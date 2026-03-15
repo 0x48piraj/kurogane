@@ -4,6 +4,7 @@ use cef::*;
 use std::sync::{Arc, Mutex};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, Ordering};
+use crate::debug;
 
 //
 // SchemeHandlerFactory
@@ -66,7 +67,7 @@ wrap_resource_handler! {
             // Handle empty path (app:// or app:///)
             let path = if path.is_empty() { "index.html" } else { path };
 
-            println!("Resolved path: {}", path);
+            debug!("Resolved path: {}", path);
 
             // Resolve relative to CWD (set by resolver)
             let root = crate::runtime::Runtime::asset_root();

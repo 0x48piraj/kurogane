@@ -6,6 +6,7 @@ use std::sync::{Mutex, OnceLock};
 use std::collections::HashMap;
 
 use crate::ipc_shm::{SharedBuffer, SHM_THRESHOLD};
+use crate::debug;
 
 //
 // Promise registry: Tracks pending promises awaiting responses from the browser process
@@ -204,7 +205,7 @@ wrap_render_process_handler! {
                 V8Propertyattribute::default(),
             );
 
-            println!("[Renderer] Injected window.core.invoke + invokeBinary");
+            debug!("[Renderer] Injected window.core.invoke + invokeBinary");
         }
 
         fn on_context_released(
@@ -346,7 +347,7 @@ wrap_v8_handler! {
 
             let id = register_promise(context.clone(), promise.clone());
 
-            println!("[Renderer] JS invoke: {} (id={})", cmd, id);
+            debug!("[Renderer] JS invoke: {} (id={})", cmd, id);
 
             if let Some(frame) = context.frame() {
                 let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();

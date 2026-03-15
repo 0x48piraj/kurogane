@@ -6,6 +6,7 @@ use std::cell::RefCell;
 
 use crate::browser::DemoBrowserProcessHandler;
 use crate::ipc_renderer::IpcRenderProcessHandler;
+use crate::debug;
 
 use cef::sys::cef_scheme_options_t::*;
 
@@ -62,7 +63,7 @@ wrap_app! {
             &self,
             registrar: Option<&mut SchemeRegistrar>,
         ) {
-            println!("on_register_custom_schemes called!");
+            debug!("on_register_custom_schemes called!");
 
             let registrar = registrar.unwrap();
 
@@ -77,7 +78,7 @@ wrap_app! {
                 flags,
             );
 
-            println!("Registered 'app://' scheme with flags {} result: {}", flags, result);
+            debug!("Registered 'app://' scheme with flags {} result: {}", flags, result);
         }
 
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {

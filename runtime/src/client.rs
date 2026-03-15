@@ -1,6 +1,7 @@
 //! Browser client implementation.
 
 use cef::*;
+use crate::debug;
 
 //
 // LOAD HANDLER
@@ -17,7 +18,7 @@ wrap_load_handler! {
         ) {
             if let Some(f) = frame {
                 let u: CefString = (&f.url()).into();
-                println!("[LoadHandler] START {}", u.to_string());
+                debug!("[LoadHandler] START {}", u.to_string());
             }
         }
 
@@ -29,7 +30,7 @@ wrap_load_handler! {
         ) {
             if let Some(f) = frame {
                 let u: CefString = (&f.url()).into();
-                println!("[LoadHandler] END {} status={}", u.to_string(), http_status_code);
+                debug!("[LoadHandler] END {} status={}", u.to_string(), http_status_code);
             }
         }
 
@@ -43,7 +44,7 @@ wrap_load_handler! {
         ) {
             let err = error_text.map(|s| s.to_string()).unwrap_or_default();
             let url = failed_url.map(|s| s.to_string()).unwrap_or_default();
-            println!("[LoadHandler] ERROR {:?} '{}' {}", error_code, err, url);
+            debug!("[LoadHandler] ERROR {:?} '{}' {}", error_code, err, url);
         }
     }
 }

@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
 use crate::client::DemoClient;
+use crate::debug;
 
 wrap_browser_process_handler! {
     pub struct DemoBrowserProcessHandler {
@@ -20,15 +21,15 @@ wrap_browser_process_handler! {
 
     impl BrowserProcessHandler {
         fn on_context_initialized(&self) {
-            println!("on_context_initialized called");
+            debug!("on_context_initialized called");
 
             // Initialize IPC dispatcher
             crate::ipc_browser::init_dispatcher();
-            println!("IPC dispatcher initialized");
+            debug!("IPC dispatcher initialized");
 
             // Register once per request context
             if self.scheme_factory.borrow().is_none() {
-                println!("Registering scheme handler factory for app://");
+                debug!("Registering scheme handler factory for app://");
 
                 // create factory (temporary mutable)
                 let mut factory = crate::scheme::AppSchemeHandlerFactory::new();
@@ -45,14 +46,14 @@ wrap_browser_process_handler! {
                 // store so CEF never calls freed memory
                 *self.scheme_factory.borrow_mut() = Some(factory);
 
-                println!("register_scheme_handler_factory result: {}", result);
+                debug!("register_scheme_handler_factory result: {}", result);
             }
 
             // Only create window if it does not already exist
             {
                 let guard = self.window.lock().unwrap();
                 if guard.is_some() {
-                    println!("Secondary request context; skipping window creation");
+                    debug!("Secondary request context; skipping window creation");
                     return;
                 }
             }
@@ -60,7 +61,7 @@ wrap_browser_process_handler! {
             let mut client = DemoClient::new();
             let url = self.start_url.clone();
 
-            println!("Creating main browser with URL: {}", url.to_string());
+            debug!("Creating main browser with URL: {}", url.to_string());
 
             let browser_view = browser_view_create(
                 Some(&mut client),

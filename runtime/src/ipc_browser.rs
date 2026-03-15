@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::ipc_shm::{SharedBuffer, SHM_THRESHOLD};
+use crate::debug;
 
 pub type IpcResult = Result<String, String>;
 pub type IpcHandler = Box<dyn Fn(&str) -> IpcResult + Send + Sync>;
@@ -201,7 +202,7 @@ pub fn handle_ipc_message(
             let command = list_get_string(&args, 2);
             let payload = list_get_string(&args, 3);
 
-            println!("[Browser] IPC invoke: '{}' (id={})", command, id);
+            debug!("[Browser] IPC invoke: '{}' (id={})", command, id);
 
             let dispatcher = get_dispatcher();
             let result = dispatcher.lock().unwrap().dispatch(&command, &payload);
@@ -274,13 +275,13 @@ fn send_response(id: u32, result: IpcResult)
     };
 
     let Some(call) = call else {
-        println!("[IPC] dropping response {}, caller gone", id);
+        debug!("[IPC] dropping response {}, caller gone", id);
         return;
     };
 
     // frame no longer exists
     if call.frame.is_valid() == 0 {
-        println!("[IPC] frame destroyed, dropping {}", id);
+        debug!("[IPC] frame destroyed, dropping {}", id);
         return;
     }
 
@@ -291,7 +292,7 @@ fn send_response(id: u32, result: IpcResult)
     };
 
     if current_id != call.frame_id {
-        println!("[IPC] navigation changed frame, dropping stale response {}", id);
+        debug!("[IPC] navigation changed frame, dropping stale response {}", id);
         return;
     }
 

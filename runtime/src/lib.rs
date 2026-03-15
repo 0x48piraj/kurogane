@@ -18,6 +18,7 @@ mod error;
 mod ipc_renderer;
 mod ipc_browser;
 mod ipc_shm;
+pub mod logger;
 
 #[cfg(target_os = "macos")]
 mod platform;
