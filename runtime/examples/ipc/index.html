@@ -143,9 +143,11 @@ timed("slow operation",()=>invoke("slow_operation",{payload:"demo"}));
 },
 
 batch(){
-timed("100 sequential calls",async()=>{
-for(let i=0;i<100;i++)
-await invoke("echo",{i});
+timed("100 parallel calls",async()=>{
+    const arr=[];
+    for(let i=0;i<100;i++)
+        arr.push(invoke("echo",{i}));
+    return await Promise.all(arr);
 });
 }
 
