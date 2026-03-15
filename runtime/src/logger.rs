@@ -1,7 +1,14 @@
 #[macro_export]
 macro_rules! debug {
-    ($($arg:tt)*) => {
+    ($($arg:tt)*) => {{
         #[cfg(feature = "debug")]
-        println!($($arg)*);
-    };
+        {
+            println!($($arg)*);
+        }
+
+        #[cfg(not(feature = "debug"))]
+        {
+            let _ = format_args!($($arg)*);
+        }
+    }};
 }
