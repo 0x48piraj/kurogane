@@ -13,7 +13,7 @@ mod resolver;
 type CommandHandler =
     Box<dyn Fn(Value) -> Result<Value, String> + Send + Sync + 'static>;
 
-type BinaryCommandHandler =
+type BinaryHandler =
     Box<dyn Fn(&[u8]) -> Result<Vec<u8>, String> + Send + Sync + 'static>;
 
 /// Describes where the frontend comes from
@@ -29,7 +29,7 @@ enum Source {
 pub struct App {
     source: Source,
     commands: Vec<(String, CommandHandler)>,
-    binary_commands: Vec<(String, BinaryCommandHandler)>,
+    binary_commands: Vec<(String, BinaryHandler)>,
 }
 
 impl App {
@@ -77,7 +77,7 @@ impl App {
         self
     }
 
-    pub fn command_binary<F>(
+    pub fn binary_command<F>(
         mut self,
         name: impl Into<String>,
         handler: F,

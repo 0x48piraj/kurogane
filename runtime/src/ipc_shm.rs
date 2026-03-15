@@ -9,6 +9,14 @@ pub struct SharedBuffer {
     size: usize,
 }
 
+// SAFETY: On Windows, the shared_memory crate exposes a raw OS handle
+// ViewOfFile(*mut c_void) that does not implement Send by default.
+// In practice, this handle is safe to use from any thread because the OS
+// allows it. We wrap access in a Mutex<HashMap> to enforce exclusive
+// access and ensure thread safety. This makes it sound to mark the wrapper
+// as Send.
+unsafe impl Send for SharedBuffer {}
+
 impl SharedBuffer {
 
     /// Create a new shared memory region.
@@ -22,13 +30,12 @@ impl SharedBuffer {
     }
 
     /// Open an existing shared memory region.
-    pub fn open(name: &str, size: usize) -> Self {
-        let shmem = ShmemConf::new()
+    pub fn open(name: &str, size: usize) -> Result<Self, String> {
+        ShmemConf::new()
             .os_id(name)
             .open()
-            .expect("failed to open shared memory");
-
-        Self { shmem, size }
+            .map(|shmem| Self { shmem, size })
+            .map_err(|e| format!("shm open '{}': {}", name, e))
     }
 
     /// OS identifier used for cross-process sharing.
@@ -38,22 +45,12 @@ impl SharedBuffer {
 
     /// Immutable view of the memory.
     pub fn as_slice(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(
-                self.shmem.as_ptr(),
-                self.size,
-            )
-        }
+        unsafe { std::slice::from_raw_parts(self.shmem.as_ptr(), self.size) }
     }
 
     /// Mutable view of the memory.
     pub fn as_slice_mut(&mut self) -> &mut [u8] {
-        unsafe {
-            std::slice::from_raw_parts_mut(
-                self.shmem.as_ptr(),
-                self.size,
-            )
-        }
+        unsafe { std::slice::from_raw_parts_mut(self.shmem.as_ptr(), self.size) }
     }
 
     /// Copy data into the shared memory.
