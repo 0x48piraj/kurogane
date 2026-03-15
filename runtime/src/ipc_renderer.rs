@@ -2,7 +2,7 @@
 //! Transport uses ProcessMessage "ipc" and ListValue typed args.
 
 use cef::*;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::collections::HashMap;
 
 use crate::ipc_shm::{SharedBuffer, SHM_THRESHOLD};
@@ -81,45 +81,45 @@ impl PromiseRegistry {
     }
 }
 
-static PROMISE_REGISTRY: Mutex<Option<PromiseRegistry>> = Mutex::new(None);
+static PROMISE_REGISTRY: OnceLock<Mutex<PromiseRegistry>> = OnceLock::new();
 
 fn ensure_registry() {
-    let mut g = PROMISE_REGISTRY.lock().unwrap();
-    if g.is_none() {
-        *g = Some(PromiseRegistry::new());
-    }
+    PROMISE_REGISTRY.get_or_init(|| Mutex::new(PromiseRegistry::new()));
 }
 
 fn register_promise(ctx: V8Context, promise: V8Value) -> u32 {
     PROMISE_REGISTRY
-        .lock()
+        .get()
         .unwrap()
-        .as_mut()
+        .lock()
         .unwrap()
         .register(ctx, promise)
 }
 
 fn resolve_string(id: u32, success: bool, payload: &str) {
     PROMISE_REGISTRY
-        .lock()
+        .get()
         .unwrap()
-        .as_mut()
+        .lock()
         .unwrap()
         .resolve_string(id, success, payload)
 }
 
 fn resolve_binary(id: u32, payload: &[u8]) {
     PROMISE_REGISTRY
-        .lock()
+        .get()
         .unwrap()
-        .as_mut()
+        .lock()
         .unwrap()
         .resolve_binary(id, payload)
 }
 
 fn clear_context_promises(ctx: &V8Context) {
-    let mut guard = PROMISE_REGISTRY.lock().unwrap();
-    let registry = guard.as_mut().unwrap();
+    let mut registry = PROMISE_REGISTRY
+        .get()
+        .unwrap()
+        .lock()
+        .unwrap();
 
     registry.pending.retain(|_, (stored_ctx, _)| {
         let mut other = ctx.clone();
