@@ -423,6 +423,13 @@ wrap_v8_handler! {
             let ptr = buffer.array_buffer_data();
             let len = buffer.array_buffer_byte_length();
 
+            if ptr.is_null() {
+                if let Some(exc) = exception {
+                    *exc = CefString::from("ArrayBuffer has null data");
+                }
+                return 0;
+            }
+
             let data = unsafe {
                 std::slice::from_raw_parts(ptr as *const u8, len)
             };
