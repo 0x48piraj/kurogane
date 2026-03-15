@@ -126,19 +126,17 @@ Early days! Architecture and APIs may change as the project evolves.
 
 #### In progress / planned
 
-* macOS support
-* More packaging helpers
-* CI builds and example verification
-* Nominal project scaffolding / starter layout
+- [ ] macOS support
+- [ ] End-to-end packaging helpers
+- [ ] CI builds and example verification
+- [ ] Nominal project scaffolding / starter layout
 
 ## Philosophy
 
-This project is a streamlined CEF runtime giving direct access to the browser model.
+Good runtime design is a balancing act.
 
-You keep control of:
+Too much abstraction can make a system rigid and difficult to extend. Too little structure leaves every application to solve the same problems repeatedly.
 
-* Window and browser lifecycle
-* Multi-process boundaries
-* Renderer <-> native communication
+This project aims to sit between those extremes by providing a clear foundation while keeping the underlying internals accessible when needed.
 
-More control. Fewer assumptions.
+We believe in providing a canonical way while keeping escape hatches.

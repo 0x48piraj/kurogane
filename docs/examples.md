@@ -113,3 +113,10 @@ cargo run --example files-cors
 The runtime will load the built `index.html` using the `app://app/` scheme and serve all assets through the custom CEF resource handler.
 
 > **Note**: This example uses a production Vite build (`vite build`), not the Vite dev server. Dev server usage is supported separately via `CEF_START_URL`.
+
+Advanced users can still:
+
+```
+Runtime::run(url, true);
+register_command(...)
+```
