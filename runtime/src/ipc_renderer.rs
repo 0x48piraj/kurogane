@@ -471,10 +471,11 @@ wrap_v8_handler! {
             msg_args.set_string(2, Some(&CefString::from(cmd.as_str())));
 
             if data.len() < SHM_THRESHOLD {
+                // inline: faster for medium sizes
                 let mut binary = binary_value_create(Some(data)).unwrap();
                 msg_args.set_binary(3, Some(&mut binary));
             } else {
-
+                // shm: only for large payloads
                 let mut shm = SharedBuffer::create(data.len());
                 shm.write(data);
 

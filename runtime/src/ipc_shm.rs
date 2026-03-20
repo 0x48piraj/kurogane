@@ -2,7 +2,8 @@
 
 use shared_memory::{Shmem, ShmemConf};
 
-pub const SHM_THRESHOLD: usize = 64 * 1024;
+// Empirically derived crossover point (~2.5-3MB) where SHM becomes faster than inline
+pub const SHM_THRESHOLD: usize = 3 * 1024 * 1024; // 3MB
 
 pub struct SharedBuffer {
     shmem: Shmem,
