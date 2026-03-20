@@ -3,7 +3,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>rust-cef-runtime IPC Demo</title>
+<title>Kurogane: IPC Demo</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
@@ -56,7 +56,7 @@ overflow:auto;
 
 <body>
 <header>
-<h1>rust-cef-runtime IPC demonstration</h1>
+<h1>Kurogane: IPC test suite</h1>
 </header>
 
 <div class="container">
@@ -85,8 +85,6 @@ overflow:auto;
 </div>
 
 <script type="module">
-import { invoke, invokeBinary } from "./rust-cef-runtime.js";
-
 const logEl = document.getElementById("log");
 
 function log(msg,cls="info"){
@@ -113,46 +111,46 @@ err(`${name}: ${e}`);
 window.demo={
 
 echo(){
-timed("echo roundtrip",()=>invoke("echo",{hello:"world",n:42}));
+timed("echo roundtrip",()=>kurogane.invoke("echo",{hello:"world",n:42}));
 },
 
 greet(){
-timed("greet",()=>invoke("greet","Alice"));
+timed("greet",()=>kurogane.invoke("greet","Alice"));
 },
 
 divide(){
-timed("20 / 4",()=>invoke("divide",{a:20,b:4}));
+timed("20 / 4",()=>kurogane.invoke("divide",{a:20,b:4}));
 },
 
 error(){
-timed("division by zero",()=>invoke("divide",{a:1,b:0}));
+timed("division by zero",()=>kurogane.invoke("divide",{a:1,b:0}));
 },
 
 types(){
-timed("type inspection",()=>invoke("types",{a:1,b:true,c:null,d:[1,2]}));
+timed("type inspection",()=>kurogane.invoke("types",{a:1,b:true,c:null,d:[1,2]}));
 },
 
 fs(){
-timed("fs.read config",()=>invoke("fs.read","config.json"));
+timed("fs.read config",()=>kurogane.invoke("fs.read","config.json"));
 },
 
 parallel(){
 timed("parallel 10",async()=>{
 const arr=[];
-for(let i=0;i<10;i++)arr.push(invoke("echo",{id:i}));
+for(let i=0;i<10;i++)arr.push(kurogane.invoke("echo",{id:i}));
 return await Promise.all(arr);
 });
 },
 
 slow(){
-timed("slow operation",()=>invoke("slow_operation",{payload:"demo"}));
+timed("slow operation",()=>kurogane.invoke("slow_operation",{payload:"demo"}));
 },
 
 batch(){
 timed("100 parallel calls",async()=>{
     const arr=[];
     for(let i=0;i<100;i++)
-        arr.push(invoke("echo",{i}));
+        arr.push(kurogane.invoke("echo",{i}));
     return await Promise.all(arr);
 });
 },
@@ -161,7 +159,7 @@ binarySmall(){
 timed("binary small", async()=>{
     const data = new Uint8Array([1,2,3,4,5]);
 
-    const out = await invokeBinary("echo_binary", data);
+    const out = await kurogane.invokeBinary("echo_binary", data);
 
     return Array.from(new Uint8Array(out));
 });
@@ -173,7 +171,7 @@ timed("binary large (2MB)", async()=>{
     const data = new Uint8Array(2_000_000);
     data.fill(7);
 
-    const out = await invokeBinary("echo_binary", data);
+    const out = await kurogane.invokeBinary("echo_binary", data);
 
     return {
         input:data.length,
@@ -191,7 +189,7 @@ timed("binary integrity", async()=>{
         data[i]=i%255;
 
     const out = new Uint8Array(
-        await invokeBinary("echo_binary", data)
+        await kurogane.invokeBinary("echo_binary", data)
     );
 
     for(let i=0;i<data.length;i++){
@@ -213,7 +211,7 @@ timed("binary stress 50", async()=>{
         const data = new Uint8Array(50000);
         data.fill(i);
 
-        arr.push(invokeBinary("echo_binary",data));
+        arr.push(kurogane.invokeBinary("echo_binary",data));
     }
 
     await Promise.all(arr).then(res=>{
@@ -237,7 +235,7 @@ timed("binary threshold test", async()=>{
         data[i]=i%255;
 
     const out = new Uint8Array(
-        await invokeBinary("echo_binary", data)
+        await kurogane.invokeBinary("echo_binary", data)
     );
 
     return {
@@ -253,7 +251,7 @@ timed("binary huge (10MB)", async()=>{
     const data = new Uint8Array(10_000_000);
     data.fill(3);
 
-    const out = await invokeBinary("echo_binary", data);
+    const out = await kurogane.invokeBinary("echo_binary", data);
 
     return {
         input:data.length,
@@ -265,7 +263,7 @@ timed("binary huge (10MB)", async()=>{
 };
 
 // startup smoke test
-timed("startup check",()=>invoke("echo",{runtime:"online"}));
+timed("startup check",()=>kurogane.invoke("echo",{runtime:"online"}));
 
 </script>
 

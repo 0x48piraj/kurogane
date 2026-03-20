@@ -1,5 +1,5 @@
 [package]
-name = "rust-cef-runtime"
+name = "kurogane"
 version = "0.1.0"
 edition = "2021"
 

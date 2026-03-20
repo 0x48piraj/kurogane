@@ -2,10 +2,10 @@
 
 A Rust-native Chromium runtime for building high-performance, GPU-accelerated desktop applications **without Electron and without system WebViews**.
 
-`rust-cef-runtime` is a low-level Rust runtime built directly on the **Chromium Embedded Framework (CEF)** for developers who need control, performance and consistency beyond OS-managed WebViews.
+Kurogane is a low-level Rust runtime built directly on the **Chromium Embedded Framework (CEF)** for developers who need control, performance and consistency beyond OS-managed WebViews.
 
 <p align="center">
-  <img alt="rust-cef-runtime demo" src="docs/images/output.gif" width="400"><br>
+  <img alt="Kurogane demo" src="docs/images/output.gif" width="400"><br>
   <b>Chromium goodness. Native Rust. No WebView. No Electron.</b>
 </p>
 
@@ -94,7 +94,7 @@ Learn from them:
 
 ## Production packaging
 
-`rust-cef-runtime` does not impose a packaging format.
+Kurogane does not impose a packaging format.
 
 In production, the embedding application is responsible for bundling frontend assets and selecting the startup URL.
 

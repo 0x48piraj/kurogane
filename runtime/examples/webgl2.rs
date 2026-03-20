@@ -1,4 +1,4 @@
-use rust_cef_runtime::App;
+use kurogane::App;
 
 fn main() {
     App::new("webgl2").run_or_exit();

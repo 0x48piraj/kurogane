@@ -1,4 +1,4 @@
-# `rust-cef-runtime` Canvas GPU Demo
+# Kurogane: Canvas GPU Demo
 
 This demo uses the HTML Canvas API to demonstrate GPU-backed rendering without DOM overhead.
 

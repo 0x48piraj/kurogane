@@ -1,4 +1,4 @@
-use rust_cef_runtime::App;
+use kurogane::App;
 
 fn main() {
     let exe = std::env::current_exe().unwrap();

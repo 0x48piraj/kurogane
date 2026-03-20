@@ -63,7 +63,7 @@ impl Runtime {
             .unwrap_or_else(|| "app".to_string());
 
         let cache_dir = std::env::temp_dir()
-            .join("rust_cef_runtime")
+            .join("kurogane")
             .join(&exe_name);
 
         std::fs::create_dir_all(&cache_dir).ok();

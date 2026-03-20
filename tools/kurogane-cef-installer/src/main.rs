@@ -79,7 +79,7 @@ fn print_env_instructions(root: &Path) {
 }
 
 fn main() -> Result<()> {
-    println!("rust-cef-runtime installer");
+    println!("Kurogane CEF installer");
 
     let lock = find_workspace_lock()?;
     println!("Using lockfile: {}", lock.display());

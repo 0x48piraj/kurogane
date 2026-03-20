@@ -1,6 +1,4 @@
-import { invoke } from "./rust-cef-runtime.js";
-
-const result = await invoke("add", {a:1,b:2});
+const result = await kurogane.invoke("add", {a:1,b:2});
 console.log(result);
 
 const canvas = document.getElementById("canvas");

@@ -1,4 +1,4 @@
-use rust_cef_runtime::App;
+use kurogane::App;
 use serde_json::{Value, json};
 
 fn main() {

@@ -1,6 +1,6 @@
 # Architecture
 
-`rust-cef-runtime` is a compact Rust binding layer around CEF's native application model.
+Kurogane is a compact Rust binding layer around CEF's native application model.
 
 It does not emulate a browser: it hosts Chromium as a runtime component.
 

@@ -1,5 +1,5 @@
 {
-  description = "rust-cef-runtime";
+  description = "Kurogane";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -67,7 +67,7 @@
             # Use cargo install and call via full path or rely on PATH update
             alias setup-cef='cargo install --git https://github.com/tauri-apps/cef-rs export-cef-dir && "$HOME/.cargo/bin/export-cef-dir" --force "$CEF_PATH"'
 
-            echo "rust-cef-runtime dev shell ready"
+            echo "Kurogane dev shell ready"
             echo "Run 'setup-cef' to download/install CEF binaries (if not already done)."
           '';
 

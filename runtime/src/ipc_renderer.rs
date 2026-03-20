@@ -76,6 +76,8 @@ impl PromiseRegistry {
     }
 }
 
+const KUROGANE_BRIDGE: &str = include_str!("../bridge/runtime.js");
+
 static PROMISE_REGISTRY: OnceLock<Mutex<PromiseRegistry>> = OnceLock::new();
 
 fn ensure_registry() {
@@ -197,7 +199,13 @@ wrap_render_process_handler! {
                 V8Propertyattribute::default(),
             );
 
-            debug!("[Renderer] Injected window.core.invoke + invokeBinary");
+            frame.execute_java_script(
+                Some(&CefString::from(KUROGANE_BRIDGE)),
+                None,
+                0,
+            );
+
+            debug!("[Renderer] Injected window.core.* + kurogane bridge");
         }
 
         fn on_context_released(
