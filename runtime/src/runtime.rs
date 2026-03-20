@@ -55,7 +55,17 @@ impl Runtime {
             .expect("failed to get current exe path");
         let exe_str = exe.to_string_lossy();
 
-        let cache_dir = std::env::temp_dir().join("rust_cef_runtime");
+        // Isolate the CEF cache per executable.
+        // Reusing a profile across runs can trigger session restore leading to multiple on_context_initialized invocations.
+        let exe_name = exe
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "app".to_string());
+
+        let cache_dir = std::env::temp_dir()
+            .join("rust_cef_runtime")
+            .join(&exe_name);
+
         std::fs::create_dir_all(&cache_dir).ok();
 
         let cef_root = find_cef_root()?
