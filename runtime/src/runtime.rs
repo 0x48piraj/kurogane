@@ -1,5 +1,6 @@
 use cef::{args::Args, *};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::AtomicBool;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -33,9 +34,10 @@ impl Runtime {
 
         let args = Args::new();
         let window = Arc::new(Mutex::new(None));
+        let window_creation_started = Arc::new(AtomicBool::new(false));
 
         // ONE app for ALL processes
-        let mut app = DemoApp::new(window.clone(), start_url);
+        let mut app: App = DemoApp::new(window.clone(), start_url, window_creation_started);
 
         // CEF internally determines process role here
         let exit_code = execute_process(

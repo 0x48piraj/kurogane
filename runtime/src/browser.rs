@@ -6,6 +6,7 @@
 use cef::*;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::client::DemoClient;
 use crate::debug;
@@ -17,6 +18,7 @@ wrap_browser_process_handler! {
 
         // Keep factory alive for browser lifetime; RefCell for interior mutability
         scheme_factory: RefCell<Option<SchemeHandlerFactory>>,
+        window_creation_started: Arc<AtomicBool>,
     }
 
     impl BrowserProcessHandler {
@@ -49,13 +51,10 @@ wrap_browser_process_handler! {
                 debug!("register_scheme_handler_factory result: {}", result);
             }
 
-            // Only create window if it does not already exist
-            {
-                let guard = self.window.lock().unwrap();
-                if guard.is_some() {
-                    debug!("Secondary request context; skipping window creation");
-                    return;
-                }
+            // Atomically claim the window creation slot; bail if already taken
+            if self.window_creation_started.swap(true, Ordering::SeqCst) { // returns the old value
+                debug!("Secondary request context; skipping window creation");
+                return;
             }
 
             let mut client = DemoClient::new();
@@ -67,9 +66,7 @@ wrap_browser_process_handler! {
                 Some(&mut client),
                 Some(&url),
                 Some(&Default::default()),
-                None,
-                None,
-                None,
+                None, None, None,
             )
             .expect("browser_view_create failed");
 

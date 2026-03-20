@@ -2,6 +2,7 @@
 
 use cef::*;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::AtomicBool;
 use std::cell::RefCell;
 
 use crate::browser::DemoBrowserProcessHandler;
@@ -14,6 +15,7 @@ wrap_app! {
     pub struct DemoApp {
         window: Arc<Mutex<Option<Window>>>,
         start_url: CefString,
+        window_creation_started: Arc<AtomicBool>,
     }
 
     impl App {
@@ -87,6 +89,7 @@ wrap_app! {
                     self.window.clone(),
                     self.start_url.clone(),
                     RefCell::new(None),
+                    self.window_creation_started.clone(),
                 )
             )
         }
