@@ -48,29 +48,54 @@ When you should *not* use this project:
 
 This project is not a replacement for Tauri or Electron.
 
-## Setup
+## Getting started
 
-### 1. Install CEF (one time)
-
-The runtime automatically downloads the compatible Chromium build required by the Rust bindings.
-
-From the project root:
+### 1. Install Kurogane CLI (one-time)
 
 ```bash
-cargo run -p rust-cef-installer
+cargo install --git https://github.com/0x48piraj/kurogane kurogane-cli
 ```
 
-## Running the examples
-
-After installation you can simply run the demo:
-
-### Default GPU demo (recommended)
+### 2. Install Chromium (one-time)
 
 ```bash
-cargo run --example demo
+kurogane install
 ```
 
-Launches a native window rendering a **canvas-based animation** designed to accurately reflect GPU-backed rendering performance.
+The CLI automatically downloads the compatible Chromium build required by the Rust bindings.
+
+### 3. Create a new app
+
+```bash
+kurogane init
+```
+
+### 4. Run your app
+
+```bash
+cd my-app
+kurogane dev
+```
+
+## Templates
+
+Kurogane includes built-in templates to help you get started.
+
+### Default app
+
+```bash
+kurogane init
+```
+
+A minimal starter template with a vanilla HTML frontend.
+
+### Canvas demo (recommended)
+
+```bash
+kurogane init --template demo
+```
+
+Launches a native window rendering a **canvas-based animation** designed to reflect GPU-backed rendering performance.
 
 This is the **primary demo** for evaluating rendering behavior and performance.
 
@@ -80,10 +105,10 @@ This is the **primary demo** for evaluating rendering behavior and performance.
 
 ### DOM-based educational demos
 
-These examples illustrate **DOM animation limits** and are **not performance benchmarks**.
+This template illustrates DOM animation limits, CPU-bound rendering behavior and are **NOT performance benchmarks**.
 
 ```bash
-cargo run --example dom
+kurogane init --template dom
 ```
 
 Learn from them:
@@ -98,13 +123,13 @@ Kurogane does not impose a packaging format.
 
 In production, the embedding application is responsible for bundling frontend assets and selecting the startup URL.
 
-You can run:
+For convenience, we include a straightforward way to do this:
 
 ```bash
-cargo build --example package
+kurogane bundle
 ```
 
-> Note: Place your built frontend in an `content/` directory next to the executable.
+Outputs a distributable app in the `dist/` directory.
 
 ## 🚧 Current status
 
