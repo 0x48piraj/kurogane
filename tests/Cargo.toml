@@ -1,0 +1,20 @@
+[package]
+name = "kurogane-tests"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+kurogane = { path = "../kurogane" }
+serde_json = "1.0.149"
+
+[[bin]]
+name = "benchmark"
+path = "benchmark.rs"
+
+[[bin]]
+name = "gpu"
+path = "gpu.rs"
+
+[[bin]]
+name = "files-cors"
+path = "files-cors.rs"

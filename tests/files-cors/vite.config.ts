@@ -4,6 +4,6 @@ import { defineConfig } from "vite";
 export default defineConfig({
 	base: "app://app/",
 	build: {
-		outDir: "../../examples/files-cors",
+		outDir: "dist",
 	},
 });

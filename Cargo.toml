@@ -2,5 +2,6 @@
 resolver = "2"
 members = [
     "kurogane",
-    "kurogane-cli"
+    "kurogane-cli",
+    "tests"
 ]

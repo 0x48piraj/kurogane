@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IPC Latency/Throughput Characterization</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @keyframes shimmer {
+      0% { background-position: -1000px 0; }
+      100% { background-position: 1000px 0; }
+    }
+
+    .shimmer {
+      animation: shimmer 2s infinite linear;
+      background: linear-gradient(to right, transparent 0%, rgba(255,255,255,0.1) 50%, transparent 100%);
+      background-size: 1000px 100%;
+    }
+
+    @keyframes pulse-glow {
+      0%, 100% { box-shadow: 0 0 20px rgba(59, 130, 246, 0.3); }
+      50% { box-shadow: 0 0 30px rgba(59, 130, 246, 0.6); }
+    }
+
+    .pulse-glow {
+      animation: pulse-glow 2s ease-in-out infinite;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .slide-in {
+      animation: slideIn 0.3s ease-out forwards;
+    }
+
+    .progress-bar {
+      transition: width 0.3s ease-out;
+    }
+  </style>
+</head>
+
+<body class="bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 min-h-screen">
+
+  <!-- Header -->
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div class="text-center mb-12">
+      <h1 class="text-5xl font-bold text-white mb-4 tracking-tight">
+        IPC Transport Characterization Suite
+      </h1>
+      <p class="text-xl text-blue-200">
+        Evaluating latency and throughput under varying load conditions
+      </p>
+    </div>
+
+    <!-- Info -->
+    <div id="systemInfo" class="bg-white/10 backdrop-blur-lg rounded-2xl p-6 mb-8 border border-white/20">
+      <h2 class="text-2xl font-semibold text-white mb-4 flex items-center gap-2">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+        </svg>
+        System information
+      </h2>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="systemInfoContent">
+        <div class="flex items-center gap-2">
+          <div class="shimmer w-full h-6 bg-white/5 rounded"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Progress -->
+    <div id="progress" class="bg-white/10 backdrop-blur-lg rounded-2xl p-6 mb-8 border border-white/20 hidden">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-2xl font-semibold text-white">Overall progress</h2>
+        <span id="progressText" class="text-lg text-blue-200">0%</span>
+      </div>
+      <div class="w-full bg-white/10 rounded-full h-3 overflow-hidden">
+        <div id="progressBar" class="progress-bar bg-gradient-to-r from-blue-500 to-cyan-400 h-full rounded-full" style="width: 0%"></div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8" id="testCardsContainer">
+      <!-- Test cards -->
+    </div>
+
+    <!-- Results -->
+    <div id="results" class="hidden">
+      <div class="bg-gradient-to-br from-green-500/20 to-emerald-500/20 backdrop-blur-lg rounded-2xl p-8 border border-green-400/30">
+        <h2 class="text-3xl font-bold text-white mb-6 flex items-center gap-3">
+          <svg class="w-8 h-8 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          Benchmark Complete
+        </h2>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8" id="summaryStats">
+          <!-- Summary stats -->
+        </div>
+
+        <div id="detailedResults" class="space-y-4">
+          <!-- Detailed results -->
+        </div>
+
+        <div class="mt-8">
+          <button id="copyResults" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors flex items-center gap-2">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            Copy Results JSON
+          </button>
+          <div id="copySuccess" class="hidden mt-2 text-green-400 text-sm flex items-center gap-1">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+            </svg>
+            Copied to clipboard!
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-8">
+      <button id="toggleConsole" class="text-white/60 hover:text-white transition-colors text-sm mb-2 flex items-center gap-2">
+        <svg id="consoleChevron" class="w-4 h-4 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+        </svg>
+        View console logs
+      </button>
+      <div id="consoleContainer" class="hidden bg-black/40 backdrop-blur-lg rounded-xl p-4 border border-white/10 max-h-96 overflow-y-auto">
+        <pre id="log" class="text-green-400 text-sm font-mono whitespace-pre-wrap"></pre>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    const logEl = document.getElementById("log")
+    const testCardsContainer = document.getElementById("testCardsContainer")
+    const progressEl = document.getElementById("progress")
+    const progressBar = document.getElementById("progressBar")
+    const progressText = document.getElementById("progressText")
+    const resultsEl = document.getElementById("results")
+    const systemInfoContent = document.getElementById("systemInfoContent")
+
+    let allResults = {}
+
+    function log(...msg) {
+      const line = msg.join(" ")
+      console.log(line)
+      logEl.textContent += line + "\n"
+      logEl.scrollTop = logEl.scrollHeight
+    }
+
+    function sleep(ms) {
+      return new Promise(r => setTimeout(r, ms))
+    }
+
+    // Benchmark configuration
+    const CONFIG = {
+      warmupRuns: 3,
+      measureRuns: 5,
+      tests: [
+        "json_latency",
+        "binary_small",
+        "binary_medium",
+        "binary_large",
+        "binary_10mb",
+        "binary_parallel"
+      ]
+    }
+
+    const TEST_METADATA = {
+      json_latency: {
+        name: "Latency (JSON)",
+        description: "1,000 JSON echo calls",
+        icon: `<svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>`,
+        color: "blue"
+      },
+      binary_small: {
+        name: "Small (Binary)",
+        description: "1KB × 1,000 transfers",
+        icon: `<svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+        </svg>`,
+        color: "purple"
+      },
+      binary_medium: {
+        name: "Medium (Binary)",
+        description: "1MB × 100 transfers",
+        icon: `<svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+        </svg>`,
+        color: "green"
+      },
+      binary_large: {
+        name: "Large (Binary)",
+        description: "5MB × 100 transfers",
+        icon: `<svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+        </svg>`,
+        color: "orange"
+      },
+      binary_10mb: {
+        name: "10MB (Binary)",
+        description: "10MB × 50 transfers",
+        icon: `<svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+        </svg>`,
+        color: "red"
+      },
+      binary_parallel: {
+        name: "Parallel (Binary)",
+        description: "2MB × 50 concurrent",
+        icon: `<svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>`,
+        color: "cyan"
+      }
+    }
+
+    // Workloads
+    async function json_latency() {
+      for (let i = 0; i < 1000; i++) await kurogane.invoke("echo", { i })
+    }
+
+    async function binary_small() {
+      const data = new Uint8Array(1024)
+      for (let i = 0; i < 1000; i++) await kurogane.invokeBinary("echo_binary", data)
+    }
+
+    async function binary_medium() {
+      const data = new Uint8Array(1_000_000)
+      for (let i = 0; i < 100; i++) await kurogane.invokeBinary("echo_binary", data)
+    }
+
+    async function binary_large() {
+      const data = new Uint8Array(5_000_000)
+      for (let i = 0; i < 100; i++) await kurogane.invokeBinary("echo_binary", data)
+    }
+
+    async function binary_10mb() {
+      const data = new Uint8Array(10_000_000)
+      for (let i = 0; i < 50; i++) await kurogane.invokeBinary("echo_binary", data)
+    }
+
+    async function binary_parallel() {
+      const data = new Uint8Array(2_000_000)
+      const tasks = []
+      for (let i = 0; i < 50; i++) tasks.push(kurogane.invokeBinary("echo_binary", data))
+      await Promise.all(tasks)
+    }
+
+    const WORKLOADS = {
+      json_latency,
+      binary_small,
+      binary_medium,
+      binary_large,
+      binary_10mb,
+      binary_parallel
+    }
+
+    // Helpers
+    async function measure(fn) {
+      const t0 = performance.now()
+      await fn()
+      const t1 = performance.now()
+      return t1 - t0
+    }
+
+    function median(values) {
+      const sorted = [...values].sort((a, b) => a - b)
+      return sorted[Math.floor(sorted.length / 2)]
+    }
+
+    function throughput(bytes, timeMs) {
+      const mb = bytes / 1_000_000
+      return mb / (timeMs / 1000)
+    }
+
+    // UI Functions
+    function createTestCard(testName) {
+      const meta = TEST_METADATA[testName]
+      const card = document.createElement('div')
+      card.id = `card-${testName}`
+      card.className = 'bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20 slide-in'
+      card.innerHTML = `
+        <div class="flex items-start justify-between mb-4">
+          <div class="flex items-center gap-3">
+            <div class="text-blue-400">${meta.icon}</div>
+            <div>
+              <h3 class="text-xl font-semibold text-white">${meta.name}</h3>
+              <p class="text-sm text-blue-200">${meta.description}</p>
+            </div>
+          </div>
+          <div id="status-${testName}">
+            <svg class="w-6 h-6 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+        </div>
+
+        <div id="progress-${testName}" class="mb-4 hidden">
+          <div class="flex justify-between text-sm text-white/60 mb-2">
+            <span id="stage-${testName}">Warming up...</span>
+            <span id="progress-text-${testName}">0%</span>
+          </div>
+          <div class="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+            <div id="progress-bar-${testName}" class="progress-bar bg-gradient-to-r from-${meta.color}-500 to-${meta.color}-300 h-full rounded-full" style="width: 0%"></div>
+          </div>
+        </div>
+
+        <div id="results-${testName}" class="hidden space-y-2">
+          <div class="flex justify-between items-center">
+            <span class="text-white/60">Median Time</span>
+            <span id="median-${testName}" class="text-xl font-bold text-white"></span>
+          </div>
+          <div id="throughput-${testName}" class="hidden flex justify-between items-center">
+            <span class="text-white/60">Throughput</span>
+            <span id="throughput-value-${testName}" class="text-lg font-semibold text-${meta.color}-400"></span>
+          </div>
+          <div class="mt-3 pt-3 border-t border-white/10">
+            <details class="text-sm">
+              <summary class="text-white/60 cursor-pointer hover:text-white">View all runs</summary>
+              <div id="runs-${testName}" class="mt-2 space-y-1 text-white/80"></div>
+            </details>
+          </div>
+        </div>
+      `
+      return card
+    }
+
+    function updateTestProgress(testName, stage, progress) {
+      const progressEl = document.getElementById(`progress-${testName}`)
+      const stageEl = document.getElementById(`stage-${testName}`)
+      const progressBar = document.getElementById(`progress-bar-${testName}`)
+      const progressText = document.getElementById(`progress-text-${testName}`)
+
+      progressEl.classList.remove('hidden')
+      stageEl.textContent = stage
+      progressBar.style.width = `${progress}%`
+      progressText.textContent = `${Math.round(progress)}%`
+    }
+
+    function updateTestResults(testName, results) {
+      const statusEl = document.getElementById(`status-${testName}`)
+      const progressEl = document.getElementById(`progress-${testName}`)
+      const resultsEl = document.getElementById(`results-${testName}`)
+      const medianEl = document.getElementById(`median-${testName}`)
+      const runsEl = document.getElementById(`runs-${testName}`)
+
+      statusEl.innerHTML = `
+        <svg class="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      `
+      progressEl.classList.add('hidden')
+      resultsEl.classList.remove('hidden')
+      medianEl.textContent = results.median.toFixed(2) + ' ms'
+
+      // Show individual runs
+      results.runs.forEach((time, i) => {
+        const runDiv = document.createElement('div')
+        runDiv.textContent = `Run ${i + 1}: ${time.toFixed(2)} ms`
+        runsEl.appendChild(runDiv)
+      })
+
+      // Calculate throughput if applicable
+      const throughputEl = document.getElementById(`throughput-${testName}`)
+      const throughputValueEl = document.getElementById(`throughput-value-${testName}`)
+
+      const byteSizes = {
+        binary_small: 1024 * 1000,
+        binary_medium: 1_000_000 * 100,
+        binary_large: 5_000_000 * 100,
+        binary_10mb: 10_000_000 * 50,
+        binary_parallel: 2_000_000 * 50
+      }
+
+      if (byteSizes[testName]) {
+        const mbps = throughput(byteSizes[testName], results.median)
+        throughputEl.classList.remove('hidden')
+        throughputValueEl.textContent = mbps.toFixed(2) + ' MB/s'
+      }
+    }
+
+    function updateProgress(current, total) {
+      progressEl.classList.remove('hidden')
+      const percent = (current / total) * 100
+      progressBar.style.width = `${percent}%`
+      progressText.textContent = `${Math.round(percent)}%`
+    }
+
+    // Run a single test
+    async function runTest(testName, index, total) {
+      const fn = WORKLOADS[testName]
+      log("")
+      log("TEST:", testName)
+
+      // Warmup
+      for (let i = 0; i < CONFIG.warmupRuns; i++) {
+        const progress = ((i + 1) / CONFIG.warmupRuns) * 50
+        updateTestProgress(testName, `Warming up... (${i + 1}/${CONFIG.warmupRuns})`, progress)
+        log("warmup", i + 1)
+        await fn()
+        await sleep(500)
+      }
+
+      // Measure
+      const runs = []
+      for (let i = 0; i < CONFIG.measureRuns; i++) {
+        const progress = 50 + ((i + 1) / CONFIG.measureRuns) * 50
+        updateTestProgress(testName, `Measuring... (${i + 1}/${CONFIG.measureRuns})`, progress)
+        const t = await measure(fn)
+        runs.push(t)
+        log(`run${i + 1}`, t.toFixed(2), "ms")
+        await sleep(500)
+      }
+
+      const med = median(runs)
+      log("median", med.toFixed(2), "ms")
+
+      const results = {
+        runs: runs,
+        median: med
+      }
+
+      updateTestResults(testName, results)
+      updateProgress(index + 1, total)
+
+      return results
+    }
+
+    // Benchmark runner
+    async function runBenchmark() {
+      log("UserAgent:", navigator.userAgent)
+      log("CPU cores:", navigator.hardwareConcurrency)
+
+      // Update system info
+      systemInfoContent.innerHTML = `
+        <div class="flex items-center gap-3">
+          <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+          </svg>
+          <div>
+            <div class="text-white/60 text-sm">Browser</div>
+            <div class="text-white font-medium">${navigator.userAgent.split(' ').slice(-2).join(' ')}</div>
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+          </svg>
+          <div>
+            <div class="text-white/60 text-sm">CPU Cores</div>
+            <div class="text-white font-medium">${navigator.hardwareConcurrency}</div>
+          </div>
+        </div>
+      `
+
+      // Create test cards
+      CONFIG.tests.forEach(testName => {
+        testCardsContainer.appendChild(createTestCard(testName))
+      })
+
+      const results = {}
+
+      for (let i = 0; i < CONFIG.tests.length; i++) {
+        const testName = CONFIG.tests[i]
+        const res = await runTest(testName, i, CONFIG.tests.length)
+        results[testName] = res
+      }
+
+      allResults = results
+
+      showResults(results)
+    }
+
+    function showResults(results) {
+      resultsEl.classList.remove('hidden')
+
+      // Calculate summary stats
+      const allMedians = Object.values(results).map(r => r.median)
+      const avgTime = allMedians.reduce((a, b) => a + b, 0) / allMedians.length
+      const fastestTest = Object.entries(results).reduce((a, b) => a[1].median < b[1].median ? a : b)
+      const slowestTest = Object.entries(results).reduce((a, b) => a[1].median > b[1].median ? a : b)
+
+      document.getElementById('summaryStats').innerHTML = `
+        <div class="bg-white/10 rounded-lg p-4 backdrop-blur">
+          <div class="text-white/60 text-sm mb-1">Average Time</div>
+          <div class="text-2xl font-bold text-white">${avgTime.toFixed(2)} ms</div>
+        </div>
+        <div class="bg-white/10 rounded-lg p-4 backdrop-blur">
+          <div class="text-white/60 text-sm mb-1">Fastest Test</div>
+          <div class="text-lg font-semibold text-green-400">${TEST_METADATA[fastestTest[0]].name}</div>
+          <div class="text-sm text-white/60">${fastestTest[1].median.toFixed(2)} ms</div>
+        </div>
+        <div class="bg-white/10 rounded-lg p-4 backdrop-blur">
+          <div class="text-white/60 text-sm mb-1">Slowest Test</div>
+          <div class="text-lg font-semibold text-orange-400">${TEST_METADATA[slowestTest[0]].name}</div>
+          <div class="text-sm text-white/60">${slowestTest[1].median.toFixed(2)} ms</div>
+        </div>
+      `
+
+      // Scroll to results
+      resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+
+    // Console toggle
+    document.getElementById('toggleConsole').addEventListener('click', () => {
+      const container = document.getElementById('consoleContainer')
+      const chevron = document.getElementById('consoleChevron')
+      container.classList.toggle('hidden')
+      chevron.classList.toggle('rotate-180')
+    })
+
+    // Copy results
+    document.getElementById('copyResults').addEventListener('click', async () => {
+      const json = JSON.stringify(allResults, null, 2)
+      await navigator.clipboard.writeText(json)
+      const successEl = document.getElementById('copySuccess')
+      successEl.classList.remove('hidden')
+      setTimeout(() => successEl.classList.add('hidden'), 3000)
+    })
+
+    // Start benchmark
+    runBenchmark()
+  </script>
+
+</body>
+</html>
