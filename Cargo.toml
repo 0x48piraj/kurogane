@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "runtime",
-    "tools/kurogane-cef-installer"
+    "kurogane",
+    "kurogane-cli"
 ]
