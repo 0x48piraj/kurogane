@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Kurogane: canvas template</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #0f172a;
+      overflow: hidden;
+      height: 100%;
+    }
+
+    #fps {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      padding: 6px 10px;
+      background: rgba(0,0,0,0.5);
+      color: #e5e7eb;
+      border-radius: 6px;
+      font-family: system-ui, sans-serif;
+      font-size: 18px;
+      z-index: 999;
+    }
+
+    canvas {
+      display: block;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="fps">FPS: 0</div>
+  <canvas id="canvas"></canvas>
+  <script type="module" src="app://app/main.js"></script>
+</body>
+</html>

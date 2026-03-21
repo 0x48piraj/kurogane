@@ -1,0 +1,4 @@
+[app]
+name = "kurogane-ipc-template"
+frontend = "content"
+dev_url = ""

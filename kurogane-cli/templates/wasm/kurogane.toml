@@ -1,0 +1,4 @@
+[app]
+name = "kurogane-wasm-template"
+frontend = "content"
+dev_url = ""

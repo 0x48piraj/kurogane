@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Kurogane: webgl2 instancing template</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #020617;
+      overflow: hidden;
+    }
+
+    #hud {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      font-family: system-ui, sans-serif;
+      font-size: 16px;
+      color: #e5e7eb;
+      background: rgba(0,0,0,0.55);
+      padding: 8px 12px;
+      border-radius: 6px;
+      z-index: 10;
+    }
+
+    canvas {
+      display: block;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="hud">Initializing…</div>
+  <canvas id="gl"></canvas>
+  <script src="app://app/main.js"></script>
+</body>
+</html>
