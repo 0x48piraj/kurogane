@@ -21,6 +21,8 @@ enum Commands {
     Build,
     Bundle,
     Init {
+        name: Option<String>,
+
         #[arg(long)]
         template: Option<String>,
     },
@@ -34,6 +36,6 @@ fn main() -> anyhow::Result<()> {
         Commands::Dev => dev::run(),
         Commands::Build => build::run(),
         Commands::Bundle => bundle::run(),
-        Commands::Init { template } => init::run(template),
+        Commands::Init { name, template } => init::run(name, template),
     }
 }

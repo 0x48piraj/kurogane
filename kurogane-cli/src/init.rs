@@ -8,22 +8,27 @@ use include_dir::{include_dir, Dir};
 // Embed templates into the binary
 static TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/templates");
 
-pub fn run(template: Option<String>) -> Result<()> {
+pub fn run(name: Option<String>, template: Option<String>) -> Result<()> {
     println!("Kurogane project setup");
 
-    // Ask project name
-    print!("Project name: ");
-    io::stdout().flush()?;
+    let name = match name {
+        Some(n) => n,
+        None => {
+            // Ask project name
+            print!("Project name: ");
+            io::stdout().flush()?;
 
-    let mut name = String::new();
-    io::stdin().read_line(&mut name)?;
-    let name = name.trim();
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            input.trim().to_string()
+        }
+    };
 
     if name.is_empty() {
         bail!("[!] Project name cannot be empty.");
     }
 
-    let root = Path::new(name);
+    let root = Path::new(&name);
 
     if root.exists() {
         bail!("[!] Directory already exists.");
