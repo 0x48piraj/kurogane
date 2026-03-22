@@ -58,17 +58,36 @@
             export PKG_CONFIG_PATH="${
               pkgs.lib.makeSearchPath "lib/pkgconfig" runtimeDeps
             }"
-            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath runtimeDeps}"
 
             export CEF_PATH="$HOME/.local/share/cef"
-            export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$CEF_PATH"
+            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath runtimeDeps}:$CEF_PATH:$LD_LIBRARY_PATH"
             export PATH="$HOME/.cargo/bin:$PATH"
 
-            # Use cargo install and call via full path or rely on PATH update
-            alias setup-cef='cargo install --git https://github.com/tauri-apps/cef-rs export-cef-dir && "$HOME/.cargo/bin/export-cef-dir" --force "$CEF_PATH"'
+            alias kurogane-setup='
+              echo "Installing kurogane-cli...";
+              cargo install --path ./kurogane-cli --force;
+              echo "";
+              echo "Downloading CEF binaries...";
+              cargo install --git https://github.com/tauri-apps/cef-rs export-cef-dir && "$HOME/.cargo/bin/export-cef-dir" --force "$CEF_PATH";
+              echo "";
+              echo "Setup complete!"
+              echo "IMPORTANT: Do NOT run this inside the Kurogane repository."
+              echo "Create a new project directory and run:"
+              echo "  kurogane init"
+            '
 
-            echo "Kurogane dev shell ready"
-            echo "Run 'setup-cef' to download/install CEF binaries (if not already done)."
+            echo ""
+            echo "First time setup:"
+            echo "  1. Run: kurogane-setup"
+            echo "     (This installs CLI and downloads CEF)"
+            echo ""
+            echo "Regular development:"
+            echo "  - kurogane init   - Create new project"
+            echo "  - kurogane dev    - Run the project"
+            echo "  - kurogane build  - Build for production"
+            echo ""
+            echo "CEF will be installed to: $CEF_PATH"
+            echo ""
           '';
 
         };
