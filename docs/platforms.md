@@ -1,21 +1,7 @@
 
 # Install notes
 
-CEF still has a few operating-system security/runtime requirements that cannot be automated.
-
-From the project root:
-
-```bash
-cargo run -p rust-cef-installer
-```
-
-This installs CEF into:
-
-```
-~/.local/share/cef
-```
-
-No environment variables are required and nothing else needs to be configured.
+CEF still has a few operating-system security/runtime requirements that are not automated as of now.
 
 ## Linux (Sandbox permission)
 
@@ -52,7 +38,7 @@ cargo run
 
 macOS support currently works in development but proper `.app` bundling and signing are not finalized.
 
-No additional setup is required beyond installing CEF, but distribution outside development environments may fail until bundling support is completed.
+No additional setup is required beyond installing CEF but distribution outside development environments may fail until bundling support is completed.
 
 ## NixOS
 
@@ -62,8 +48,8 @@ Enter the dev-shell before building:
 nix develop
 ```
 
-Then install CEF normally:
+Run this **once** to set up the shared linked CEF installation:
 
 ```bash
-cargo run -p rust-cef-installer
+kurogane-setup
 ```
