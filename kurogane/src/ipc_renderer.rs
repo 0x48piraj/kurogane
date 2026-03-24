@@ -28,7 +28,7 @@ impl PromiseRegistry {
         id
     }
 
-    fn resolve_string(id: u32, success: bool, payload: &str) {
+    fn resolve_cef_string(id: u32, success: bool, payload: &CefString) {
         // Remove entry under lock; drop it before touching V8.
         // Holding the mutex across context.exit() can deadlock due to microtask reentrancy.
         let entry = {
@@ -44,13 +44,14 @@ impl PromiseRegistry {
                     eprintln!("[IPC] Failed to enter V8 context for promise id={}", id);
                     return;
                 }
-                let s = CefString::from(payload);
+
                 if success {
-                    let mut v = v8_value_create_string(Some(&s)).unwrap();
+                    let mut v = v8_value_create_string(Some(payload)).unwrap();
                     promise.resolve_promise(Some(&mut v));
                 } else {
-                    promise.reject_promise(Some(&s));
+                    promise.reject_promise(Some(payload));
                 }
+
                 context.exit(); // microtask checkpoint fires; lock is not held
             }
         }
@@ -116,6 +117,11 @@ fn outgoing_shm() -> &'static Mutex<HashMap<u32, SharedBuffer>> {
     OUTGOING_SHM.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[inline(always)]
+fn get_frame() -> Option<Frame> {
+    renderer_frame().lock().unwrap().clone()
+}
+
 /// Notify the browser that it can release its SHM response buffer.
 fn send_shm_free(id: u32, frame: &mut Frame) {
     let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
@@ -130,10 +136,17 @@ fn send_shm_free(id: u32, frame: &mut Frame) {
 // Helpers
 //
 
+#[inline(always)]
 fn list_int(args: &ListValue, idx: usize) -> i32 { args.int(idx) }
 
-fn list_string(args: &ListValue, idx: usize) -> String {
-    let s: CefString = (&args.string(idx)).into();
+#[inline(always)]
+fn list_cef_string(args: &ListValue, idx: usize) -> CefString {
+    (&args.string(idx)).into()
+}
+
+#[inline(always)]
+fn v8_to_string(v: &V8Value) -> String {
+    let s: CefString = (&v.string_value()).into();
     s.to_string()
 }
 
@@ -236,14 +249,14 @@ wrap_render_process_handler! {
                 1 => {
                     // Release outgoing SHM; browser has read it and responded
                     outgoing_shm().lock().unwrap().remove(&id);
-                    let payload = list_string(&args, 2);
-                    PromiseRegistry::resolve_string(id, true, &payload);
+                    let payload = list_cef_string(&args, 2);
+                    PromiseRegistry::resolve_cef_string(id, true, &payload);
                 }
 
                 2 => {
                     outgoing_shm().lock().unwrap().remove(&id);
-                    let payload = list_string(&args, 2);
-                    PromiseRegistry::resolve_string(id, false, &payload);
+                    let payload = list_cef_string(&args, 2);
+                    PromiseRegistry::resolve_cef_string(id, false, &payload);
                 }
 
                 4 => {
@@ -263,7 +276,8 @@ wrap_render_process_handler! {
                         PromiseRegistry::resolve_binary(id, &buf);
                     } else {
                         // Browser used SHM for this response
-                        let name = list_string(&args, 2);
+                        let name: CefString = (&args.string(2)).into();
+                        let name = name.to_string();
                         let size = list_int(&args, 3) as usize;
 
                         // Pass SHM slice directly; V8 performs the copy internally
@@ -272,7 +286,8 @@ wrap_render_process_handler! {
                             Ok(s) => s,
                             Err(e) => {
                                 eprintln!("[IPC] SHM open failed for id={}: {}", id, e);
-                                PromiseRegistry::resolve_string(id, false, &format!("shm transport error: {}", e));
+                                let msg = CefString::from(format!("shm transport error: {}", e).as_str());
+                                PromiseRegistry::resolve_cef_string(id, false, &msg);
                                 if let Some(f) = frame { send_shm_free(id, f); }
                                 return 1;
                             }
@@ -327,8 +342,7 @@ wrap_v8_handler! {
             // first arg: command string
             let cmd = match args.get(0) {
                 Some(Some(v)) if v.is_string() != 0 => {
-                    let s: CefString = (&v.string_value()).into();
-                    let s = s.to_string();
+                    let s = v8_to_string(v);
                     if s.is_empty() {
                         if let Some(exc) = exception { *exc = CefString::from("command cannot be empty"); }
                         return 0;
@@ -344,8 +358,7 @@ wrap_v8_handler! {
             // optional payload (string)
             let payload = match args.get(1) {
                 Some(Some(v)) if v.is_string() != 0 => {
-                    let s: CefString = (&v.string_value()).into();
-                    s.to_string()
+                    v8_to_string(v)
                 }
                 _ => String::new(),
             };
@@ -366,7 +379,7 @@ wrap_v8_handler! {
             debug!("[Renderer] JS invoke: '{}' (id={})", cmd, id);
 
             // Use the captured frame
-            if let Some(frame) = renderer_frame().lock().unwrap().clone() {
+            if let Some(frame) = get_frame() {
                 let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
                 let msg_args = msg.argument_list().unwrap();
 
@@ -415,8 +428,7 @@ wrap_v8_handler! {
 
             let cmd = match args.get(0) {
                 Some(Some(v)) if v.is_string() != 0 => {
-                    let s: CefString = (&v.string_value()).into();
-                    s.to_string()
+                    v8_to_string(v)
                 }
                 _ => {
                     if let Some(exc) = exception {
@@ -486,7 +498,7 @@ wrap_v8_handler! {
                 }
             });
 
-            if let Some(frame) = renderer_frame().lock().unwrap().clone() {
+            if let Some(frame) = get_frame() {
                 frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
             }
 
