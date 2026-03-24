@@ -454,10 +454,6 @@ wrap_v8_handler! {
                 return 0;
             }
 
-            let data = unsafe {
-                std::slice::from_raw_parts(ptr as *const u8, len)
-            };
-
             let context = match v8_context_get_current_context() {
                 Some(ctx) => ctx,
                 None => {
@@ -478,21 +474,23 @@ wrap_v8_handler! {
             msg_args.set_int(1, id as i32);
             msg_args.set_string(2, Some(&CefString::from(cmd.as_str())));
 
-            if data.len() < SHM_THRESHOLD {
-                // inline: faster for medium sizes
-                let mut binary = binary_value_create(Some(data)).unwrap();
-                msg_args.set_binary(3, Some(&mut binary));
-            } else {
-                // shm: only for large payloads
-                let mut shm = SharedBuffer::create(data.len());
-                shm.write(data);
+            with_array_buffer(ptr as *const u8, len, |data| {
+                if len < SHM_THRESHOLD {
+                    // inline: faster for small-medium sizes
+                    let mut binary = binary_value_create(Some(data)).unwrap();
+                    msg_args.set_binary(3, Some(&mut binary));
+                } else {
+                    // shm: only for large payloads
+                    let mut shm = SharedBuffer::create(len);
+                    shm.write(data);
 
-                let name = shm.name();
-                msg_args.set_string(3, Some(&CefString::from(name.as_str())));
-                msg_args.set_int(4, data.len() as i32);
-                // Keep alive until the response proves browser has read it
-                outgoing_shm().lock().unwrap().insert(id, shm);
-            }
+                    let name = shm.name();
+                    msg_args.set_string(3, Some(&CefString::from(name.as_str())));
+                    msg_args.set_int(4, len as i32);
+
+                    outgoing_shm().lock().unwrap().insert(id, shm);
+                }
+            });
 
             if let Some(frame) = renderer_frame().lock().unwrap().clone() {
                 frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
@@ -505,4 +503,36 @@ wrap_v8_handler! {
             1
         }
     }
+}
+
+#[inline(always)]
+fn with_array_buffer<R>(
+    ptr: *const u8,
+    len: usize,
+    f: impl FnOnce(&[u8]) -> R,
+) -> R {
+    // SAFETY:
+    //
+    // ptr originates from V8 ArrayBuffer backing store.
+    //
+    // This is safe because:
+    //
+    // 1. V8 guarantees the backing store is valid for the duration of
+    //    this callback (inside a V8 handler).
+    //
+    // 2. The slice is only exposed through the closure f, preventing it
+    //    from escaping this function (imposed by Rust lifetimes).
+    //
+    // 3. All uses must be synchronous. The data MUST NOT:
+    //    - be stored
+    //    - be sent across threads
+    //    - outlive this function
+    //
+    // After this function returns, V8 may move or free ArrayBuffer memory.
+    // Any use beyond this scope is undefined behavior.
+    let slice = unsafe {
+        std::slice::from_raw_parts(ptr, len)
+    };
+
+    f(slice)
 }
