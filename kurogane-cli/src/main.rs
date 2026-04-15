@@ -5,6 +5,7 @@ mod dev;
 mod build;
 mod bundle;
 mod init;
+mod doctor;
 mod info;
 
 #[derive(Parser)]
@@ -27,6 +28,7 @@ enum Commands {
         #[arg(long)]
         template: Option<String>,
     },
+    Doctor,
     Info,
 }
 
@@ -39,6 +41,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Build => build::run(),
         Commands::Bundle => bundle::run(),
         Commands::Init { name, template } => init::run(name, template),
+        Commands::Doctor => doctor::run(),
         Commands::Info => info::run(),
     }
 }
