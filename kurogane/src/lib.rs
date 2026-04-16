@@ -17,6 +17,7 @@ mod scheme;
 mod error;
 mod ipc_renderer;
 mod ipc_browser;
+mod ipc_protocol;
 mod ipc_shm;
 pub mod logger;
 

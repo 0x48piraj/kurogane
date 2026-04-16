@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::ipc_shm::{SharedBuffer, SHM_THRESHOLD};
+use crate::ipc_protocol::{get_kind, set_kind, IpcMsgKind};
 use crate::debug;
 
 pub type IpcResult = Result<String, String>;
@@ -200,18 +201,26 @@ pub fn handle_ipc_message(
         None => return false,
     };
 
-    // Message type: 0 = invoke, 1 = resolve (browser shouldn't receive), 2 = reject
-    let msg_type = list_get_int(&args, 0);
+    let kind = match get_kind(&args) {
+        Some(k) => k,
+        None => {
+            debug!("[IPC Browser] invalid ipc message type");
+            return false;
+        }
+    };
 
-    match msg_type {
+    let id = list_get_int(&args, 1) as u32;
+    debug!("[IPC Browser] message type={:?} id={}", kind, id);
+
+    match kind {
 
         // JSON invoke
-        0 => {
+        IpcMsgKind::Invoke => {
             let id = list_get_int(&args, 1) as u32;
             let command = list_get_string(&args, 2);
             let payload = list_get_string(&args, 3);
 
-            debug!("[Browser] IPC invoke: '{}' (id={})", command, id);
+            debug!("[IPC Browser] invoke: '{}' (id={})", command, id);
 
             let dispatcher = get_dispatcher();
             let result = std::panic::catch_unwind(|| {
@@ -234,7 +243,7 @@ pub fn handle_ipc_message(
         }
 
         // Binary invoke
-        3 => {
+        IpcMsgKind::BinaryInvoke => {
             let id = list_get_int(&args, 1) as u32;
             let command = list_get_string(&args, 2);
 
@@ -244,7 +253,7 @@ pub fn handle_ipc_message(
 
                 let written = binary.data(Some(&mut buf), 0);
                 buf.truncate(written);
-                debug!("[Browser] inline binary: {} bytes", written);
+                debug!("[IPC Browser] inline binary: {} bytes", written);
                 buf
             } else {
                 // Large payload via SHM; open before the renderer drops it
@@ -256,7 +265,7 @@ pub fn handle_ipc_message(
                 // shm unmapped here; renderer keeps its own alive until our response arrives
             };
 
-            debug!("[Browser] binary invoke: '{}' (id={}, {} bytes)", command, id, data.len());
+            debug!("[IPC Browser] binary invoke: '{}' (id={}, {} bytes)", command, id, data.len());
 
             let dispatcher = get_dispatcher();
 
@@ -270,14 +279,17 @@ pub fn handle_ipc_message(
         }
 
         // SHM_FREE: renderer has finished reading a large binary response
-        5 => {
+        IpcMsgKind::ShmFree => {
             let id = list_get_int(&args, 1) as u32;
-            debug!("[Browser] SHM_FREE for id={}", id);
+            debug!("[IPC Browser] SHM_FREE for id={}", id);
             response_shm_store().lock().unwrap().remove(&id);
             true
         }
 
-        _ => false,
+        _ => {
+            debug!("[IPC Browser] unhandled ipc message type={:?}", kind);
+            false
+        }
     }
 }
 
@@ -292,13 +304,13 @@ fn send_response(id: u32, result: IpcResult) {
     };
 
     let Some(call) = call else {
-        debug!("[IPC] dropping response {}, caller gone", id);
+        debug!("[IPC Browser] dropping response {}, caller gone", id);
         return;
     };
 
     // frame no longer exists
     if call.frame.is_valid() == 0 {
-        debug!("[IPC] frame destroyed, dropping {}", id);
+        debug!("[IPC Browser] frame destroyed, dropping {}", id);
         return;
     }
 
@@ -309,22 +321,22 @@ fn send_response(id: u32, result: IpcResult) {
     };
 
     if current_id != call.frame_id {
-        debug!("[IPC] navigation changed frame, dropping stale response {}", id);
+        debug!("[IPC Browser] navigation changed frame, dropping stale response {}", id);
         return;
     }
 
     let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
-    let args = msg.argument_list().unwrap();
+    let mut args = msg.argument_list().unwrap();
 
     match result {
         Ok(payload) => {
-            args.set_int(0, 1); // resolve
+            set_kind(&mut args, IpcMsgKind::Resolve);
             args.set_int(1, id as i32);
             args.set_string(2, Some(&CefString::from(payload.as_str())));
         }
 
         Err(err) => {
-            args.set_int(0, 2); // reject
+            set_kind(&mut args, IpcMsgKind::Reject);
             args.set_int(1, id as i32);
             args.set_string(2, Some(&CefString::from(err.as_str())));
         }
@@ -340,26 +352,26 @@ fn send_response(id: u32, result: IpcResult) {
 fn send_binary_response(id: u32, result: Result<Vec<u8>, String>, frame: &Frame) {
     // Guard against destroyed frames (mirrors send_response)
     if frame.is_valid() == 0 {
-        debug!("[IPC] frame destroyed before binary response id={}", id);
+        debug!("[IPC Browser] frame destroyed before binary response id={}", id);
         return;
     }
 
     let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
-    let args = msg.argument_list().unwrap();
+    let mut args = msg.argument_list().unwrap();
 
     match result {
 
         Ok(data) => {
-            args.set_int(0, 4);
+            set_kind(&mut args, IpcMsgKind::BinaryResponse);
             args.set_int(1, id as i32);
 
             if data.len() < SHM_THRESHOLD {
-                debug!("[Browser] inline binary response: {} bytes", data.len());
+                debug!("[IPC Browser] inline binary response: {} bytes", data.len());
                 let mut binary = binary_value_create(Some(data.as_slice())).unwrap();
                 args.set_binary(2, Some(&mut binary));
 
             } else {
-                debug!("[Browser] SHM binary response: {} bytes", data.len());
+                debug!("[IPC Browser] SHM binary response: {} bytes", data.len());
                 let mut shm = SharedBuffer::create(data.len());
                 shm.write(&data);
 
@@ -372,7 +384,7 @@ fn send_binary_response(id: u32, result: Result<Vec<u8>, String>, frame: &Frame)
         }
 
         Err(err) => {
-            args.set_int(0, 2); // reject
+            set_kind(&mut args, IpcMsgKind::Reject);
             args.set_int(1, id as i32);
             args.set_string(2, Some(&CefString::from(err.as_str())));
         }

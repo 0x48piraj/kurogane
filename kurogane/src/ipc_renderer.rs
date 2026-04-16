@@ -6,6 +6,7 @@ use std::sync::{Mutex, OnceLock};
 use std::collections::HashMap;
 
 use crate::ipc_shm::{SharedBuffer, SHM_THRESHOLD};
+use crate::ipc_protocol::{get_kind, set_kind, IpcMsgKind};
 use crate::debug;
 
 //
@@ -125,11 +126,11 @@ fn get_frame() -> Option<Frame> {
 /// Notify the browser that it can release its SHM response buffer.
 fn send_shm_free(id: u32, frame: &mut Frame) {
     let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
-    let args = msg.argument_list().unwrap();
-    args.set_int(0, 5); // SHM_FREE
+    let mut args = msg.argument_list().unwrap();
+    set_kind(&mut args, IpcMsgKind::ShmFree);
     args.set_int(1, id as i32);
     frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
-    debug!("[Renderer] SHM_FREE sent for id={}", id);
+    debug!("[IPC Renderer] SHM_FREE sent for id={}", id);
 }
 
 //
@@ -212,7 +213,7 @@ wrap_render_process_handler! {
                 0,
             );
 
-            debug!("[Renderer] Injected window.core.* + kurogane bridge");
+            debug!("[IPC Renderer] Injected window.core.* + kurogane bridge");
         }
 
         fn on_context_released(
@@ -242,24 +243,33 @@ wrap_render_process_handler! {
 
             let args = msg.argument_list().unwrap();
 
-            let msg_type = list_int(&args, 0);
+            let kind = match get_kind(&args) {
+                Some(k) => k,
+                None => {
+                    debug!("[IPC Renderer] invalid ipc message type");
+                    return 0;
+                }
+            };
+
             let id = list_int(&args, 1) as u32;
 
-            match msg_type {
-                1 => {
+            debug!("[IPC Renderer] message type={:?} id={}", kind, id);
+
+            match kind {
+                IpcMsgKind::Resolve => {
                     // Release outgoing SHM; browser has read it and responded
                     outgoing_shm().lock().unwrap().remove(&id);
                     let payload = list_cef_string(&args, 2);
                     PromiseRegistry::resolve_cef_string(id, true, &payload);
                 }
 
-                2 => {
+                IpcMsgKind::Reject => {
                     outgoing_shm().lock().unwrap().remove(&id);
                     let payload = list_cef_string(&args, 2);
                     PromiseRegistry::resolve_cef_string(id, false, &payload);
                 }
 
-                4 => {
+                IpcMsgKind::BinaryResponse => {
                     // Release outgoing SHM regardless of transport used in response
                     outgoing_shm().lock().unwrap().remove(&id);
 
@@ -271,7 +281,7 @@ wrap_render_process_handler! {
                         let written = binary.data(Some(&mut buf), 0);
                         buf.truncate(written);
 
-                        debug!("[Renderer] inline binary response: {} bytes", written);
+                        debug!("[IPC Renderer] inline binary response: {} bytes", written);
 
                         PromiseRegistry::resolve_binary(id, &buf);
                     } else {
@@ -303,7 +313,7 @@ wrap_render_process_handler! {
                 }
 
                 _ => {
-                    eprintln!("[IPC ERROR] unexpected message type {} from browser", msg_type);
+                    debug!("[IPC Renderer] unexpected ipc message type from browser: {:?}", kind);
                 }
             }
 
@@ -376,14 +386,14 @@ wrap_v8_handler! {
 
             let id = register_promise(context.clone(), promise.clone());
 
-            debug!("[Renderer] JS invoke: '{}' (id={})", cmd, id);
+            debug!("[IPC Renderer] JS invoke: '{}' (id={})", cmd, id);
 
             // Use the captured frame
             if let Some(frame) = get_frame() {
                 let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
-                let msg_args = msg.argument_list().unwrap();
+                let mut msg_args = msg.argument_list().unwrap();
 
-                msg_args.set_int(0, 0);
+                set_kind(&mut msg_args, IpcMsgKind::Invoke);
                 msg_args.set_int(1, id as i32);
                 msg_args.set_string(2, Some(&CefString::from(cmd.as_str())));
                 msg_args.set_string(3, Some(&CefString::from(payload.as_str())));
@@ -474,9 +484,9 @@ wrap_v8_handler! {
             let id = register_promise(context.clone(), promise.clone());
 
             let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
-            let msg_args = msg.argument_list().unwrap();
+            let mut msg_args = msg.argument_list().unwrap();
 
-            msg_args.set_int(0, 3);
+            set_kind(&mut msg_args, IpcMsgKind::BinaryInvoke);
             msg_args.set_int(1, id as i32);
             msg_args.set_string(2, Some(&CefString::from(cmd.as_str())));
 
