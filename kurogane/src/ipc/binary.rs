@@ -32,6 +32,21 @@ pub fn handle_shm_free(id: u32) {
     response_shm_store().lock().unwrap().remove(&id);
 }
 
+pub fn send_error(frame: &Frame, id: u32, err: String) {
+    if frame.is_valid() == 0 {
+        return;
+    }
+
+    let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
+    let mut args = msg.argument_list().unwrap();
+
+    set_kind(&mut args, IpcMsgKind::Reject);
+    args.set_int(1, id as i32);
+    args.set_string(2, Some(&CefString::from(err.as_str())));
+
+    frame.send_process_message(ProcessId::RENDERER, Some(&mut msg));
+}
+
 pub fn send_response(
     frame: &Frame,
     id: u32,
