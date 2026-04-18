@@ -16,12 +16,12 @@ pub fn handle_invoke(
     frame: &mut Frame,
     id: u32,
     command: String,
-    data: Vec<u8>,
+    data: &[u8],
 ) {
     let dispatcher = get_dispatcher();
 
     let result = std::panic::catch_unwind(|| {
-        dispatcher.lock().unwrap().dispatch_binary(&command, &data)
+        dispatcher.lock().unwrap().dispatch_binary(&command, data)
     })
     .unwrap_or_else(|_| Err("Binary handler panicked".to_string()));
 
