@@ -6,7 +6,7 @@
 use cef::*;
 use crate::debug;
 use crate::ipc::protocol::{set_kind, IpcMsgKind};
-use crate::ipc::transport::shm::{SharedBuffer, SHM_THRESHOLD};
+use crate::ipc::transport::shm::{SharedBuffer, SHM_THRESHOLD, SHM_HEADER_SIZE};
 use crate::ipc::renderer_state::{get_frame, register_promise, clear_context_promises, renderer_frame, outgoing_shm};
 use crate::ipc::router;
 use crate::bridge;
@@ -333,23 +333,32 @@ wrap_v8_handler! {
             msg_args.set_int(1, id as i32);
             msg_args.set_string(2, Some(&CefString::from(cmd.as_str())));
 
-            with_array_buffer(ptr as *const u8, len, |data| {
+            let result: Result<(), String> = with_array_buffer(ptr as *const u8, len, |data| {
                 if len < SHM_THRESHOLD {
                     // inline: faster for small-medium sizes
                     let mut binary = binary_value_create(Some(data)).unwrap();
                     msg_args.set_binary(3, Some(&mut binary));
+                    Ok(())
                 } else {
                     // shm: only for large payloads
-                    let mut shm = SharedBuffer::create(len);
-                    shm.write(data);
+                    let mut shm = SharedBuffer::create(len)?;
+                    shm.write(data)?;
 
                     let name = shm.name();
                     msg_args.set_string(3, Some(&CefString::from(name.as_str())));
-                    msg_args.set_int(4, len as i32);
+                    msg_args.set_int(4, (len + SHM_HEADER_SIZE) as i32);
 
                     outgoing_shm().lock().unwrap().insert(id, shm);
+
+                    Ok(())
                 }
             });
+
+            if let Err(e) = result {
+                let msg = CefString::from(e.as_str());
+                crate::ipc::rpc::resolve_cef_string(id, false, &msg);
+                return 1;
+            }
 
             if let Some(frame) = get_frame() {
                 frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));

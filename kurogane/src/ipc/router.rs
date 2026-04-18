@@ -35,21 +35,37 @@ pub fn route_browser(
         IpcMsgKind::BinaryInvoke => {
             let command = list_get_string(args, 2);
 
-            let data = if let Some(bin) = args.binary(3) {
-                let mut buf = vec![0u8; bin.size()];
-                let written = bin.data(Some(&mut buf), 0);
-                buf.truncate(written);
-                debug!("[IPC Browser] inline binary: {} bytes", written);
-                buf
-            } else {
-                // Large payload via SHM; open before the renderer drops it
-                // Handle SHM buffer reading for large payloads
-                let name = list_get_string(args, 3);
-                let size = list_get_int(args, 4) as usize;
-                let shm = crate::ipc::transport::shm::SharedBuffer::open(&name, size)
-                    .unwrap_or_else(|e| panic!("[IPC] {}", e));
-                shm.as_slice().to_vec()
-                // shm unmapped here; renderer keeps its own alive until our response arrives
+            let data_result: Result<Vec<u8>, String> = (|| {
+                if let Some(bin) = args.binary(3) {
+                    let mut buf = vec![0u8; bin.size()];
+                    let written = bin.data(Some(&mut buf), 0);
+                    buf.truncate(written);
+
+                    debug!("[IPC Browser] inline binary: {} bytes", written);
+
+                    Ok(buf)
+                } else {
+                    // Large payload via SHM; open before the renderer drops it
+                    // Handle SHM buffer reading for large payloads
+                    let name = list_get_string(args, 3);
+                    let size = list_get_int(args, 4) as usize;
+
+                    let shm = crate::ipc::transport::shm::SharedBuffer::open(&name, size)?;
+                    let data = shm.read()?.to_vec();
+
+                    Ok(data)
+
+                    // shm unmapped here; renderer keeps its own alive until our response arrives
+                }
+            })();
+
+            let data = match data_result {
+                Ok(d) => d,
+                Err(e) => {
+                    debug!("[IPC Browser] SHM failure: {}", e);
+                    binary::send_error(frame, id, e);
+                    return true;
+                }
             };
 
             debug!("[IPC Browser] binary invoke: '{}' (id={}, {} bytes)", command, id, data.len());

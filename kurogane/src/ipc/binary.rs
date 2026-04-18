@@ -5,7 +5,7 @@
 
 use cef::*;
 use crate::ipc::protocol::{IpcMsgKind, set_kind};
-use crate::ipc::transport::shm::{SharedBuffer, SHM_THRESHOLD};
+use crate::ipc::transport::shm::{SharedBuffer, SHM_THRESHOLD, SHM_HEADER_SIZE};
 use crate::ipc::renderer_state::{outgoing_shm, registry};
 use crate::ipc::browser_state::{response_shm_store, get_dispatcher};
 use crate::debug;
@@ -77,12 +77,22 @@ pub fn send_response(
             } else {
                 debug!("[IPC Browser] SHM binary response: {} bytes", data.len());
 
-                let mut shm = SharedBuffer::create(data.len());
-                shm.write(&data);
+                let mut shm = match SharedBuffer::create(data.len()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        debug!("[IPC Browser] SHM create failed: {}", e);
+                        return send_error(frame, id, e);
+                    }
+                };
+
+                if let Err(e) = shm.write(&data) {
+                    debug!("[IPC Browser] SHM write failed: {}", e);
+                    return send_error(frame, id, e);
+                }
 
                 let name = shm.name();
                 args.set_string(2, Some(&CefString::from(name.as_str())));
-                args.set_int(3, data.len() as i32);
+                args.set_int(3, (data.len() + SHM_HEADER_SIZE) as i32);
 
                 // Keep SHM alive; renderer sends msg_type 5 (SHM_FREE) after reading
                 response_shm_store().lock().unwrap().insert(id, shm);
@@ -139,7 +149,20 @@ pub fn handle_response(
             }
         };
 
-        resolve_binary(id, shm.as_slice());
+        let payload = match shm.read() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("[IPC] SHM read failed: {}", e);
+
+                let msg = CefString::from(format!("shm transport error: {}", e).as_str());
+                crate::ipc::rpc::resolve_cef_string(id, false, &msg);
+
+                send_shm_free(frame, id);
+                return;
+            }
+        };
+
+        resolve_binary(id, payload);
 
         // Notify browser it can release the SHM buffer
         send_shm_free(frame, id);
