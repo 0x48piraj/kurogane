@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::cell::RefCell;
 
 use crate::browser::DemoBrowserProcessHandler;
-use crate::ipc_renderer::IpcRenderProcessHandler;
+use crate::ipc::IpcRenderProcessHandler;
 use crate::debug;
 
 use cef::sys::cef_scheme_options_t::*;

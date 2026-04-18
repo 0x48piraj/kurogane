@@ -77,7 +77,7 @@ wrap_client! {
             let msg = message.unwrap();
 
             // Delegate to IPC dispatcher
-            if crate::ipc_browser::handle_ipc_message(browser, frame, msg) {
+            if crate::ipc::handle_ipc_message(browser, frame, msg) {
                 return 1;
             }
 

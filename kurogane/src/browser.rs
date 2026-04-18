@@ -26,7 +26,7 @@ wrap_browser_process_handler! {
             debug!("on_context_initialized called");
 
             // Initialize IPC dispatcher
-            crate::ipc_browser::init_dispatcher();
+            crate::ipc::init_dispatcher();
             debug!("IPC dispatcher initialized");
 
             // Register once per request context

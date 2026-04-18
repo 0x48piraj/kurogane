@@ -1,13 +1,24 @@
+//! IPC protocol definitions and wire format
+//!
+//! Defines message kinds and helper functions for encoding/decoding
+//! ListValue-based messages.
+
 use cef::{ListValue, ImplListValue};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 pub enum IpcMsgKind {
+    /// JSON RPC invoke (renderer to browser)
     Invoke = 0,
+    /// JSON RPC resolve (browser to renderer)
     Resolve = 1,
+    /// JSON RPC reject (browser to renderer)
     Reject = 2,
+    /// Binary invoke (renderer to browser)
     BinaryInvoke = 3,
+    /// Binary response (browser to renderer)
     BinaryResponse = 4,
+    /// SHM free notification (renderer to browser)
     ShmFree = 5,
 }
 
@@ -24,13 +35,9 @@ impl IpcMsgKind {
             _ => None,
         }
     }
-
-    #[inline]
-    pub fn as_int(self) -> i32 {
-        self as i32
-    }
 }
 
+/// Get message kind from ListValue (index 0)
 #[inline]
 pub fn get_kind(args: &ListValue) -> Option<IpcMsgKind> {
     IpcMsgKind::from_int(args.int(0))
@@ -38,5 +45,5 @@ pub fn get_kind(args: &ListValue) -> Option<IpcMsgKind> {
 
 #[inline]
 pub fn set_kind(args: &mut ListValue, kind: IpcMsgKind) {
-    args.set_int(0, kind.as_int());
+    args.set_int(0, kind as i32);
 }

@@ -15,10 +15,7 @@ mod window;
 mod client;
 mod scheme;
 mod error;
-mod ipc_renderer;
-mod ipc_browser;
-mod ipc_protocol;
-mod ipc_shm;
+pub mod ipc;
 pub mod logger;
 
 #[cfg(target_os = "macos")]
@@ -29,4 +26,8 @@ pub use error::RuntimeError;
 pub use app::App;
 
 // Re-export IPC types for public use
-pub use ipc_browser::{IpcResult, register_command, register_binary_command};
+pub use crate::ipc::{
+    IpcResult,
+    register_command,
+    register_binary_command
+};
