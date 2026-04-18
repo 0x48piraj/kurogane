@@ -4,6 +4,7 @@
 //! inline and shared memory based on payload size.
 
 use cef::*;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use crate::ipc::protocol::{IpcMsgKind, set_kind};
 use crate::ipc::transport::shm::{SharedBuffer, SHM_THRESHOLD, SHM_HEADER_SIZE};
 use crate::ipc::renderer_state::{outgoing_shm, registry};
@@ -20,9 +21,9 @@ pub fn handle_invoke(
 ) {
     let dispatcher = get_dispatcher();
 
-    let result = std::panic::catch_unwind(|| {
+    let result = catch_unwind(AssertUnwindSafe(|| {
         dispatcher.lock().unwrap().dispatch_binary(&command, data)
-    })
+    }))
     .unwrap_or_else(|_| Err("Binary handler panicked".to_string()));
 
     send_response(frame, id, result);
