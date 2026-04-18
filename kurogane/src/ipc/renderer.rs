@@ -9,8 +9,7 @@ use crate::ipc::protocol::{set_kind, IpcMsgKind};
 use crate::ipc::transport::shm::{SharedBuffer, SHM_THRESHOLD};
 use crate::ipc::renderer_state::{get_frame, register_promise, clear_context_promises, renderer_frame, outgoing_shm};
 use crate::ipc::router;
-
-const KUROGANE_BRIDGE: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/bridge/runtime.js"));
+use crate::bridge;
 
 //
 // Helpers
@@ -110,7 +109,7 @@ wrap_render_process_handler! {
             );
 
             frame.execute_java_script(
-                Some(&CefString::from(KUROGANE_BRIDGE)),
+                Some(&CefString::from(bridge::KUROGANE_BRIDGE)),
                 None,
                 0,
             );

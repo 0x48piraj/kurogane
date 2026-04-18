@@ -16,6 +16,7 @@ mod client;
 mod scheme;
 mod error;
 pub mod ipc;
+pub mod bridge;
 pub mod logger;
 
 #[cfg(target_os = "macos")]

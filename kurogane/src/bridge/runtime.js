@@ -4,6 +4,7 @@
 
     /**
      * Invoke a named JSON command.
+     *
      * Payload is serialized to JSON before sending and the response is deserialized.
      *
      * @param {string} command
@@ -25,7 +26,7 @@
      * Invoke a named binary command.
      *
      * Accepts ArrayBuffer or any ArrayBufferView (Uint8Array, Float32Array, DataView, etc.)
-     * The native side only understands plain ArrayBuffers, so this wrapper
+     * The native side only understands plain ArrayBuffers so this wrapper
      * automatically converts or slices the input to a proper ArrayBuffer.
      *
      * @param {string} command
