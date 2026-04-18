@@ -10,7 +10,7 @@ use crate::ipc::transport::shm::{SharedBuffer, SHM_THRESHOLD};
 use crate::ipc::renderer_state::{get_frame, register_promise, clear_context_promises, renderer_frame, outgoing_shm};
 use crate::ipc::router;
 
-const KUROGANE_BRIDGE: &str = include_str!("../../bridge/runtime.js");
+const KUROGANE_BRIDGE: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/bridge/runtime.js"));
 
 //
 // Helpers
