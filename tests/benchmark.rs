@@ -4,7 +4,6 @@ use serde_json::{Value};
 fn main() {
     App::path("benchmark")
         .command("echo", |payload: Value| {
-            println!("[echo] {:?}", payload);
             Ok(payload)
         })
         .binary_command("echo_binary", |data: &[u8]| {
