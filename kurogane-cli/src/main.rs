@@ -7,10 +7,11 @@ mod bundle;
 mod init;
 mod doctor;
 mod info;
+mod tui;
 
 #[derive(Parser)]
 #[command(name = "kurogane")]
-#[command(about = "Kurogane: Chromium runtime for building high-performance apps", version)]
+#[command(about = "Kurogane: GPU-accelerated runtime for building high-performance desktop apps", version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
