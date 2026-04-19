@@ -4,6 +4,7 @@
 //! like success, error, warnings and structured sections.
 
 use colored::*;
+use std::path::Path;
 use std::fmt::Display;
 
 /// Prints a success message.
@@ -42,3 +43,7 @@ pub fn section(title: &str) {
     println!("\n{}\n", title.bold());
 }
 
+/// Formats a path for display ensuring consistent output across platforms.
+pub fn format_path(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
