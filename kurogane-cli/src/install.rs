@@ -1,5 +1,4 @@
-use anyhow::{Context, Result};
-use cargo_metadata::MetadataCommand;
+use anyhow::Result;
 use download_cef::{CefIndex, DEFAULT_TARGET};
 use std::time::Duration;
 use std::path::{Path, PathBuf};
@@ -17,15 +16,7 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    let cef_version = match required_cef_version() {
-        Ok(v) => v,
-        Err(_) => {
-            tui::warn("Could not detect project's Chromium engine version");
-            return Err(anyhow::anyhow!(
-                "Run this inside a kurogane project or build once."
-            ));
-        }
-    };
+    let cef_version = env!("KUROGANE_CEF_VERSION").to_string();
 
     tui::step("Resolving version...");
     tui::field("chromium", &cef_version);
@@ -85,27 +76,6 @@ fn default_install_dir() -> PathBuf {
     dirs::home_dir()
         .expect("no home dir")
         .join(".local/share/cef")
-}
-
-fn required_cef_version() -> Result<String> {
-    let metadata = MetadataCommand::new()
-        .exec()
-        .context("failed to read cargo metadata")?;
-
-    let pkg = metadata
-        .packages
-        .iter()
-        .find(|p| p.name == "cef-dll-sys")
-        .context("cef-dll-sys not found in dependency graph")?;
-
-    let version = pkg.version.to_string();
-
-    let cef_version = version
-        .split('+')
-        .nth(1)
-        .context("invalid cef-dll-sys version format")?;
-
-    Ok(cef_version.to_string())
 }
 
 fn print_env_instructions(root: &Path) {
