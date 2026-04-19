@@ -2,7 +2,7 @@ use kurogane::App;
 use serde_json::{Value, json};
 
 fn main() {
-    App::path("content")
+    App::new("content")
         .command("echo", |v: Value| Ok(v))
         .command("add", |v: Value| {
             let a = v["a"].as_i64().unwrap_or(0);

@@ -18,7 +18,6 @@ type BinaryHandler =
 
 /// Describes where the frontend comes from
 enum Source {
-    Name(String),
     Url(String),
     Path(PathBuf),
 }
@@ -33,18 +32,10 @@ pub struct App {
 }
 
 impl App {
-    /// Create an app from a name OR URL
-    pub fn new(input: impl Into<String>) -> Self {
-        let input = input.into();
-
-        let source = if input.starts_with("http://") || input.starts_with("https://") {
-            Source::Url(input)
-        } else {
-            Source::Name(input)
-        };
-
+    /// Create an app from a local directory (default entrypoint)
+    pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
-            source,
+            source: Source::Path(path.into()),
             commands: Vec::new(),
             binary_commands: Vec::new(),
         }
@@ -54,15 +45,6 @@ impl App {
     pub fn url(url: impl Into<String>) -> Self {
         Self {
             source: Source::Url(url.into()),
-            commands: Vec::new(),
-            binary_commands: Vec::new(),
-        }
-    }
-
-    /// Load frontend from explicit directory (escape hatch for power users)
-    pub fn path(path: impl Into<PathBuf>) -> Self {
-        Self {
-            source: Source::Path(path.into()),
             commands: Vec::new(),
             binary_commands: Vec::new(),
         }
@@ -92,7 +74,7 @@ impl App {
 
     /// Start the application
     pub fn run(self) -> Result<(), RuntimeError> {
-        let (asset_root, url) = resolver::resolve(&self.source);
+        let (asset_root, url) = resolver::resolve(&self.source)?;
 
         let require_assets = asset_root.is_some();
 
@@ -112,9 +94,7 @@ impl App {
     }
 
     /// Run the application and terminate the process on failure.
-    ///
-    /// Intended for binaries and examples.
-    /// Libraries embedding the runtime should use run() instead.
+    /// Intended for binaries. Libraries embedding the runtime should use run() instead.
     pub fn run_or_exit(self) {
         if let Err(e) = self.run() {
             eprintln!("\nApplication failed to start:\n{}\n", e);

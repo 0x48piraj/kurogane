@@ -2,7 +2,7 @@ use kurogane::App;
 use serde_json::{Value};
 
 fn main() {
-    App::path("benchmark")
+    App::new("benchmark")
         .command("echo", |payload: Value| {
             Ok(payload)
         })

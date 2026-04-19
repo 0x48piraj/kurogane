@@ -2,7 +2,7 @@ use kurogane::App;
 use serde_json::{Value, json};
 
 fn main() {
-App::path("content")
+App::new("content")
     // Echo: returns exactly what was sent
     .command("echo", |payload: Value| {
         println!("[echo] {:?}", payload);

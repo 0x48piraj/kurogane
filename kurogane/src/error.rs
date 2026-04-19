@@ -15,12 +15,12 @@ impl Display for RuntimeError {
                 f,
                 "No frontend assets were configured.
 
-You attempted to launch a local application, but no asset directory was set.
+You attempted to launch a local application but no frontend backend was set.
 
 Possible fixes:
-  - Run using App::new(\"demo\") inside a project containing examples/demo/index.html
-  - Set environment variable CEF_APP_PATH to your frontend directory
-  - Use a dev server URL: App::new(\"http://localhost:8000\")"
+  - Make sure your app is using App::new(\"your-frontend-directory\")
+  - Use a dev server URL: App::url(\"http://your-dev-server\")
+  - Set environment variable CEF_APP_PATH to your frontend directory"
             ),
 
             RuntimeError::AssetRootMissing(p) => write!(
@@ -47,7 +47,7 @@ are missing next to the executable."
 
 Install it with:
 
-    cargo run -p rust-cef-installer
+    kurogane install
 
 Then run your application again."
             ),

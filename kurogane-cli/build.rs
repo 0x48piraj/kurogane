@@ -4,7 +4,7 @@ fn main() {
     // Ask Cargo for resolved dependency graph
     let metadata = MetadataCommand::new()
         .exec()
-        .expect("Failed to read cargo metadata");
+        .expect("failed to read cargo metadata");
 
     // Find cef-dll-sys package
     let pkg = metadata.packages.iter()
@@ -17,7 +17,7 @@ fn main() {
     let cef_version = version
         .split('+')
         .nth(1)
-        .expect("Invalid cef version format");
+        .expect("invalid cef version format");
 
     println!("cargo:rustc-env=KUROGANE_CEF_VERSION={}", cef_version);
 
