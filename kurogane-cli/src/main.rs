@@ -9,9 +9,6 @@ mod doctor;
 mod info;
 mod tui;
 
-#[cfg(target_os = "macos")]
-use crate::tui;
-
 #[derive(Parser)]
 #[command(name = "kurogane")]
 #[command(about = "Kurogane: GPU-accelerated runtime for building high-performance desktop apps", version)]
@@ -37,14 +34,7 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
-    // macOS is currently unsupported due to missing platform-specific runtime support.
-    // Fail fast to avoid undefined behavior.
-    #[cfg(target_os = "macos")]
-    {
-        tui::error("macOS is not supported");
-        tui::info("Support is planned but not implemented yet");
-        std::process::exit(1);
-    }
+    validate_platform();
 
     let cli = Cli::parse();
 
@@ -56,5 +46,17 @@ fn main() -> anyhow::Result<()> {
         Commands::Init { name, template } => init::run(name, template),
         Commands::Doctor => doctor::run(),
         Commands::Info => info::run(),
+    }
+}
+
+/// macOS is currently unsupported due to missing platform-specific runtime support.
+/// Fail fast to avoid undefined behavior.
+#[cold]
+fn validate_platform() {
+    #[cfg(target_os = "macos")]
+    {
+        tui::error("macOS is not supported");
+        tui::info("Support is planned but not implemented yet");
+        std::process::exit(1);
     }
 }
