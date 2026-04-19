@@ -5,11 +5,13 @@ use std::path::{Path, PathBuf};
 
 use include_dir::{include_dir, Dir};
 
+use crate::tui;
+
 // Embed templates into the binary
 static TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/templates");
 
 pub fn run(name: Option<String>, template: Option<String>) -> Result<()> {
-    println!("Kurogane project setup");
+    tui::section("Kurogane project setup");
 
     let name = match name {
         Some(n) => n,
@@ -25,17 +27,21 @@ pub fn run(name: Option<String>, template: Option<String>) -> Result<()> {
     };
 
     if name.is_empty() {
-        bail!("[!] Project name cannot be empty.");
+        bail!("Project name cannot be empty.");
     }
 
     let root = Path::new(&name);
 
     if root.exists() {
-        bail!("[!] Directory already exists.");
+        bail!("Directory already exists.");
     }
 
     // Choose template
     let template = template.unwrap_or_else(|| "vanilla".to_string());
+
+    tui::step("Creating project");
+    tui::field("name", &name);
+    tui::field("template", &template);
 
     // Extract template from embedded assets
     extract_template(&template, root)?;
@@ -55,10 +61,17 @@ CEF_PATH = {{ value = "{}", force = true }}
         ),
     )?;
 
-    println!("\n[+] Project '{}' created using '{}' template!", name, template);
-    println!("Next steps:");
-    println!("  cd {}", name);
-    println!("  kurogane dev");
+    tui::success("Project created");
+    tui::field("name", &name);
+    tui::field("template", &template);
+
+    println!();
+
+    tui::info("Next steps");
+    println!("    cd {}", name);
+    println!("    kurogane dev");
+
+    println!();
 
     Ok(())
 }

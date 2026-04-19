@@ -1,16 +1,24 @@
 use anyhow::Result;
 use std::process::Command;
 
+use crate::tui;
+
 pub fn run() -> Result<()> {
-    println!("Starting dev mode...");
+    tui::section("Kurogane Dev");
 
     let cef = dirs::home_dir()
         .expect("no home dir")
         .join(".local/share/cef");
 
+    tui::step("Checking CEF");
+
     if !cef.exists() {
-        println!("CEF not found. Installing...");
+        tui::warn("CEF not found");
+        tui::info("installing...");
         crate::install::run()?;
+    } else {
+        tui::success("CEF ready");
+        tui::field("path", tui::format_path(&cef));
     }
 
     // Pass env to build step
@@ -44,11 +52,17 @@ pub fn run() -> Result<()> {
         cmd.env("DYLD_FALLBACK_LIBRARY_PATH", dyld);
     }
 
+    println!();
+    tui::step("Launching application");
+
     let status = cmd.status()?;
 
     if !status.success() {
         anyhow::bail!("Application failed");
     }
+
+    println!();
+    tui::success("Application exited");
 
     Ok(())
 }

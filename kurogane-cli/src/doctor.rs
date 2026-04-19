@@ -16,10 +16,10 @@ pub fn run() -> Result<()> {
 
     if cef_path.exists() {
         tui::success("CEF installation");
-        tui::field("path", cef_path.display());
+        tui::field("path", tui::format_path(&cef_path));
     } else {
         tui::error("CEF not found");
-        tui::field("expected", cef_path.display());
+        tui::field("expected", tui::format_path(&cef_path));
         tui::info("Run: kurogane install");
         fail += 1;
     }
