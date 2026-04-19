@@ -1,8 +1,12 @@
 use anyhow::Result;
 use std::process::Command;
 
+use crate::tui;
+
 pub fn run() -> Result<()> {
-    println!("Building release app...");
+    tui::section("Kurogane Build");
+
+    tui::step("Building release app...");
 
     let status = Command::new("cargo")
         .arg("build")
@@ -10,10 +14,11 @@ pub fn run() -> Result<()> {
         .status()?;
 
     if !status.success() {
-        anyhow::bail!("Build failed.");
+        anyhow::bail!("Build failed");
     }
 
-    println!("Build complete.");
+    println!();
+    tui::success("Build complete");
 
     Ok(())
 }

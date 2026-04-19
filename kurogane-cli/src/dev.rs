@@ -10,14 +10,14 @@ pub fn run() -> Result<()> {
         .expect("no home dir")
         .join(".local/share/cef");
 
-    tui::step("Checking CEF");
+    tui::step("Checking Chromium engine");
 
     if !cef.exists() {
-        tui::warn("CEF not found");
-        tui::info("installing...");
+        tui::warn("Chromium engine not found");
+        tui::info("Initiating install process");
         crate::install::run()?;
     } else {
-        tui::success("CEF ready");
+        tui::success("Chromium engine ready");
         tui::field("path", tui::format_path(&cef));
     }
 

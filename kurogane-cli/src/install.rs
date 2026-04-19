@@ -4,27 +4,31 @@ use download_cef::{CefIndex, DEFAULT_TARGET};
 use std::time::Duration;
 use std::path::{Path, PathBuf};
 
+use crate::tui;
+
 pub fn run() -> Result<()> {
-    println!("Kurogane CEF installer");
+    tui::section("Kurogane installer");
 
     let install_dir = default_install_dir(); // ~/.local/share/cef
 
     if install_dir.exists() {
-        println!("[+] CEF already installed at {}", install_dir.display());
+        tui::success("Chromium engine already installed");
+        tui::field("path", tui::format_path(&install_dir));
         return Ok(());
     }
 
     let cef_version = match required_cef_version() {
         Ok(v) => v,
         Err(_) => {
-            println!("[~] Could not detect project CEF version, falling back...");
+            tui::warn("Could not detect project's Chromium engine version");
             return Err(anyhow::anyhow!(
                 "Run this inside a kurogane project or build once."
             ));
         }
     };
 
-    println!("[!] Required CEF version: {}", cef_version);
+    tui::step("Resolving version...");
+    tui::field("chromium", &cef_version);
 
     let parent = install_dir.parent().unwrap(); // ~/.local/share
     std::fs::create_dir_all(parent)?;
@@ -33,7 +37,7 @@ pub fn run() -> Result<()> {
     let platform = index.platform(DEFAULT_TARGET)?;
     let version = platform.version(&cef_version)?;
 
-    println!("[*] Downloading matching CEF build...");
+    tui::step("Downloading Chromium engine...");
 
     let archive = version.download_archive_with_retry(
         parent,
@@ -42,7 +46,8 @@ pub fn run() -> Result<()> {
         3,
     )?;
 
-    println!("[*] Extracting...");
+    tui::step("Extracting...");
+
     let extracted = download_cef::extract_target_archive(
         DEFAULT_TARGET,
         &archive,
@@ -55,16 +60,22 @@ pub fn run() -> Result<()> {
 
     // Replace existing install (safety, though we already early-returned)
     if install_dir.exists() {
-        println!("[*] Removing old install...");
+        tui::step("Removing old install...");
         std::fs::remove_dir_all(&install_dir)?;
     }
 
-    println!("[*] Installing to {}", install_dir.display());
+    tui::step("Installing...");
+    tui::field("path", tui::format_path(&install_dir));
+
     std::fs::rename(&extracted, &install_dir)?;
 
     let _ = std::fs::remove_file(&archive);
 
-    println!("\n[+] CEF installed at {}", install_dir.display());
+    println!();
+
+    tui::success("Chromium engine installed");
+    tui::field("path", tui::format_path(&install_dir));
+
     print_env_instructions(&install_dir);
 
     Ok(())
@@ -98,38 +109,42 @@ fn required_cef_version() -> Result<String> {
 }
 
 fn print_env_instructions(root: &Path) {
-    println!("\nInitializing runtime (one-time setup)\n");
+    println!();
+    tui::section("Environment setup (optional)");
 
     #[cfg(target_os = "windows")]
     {
-        println!("PowerShell:");
-        println!(r#"$env:CEF_PATH="{}""#, root.display());
-        println!(r#"$env:PATH="$env:PATH;$env:CEF_PATH""#);
+        tui::info("PowerShell");
+        println!(r#"    $env:CEF_PATH="{}""#, tui::format_path(root));
+        println!(r#"    $env:PATH="$env:PATH;$env:CEF_PATH""#);
     }
 
     #[cfg(target_os = "linux")]
     {
-        println!(r#"export CEF_PATH="{}""#, root.display());
-        println!(r#"export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$CEF_PATH""#);
-        println!("Run once:");
+        println!(r#"    export CEF_PATH="{}""#, tui::format_path(root));
+        println!(r#"    export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$CEF_PATH""#);
+        println!();
+        tui::warn("Run once");
         println!(
-            " sudo chown root:root {}/chrome-sandbox",
-            root.display()
+            "    sudo chown root:root {}/chrome-sandbox",
+            tui::format_path(root)
         );
         println!(
-            " sudo chmod 4755 {}/chrome-sandbox",
-            root.display()
+            "    sudo chmod 4755 {}/chrome-sandbox",
+            tui::format_path(root)
         );
     }
 
     #[cfg(target_os = "macos")]
     {
-        println!(r#"export CEF_PATH="{}""#, root.display());
+        println!(r#"    export CEF_PATH="{}""#, tui::format_path(root));
         println!(
-            r#"export DYLD_FALLBACK_LIBRARY_PATH="$DYLD_FALLBACK_LIBRARY_PATH:$CEF_PATH:$CEF_PATH/Chromium Embedded Framework.framework/Libraries""#
+            r#"    export DYLD_FALLBACK_LIBRARY_PATH="$DYLD_FALLBACK_LIBRARY_PATH:$CEF_PATH:$CEF_PATH/Chromium Embedded Framework.framework/Libraries""#
         );
     }
 
-    println!("\nRestart your terminal after running these commands.");
-    println!("Then run: kurogane dev\n");
+    println!();
+    tui::step("Restart your terminal after running these commands");
+    tui::step("Then run: kurogane dev");
+    println!();
 }

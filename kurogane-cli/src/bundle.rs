@@ -3,10 +3,14 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::tui;
+
 pub fn run() -> Result<()> {
-    println!("Bundling application...");
+    tui::section("Kurogane Bundle");
 
     // Ensure release build
+    tui::step("Building release...");
+
     let status = Command::new("cargo")
         .arg("build")
         .arg("--release")
@@ -19,34 +23,48 @@ pub fn run() -> Result<()> {
     let target = PathBuf::from("target/release");
 
     // Find executable
+    tui::step("Locating executable...");
     let exe = find_exe(&target)?;
+    tui::field("binary", tui::format_path(&exe));
 
     // Prepare destination
     let dist = PathBuf::from("dist");
 
     if dist.exists() {
+        tui::step("Cleaning build directory...");
         fs::remove_dir_all(&dist)?;
     }
 
     fs::create_dir_all(&dist)?;
 
     // Copy executable
+    tui::step("Copying executable...");
+
     let exe_name = exe.file_name().unwrap();
     fs::copy(&exe, dist.join(exe_name))?;
 
     // Copy frontend
     let content = PathBuf::from("content");
     if content.exists() {
+        tui::step("Copying frontend...");
         copy_dir(&content, &dist.join("content"))?;
+    } else {
+        tui::warn("No content/ directory found");
     }
 
     // Copy CEF
+    tui::step("Copying Chromium engine...");
+
     let cef_src = find_cef()?;
     let cef_dst = dist.join("cef");
 
+    tui::field("source", tui::format_path(&cef_src));
+
     copy_dir(&cef_src, &cef_dst)?;
 
-    println!("Bundle ready at ./dist");
+    println!();
+    tui::success("Bundle ready");
+    tui::field("path", "./dist");
 
     Ok(())
 }
@@ -64,7 +82,7 @@ fn find_exe(dir: &PathBuf) -> Result<PathBuf> {
         }
     }
 
-    bail!("[!] No executable found in {:?}", dir);
+    bail!("No executable found in {:?}", dir);
 }
 
 fn copy_dir(src: &PathBuf, dst: &PathBuf) -> Result<()> {
@@ -100,5 +118,5 @@ fn find_cef() -> Result<PathBuf> {
         }
     }
 
-    anyhow::bail!("[!] CEF not found. Run 'kurogane install'.");
+    anyhow::bail!("Chromium engine not found. Run 'kurogane install'.");
 }
