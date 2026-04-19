@@ -1,8 +1,13 @@
 use anyhow::Result;
 use std::path::PathBuf;
 
+use crate::tui;
+
 pub fn run() -> Result<()> {
-    println!("Kurogane Doctor\n");
+    tui::section("Kurogane Doctor");
+
+    let mut warn = 0;
+    let mut fail = 0;
 
     // Check CEF installation
     let cef_path = dirs::home_dir()
@@ -10,33 +15,61 @@ pub fn run() -> Result<()> {
         .unwrap_or(PathBuf::from("~/.local/share/cef"));
 
     if cef_path.exists() {
-        println!("[+] CEF installed at {}", cef_path.display());
+        tui::success("CEF installation");
+        tui::field("path", cef_path.display());
     } else {
-        println!("[-] CEF not found at {}", cef_path.display());
-        println!("    Run: kurogane install");
+        tui::error("CEF not found");
+        tui::field("expected", cef_path.display());
+        tui::info("Run: kurogane install");
+        fail += 1;
     }
+
+    println!();
 
     // Check CEF_PATH env
     match std::env::var("CEF_PATH") {
-        Ok(v) => println!("[+] CEF_PATH is set ({})", v),
-        Err(_) => println!("[!] CEF_PATH not set (fallback will be used)"),
+        Ok(v) => {
+            tui::success("Environment");
+            tui::field("CEF_PATH", v);
+        }
+        Err(_) => {
+            tui::warn("Environment");
+            tui::field("CEF_PATH", "not set");
+            tui::step("Resolved to default install path");
+            warn += 1;
+        }
+    }
+
+    println!();
+
+    // Check Cargo.toml
+    if std::path::Path::new("Cargo.toml").exists() {
+        tui::success("Cargo project detected");
+    } else {
+        tui::error("Not inside a Rust project");
+        fail += 1;
     }
 
     // Check project structure
     if std::path::Path::new("content").exists() {
-        println!("[+] content/ directory found");
+        tui::success("Using default directory");
     } else {
-        println!("[!] content/ directory missing");
+        tui::warn("Default content directory not found");
+        tui::field("default", "./content");
+        warn += 1;
     }
 
-    // Check Cargo.toml
-    if std::path::Path::new("Cargo.toml").exists() {
-        println!("[+] Cargo.toml found");
+    tui::section("Summary");
+
+    if fail > 0 {
+        tui::error("System status: Non-operational");
+    } else if warn > 0 {
+        tui::warn("System status: Degraded (warnings detected)");
     } else {
-        println!("[-] Not inside a Rust project");
+        tui::success("System status: Operational");
     }
 
-    println!("\nDoctor check complete.\n");
+    println!();
 
     Ok(())
 }
