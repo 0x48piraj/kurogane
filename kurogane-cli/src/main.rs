@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::ffi::OsString;
 
 mod install;
 mod dev;
@@ -20,7 +21,15 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Install,
-    Dev,
+    Dev {
+        #[arg(
+            num_args = 0..,
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_parser = clap::value_parser!(OsString)
+        )]
+        cargo_args: Vec<OsString>,
+    },
     Build,
     Bundle,
     Init {
@@ -40,7 +49,7 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Install => install::run(),
-        Commands::Dev => dev::run(),
+        Commands::Dev { cargo_args } => dev::run(cargo_args),
         Commands::Build => build::run(),
         Commands::Bundle => bundle::run(),
         Commands::Init { name, template } => init::run(name, template),

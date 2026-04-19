@@ -1,9 +1,10 @@
 use anyhow::Result;
+use std::ffi::OsString;
 use std::process::Command;
 
 use crate::tui;
 
-pub fn run() -> Result<()> {
+pub fn run(cargo_args: Vec<OsString>) -> Result<()> {
     tui::section("Kurogane Dev");
 
     let cef = dirs::home_dir()
@@ -24,6 +25,10 @@ pub fn run() -> Result<()> {
     // Pass env to build step
     let mut cmd = Command::new("cargo");
     cmd.arg("run");
+
+    for arg in cargo_args {
+        cmd.arg(arg);
+    }
 
     cmd.env("CEF_PATH", &cef);
 
@@ -46,8 +51,7 @@ pub fn run() -> Result<()> {
 
     #[cfg(target_os = "macos")]
     {
-        let mut dyld =
-            std::env::var("DYLD_FALLBACK_LIBRARY_PATH").unwrap_or_default();
+        let mut dyld = std::env::var("DYLD_FALLBACK_LIBRARY_PATH").unwrap_or_default();
         dyld = format!("{}:{}", cef.display(), dyld);
         cmd.env("DYLD_FALLBACK_LIBRARY_PATH", dyld);
     }
