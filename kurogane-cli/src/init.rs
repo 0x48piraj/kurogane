@@ -56,6 +56,9 @@ pub fn run(name: Option<String>, template: Option<String>) -> Result<()> {
         format!(
             r#"[env]
 CEF_PATH = {{ value = "{}", force = true }}
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN/cef"]
 "#,
             cef_path
         ),
