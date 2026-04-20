@@ -3,6 +3,54 @@ use std::path::PathBuf;
 
 use crate::tui;
 
+struct ToolCheck {
+    name: &'static str,
+    cmd: &'static str,
+    hint: &'static str,
+}
+
+fn required_tools() -> Vec<ToolCheck> {
+    if cfg!(windows) {
+        vec![
+            ToolCheck {
+                name: "MSVC",
+                cmd: "cl",
+                hint: "not available",
+            },
+            ToolCheck {
+                name: "CMake",
+                cmd: "cmake",
+                hint: "not found",
+            },
+            ToolCheck {
+                name: "Ninja",
+                cmd: "ninja",
+                hint: "not found",
+            },
+        ]
+    } else {
+        vec![
+            ToolCheck {
+                name: "C compiler (cc)",
+                cmd: "cc",
+                hint: "No C compiler found. Run: 'sudo apt install build-essential' # or distro equivalent",
+            },
+            ToolCheck {
+                name: "CMake",
+                cmd: "cmake",
+                hint: "Ninja not found. Run: 'sudo apt install cmake' # or distro equivalent",
+            },
+        ]
+    }
+}
+
+fn probe(cmd: &str) -> bool {
+    std::process::Command::new(cmd)
+        .arg("--version")
+        .output()
+        .is_ok()
+}
+
 pub fn run() -> Result<()> {
     tui::section("Kurogane Doctor");
 
@@ -12,7 +60,7 @@ pub fn run() -> Result<()> {
     // Check CEF installation
     let cef_path = dirs::home_dir()
         .map(|h| h.join(".local/share/cef"))
-        .unwrap_or(PathBuf::from("~/.local/share/cef"));
+        .unwrap_or_else(|| PathBuf::from("~/.local/share/cef"));
 
     if cef_path.exists() {
         tui::success("CEF installation");
@@ -36,11 +84,49 @@ pub fn run() -> Result<()> {
             tui::warn("Environment");
             tui::field("CEF_PATH", "not set");
             tui::step("Resolved to default install path");
-            warn += 1;
         }
     }
 
-    println!();
+    tui::section("Toolchain");
+
+    let tools = required_tools();
+
+    let mut missing = Vec::new();
+
+    for tool in tools {
+        if !probe(tool.cmd) {
+            missing.push(tool);
+            fail += 1;
+        } else {
+            tui::success(tool.name);
+        }
+    }
+
+    if !missing.is_empty() {
+        // Grouped hints
+        if cfg!(windows) {
+            if std::env::var("VCINSTALLDIR").is_ok() {
+                tui::error("Missing Visual Studio components");
+                tui::field("hint", "Install C++ workload via Visual Studio Installer");
+            } else {
+                tui::error("Build toolchain not available");
+                tui::field("hint", "Run from 'Developer Command Prompt for VS' (search in Start menu)");
+            }
+        } else {
+            tui::error("Build toolchain not found");
+        }
+
+        println!();
+
+        tui::info("Components:");
+
+        // Structured details
+        for tool in &missing {
+            tui::field(tool.name, tool.hint);
+        }
+    }
+
+    tui::section("Project");
 
     // Check Cargo.toml
     if std::path::Path::new("Cargo.toml").exists() {
@@ -52,7 +138,7 @@ pub fn run() -> Result<()> {
 
     // Check project structure
     if std::path::Path::new("content").exists() {
-        tui::success("Using default directory");
+        tui::success("Using default frontend directory");
     } else {
         tui::warn("Default content directory not found");
         tui::field("default", "./content");
@@ -61,12 +147,10 @@ pub fn run() -> Result<()> {
 
     tui::section("Summary");
 
-    if fail > 0 {
-        tui::error("System status: Non-operational");
-    } else if warn > 0 {
-        tui::warn("System status: Degraded (warnings detected)");
-    } else {
-        tui::success("System status: Operational");
+    match (fail, warn) {
+        (f, _) if f > 0 => tui::error("System status: Non-operational"),
+        (_, w) if w > 0 => tui::warn("System status: Degraded (warnings detected)"),
+        _ => tui::success("System status: Operational"),
     }
 
     println!();
