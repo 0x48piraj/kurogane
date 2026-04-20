@@ -1,7 +1,8 @@
 use anyhow::{Result, bail};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use std::process::Command;
+use cargo_metadata::{MetadataCommand, TargetKind};
 
 use crate::tui;
 
@@ -20,11 +21,9 @@ pub fn run() -> Result<()> {
         bail!("Release build failed");
     }
 
-    let target = PathBuf::from("target/release");
-
     // Find executable
     tui::step("Locating executable...");
-    let exe = find_exe(&target)?;
+    let exe = find_exe()?;
     tui::field("binary", tui::format_path(&exe));
 
     // Prepare destination
@@ -56,11 +55,11 @@ pub fn run() -> Result<()> {
     tui::step("Copying Chromium engine...");
 
     let cef_src = find_cef()?;
-    let cef_dst = dist.join("cef");
 
     tui::field("source", tui::format_path(&cef_src));
+    tui::step("Preparing runtime...");
 
-    copy_dir(&cef_src, &cef_dst)?;
+    copy_cef_bundle(&cef_src, &dist)?;
 
     println!();
     tui::success("Bundle ready");
@@ -69,23 +68,35 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn find_exe(dir: &PathBuf) -> Result<PathBuf> {
-    for entry in fs::read_dir(dir)? {
-        let path = entry?.path();
+fn find_exe() -> Result<PathBuf> {
+    let metadata = MetadataCommand::new().exec()?;
 
-        if cfg!(target_os = "windows") {
-            if path.extension().map(|e| e == "exe").unwrap_or(false) {
-                return Ok(path);
-            }
-        } else if path.is_file() && path.extension().is_none() {
-            return Ok(path);
-        }
+    let pkg = metadata.root_package()
+        .ok_or_else(|| anyhow::anyhow!("No root package"))?;
+
+    let target_dir = metadata.target_directory.join("release");
+
+    // Find binary target
+    let target = pkg.targets.iter()
+        .find(|t| t.kind.contains(&TargetKind::Bin))
+        .ok_or_else(|| anyhow::anyhow!("No binary target found"))?;
+
+    let exe_name = &target.name;
+
+    let exe_path = if cfg!(target_os = "windows") {
+        target_dir.join(format!("{exe_name}.exe"))
+    } else {
+        target_dir.join(exe_name)
+    };
+
+    if exe_path.exists() {
+        Ok(exe_path.into_std_path_buf()) 
+    } else {
+        bail!("Executable not found: {:?}", exe_path)
     }
-
-    bail!("No executable found in {:?}", dir);
 }
 
-fn copy_dir(src: &PathBuf, dst: &PathBuf) -> Result<()> {
+fn copy_dir(src: &std::path::Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
 
     for entry in fs::read_dir(src)? {
@@ -119,4 +130,53 @@ fn find_cef() -> Result<PathBuf> {
     }
 
     anyhow::bail!("Chromium engine not found. Run 'kurogane install'.");
+}
+
+/// Copy Chromium Embedded Framework for Windows.
+///
+/// On Windows, the dynamic loader automatically searches for DLLs
+/// in the same directory as the executable.
+///
+/// Because of this, we flatten the CEF directory and copy all
+/// required resource files directly into dist/.
+///
+/// This avoids any runtime configuration (no PATH hacks, no env vars)
+/// and ensures the application is self-contained.
+#[cfg(target_os = "windows")]
+fn copy_cef_bundle(src: &PathBuf, dist: &PathBuf) -> Result<()> {
+    copy_dir(src, dist)?; // flatten
+    Ok(())
+}
+
+/// Copy Chromium Embedded Framework for Linux.
+///
+/// On Linux, the dynamic linker does not search the executable
+/// directory for shared libraries by default.
+///
+/// Instead, it relies on:
+///   - RPATH / RUNPATH embedded in the binary
+///   - LD_LIBRARY_PATH environment variable
+///   - System library paths
+///
+/// To keep the bundle clean and predictable, we:
+///   - Place CEF inside dist/cef/
+///   - Use RPATH ($ORIGIN/cef) so the binary can locate it at runtime
+///
+/// This avoids requiring environment variables or wrapper scripts.
+///
+/// Additionally, CEF requires chrome-sandbox to have setuid permissions
+/// for proper sandboxing. Without this, CEF may fail silently.
+#[cfg(target_os = "linux")]
+fn copy_cef_bundle(src: &PathBuf, dist: &PathBuf) -> Result<()> {
+    let cef_dst = dist.join("cef");
+    copy_dir(src, &cef_dst)?;
+
+    // Sandbox permissions (required by CEF)
+    let sandbox = cef_dst.join("chrome-sandbox");
+    let _ = Command::new("chmod")
+        .arg("4755")
+        .arg(&sandbox)
+        .status();
+
+    Ok(())
 }
