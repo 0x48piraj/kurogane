@@ -42,8 +42,23 @@ No additional setup is required beyond installing CEF but distribution outside d
 
 ## NixOS
 
-Enter the dev-shell before building:
+Kurogane provides a Nix flake for a reproducible development environment:
 
 ```bash
 nix develop github:0x48piraj/kurogane
 ```
+
+This shell includes all required build tools, native dependencies and runtime libraries needed to work on the project.
+
+### Why not pure Nix?
+
+This project uses a hybrid approach where the development workflow remains based on standard Rust tooling and scripts.
+
+The reason for this is intentional simplicity:
+
+* Rust tooling (`cargo`) already provides fast, incremental builds
+* Development is simpler without wrestling with Nix derivations
+* Contributors don't need Nix knowledge to get started
+* The workflow stays consistent outside of Nix environments
+
+As the project matures, more parts may be optionally expressed in Nix (such as packaging or CI builds) but the core development workflow will hopefully remain tool-native for simplicity and speed.

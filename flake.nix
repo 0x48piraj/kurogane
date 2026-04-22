@@ -52,6 +52,7 @@
         buildDeps = with pkgs; [
           rustc
           cargo
+          rsync
           pkg-config
           cmake
           ninja
@@ -65,16 +66,12 @@
           mkdir -p "$BUILD_DIR"
 
           # Sync source
-          if [ ! -f "$BUILD_DIR/Cargo.toml" ]; then
-            echo "[kurogane] Preparing source..."
-            cp -r "$SRC"/* "$BUILD_DIR/"
-          fi
+          echo "[kurogane] Preparing source..."
+          rsync -a --delete --chmod=Du+rwx,Fu+rw "$SRC/" "$BUILD_DIR/"
 
           # Build CLI
-          if [ ! -f "$BUILD_DIR/target/debug/kurogane" ]; then
-            echo "[kurogane] Building Kurogane CLI..."
-            (cd "$BUILD_DIR" && cargo build -p kurogane-cli)
-          fi
+          echo "[kurogane] Building Kurogane CLI..."
+          (cd "$BUILD_DIR" && cargo build -p kurogane-cli)
 
           # Run CLI
           exec "$BUILD_DIR/target/debug/kurogane" "$@"
