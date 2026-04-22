@@ -45,11 +45,5 @@ No additional setup is required beyond installing CEF but distribution outside d
 Enter the dev-shell before building:
 
 ```bash
-nix develop
-```
-
-Run this **once** to set up the shared linked CEF installation:
-
-```bash
-kurogane-setup
+nix develop github:0x48piraj/kurogane
 ```

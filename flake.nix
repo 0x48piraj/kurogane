@@ -49,48 +49,58 @@
           systemd
         ];
 
-        buildDeps = with pkgs; [ rustc cargo pkg-config cmake ninja ];
+        buildDeps = with pkgs; [
+          rustc
+          cargo
+          pkg-config
+          cmake
+          ninja
+        ];
+        kurogane-cli = pkgs.writeShellScriptBin "kurogane" ''
+          set -e
+
+          SRC=${./.}
+          BUILD_DIR="$HOME/.kurogane-build"
+
+          mkdir -p "$BUILD_DIR"
+
+          # Sync source
+          if [ ! -f "$BUILD_DIR/Cargo.toml" ]; then
+            echo "[kurogane] Preparing source..."
+            cp -r "$SRC"/* "$BUILD_DIR/"
+          fi
+
+          # Build CLI
+          if [ ! -f "$BUILD_DIR/target/debug/kurogane" ]; then
+            echo "[kurogane] Building Kurogane CLI..."
+            (cd "$BUILD_DIR" && cargo build -p kurogane-cli)
+          fi
+
+          # Run CLI
+          exec "$BUILD_DIR/target/debug/kurogane" "$@"
+        '';
       in {
         devShells.default = pkgs.mkShell {
-          buildInputs = buildDeps ++ runtimeDeps;
+          buildInputs =
+            buildDeps
+            ++ runtimeDeps
+            ++ [ kurogane-cli ];
 
           shellHook = ''
+            export CEF_PATH="$HOME/.local/share/cef"
+
             export PKG_CONFIG_PATH="${
               pkgs.lib.makeSearchPath "lib/pkgconfig" runtimeDeps
             }"
-
-            export CEF_PATH="$HOME/.local/share/cef"
             export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath runtimeDeps}:$CEF_PATH:$LD_LIBRARY_PATH"
-            export PATH="$HOME/.cargo/bin:$PATH"
 
-            alias kurogane-setup='
-              echo "Installing kurogane-cli...";
-              cargo install --path ./kurogane-cli --force;
-              echo "";
-              echo "Downloading CEF binaries...";
-              cargo install --git https://github.com/tauri-apps/cef-rs export-cef-dir && "$HOME/.cargo/bin/export-cef-dir" --force "$CEF_PATH";
-              echo "";
-              echo "Setup complete!"
-              echo "IMPORTANT: Do NOT run this inside the Kurogane repository."
-              echo "Create a new project directory and run:"
-              echo "  kurogane init"
-            '
-
-            echo ""
-            echo "First time setup:"
-            echo "  1. Run: kurogane-setup"
-            echo "     (This installs CLI and downloads CEF)"
-            echo ""
-            echo "Regular development:"
-            echo "  - kurogane init   - Create new project"
-            echo "  - kurogane dev    - Run the project"
-            echo "  - kurogane build  - Build for production"
-            echo ""
-            echo "CEF will be installed to: $CEF_PATH"
+            echo "Kurogane Dev Shell"
+            echo "    kurogane init   - Create new project"
+            echo "    kurogane dev    - Run the project"
+            echo "    kurogane bundle - Package for production"
             echo ""
           '';
-
         };
-
-      });
+      }
+    );
 }
