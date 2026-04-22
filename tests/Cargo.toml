@@ -18,3 +18,8 @@ path = "gpu.rs"
 [[bin]]
 name = "files-cors"
 path = "files-cors.rs"
+
+[[bin]]
+name = "dom"
+path = "dom.rs"
+

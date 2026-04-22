@@ -6,7 +6,7 @@ Kurogane is a low-level Rust runtime built directly on the **Chromium Embedded F
 
 <p align="center">
   <img alt="Kurogane demo" src="docs/images/output.gif" width="400"><br>
-  <b>Chromium goodness. Native Rust. No WebView. No Electron.</b>
+  <b>Native Rust. No WebView. No Electron.</b>
 </p>
 
 ## Motivation
@@ -19,15 +19,15 @@ This project started as a "_GPU-accelerated FPS toy demo built with Tauri for th
 
 Those constraints are inherent to _system WebViews_. So we pivoted to **CEF**. Chromium gives you the native GPU pipeline but most integrations come with baggage:
 
-* **Electron** bundles Node.js, adds runtime overhead and constrains architecture
-* **Custom Chromium builds** are complex, fragile and expensive to maintain
+* **Electron** bundles Node.js, adds runtime overhead and forces a Node.js runtime into every application.
+* **Building directly on Chromium/CEF** gives full control but is complex, fragile and expensive to maintain.
 
-This project takes a different approach:
+Kurogane sits between these extremes:
 
-* Native, reliable Chromium GPU pipeline especially on Linux (and macOS)
-* Explicit lifecycle and process control
+* Native, reliable Chromium GPU pipeline especially on Linux
+* Direct control over application lifecycle and process model
+* Fine-grained control over IPC
 * No embedded Node.js runtime
-* Total control over process boundaries and IPC
 
 ## What this project optimizes for
 
@@ -91,21 +91,7 @@ This is the **primary demo** for evaluating rendering behavior and performance.
 
 > **Rendering note**
 >
-> Unlike Chrome or Electron, this runtime does not ship with a browser helper process model. Some GPU features may behave differently depending on platform and driver configuration. These differences are architectural and not regressions in rendering performance.
-
-### DOM-based educational demos
-
-This template illustrates DOM animation limits, CPU-bound rendering behavior and are **NOT performance benchmarks**.
-
-```bash
-kurogane init --template dom
-```
-
-Learn from them:
-
-* How main-thread vs compositor behavior affects rendering
-* CPU costs of DOM-heavy animations
-* Why WebGL / Canvas2D are preferred for high-frequency rendering
+> Unlike Chrome or Electron, as of now, this runtime does not ship with a browser helper process model. Some GPU features may behave differently depending on platform and driver configuration. These differences are architectural and not regressions in rendering performance.
 
 ## Production packaging
 
@@ -148,10 +134,16 @@ Early days! Architecture and APIs may change as the project evolves.
 
 ## Philosophy
 
-Good runtime design is a balancing act.
+Most desktop runtimes optimize for convenience first.
 
-Too much abstraction can make a system rigid and difficult to extend. Too little structure leaves every application to solve the same problems repeatedly.
+Kurogane prioritizes control and consistency instead.
 
-This project aims to sit between those extremes by providing a clear foundation while keeping the underlying internals accessible when needed.
+System WebViews trade control for simplicity. That trade-off works for many applications but it breaks down for high-frequency rendering, GPU-bound workloads and cases where consistency across platforms matters.
 
-We believe in providing a canonical way while keeping escape hatches.
+Kurogane is built on a different assumption:
+
+> When rendering performance and behavior matter, the runtime should expose the underlying system rather than abstract it away.
+
+This project avoids unnecessary abstraction, keeping core mechanisms accessible and predictable.
+
+You should be able to reason about rendering, performance and cross-platform behavior without fighting the runtime.
