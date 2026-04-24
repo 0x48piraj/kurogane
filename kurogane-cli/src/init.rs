@@ -49,7 +49,10 @@ pub fn run(name: Option<String>, template: Option<String>) -> Result<()> {
     // .cargo/config.toml
     fs::create_dir_all(root.join(".cargo"))?;
 
-    let cef_path = default_cef_path()?;
+    let cef_path = dirs::home_dir()
+        .unwrap()
+        .join(".local/share/cef")
+        .join(env!("KUROGANE_CEF_VERSION"));
 
     fs::write(
         root.join(".cargo/config.toml"),
@@ -60,7 +63,7 @@ CEF_PATH = {{ value = "{}", force = true }}
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN/cef"]
 "#,
-            cef_path
+            cef_path.display().to_string().replace("\\", "\\\\")
         ),
     )?;
 
@@ -116,21 +119,4 @@ fn copy_embedded_dir(dir: &Dir, dest: &Path) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn default_cef_path() -> Result<String> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("No home directory"))?;
-
-    let path: PathBuf = home.join(".local").join("share").join("cef");
-
-    #[cfg(target_os = "windows")]
-    {
-        Ok(path.display().to_string().replace("\\", "\\\\"))
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        Ok(path.display().to_string())
-    }
 }

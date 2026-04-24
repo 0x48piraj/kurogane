@@ -122,8 +122,10 @@ fn find_cef() -> Result<PathBuf> {
     }
 
     // User install
+    let version = env!("KUROGANE_CEF_VERSION");
+
     if let Some(home) = dirs::home_dir() {
-        let path = home.join(".local/share/cef");
+        let path = home.join(".local/share/cef").join(version);
         if path.exists() {
             return Ok(path);
         }

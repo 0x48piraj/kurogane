@@ -58,18 +58,43 @@ pub fn run() -> Result<()> {
     let mut fail = 0;
 
     // Check CEF installation
+    let version = env!("KUROGANE_CEF_VERSION");
+
     let cef_path = dirs::home_dir()
-        .map(|h| h.join(".local/share/cef"))
-        .unwrap_or_else(|| PathBuf::from("~/.local/share/cef"));
+        .map(|h| h.join(".local/share/cef").join(version))
+        .unwrap_or_else(|| PathBuf::from("~/.local/share/cef").join(version));
 
     if cef_path.exists() {
         tui::success("CEF installation");
+        tui::field("version", version);
         tui::field("path", tui::format_path(&cef_path));
     } else {
         tui::error("CEF not found");
+        tui::field("required", version);
         tui::field("expected", tui::format_path(&cef_path));
         tui::info("Run: kurogane install");
         fail += 1;
+    }
+
+    let root = dirs::home_dir()
+        .map(|h| h.join(".local/share/cef"));
+
+    if let Some(root) = root {
+        if let Ok(entries) = std::fs::read_dir(&root) {
+            let versions: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect();
+
+            if !versions.is_empty() {
+                println!();
+                tui::info("Installed versions");
+                for v in versions {
+                    tui::field("cef", v);
+                }
+            }
+        }
     }
 
     println!();
@@ -83,7 +108,7 @@ pub fn run() -> Result<()> {
         Err(_) => {
             tui::warn("Environment");
             tui::field("CEF_PATH", "not set");
-            tui::step("Resolved to default install path");
+            tui::step("Using versioned runtime path");
         }
     }
 

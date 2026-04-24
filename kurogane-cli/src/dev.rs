@@ -7,9 +7,11 @@ use crate::tui;
 pub fn run(cargo_args: Vec<OsString>) -> Result<()> {
     tui::section("Kurogane Dev");
 
+    let version = env!("KUROGANE_CEF_VERSION");
     let cef = dirs::home_dir()
         .expect("no home dir")
-        .join(".local/share/cef");
+        .join(".local/share/cef")
+        .join(version);
 
     tui::step("Checking Chromium engine");
 

@@ -8,10 +8,12 @@ use crate::tui;
 pub fn run() -> Result<()> {
     tui::section("Kurogane installer");
 
-    let install_dir = default_install_dir(); // ~/.local/share/cef
+    let cef_version = env!("KUROGANE_CEF_VERSION").to_string();
+    let install_dir = install_dir_for(&cef_version);
 
     if install_dir.exists() {
         tui::success("Chromium engine already installed");
+        tui::field("version", &cef_version);
         tui::field("path", tui::format_path(&install_dir));
         return Ok(());
     }
@@ -49,12 +51,6 @@ pub fn run() -> Result<()> {
     // Write archive.json
     version.minimal()?.write_archive_json(&extracted)?;
 
-    // Replace existing install (safety, though we already early-returned)
-    if install_dir.exists() {
-        tui::step("Removing old install...");
-        std::fs::remove_dir_all(&install_dir)?;
-    }
-
     tui::step("Installing...");
     tui::field("path", tui::format_path(&install_dir));
 
@@ -72,10 +68,11 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn default_install_dir() -> PathBuf {
+fn install_dir_for(version: &str) -> PathBuf {
     dirs::home_dir()
         .expect("no home dir")
         .join(".local/share/cef")
+        .join(version)
 }
 
 fn print_env_instructions(root: &Path) {
