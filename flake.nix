@@ -62,18 +62,30 @@
 
           SRC=${./.}
           BUILD_DIR="$HOME/.kurogane-build"
+          HASH_FILE="$BUILD_DIR/.src-hash"
 
           mkdir -p "$BUILD_DIR"
 
-          # Sync source
-          echo "[kurogane] Preparing source..."
-          rsync -a --delete --chmod=Du+rwx,Fu+rw "$SRC/" "$BUILD_DIR/"
+          # Hash Rust-relevant source files
+          CURRENT_HASH=$(find "$SRC" \
+            \( -name "*.rs" -o -name "Cargo.toml" -o -name "Cargo.lock" \) \
+            -not -path "*/target/*" \
+            | sort | xargs sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1)
 
-          # Build CLI
-          echo "[kurogane] Building Kurogane CLI..."
-          (cd "$BUILD_DIR" && cargo build -p kurogane-cli)
+          STORED_HASH=$(cat "$HASH_FILE" 2>/dev/null || echo "none")
 
-          # Run CLI
+          if [ "$CURRENT_HASH" != "$STORED_HASH" ]; then
+            echo "[kurogane] Source changed, syncing..."
+            rsync -a --delete --chmod=Du+rwx,Fu+rw \
+              --exclude="target/" \
+              "$SRC/" "$BUILD_DIR/"
+
+            echo "[kurogane] Building Kurogane CLI..."
+            (cd "$BUILD_DIR" && cargo build -p kurogane-cli)
+
+            echo "$CURRENT_HASH" > "$HASH_FILE"
+          fi
+
           exec "$BUILD_DIR/target/debug/kurogane" "$@"
         '';
       in {
