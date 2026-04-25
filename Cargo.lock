@@ -169,8 +169,8 @@ dependencies = [
 
 [[package]]
 name = "cef"
-version = "146.6.0+146.0.11"
-source = "git+https://github.com/tauri-apps/cef-rs#4bd605a9fee6a340616ececd8fb9490abc9f100d"
+version = "147.0.0+147.0.9"
+source = "git+https://github.com/tauri-apps/cef-rs#e19754d386cf1d6aaedbc9d4851a6f1ed77fb31f"
 dependencies = [
  "anyhow",
  "cargo_metadata",
@@ -188,8 +188,8 @@ dependencies = [
 
 [[package]]
 name = "cef-dll-sys"
-version = "146.6.0+146.0.11"
-source = "git+https://github.com/tauri-apps/cef-rs#4bd605a9fee6a340616ececd8fb9490abc9f100d"
+version = "147.0.0+147.0.9"
+source = "git+https://github.com/tauri-apps/cef-rs#e19754d386cf1d6aaedbc9d4851a6f1ed77fb31f"
 dependencies = [
  "anyhow",
  "cmake",
@@ -389,7 +389,7 @@ dependencies = [
 [[package]]
 name = "download-cef"
 version = "2.3.1"
-source = "git+https://github.com/tauri-apps/cef-rs#4bd605a9fee6a340616ececd8fb9490abc9f100d"
+source = "git+https://github.com/tauri-apps/cef-rs#e19754d386cf1d6aaedbc9d4851a6f1ed77fb31f"
 dependencies = [
  "bzip2",
  "clap",
@@ -689,6 +689,7 @@ dependencies = [
  "dirs",
  "download-cef 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "include_dir",
+ "semver",
  "serde",
  "serde_json",
  "toml",
@@ -1068,9 +1069,9 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "semver"
-version = "1.0.27"
+version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
+checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 dependencies = [
  "serde",
  "serde_core",
