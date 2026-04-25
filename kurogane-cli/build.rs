@@ -1,4 +1,4 @@
-use cargo_metadata::MetadataCommand;
+use cargo_metadata::{MetadataCommand, semver::Version};
 
 fn main() {
     // Ask Cargo for resolved dependency graph
@@ -8,7 +8,8 @@ fn main() {
 
     // Find cef-dll-sys package
     let pkg = metadata.packages.iter()
-        .find(|p| p.name == "cef-dll-sys")
+        .filter(|p| p.name == "cef-dll-sys")
+        .max_by_key(|p| Version::parse(&p.version.to_string()).unwrap())
         .expect("cef crate not found in dependency graph");
 
     let version = pkg.version.to_string();
