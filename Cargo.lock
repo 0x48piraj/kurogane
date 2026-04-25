@@ -690,6 +690,7 @@ dependencies = [
  "download-cef 2.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "include_dir",
  "serde",
+ "serde_json",
  "toml",
 ]
 

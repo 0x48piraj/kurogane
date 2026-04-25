@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 
 use crate::tui;
+use crate::collector;
 
 struct ToolCheck {
     name: &'static str,
@@ -51,7 +52,7 @@ fn probe(cmd: &str) -> bool {
         .is_ok()
 }
 
-pub fn run() -> Result<()> {
+pub fn run(json: bool) -> Result<()> {
     tui::section("Kurogane Doctor");
 
     let mut warn = 0;
@@ -179,6 +180,12 @@ pub fn run() -> Result<()> {
     }
 
     println!();
+
+    if json {
+        let report = collector::collect_all();
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
 
     Ok(())
 }

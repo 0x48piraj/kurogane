@@ -8,7 +8,9 @@ mod bundle;
 mod init;
 mod doctor;
 mod info;
+
 mod tui;
+mod collector;
 
 #[derive(Parser)]
 #[command(name = "kurogane")]
@@ -38,7 +40,10 @@ enum Commands {
         #[arg(long)]
         template: Option<String>,
     },
-    Doctor,
+    Doctor {
+        #[arg(long)]
+        json: bool,
+    },
     Info,
 }
 
@@ -53,7 +58,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Build => build::run(),
         Commands::Bundle => bundle::run(),
         Commands::Init { name, template } => init::run(name, template),
-        Commands::Doctor => doctor::run(),
+        Commands::Doctor { json } => doctor::run(json),
         Commands::Info => info::run(),
     }
 }
