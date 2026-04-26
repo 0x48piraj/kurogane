@@ -61,6 +61,43 @@ pub fn run() -> Result<()> {
 
     copy_cef_bundle(&cef_src, &dist)?;
 
+    tui::step("Verifying bundle");
+
+    let bin = dist.join(exe_name);
+    let index = dist.join("content/index.html");
+
+    if !bin.exists() {
+        anyhow::bail!("Bundle failed: binary missing");
+    }
+
+    if !index.exists() {
+        anyhow::bail!("Bundle failed: content/index.html missing");
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let libcef = dist.join("libcef.dll");
+
+        if !libcef.exists() {
+            tui::error("Bundle failed: CEF not copied correctly");
+            anyhow::bail!("libcef.dll missing");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let cef = dist.join("cef");
+
+        if !cef.exists() {
+            tui::error("Bundle failed: CEF not copied correctly");
+            anyhow::bail!("cef/ directory missing");
+        }
+    }
+
+    tui::success("Bundle verified");
+    tui::field("binary", tui::format_path(&bin));
+    tui::field("entry", tui::format_path(&index));
+
     println!();
     tui::success("Bundle ready");
     tui::field("path", "./dist");
