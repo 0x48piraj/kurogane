@@ -158,7 +158,7 @@ impl Runtime {
 fn find_cef_root() -> Result<PathBuf, RuntimeError> {
     use std::env;
 
-    // Explicit override
+    // Dev environment
     if let Ok(path) = env::var("CEF_PATH") {
         let p = PathBuf::from(path);
         if p.exists() {
@@ -169,18 +169,22 @@ fn find_cef_root() -> Result<PathBuf, RuntimeError> {
     // Next to executable (production)
     if let Ok(exe) = env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let candidate = dir.join("cef");
-            if candidate.exists() {
-                return Ok(candidate);
+            #[cfg(target_os = "windows")]
+            {
+                // Windows bundle: CEF is flattened next to the exe.
+                if dir.join("libcef.dll").exists() {
+                    return Ok(dir.to_path_buf());
+                }
             }
-        }
-    }
 
-    // User install location (dev)
-    if let Some(home) = dirs::home_dir() {
-        let candidate = home.join(".local/share/cef");
-        if candidate.exists() {
-            return Ok(candidate);
+            #[cfg(target_os = "linux")]
+            {
+                // Linux: CEF lives in a cef/ subdirectory.
+                let candidate = dir.join("cef");
+                if candidate.exists() {
+                    return Ok(candidate);
+                }
+            }
         }
     }
 
