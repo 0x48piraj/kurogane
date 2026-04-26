@@ -6,16 +6,23 @@ use cargo_metadata::{MetadataCommand, TargetKind};
 
 use crate::tui;
 
-pub fn run() -> Result<()> {
+pub fn run(debug: bool) -> Result<()> {
     tui::section("Kurogane Bundle");
 
     // Ensure release build
     tui::step("Building release...");
 
-    let status = Command::new("cargo")
-        .arg("build")
-        .arg("--release")
-        .status()?;
+    let mut cmd = Command::new("cargo");
+
+    cmd.arg("build");
+
+    if debug {
+        cmd.arg("--features").arg("kurogane/debug");
+    } else {
+        cmd.arg("--release");
+    }
+
+    let status = cmd.status()?;
 
     if !status.success() {
         bail!("Release build failed");
@@ -23,7 +30,7 @@ pub fn run() -> Result<()> {
 
     // Find executable
     tui::step("Locating executable...");
-    let exe = find_exe()?;
+    let exe = find_exe(debug)?;
     tui::field("binary", tui::format_path(&exe));
 
     // Prepare destination
@@ -105,13 +112,14 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn find_exe() -> Result<PathBuf> {
+fn find_exe(debug: bool) -> Result<PathBuf> {
     let metadata = MetadataCommand::new().exec()?;
 
     let pkg = metadata.root_package()
         .ok_or_else(|| anyhow::anyhow!("No root package"))?;
 
-    let target_dir = metadata.target_directory.join("release");
+    let profile = if debug { "debug" } else { "release" };
+    let target_dir = metadata.target_directory.join(profile);
 
     // Find binary target
     let target = pkg.targets.iter()

@@ -33,7 +33,10 @@ enum Commands {
         cargo_args: Vec<OsString>,
     },
     Build,
-    Bundle,
+    Bundle {
+        #[arg(long)]
+        debug: bool,
+    },
     Init {
         name: Option<String>,
 
@@ -56,7 +59,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Install => install::run(),
         Commands::Dev { cargo_args } => dev::run(cargo_args),
         Commands::Build => build::run(),
-        Commands::Bundle => bundle::run(),
+        Commands::Bundle { debug } => bundle::run(debug),
         Commands::Init { name, template } => init::run(name, template),
         Commands::Doctor { json } => doctor::run(json),
         Commands::Info => info::run(),
