@@ -163,6 +163,7 @@ fn mime_from_path(path: &Path) -> String {
         Some("js") | Some("mjs") | Some("cjs") => {
             "application/javascript".to_string()
         }
+        // Note: MIME resolution depends on mime_guess crate. Dependency updates can be fatal.
         _ => MimeGuess::from_path(path)
             .first_or_octet_stream()
             .essence_str()
@@ -173,4 +174,40 @@ fn mime_from_path(path: &Path) -> String {
 fn safe_join(root: &Path, request: &str) -> Option<PathBuf> {
     let canonical = root.join(request).canonicalize().ok()?;
     canonical.starts_with(root).then_some(canonical)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_common_types() {
+        assert_eq!(mime_from_path("index.html".as_ref()), "text/html");
+        assert_eq!(mime_from_path("app.js".as_ref()), "application/javascript");
+        assert_eq!(mime_from_path("style.css".as_ref()), "text/css");
+        assert_eq!(mime_from_path("data.json".as_ref()), "application/json");
+    }
+
+    #[test]
+    fn detects_modern_edge_cases() {
+        assert_eq!(mime_from_path("module.mjs".as_ref()), "application/javascript");
+        assert_eq!(mime_from_path("config.cjs".as_ref()), "application/javascript"); // mime_guess create misses
+    }
+
+    #[test]
+    fn handles_unknown() {
+        assert_eq!(
+            mime_from_path("file.unknownext".as_ref()),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
+    fn handles_double_extensions() {
+        assert_eq!(
+            mime_from_path("archive.tar.gz".as_ref()),
+            "application/gzip"
+        );
+    }
 }
