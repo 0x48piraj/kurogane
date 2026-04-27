@@ -4,6 +4,8 @@ use cef::*;
 use std::sync::{Arc, Mutex};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, Ordering};
+use mime_guess::MimeGuess;
+
 use crate::debug;
 
 //
@@ -79,7 +81,7 @@ wrap_resource_handler! {
                 Some((full_path, bytes)) => {
                     *self.data.lock().unwrap() = bytes;
                     *self.offset.lock().unwrap() = 0;
-                    *self.mime.lock().unwrap() = mime_from_path(&full_path).to_string();
+                    *self.mime.lock().unwrap() = mime_from_path(&full_path);
                     self.status.store(200, Ordering::Release);
                 }
                 None => {
@@ -155,18 +157,14 @@ wrap_resource_handler! {
 // Helpers
 //
 
-fn mime_from_path(path: &Path) -> &'static str {
+fn mime_from_path(path: &Path) -> String {
     match path.extension().and_then(|e| e.to_str()) {
-        Some("html") => "text/html",
-        Some("js") => "application/javascript",
-        Some("css") => "text/css",
-        Some("json") => "application/json",
-        Some("wasm") => "application/wasm",
-        Some("svg") => "image/svg+xml",
-        Some("png") => "image/png",
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("ico") => "image/x-icon",
-        _ => "application/octet-stream",
+        // App-specific overrides
+        Some("js") => "application/javascript".to_string(),
+        _ => MimeGuess::from_path(path)
+            .first_or_octet_stream()
+            .essence_str()
+            .to_owned(),
     }
 }
 
