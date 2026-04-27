@@ -160,7 +160,9 @@ wrap_resource_handler! {
 fn mime_from_path(path: &Path) -> String {
     match path.extension().and_then(|e| e.to_str()) {
         // App-specific overrides
-        Some("js") => "application/javascript".to_string(),
+        Some("js") | Some("mjs") | Some("cjs") => {
+            "application/javascript".to_string()
+        }
         _ => MimeGuess::from_path(path)
             .first_or_octet_stream()
             .essence_str()
