@@ -11,22 +11,22 @@ use crate::debug;
 
 /// Errors returned when resolving an app:// request.
 /// Each variant maps to an HTTP status code.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum ResolveError {
     /// The URL could not be parsed, or its scheme is not app
-    InvalidUrl(String),
+    InvalidUrl,
     /// The resolved path escapes the asset root (path-traversal attempt)
     Forbidden(PathBuf),
     /// The path is inside the root but the file does not exist
     NotFound(PathBuf),
     /// An I/O error occurred after validation
-    Io(String),
+    Io(std::io::Error),
 }
 
 impl ResolveError {
     pub fn http_status(&self) -> i32 {
         match self {
-            Self::InvalidUrl(_) => 400,
+            Self::InvalidUrl => 400,
             Self::Forbidden(_) => 403,
             Self::NotFound(_) => 404,
             Self::Io(_) => 500,
@@ -37,9 +37,9 @@ impl ResolveError {
 impl std::fmt::Display for ResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidUrl(u) => write!(f, "invalid URL: {u}"),
-            Self::Forbidden(p) => write!(f, "forbidden – path escapes root: {}", p.display()),
-            Self::NotFound(p) => write!(f, "not found: {}", p.display()),
+            Self::InvalidUrl => write!(f, "Invalid URL"),
+            Self::Forbidden(p) => write!(f, "Forbidden: {}", p.display()),
+            Self::NotFound(p) => write!(f, "Not found: {}", p.display()),
             Self::Io(e) => write!(f, "I/O error: {e}"),
         }
     }
@@ -118,15 +118,35 @@ wrap_resource_handler! {
                     self.status.store(200, Ordering::Release);
                 }
                 Err(e) => {
-                    // Log at the severity
-                    if matches!(e, ResolveError::Forbidden(_)) {
-                        eprintln!("[app://] 403 FORBIDDEN - {e}");
-                    } else {
-                        eprintln!("[app://] {} - {e}", e.http_status());
+                    let status = e.http_status();
+
+                    match &e {
+                        ResolveError::Forbidden(path) |
+                        ResolveError::NotFound(path) => {
+                            eprintln!(
+                                "[kurogane] status={} path=\"{}\" reason={:?}",
+                                status,
+                                path.display(),
+                                e
+                            );
+                        }
+                        _ => {
+                            eprintln!(
+                                "[kurogane] status={} reason={:?}",
+                                status,
+                                e
+                            );
+                        }
                     }
 
-                    let body = e.to_string().into_bytes();
-                    self.status.store(e.http_status(), Ordering::Release);
+                    let body = match e {
+                        ResolveError::InvalidUrl => b"400 Bad Request".to_vec(),
+                        ResolveError::Forbidden(_) => b"403 Forbidden".to_vec(),
+                        ResolveError::NotFound(_) => b"404 Not Found".to_vec(),
+                        ResolveError::Io(_) => b"500 Internal Server Error".to_vec(),
+                    };
+
+                    self.status.store(status, Ordering::Release);
                     *self.data.lock().unwrap() = body;
                     *self.offset.lock().unwrap() = 0;
                     *self.mime.lock().unwrap() = "text/plain".into();
@@ -209,10 +229,10 @@ wrap_resource_handler! {
 /// Query strings and fragments are intentionally ignored.
 pub fn extract_rel_path(raw_url: &str) -> Result<String, ResolveError> {
     let parsed = Url::parse(raw_url)
-        .map_err(|_| ResolveError::InvalidUrl(raw_url.to_owned()))?;
+        .map_err(|_| ResolveError::InvalidUrl)?;
 
     if parsed.scheme() != "app" {
-        return Err(ResolveError::InvalidUrl(raw_url.to_owned()));
+        return Err(ResolveError::InvalidUrl);
     }
 
     let rel = parsed.path().trim_start_matches('/');
@@ -227,7 +247,7 @@ pub fn safe_join(root: &Path, request: &str) -> Result<PathBuf, ResolveError> {
     // Canonical root defines the sandbox boundary
     let root = root
         .canonicalize()
-        .map_err(|e| ResolveError::Io(format!("cannot canonicalize root: {e}")))?;
+        .map_err(ResolveError::Io)?;
 
     let joined = root.join(request);
 
@@ -238,7 +258,7 @@ pub fn safe_join(root: &Path, request: &str) -> Result<PathBuf, ResolveError> {
             if e.kind() == std::io::ErrorKind::NotFound {
                 ResolveError::NotFound(joined)
             } else {
-                ResolveError::Io(e.to_string())
+                ResolveError::Io(e)
             }
         })?;
 
@@ -253,7 +273,7 @@ pub fn safe_join(root: &Path, request: &str) -> Result<PathBuf, ResolveError> {
 pub fn resolve_asset(root: &Path, rel_path: &str) -> Result<Asset, ResolveError> {
     let path = safe_join(root, rel_path)?;
 
-    let bytes = std::fs::read(&path).map_err(|e| ResolveError::Io(e.to_string()))?;
+    let bytes = std::fs::read(&path).map_err(|e| ResolveError::Io(e))?;
 
     let mime = mime_from_path(&path);
 
@@ -342,14 +362,14 @@ mod tests {
     #[test]
     fn rel_path_rejects_wrong_scheme() {
         let err = extract_rel_path("https://example.com/foo").unwrap_err();
-        assert!(matches!(err, ResolveError::InvalidUrl(_)));
+        assert!(matches!(err, ResolveError::InvalidUrl));
         assert_eq!(err.http_status(), 400);
     }
 
     #[test]
     fn rel_path_rejects_malformed_url() {
         let err = extract_rel_path("not a url at all").unwrap_err();
-        assert!(matches!(err, ResolveError::InvalidUrl(_)));
+        assert!(matches!(err, ResolveError::InvalidUrl));
     }
 
     // Path safety and traversal checks
@@ -530,20 +550,20 @@ mod tests {
 
     #[test]
     fn error_http_status_codes() {
-        assert_eq!(ResolveError::InvalidUrl("x".into()).http_status(), 400);
+        assert_eq!(ResolveError::InvalidUrl.http_status(), 400);
         assert_eq!(ResolveError::Forbidden(PathBuf::new()).http_status(), 403);
         assert_eq!(ResolveError::NotFound(PathBuf::new()).http_status(), 404);
-        assert_eq!(ResolveError::Io("disk on fire".into()).http_status(), 500);
+        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "disk on fire");
+        assert_eq!(ResolveError::Io(io_err).http_status(), 500);
     }
 
     #[test]
     fn error_display_is_human_readable() {
-        let s = ResolveError::InvalidUrl("app://???".into()).to_string();
-        assert!(s.contains("invalid URL"));
-        assert!(s.contains("app://???"));
+        let s = ResolveError::InvalidUrl.to_string();
+        assert!(s.contains("Invalid URL"));
 
         let s = ResolveError::Forbidden(PathBuf::from("/etc/passwd")).to_string();
-        assert!(s.contains("forbidden"));
+        assert!(s.contains("Forbidden"));
         assert!(s.contains("passwd"));
     }
 }
