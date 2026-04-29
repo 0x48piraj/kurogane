@@ -5,8 +5,52 @@ use std::sync::{Arc, Mutex};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, Ordering};
 use mime_guess::MimeGuess;
+use url::Url;
 
 use crate::debug;
+
+/// Errors returned when resolving an app:// request.
+/// Each variant maps to an HTTP status code.
+#[derive(Debug, PartialEq)]
+pub enum ResolveError {
+    /// The URL could not be parsed, or its scheme is not app
+    InvalidUrl(String),
+    /// The resolved path escapes the asset root (path-traversal attempt)
+    Forbidden(PathBuf),
+    /// The path is inside the root but the file does not exist
+    NotFound(PathBuf),
+    /// An I/O error occurred after validation
+    Io(String),
+}
+
+impl ResolveError {
+    pub fn http_status(&self) -> i32 {
+        match self {
+            Self::InvalidUrl(_) => 400,
+            Self::Forbidden(_) => 403,
+            Self::NotFound(_) => 404,
+            Self::Io(_) => 500,
+        }
+    }
+}
+
+impl std::fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidUrl(u) => write!(f, "invalid URL: {u}"),
+            Self::Forbidden(p) => write!(f, "forbidden – path escapes root: {}", p.display()),
+            Self::NotFound(p) => write!(f, "not found: {}", p.display()),
+            Self::Io(e) => write!(f, "I/O error: {e}"),
+        }
+    }
+}
+
+/// A successfully resolved file asset.
+#[derive(Debug)]
+pub struct Asset {
+    pub bytes: Vec<u8>,
+    pub mime: String,
+}
 
 //
 // SchemeHandlerFactory
@@ -48,7 +92,9 @@ wrap_resource_handler! {
 
     impl ResourceHandler {
 
-        // Synchronous open
+        /// Resolves and loads an app:// resource for the request.
+        ///
+        /// Populates response data and status code.
         fn open(
             &self,
             request: Option<&mut Request>,
@@ -56,38 +102,32 @@ wrap_resource_handler! {
             _callback: Option<&mut Callback>,
         ) -> i32 {
             let request = request.unwrap();
-            let url: CefString = (&request.url()).into();
-            let url = url.to_string();
-
-            // Strip scheme and handle trailing slashes
-            let path = url
-                .strip_prefix("app://app/")
-                .unwrap_or("index.html")
-                .trim_start_matches('/')
-                .trim_end_matches('/');
-
-            // Handle empty path (app:// or app:///)
-            let path = if path.is_empty() { "index.html" } else { path };
-
-            debug!("Resolved path: {}", path);
+            let raw_url = CefString::from(&request.url()).to_string();
 
             // Resolve relative to CWD (set by resolver)
             let root = crate::runtime::Runtime::asset_root();
 
-            let result = safe_join(&root, path)
-                .and_then(|p| std::fs::read(&p).ok().map(|b| (p, b)));
+            let result = extract_rel_path(&raw_url)
+                .and_then(|rel| resolve_asset(&root, &rel));
 
             match result {
-                Some((full_path, bytes)) => {
-                    *self.data.lock().unwrap() = bytes;
+                Ok(asset) => {
+                    *self.data.lock().unwrap() = asset.bytes;
                     *self.offset.lock().unwrap() = 0;
-                    *self.mime.lock().unwrap() = mime_from_path(&full_path);
+                    *self.mime.lock().unwrap() = asset.mime;
                     self.status.store(200, Ordering::Release);
                 }
-                None => {
-                    eprintln!("[app://] 404 {}", path);
-                    self.status.store(404, Ordering::Release);
-                    *self.data.lock().unwrap() = b"404 Not Found".to_vec();
+                Err(e) => {
+                    // Log at the severity
+                    if matches!(e, ResolveError::Forbidden(_)) {
+                        eprintln!("[app://] 403 FORBIDDEN - {e}");
+                    } else {
+                        eprintln!("[app://] {} - {e}", e.http_status());
+                    }
+
+                    let body = e.to_string().into_bytes();
+                    self.status.store(e.http_status(), Ordering::Release);
+                    *self.data.lock().unwrap() = body;
                     *self.offset.lock().unwrap() = 0;
                     *self.mime.lock().unwrap() = "text/plain".into();
                 }
@@ -108,6 +148,12 @@ wrap_resource_handler! {
             _callback: Option<&mut ResourceReadCallback>,
         ) -> i32 {
             let br = bytes_read.unwrap();
+ 
+            // Avoid invalid cast guard
+            if bytes_to_read <= 0 {
+                *br = 0;
+                return 0;
+            }
 
             let mut offset = self.offset.lock().unwrap();
             let data = self.data.lock().unwrap();
@@ -116,6 +162,7 @@ wrap_resource_handler! {
             let read = remaining.len().min(bytes_to_read as usize);
 
             if read > 0 {
+                // Safety: writes at most bytes_to_read into valid CEF buffer
                 unsafe {
                     std::ptr::copy_nonoverlapping(remaining.as_ptr(), data_out, read);
                 }
@@ -157,6 +204,71 @@ wrap_resource_handler! {
 // Helpers
 //
 
+/// Extracts a relative path from an app:// URL.
+/// Defaults to "index.html" for empty paths.
+/// Query strings and fragments are intentionally ignored.
+pub fn extract_rel_path(raw_url: &str) -> Result<String, ResolveError> {
+    let parsed = Url::parse(raw_url)
+        .map_err(|_| ResolveError::InvalidUrl(raw_url.to_owned()))?;
+
+    if parsed.scheme() != "app" {
+        return Err(ResolveError::InvalidUrl(raw_url.to_owned()));
+    }
+
+    let rel = parsed.path().trim_start_matches('/');
+    let rel = if rel.is_empty() { "index.html" } else { rel };
+
+    Ok(rel.to_owned())
+}
+
+/// Resolves a request path relative to root and returns a canonical path
+/// inside the allowed filesystem boundary.
+pub fn safe_join(root: &Path, request: &str) -> Result<PathBuf, ResolveError> {
+    // Canonical root defines the sandbox boundary
+    let root = root
+        .canonicalize()
+        .map_err(|e| ResolveError::Io(format!("cannot canonicalize root: {e}")))?;
+
+    let joined = root.join(request);
+
+    // Canonicalize and distinguish 404 (file missing) from 403 (path escapes root)
+    let canonical = joined
+        .canonicalize()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                ResolveError::NotFound(joined)
+            } else {
+                ResolveError::Io(e.to_string())
+            }
+        })?;
+
+    if !canonical.starts_with(&root) {
+        return Err(ResolveError::Forbidden(canonical));
+    }
+
+    Ok(canonical)
+}
+
+/// Loads a file under root and returns its bytes and MIME type.
+pub fn resolve_asset(root: &Path, rel_path: &str) -> Result<Asset, ResolveError> {
+    let path = safe_join(root, rel_path)?;
+
+    let bytes = std::fs::read(&path).map_err(|e| ResolveError::Io(e.to_string()))?;
+
+    let mime = mime_from_path(&path);
+
+    debug!(
+        "[app://] 200  {}  ({}, {} bytes)",
+        rel_path,
+        mime,
+        bytes.len()
+    );
+
+    Ok(Asset { bytes, mime })
+}
+
+/// Returns the MIME type for a given path based on its file extension.
+/// Unknown extensions fall back to 'application/octet-stream'.
 fn mime_from_path(path: &Path) -> String {
     match path.extension().and_then(|e| e.to_str()) {
         // App-specific overrides
@@ -171,43 +283,267 @@ fn mime_from_path(path: &Path) -> String {
     }
 }
 
-fn safe_join(root: &Path, request: &str) -> Option<PathBuf> {
-    let canonical = root.join(request).canonicalize().ok()?;
-    canonical.starts_with(root).then_some(canonical)
-}
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
-    #[test]
-    fn detects_common_types() {
-        assert_eq!(mime_from_path("index.html".as_ref()), "text/html");
-        assert_eq!(mime_from_path("app.js".as_ref()), "application/javascript");
-        assert_eq!(mime_from_path("style.css".as_ref()), "text/css");
-        assert_eq!(mime_from_path("data.json".as_ref()), "application/json");
+    fn tmp() -> TempDir {
+        tempfile::tempdir().expect("failed to create temp dir")
     }
 
-    #[test]
-    fn detects_modern_edge_cases() {
-        assert_eq!(mime_from_path("module.mjs".as_ref()), "application/javascript");
-        assert_eq!(mime_from_path("config.cjs".as_ref()), "application/javascript"); // mime_guess create misses
-    }
+    // URL parsing and normalization tests
 
     #[test]
-    fn handles_unknown() {
+    fn rel_path_standard_file() {
         assert_eq!(
-            mime_from_path("file.unknownext".as_ref()),
+            extract_rel_path("app://app/index.html").unwrap(),
+            "index.html"
+        );
+    }
+
+    #[test]
+    fn rel_path_nested() {
+        assert_eq!(
+            extract_rel_path("app://app/static/app.js").unwrap(),
+            "static/app.js"
+        );
+    }
+
+    #[test]
+    fn rel_path_root_slash_defaults_to_index() {
+        assert_eq!(extract_rel_path("app://app/").unwrap(), "index.html");
+    }
+
+    #[test]
+    fn rel_path_bare_host_defaults_to_index() {
+        assert_eq!(extract_rel_path("app://app").unwrap(), "index.html");
+    }
+
+    #[test]
+    fn rel_path_query_string_is_stripped() {
+        // Query params are irrelevant for static file serving
+        assert_eq!(
+            extract_rel_path("app://app/page.html?v=2").unwrap(),
+            "page.html"
+        );
+    }
+
+    #[test]
+    fn rel_path_fragment_is_stripped() {
+        assert_eq!(
+            extract_rel_path("app://app/page.html#section").unwrap(),
+            "page.html"
+        );
+    }
+
+    #[test]
+    fn rel_path_rejects_wrong_scheme() {
+        let err = extract_rel_path("https://example.com/foo").unwrap_err();
+        assert!(matches!(err, ResolveError::InvalidUrl(_)));
+        assert_eq!(err.http_status(), 400);
+    }
+
+    #[test]
+    fn rel_path_rejects_malformed_url() {
+        let err = extract_rel_path("not a url at all").unwrap_err();
+        assert!(matches!(err, ResolveError::InvalidUrl(_)));
+    }
+
+    // Path safety and traversal checks
+
+    #[test]
+    fn safe_join_resolves_existing_file() {
+        let dir = tmp();
+        fs::write(dir.path().join("hello.txt"), b"hi").unwrap();
+        let path = safe_join(dir.path(), "hello.txt").unwrap();
+        assert!(path.is_file());
+        assert!(path.ends_with("hello.txt"));
+    }
+
+    #[test]
+    fn safe_join_resolves_nested_file() {
+        let dir = tmp();
+        fs::create_dir(dir.path().join("sub")).unwrap();
+        fs::write(dir.path().join("sub/page.html"), b"<h1>hi</h1>").unwrap();
+        let path = safe_join(dir.path(), "sub/page.html").unwrap();
+        assert!(path.ends_with("page.html"));
+    }
+
+    #[test]
+    fn safe_join_not_found_for_missing_file() {
+        let dir = tmp();
+        let err = safe_join(dir.path(), "missing.txt").unwrap_err();
+        assert!(matches!(err, ResolveError::NotFound(_)));
+        assert_eq!(err.http_status(), 404);
+    }
+
+    #[test]
+    fn safe_join_forbidden_for_traversal_to_existing_file() {
+        // Traversal escapes root to an existing file; must be rejected (403)
+        let parent = tmp();
+        let root = parent.path().join("assets");
+        fs::create_dir(&root).unwrap();
+        fs::write(parent.path().join("secret.txt"), b"secret").unwrap();
+ 
+        let err = safe_join(&root, "../secret.txt").unwrap_err();
+        assert!(matches!(err, ResolveError::Forbidden(_)));
+        assert_eq!(err.http_status(), 403);
+    }
+
+    #[test]
+    fn safe_join_not_found_for_traversal_to_missing_file() {
+        // Traversal to non-existent target is indistinguishable from in-root miss without
+        // an exists() check (which would be TOCTOU).
+        let dir = tmp();
+        let err = safe_join(dir.path(), "../no_such_file.txt").unwrap_err();
+        assert!(matches!(err, ResolveError::NotFound(_)));
+    }
+
+    #[test]
+    fn safe_join_rejects_buried_traversal() {
+        let parent = tmp();
+        let root = parent.path().join("assets");
+        fs::create_dir(&root).unwrap();
+        fs::write(parent.path().join("secret.txt"), b"secret").unwrap();
+ 
+        let err = safe_join(&root, "a/b/../../../../secret.txt").unwrap_err();
+        assert!(matches!(
+            err,
+            ResolveError::Forbidden(_) | ResolveError::NotFound(_)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn safe_join_denied_for_absolute_path_injection() {
+        let dir = tmp();
+        let err = safe_join(dir.path(), "/etc/passwd").unwrap_err();
+        assert!(matches!(
+            err,
+            ResolveError::Forbidden(_) | ResolveError::NotFound(_)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn safe_join_forbidden_for_symlink_escaping_root() {
+        use std::os::unix::fs::symlink;
+        let parent = tmp();
+        let root = parent.path().join("assets");
+        fs::create_dir(&root).unwrap();
+        // External file targeted via symlink inside root
+        fs::write(parent.path().join("secret.txt"), b"secret").unwrap();
+        symlink(parent.path().join("secret.txt"), root.join("escape")).unwrap();
+ 
+        let err = safe_join(&root, "escape").unwrap_err();
+        assert!(matches!(err, ResolveError::Forbidden(_)));
+        assert_eq!(err.http_status(), 403);
+    }
+
+    // MIME detection tests
+
+    #[test]
+    fn mime_common_web_types() {
+        let cases = [
+            ("index.html", "text/html"),
+            ("style.css", "text/css"),
+            ("data.json", "application/json"),
+            ("image.png", "image/png"),
+            ("font.woff2", "font/woff2"),
+        ];
+        for (file, expected) in cases {
+            assert_eq!(
+                mime_from_path(Path::new(file)),
+                expected,
+                "failed for {file}"
+            );
+        }
+    }
+
+    #[test]
+    fn mime_all_js_module_variants() {
+        for ext in ["js", "mjs", "cjs"] {
+            assert_eq!(
+                mime_from_path(Path::new(&format!("module.{ext}"))),
+                "application/javascript",
+                ".{ext} must be application/javascript"
+            );
+        }
+    }
+
+    #[test]
+    fn mime_unknown_extension_is_octet_stream() {
+        assert_eq!(
+            mime_from_path(Path::new("file.unknownext")),
             "application/octet-stream"
         );
     }
 
     #[test]
-    fn handles_double_extensions() {
+    fn mime_double_extension_uses_last() {
         assert_eq!(
-            mime_from_path("archive.tar.gz".as_ref()),
+            mime_from_path(Path::new("archive.tar.gz")),
             "application/gzip"
         );
+    }
+
+    #[test]
+    fn mime_no_extension_is_octet_stream() {
+        assert_eq!(
+            mime_from_path(Path::new("Makefile")),
+            "application/octet-stream"
+        );
+    }
+
+    // File loading tests
+
+    #[test]
+    fn resolve_asset_returns_correct_bytes_and_mime() {
+        let dir = tmp();
+        fs::write(dir.path().join("app.js"), b"console.log('hi')").unwrap();
+        let asset = resolve_asset(dir.path(), "app.js").unwrap();
+        assert_eq!(asset.mime, "application/javascript");
+        assert_eq!(asset.bytes, b"console.log('hi')");
+    }
+
+    #[test]
+    fn resolve_asset_404_propagates() {
+        let dir = tmp();
+        let err = resolve_asset(dir.path(), "nope.html").unwrap_err();
+        assert!(matches!(err, ResolveError::NotFound(_)));
+        assert_eq!(err.http_status(), 404);
+    }
+
+    #[test]
+    fn resolve_asset_empty_file_is_ok() {
+        let dir = tmp();
+        fs::write(dir.path().join("empty.js"), b"").unwrap();
+        let asset = resolve_asset(dir.path(), "empty.js").unwrap();
+        assert!(asset.bytes.is_empty());
+        assert_eq!(asset.mime, "application/javascript");
+    }
+
+    // Status mapping and formatting tests
+
+    #[test]
+    fn error_http_status_codes() {
+        assert_eq!(ResolveError::InvalidUrl("x".into()).http_status(), 400);
+        assert_eq!(ResolveError::Forbidden(PathBuf::new()).http_status(), 403);
+        assert_eq!(ResolveError::NotFound(PathBuf::new()).http_status(), 404);
+        assert_eq!(ResolveError::Io("disk on fire".into()).http_status(), 500);
+    }
+
+    #[test]
+    fn error_display_is_human_readable() {
+        let s = ResolveError::InvalidUrl("app://???".into()).to_string();
+        assert!(s.contains("invalid URL"));
+        assert!(s.contains("app://???"));
+
+        let s = ResolveError::Forbidden(PathBuf::from("/etc/passwd")).to_string();
+        assert!(s.contains("forbidden"));
+        assert!(s.contains("passwd"));
     }
 }
