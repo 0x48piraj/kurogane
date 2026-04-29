@@ -1,4 +1,20 @@
 //! app:// scheme support for local assets.
+//!
+//! This is a constrained asset-serving boundary layer designed specifically for exposing
+//! bundled application resources to the browser runtime.
+//!
+//! Converts app:// URLs into file reads while enforcing a sandbox rooted at
+//! the configured asset directory.
+//!
+//! What it guarantees:
+//! - No path traversal or root escape
+//! - No symlink-based escapes
+//! - No absolute path injection
+//! - No filesystem details leaked to clients
+//!
+//! Design notes:
+//! - The asset root is the only allowed filesystem boundary
+//! - Focused on safe, predictable asset access within the runtime
 
 use cef::*;
 use std::sync::{Arc, Mutex};
@@ -47,7 +63,8 @@ impl std::fmt::Display for ResolveError {
 
 /// A successfully resolved file asset.
 #[derive(Debug)]
-pub struct Asset {
+pub struct ResolvedAsset {
+    pub path: PathBuf,
     pub bytes: Vec<u8>,
     pub mime: String,
 }
@@ -112,6 +129,14 @@ wrap_resource_handler! {
 
             match result {
                 Ok(asset) => {
+                    debug!(
+                        "[kurogane] status=200 url=\"{}\" path=\"{}\" bytes={} mime={}",
+                        raw_url,
+                        asset.path.display(),
+                        asset.bytes.len(),
+                        asset.mime
+                    );
+
                     *self.data.lock().unwrap() = asset.bytes;
                     *self.offset.lock().unwrap() = 0;
                     *self.mime.lock().unwrap() = asset.mime;
@@ -124,16 +149,18 @@ wrap_resource_handler! {
                         ResolveError::Forbidden(path) |
                         ResolveError::NotFound(path) => {
                             eprintln!(
-                                "[kurogane] status={} path=\"{}\" reason={:?}",
+                                "[kurogane] status={} url=\"{}\" path=\"{}\" reason={:?}",
                                 status,
+                                raw_url,
                                 path.display(),
                                 e
                             );
                         }
                         _ => {
                             eprintln!(
-                                "[kurogane] status={} reason={:?}",
+                                "[kurogane] status={} url=\"{}\" reason={:?}",
                                 status,
+                                raw_url,
                                 e
                             );
                         }
@@ -178,6 +205,8 @@ wrap_resource_handler! {
             let mut offset = self.offset.lock().unwrap();
             let data = self.data.lock().unwrap();
 
+            debug_assert!(*offset <= data.len(), "offset invariant broken");
+
             let remaining = &data[*offset..];
             let read = remaining.len().min(bytes_to_read as usize);
 
@@ -187,6 +216,7 @@ wrap_resource_handler! {
                     std::ptr::copy_nonoverlapping(remaining.as_ptr(), data_out, read);
                 }
                 *offset += read;
+                debug_assert!(*offset <= data.len(), "offset exceeded buffer length");
             }
 
             *br = read as i32;
@@ -270,7 +300,7 @@ pub fn safe_join(root: &Path, request: &str) -> Result<PathBuf, ResolveError> {
 }
 
 /// Loads a file under root and returns its bytes and MIME type.
-pub fn resolve_asset(root: &Path, rel_path: &str) -> Result<Asset, ResolveError> {
+pub fn resolve_asset(root: &Path, rel_path: &str) -> Result<ResolvedAsset, ResolveError> {
     let path = safe_join(root, rel_path)?;
 
     let bytes = std::fs::read(&path).map_err(|e| ResolveError::Io(e))?;
@@ -279,12 +309,16 @@ pub fn resolve_asset(root: &Path, rel_path: &str) -> Result<Asset, ResolveError>
 
     debug!(
         "[app://] 200  {}  ({}, {} bytes)",
-        rel_path,
+        path.display(),
         mime,
         bytes.len()
     );
 
-    Ok(Asset { bytes, mime })
+    Ok(ResolvedAsset {
+        path,
+        bytes,
+        mime,
+    })
 }
 
 /// Returns the MIME type for a given path based on its file extension.
