@@ -4,6 +4,7 @@ use std::fmt::{Display, Formatter};
 pub enum RuntimeError {
     AssetRootNotSet,
     AssetRootAlreadySet,
+    InvalidAssetRoot(std::path::PathBuf),
     AssetRootMissing(std::path::PathBuf),
     CefInitializeFailed,
     CefNotInstalled,
@@ -29,6 +30,18 @@ Possible fixes:
                 "Asset root was already initialized.
 
 The runtime only allows setting the asset root once per process."
+            ),
+
+            RuntimeError::InvalidAssetRoot(p) => write!(
+                f,
+                "Invalid frontend directory:
+
+            {}
+
+            The path exists but is not a directory.
+
+            Ensure you pass a directory containing your frontend build (with index.html).",
+                p.display()
             ),
 
             RuntimeError::AssetRootMissing(p) => write!(

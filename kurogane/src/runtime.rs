@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 
 use crate::cef_app::DemoApp;
 use crate::error::RuntimeError;
-use crate::scheme::CanonicalRoot;
+use crate::scheme::{CanonicalRoot, ResolveError};
 
 static ASSET_ROOT: OnceLock<CanonicalRoot> = OnceLock::new();
 
@@ -130,8 +130,10 @@ impl Runtime {
     }
 
     pub fn set_asset_root(path: PathBuf) -> Result<(), RuntimeError> {
-        let canonical = CanonicalRoot::new(&path)
-            .map_err(|_| RuntimeError::AssetRootMissing(path.clone()))?;
+        let canonical = CanonicalRoot::new(&path).map_err(|e| match e {
+            ResolveError::InvalidRoot(p) => RuntimeError::InvalidAssetRoot(p),
+            _ => RuntimeError::AssetRootMissing(path.clone()),
+        })?;
 
         ASSET_ROOT
             .set(canonical)
@@ -145,11 +147,7 @@ impl Runtime {
     }
 
     fn validate_asset_root() -> Result<(), RuntimeError> {
-        let root = ASSET_ROOT.get().ok_or(RuntimeError::AssetRootNotSet)?;
-
-        if !root.as_path().exists() {
-            return Err(RuntimeError::AssetRootMissing(root.as_path().to_path_buf()));
-        }
+        ASSET_ROOT.get().ok_or(RuntimeError::AssetRootNotSet)?;
 
         Ok(())
     }

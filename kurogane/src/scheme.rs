@@ -32,6 +32,8 @@ use crate::debug;
 pub enum ResolveError {
     /// The URL could not be parsed, or its scheme is not app
     InvalidUrl,
+    /// The configured asset root is invalid (exists but is not a directory)
+    InvalidRoot(PathBuf),
     /// The resolved path escapes the asset root (path-traversal attempt)
     Forbidden(PathBuf),
     /// The path is inside the root but the file does not exist
@@ -44,6 +46,7 @@ impl ResolveError {
     pub fn http_status(&self) -> i32 {
         match self {
             Self::InvalidUrl => 400,
+            Self::InvalidRoot(_) => 500,
             Self::Forbidden(_) => 403,
             Self::NotFound(_) => 404,
             Self::Io(_) => 500,
@@ -55,6 +58,7 @@ impl std::fmt::Display for ResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidUrl => write!(f, "Invalid URL"),
+            Self::InvalidRoot(p) => write!(f, "Invalid asset root: {}", p.display()),
             Self::Forbidden(p) => write!(f, "Forbidden: {}", p.display()),
             Self::NotFound(p) => write!(f, "Not found: {}", p.display()),
             Self::Io(e) => write!(f, "I/O error: {e}"),
@@ -79,10 +83,20 @@ impl CanonicalRoot {
             .canonicalize()
             .map_err(ResolveError::Io)?;
 
+        if !canonical.is_dir() {
+            return Err(ResolveError::InvalidRoot(canonical));
+        }
+
         Ok(Self(canonical))
     }
 
     pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for CanonicalRoot {
+    fn as_ref(&self) -> &Path {
         &self.0
     }
 }
@@ -154,11 +168,11 @@ wrap_scheme_handler_factory! {
                         }
                     }
 
-                    let body: Vec<u8> = match e {
-                        ResolveError::InvalidUrl => b"400 Bad Request".to_vec(),
-                        ResolveError::Forbidden(_) => b"403 Forbidden".to_vec(),
-                        ResolveError::NotFound(_) => b"404 Not Found".to_vec(),
-                        ResolveError::Io(_) => b"500 Internal Server Error".to_vec(),
+                    let body: Vec<u8> = match status {
+                        400 => b"400 Bad Request".to_vec(),
+                        403 => b"403 Forbidden".to_vec(),
+                        404 => b"404 Not Found".to_vec(),
+                        _ => b"500 Internal Server Error".to_vec(),
                     };
 
                     (
@@ -642,6 +656,17 @@ mod tests {
         let asset = resolve_asset(&root, "empty.js").unwrap();
         assert!(asset.bytes.is_empty());
         assert_eq!(asset.mime, "application/javascript");
+    }
+
+    #[test]
+    fn resolve_asset_returns_404_for_directory() {
+        let dir = tmp();
+        fs::create_dir(dir.path().join("sub")).unwrap();
+
+        let root = CanonicalRoot::new(dir.path()).unwrap();
+        let err = resolve_asset(&root, "sub").unwrap_err();
+
+        assert!(matches!(err, ResolveError::NotFound(_)));
     }
 
     // Status mapping and formatting tests
