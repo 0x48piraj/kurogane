@@ -31,6 +31,9 @@ wrap_app! {
 
             let Some(cmd) = command_line else { return };
 
+            // Prevent session restore from opening stale windows on startup
+            cmd.append_switch(Some(&CefString::from("no-restore-state")));
+
             #[cfg(target_os = "windows")]
             {
                 // Sandbox disable
