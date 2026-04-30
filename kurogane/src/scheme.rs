@@ -269,6 +269,10 @@ pub fn extract_rel_path(raw_url: &str) -> Result<String, ResolveError> {
         return Err(ResolveError::InvalidUrl);
     }
 
+    if parsed.host_str().is_some_and(|h| h != "app") {
+        return Err(ResolveError::InvalidUrl);
+    }
+
     let rel = parsed.path().trim_start_matches('/');
     let rel = if rel.is_empty() { "index.html" } else { rel };
 
