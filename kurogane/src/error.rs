@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 #[derive(Debug)]
 pub enum RuntimeError {
     AssetRootNotSet,
+    AssetRootAlreadySet,
     AssetRootMissing(std::path::PathBuf),
     CefInitializeFailed,
     CefNotInstalled,
@@ -21,6 +22,13 @@ Possible fixes:
   - Make sure your app is using App::new(\"your-frontend-directory\")
   - Use a dev server URL: App::url(\"http://your-dev-server\")
   - Set environment variable CEF_APP_PATH to your frontend directory"
+            ),
+
+            RuntimeError::AssetRootAlreadySet => write!(
+                f,
+                "Asset root was already initialized.
+
+The runtime only allows setting the asset root once per process."
             ),
 
             RuntimeError::AssetRootMissing(p) => write!(

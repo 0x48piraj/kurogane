@@ -6,8 +6,9 @@ use std::sync::OnceLock;
 
 use crate::cef_app::DemoApp;
 use crate::error::RuntimeError;
+use crate::scheme::CanonicalRoot;
 
-static ASSET_ROOT: OnceLock<PathBuf> = OnceLock::new();
+static ASSET_ROOT: OnceLock<CanonicalRoot> = OnceLock::new();
 
 /// Public entry point for launching a CEF application.
 ///
@@ -129,26 +130,25 @@ impl Runtime {
     }
 
     pub fn set_asset_root(path: PathBuf) -> Result<(), RuntimeError> {
-        let canonical = path
-            .canonicalize()
+        let canonical = CanonicalRoot::new(&path)
             .map_err(|_| RuntimeError::AssetRootMissing(path.clone()))?;
 
         ASSET_ROOT
             .set(canonical)
-            .map_err(|_| RuntimeError::AssetRootNotSet)?;
+            .map_err(|_| RuntimeError::AssetRootAlreadySet)?;
 
         Ok(())
     }
 
-    pub fn asset_root() -> PathBuf {
+    pub fn asset_root() -> CanonicalRoot {
         ASSET_ROOT.get().expect("asset root not set").clone()
     }
 
     fn validate_asset_root() -> Result<(), RuntimeError> {
         let root = ASSET_ROOT.get().ok_or(RuntimeError::AssetRootNotSet)?;
 
-        if !root.exists() {
-            return Err(RuntimeError::AssetRootMissing(root.clone()));
+        if !root.as_path().exists() {
+            return Err(RuntimeError::AssetRootMissing(root.as_path().to_path_buf()));
         }
 
         Ok(())

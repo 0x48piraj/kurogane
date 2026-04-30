@@ -70,6 +70,23 @@ pub struct ResolvedAsset {
     pub mime: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct CanonicalRoot(PathBuf);
+
+impl CanonicalRoot {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, ResolveError> {
+        let canonical = path.as_ref()
+            .canonicalize()
+            .map_err(ResolveError::Io)?;
+
+        Ok(Self(canonical))
+    }
+
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
 //
 // SchemeHandlerFactory
 //
@@ -289,13 +306,8 @@ pub fn extract_rel_path(raw_url: &str) -> Result<String, ResolveError> {
 
 /// Resolves a request path relative to root and returns a canonical path
 /// inside the allowed filesystem boundary.
-pub fn safe_join(root: &Path, request: &str) -> Result<PathBuf, ResolveError> {
-    // Canonical root defines the sandbox boundary
-    let root = root
-        .canonicalize()
-        .map_err(ResolveError::Io)?;
-
-    let joined = root.join(request);
+pub fn safe_join(root: &CanonicalRoot, request: &str) -> Result<PathBuf, ResolveError> {
+    let joined = root.as_path().join(request);
 
     // Canonicalize and distinguish 404 (file missing) from 403 (path escapes root)
     let canonical = joined
@@ -308,7 +320,7 @@ pub fn safe_join(root: &Path, request: &str) -> Result<PathBuf, ResolveError> {
             }
         })?;
 
-    if !canonical.starts_with(&root) {
+    if !canonical.starts_with(root.as_path()) {
         return Err(ResolveError::Forbidden(canonical));
     }
 
@@ -316,7 +328,7 @@ pub fn safe_join(root: &Path, request: &str) -> Result<PathBuf, ResolveError> {
 }
 
 /// Loads a file under root and returns its bytes and MIME type.
-pub fn resolve_asset(root: &Path, rel_path: &str) -> Result<ResolvedAsset, ResolveError> {
+pub fn resolve_asset(root: &CanonicalRoot, rel_path: &str) -> Result<ResolvedAsset, ResolveError> {
     let path = safe_join(root, rel_path)?;
 
     // Treat directories as not found
@@ -448,7 +460,8 @@ mod tests {
     fn safe_join_resolves_existing_file() {
         let dir = tmp();
         fs::write(dir.path().join("hello.txt"), b"hi").unwrap();
-        let path = safe_join(dir.path(), "hello.txt").unwrap();
+        let root = CanonicalRoot::new(dir.path()).unwrap();
+        let path = safe_join(&root, "hello.txt").unwrap();
         assert!(path.is_file());
         assert!(path.ends_with("hello.txt"));
     }
@@ -458,14 +471,16 @@ mod tests {
         let dir = tmp();
         fs::create_dir(dir.path().join("sub")).unwrap();
         fs::write(dir.path().join("sub/page.html"), b"<h1>hi</h1>").unwrap();
-        let path = safe_join(dir.path(), "sub/page.html").unwrap();
+        let root = CanonicalRoot::new(dir.path()).unwrap();
+        let path = safe_join(&root, "sub/page.html").unwrap();
         assert!(path.ends_with("page.html"));
     }
 
     #[test]
     fn safe_join_not_found_for_missing_file() {
         let dir = tmp();
-        let err = safe_join(dir.path(), "missing.txt").unwrap_err();
+        let root = CanonicalRoot::new(dir.path()).unwrap();
+        let err = safe_join(&root, "missing.txt").unwrap_err();
         assert!(matches!(err, ResolveError::NotFound(_)));
         assert_eq!(err.http_status(), 404);
     }
@@ -474,10 +489,11 @@ mod tests {
     fn safe_join_forbidden_for_traversal_to_existing_file() {
         // Traversal escapes root to an existing file; must be rejected (403)
         let parent = tmp();
-        let root = parent.path().join("assets");
-        fs::create_dir(&root).unwrap();
+        let root_path = parent.path().join("assets");
+        fs::create_dir(&root_path).unwrap();
         fs::write(parent.path().join("secret.txt"), b"secret").unwrap();
- 
+
+        let root = CanonicalRoot::new(root_path.as_path()).unwrap();
         let err = safe_join(&root, "../secret.txt").unwrap_err();
         assert!(matches!(err, ResolveError::Forbidden(_)));
         assert_eq!(err.http_status(), 403);
@@ -488,17 +504,19 @@ mod tests {
         // Traversal to non-existent target is indistinguishable from in-root miss without
         // an exists() check (which would be TOCTOU).
         let dir = tmp();
-        let err = safe_join(dir.path(), "../no_such_file.txt").unwrap_err();
+        let root = CanonicalRoot::new(dir.path()).unwrap();
+        let err = safe_join(&root, "../no_such_file.txt").unwrap_err();
         assert!(matches!(err, ResolveError::NotFound(_)));
     }
 
     #[test]
     fn safe_join_rejects_buried_traversal() {
         let parent = tmp();
-        let root = parent.path().join("assets");
-        fs::create_dir(&root).unwrap();
+        let root_path = parent.path().join("assets");
+        fs::create_dir(&root_path).unwrap();
         fs::write(parent.path().join("secret.txt"), b"secret").unwrap();
- 
+
+        let root = CanonicalRoot::new(root_path.as_path()).unwrap();
         let err = safe_join(&root, "a/b/../../../../secret.txt").unwrap_err();
         assert!(matches!(
             err,
@@ -601,7 +619,8 @@ mod tests {
     fn resolve_asset_returns_correct_bytes_and_mime() {
         let dir = tmp();
         fs::write(dir.path().join("app.js"), b"console.log('hi')").unwrap();
-        let asset = resolve_asset(dir.path(), "app.js").unwrap();
+        let root = CanonicalRoot::new(dir.path()).unwrap();
+        let asset = resolve_asset(&root, "app.js").unwrap();
         assert_eq!(asset.mime, "application/javascript");
         assert_eq!(asset.bytes, b"console.log('hi')");
     }
@@ -609,7 +628,8 @@ mod tests {
     #[test]
     fn resolve_asset_404_propagates() {
         let dir = tmp();
-        let err = resolve_asset(dir.path(), "nope.html").unwrap_err();
+        let root = CanonicalRoot::new(dir.path()).unwrap();
+        let err = resolve_asset(&root, "nope.html").unwrap_err();
         assert!(matches!(err, ResolveError::NotFound(_)));
         assert_eq!(err.http_status(), 404);
     }
@@ -618,7 +638,8 @@ mod tests {
     fn resolve_asset_empty_file_is_ok() {
         let dir = tmp();
         fs::write(dir.path().join("empty.js"), b"").unwrap();
-        let asset = resolve_asset(dir.path(), "empty.js").unwrap();
+        let root = CanonicalRoot::new(dir.path()).unwrap();
+        let asset = resolve_asset(&root, "empty.js").unwrap();
         assert!(asset.bytes.is_empty());
         assert_eq!(asset.mime, "application/javascript");
     }
