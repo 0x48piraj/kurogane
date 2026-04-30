@@ -17,9 +17,9 @@
 //! - Focused on safe, predictable asset access within the runtime
 
 use cef::*;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use mime_guess::MimeGuess;
 use url::Url;
 
@@ -77,57 +77,26 @@ wrap_scheme_handler_factory! {
     pub struct AppSchemeHandlerFactory;
 
     impl SchemeHandlerFactory {
+        /// Resolves and loads an app:// resource for the request.
+        ///
+        /// Populates response data and status code.
         fn create(
             &self,
             _browser: Option<&mut Browser>,
             _frame: Option<&mut Frame>,
             _scheme_name: Option<&CefString>,
-            _request: Option<&mut Request>,
+            request: Option<&mut Request>,
         ) -> Option<ResourceHandler> {
 
-            Some(AppResourceHandler::new(
-                Arc::new(Mutex::new(Vec::new())),
-                Arc::new(Mutex::new(0usize)),
-                Arc::new(Mutex::new(String::from("text/html"))),
-                Arc::new(AtomicI32::new(200)),
-            ))
-        }
-    }
-}
-
-//
-// ResourceHandler
-//
-
-wrap_resource_handler! {
-    pub struct AppResourceHandler {
-        data: Arc<Mutex<Vec<u8>>>,
-        offset: Arc<Mutex<usize>>,
-        mime: Arc<Mutex<String>>,
-        status: Arc<AtomicI32>,
-    }
-
-    impl ResourceHandler {
-
-        /// Resolves and loads an app:// resource for the request.
-        ///
-        /// Populates response data and status code.
-        fn open(
-            &self,
-            request: Option<&mut Request>,
-            handle_request: Option<&mut i32>,
-            _callback: Option<&mut Callback>,
-        ) -> i32 {
             let request = request.unwrap();
             let raw_url = CefString::from(&request.url()).to_string();
 
             // Resolve relative to CWD (set by resolver)
             let root = crate::runtime::Runtime::asset_root();
 
-            let result = extract_rel_path(&raw_url)
-                .and_then(|rel| resolve_asset(&root, &rel));
-
-            match result {
+            let (data, mime, status) = match extract_rel_path(&raw_url)
+                .and_then(|rel| resolve_asset(&root, &rel))
+            {
                 Ok(asset) => {
                     debug!(
                         "[kurogane] status=200 url=\"{}\" path=\"{}\" bytes={} mime={}",
@@ -137,10 +106,11 @@ wrap_resource_handler! {
                         asset.mime
                     );
 
-                    *self.data.lock().unwrap() = asset.bytes;
-                    *self.offset.lock().unwrap() = 0;
-                    *self.mime.lock().unwrap() = asset.mime;
-                    self.status.store(200, Ordering::Release);
+                    (
+                        Arc::<[u8]>::from(asset.bytes),
+                        asset.mime,
+                        200,
+                    )
                 }
                 Err(e) => {
                     let status = e.http_status();
@@ -166,19 +136,52 @@ wrap_resource_handler! {
                         }
                     }
 
-                    let body = match e {
+                    let body: Vec<u8> = match e {
                         ResolveError::InvalidUrl => b"400 Bad Request".to_vec(),
                         ResolveError::Forbidden(_) => b"403 Forbidden".to_vec(),
                         ResolveError::NotFound(_) => b"404 Not Found".to_vec(),
                         ResolveError::Io(_) => b"500 Internal Server Error".to_vec(),
                     };
 
-                    self.status.store(status, Ordering::Release);
-                    *self.data.lock().unwrap() = body;
-                    *self.offset.lock().unwrap() = 0;
-                    *self.mime.lock().unwrap() = "text/plain".into();
+                    (
+                        Arc::<[u8]>::from(body),
+                        "text/plain".to_string(),
+                        status,
+                    )
                 }
-            }
+            };
+
+            Some(AppResourceHandler::new(
+                data,
+                Arc::new(AtomicUsize::new(0)),
+                mime,
+                Arc::new(AtomicI32::new(status)),
+            ))
+        }
+    }
+}
+
+//
+// ResourceHandler
+//
+
+wrap_resource_handler! {
+    pub struct AppResourceHandler {
+        data: Arc<[u8]>,
+        offset: Arc<AtomicUsize>,
+        mime: String,
+        status: Arc<AtomicI32>,
+    }
+
+    impl ResourceHandler {
+
+        fn open(
+            &self,
+            _request: Option<&mut Request>,
+            handle_request: Option<&mut i32>,
+            _callback: Option<&mut Callback>,
+        ) -> i32 {
+            self.offset.store(0, Ordering::Release);
 
             if let Some(hr) = handle_request {
                 *hr = 1;
@@ -202,12 +205,12 @@ wrap_resource_handler! {
                 return 0;
             }
 
-            let mut offset = self.offset.lock().unwrap();
-            let data = self.data.lock().unwrap();
+            let offset = self.offset.load(Ordering::Acquire);
+            let data = self.data.as_ref();
 
-            debug_assert!(*offset <= data.len(), "offset invariant broken");
+            debug_assert!(offset <= data.len(), "offset invariant broken");
 
-            let remaining = &data[*offset..];
+            let remaining = &data[offset..];
             let read = remaining.len().min(bytes_to_read as usize);
 
             if read > 0 {
@@ -215,8 +218,10 @@ wrap_resource_handler! {
                 unsafe {
                     std::ptr::copy_nonoverlapping(remaining.as_ptr(), data_out, read);
                 }
-                *offset += read;
-                debug_assert!(*offset <= data.len(), "offset exceeded buffer length");
+
+                self.offset.fetch_add(read, Ordering::AcqRel);
+
+                debug_assert!(offset + read <= data.len(), "offset exceeded buffer length");
             }
 
             *br = read as i32;
@@ -237,11 +242,10 @@ wrap_resource_handler! {
             let response = response.unwrap();
 
             let status = self.status.load(Ordering::Acquire);
-            let data_len = self.data.lock().unwrap().len() as i64;
-            let mime = self.mime.lock().unwrap().clone();
+            let data_len = self.data.len() as i64;
 
             response.set_status(status);
-            response.set_mime_type(Some(&CefString::from(mime.as_str())));
+            response.set_mime_type(Some(&CefString::from(self.mime.as_str())));
 
             if let Some(len) = response_length {
                 *len = data_len;
