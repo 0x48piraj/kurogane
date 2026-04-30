@@ -20,6 +20,7 @@ use cef::*;
 use std::sync::Arc;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+use percent_encoding::percent_decode_str;
 use mime_guess::MimeGuess;
 use url::Url;
 
@@ -265,15 +266,22 @@ pub fn extract_rel_path(raw_url: &str) -> Result<String, ResolveError> {
     let parsed = Url::parse(raw_url)
         .map_err(|_| ResolveError::InvalidUrl)?;
 
+    // Impose scheme rule
     if parsed.scheme() != "app" {
         return Err(ResolveError::InvalidUrl);
     }
 
+    // Impose host rule
     if parsed.host_str().is_some_and(|h| h != "app") {
         return Err(ResolveError::InvalidUrl);
     }
 
-    let rel = parsed.path().trim_start_matches('/');
+    // Percent-decode
+    let decoded = percent_decode_str(parsed.path())
+        .decode_utf8()
+        .map_err(|_| ResolveError::InvalidUrl)?; // reject invalid UTF-8
+
+    let rel = decoded.trim_start_matches('/');
     let rel = if rel.is_empty() { "index.html" } else { rel };
 
     Ok(rel.to_owned())
@@ -419,6 +427,14 @@ mod tests {
     fn rel_path_rejects_malformed_url() {
         let err = extract_rel_path("not a url at all").unwrap_err();
         assert!(matches!(err, ResolveError::InvalidUrl));
+    }
+
+    #[test]
+    fn rel_path_decodes_percent_encoding() {
+        assert_eq!(
+            extract_rel_path("app://app/My%20File.html").unwrap(),
+            "My File.html"
+        );
     }
 
     // Path safety and traversal checks

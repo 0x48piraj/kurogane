@@ -716,6 +716,7 @@ dependencies = [
  "cef",
  "dirs",
  "mime_guess",
+ "percent-encoding",
  "serde",
  "serde_json",
  "shared_memory",
