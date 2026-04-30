@@ -409,6 +409,13 @@ mod tests {
     }
 
     #[test]
+    fn rel_path_rejects_wrong_host() {
+        let err = extract_rel_path("app://evil/foo").unwrap_err();
+        assert!(matches!(err, ResolveError::InvalidUrl));
+        assert_eq!(err.http_status(), 400);
+    }
+
+    #[test]
     fn rel_path_rejects_malformed_url() {
         let err = extract_rel_path("not a url at all").unwrap_err();
         assert!(matches!(err, ResolveError::InvalidUrl));
@@ -493,14 +500,21 @@ mod tests {
     #[test]
     fn safe_join_forbidden_for_symlink_escaping_root() {
         use std::os::unix::fs::symlink;
+
         let parent = tmp();
         let root = parent.path().join("assets");
-        fs::create_dir(&root).unwrap();
-        // External file targeted via symlink inside root
-        fs::write(parent.path().join("secret.txt"), b"secret").unwrap();
-        symlink(parent.path().join("secret.txt"), root.join("escape")).unwrap();
- 
+        std::fs::create_dir(&root).unwrap();
+
+        // Create a real file outside root
+        let secret = parent.path().join("secret.txt");
+        std::fs::write(&secret, b"secret").unwrap();
+
+        // Create symlink inside root pointing outside
+        let link = root.join("escape");
+        symlink(&secret, &link).unwrap();
+
         let err = safe_join(&root, "escape").unwrap_err();
+
         assert!(matches!(err, ResolveError::Forbidden(_)));
         assert_eq!(err.http_status(), 403);
     }
