@@ -68,14 +68,14 @@ wrap_browser_process_handler! {
                 Some(&Default::default()),
                 None, None, None,
             )
-            .expect("browser_view_create failed");
+            .expect("unrecoverable: browser_view_create failed");
 
             // Create delegate
             let mut delegate = crate::window::DemoWindowDelegate::new(browser_view, self.window.clone());
 
             // Create window
             let window = window_create_top_level(Some(&mut delegate))
-                .expect("window_create_top_level failed");
+                .expect("unrecoverable: window_create_top_level failed");
 
             *self.window.lock().unwrap() = Some(window);
         }

@@ -32,6 +32,7 @@ wrap_app! {
             let Some(cmd) = command_line else { return };
 
             // Prevent session restore from opening stale windows on startup
+            // ref: https://chromium.googlesource.com/chromium/src/%2B/12bfc336/chrome/android/java/src/org/chromium/chrome/browser/ChromeSwitches.java
             cmd.append_switch(Some(&CefString::from("no-restore-state")));
 
             #[cfg(target_os = "windows")]

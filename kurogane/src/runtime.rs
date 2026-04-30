@@ -1,7 +1,7 @@
 use cef::{args::Args, *};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicBool;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use crate::cef_app::DemoApp;
@@ -23,7 +23,12 @@ impl Runtime {
     /// Launches the CEF runtime and blocks until shutdown.
     ///
     /// start_url determines what the browser loads on startup.
-    pub fn run(start_url: CefString, require_assets: bool) -> Result<(), RuntimeError> {
+    pub fn run(
+        start_url: CefString,
+        require_assets: bool,
+        profile_id: Option<String>,
+        persist_session_cookies: bool,
+    ) -> Result<(), RuntimeError> {
         if require_assets {
             Self::validate_asset_root()?;
         }
@@ -58,14 +63,20 @@ impl Runtime {
 
         // Isolate the CEF cache per executable.
         // Reusing a profile across runs can trigger session restore leading to multiple on_context_initialized invocations.
-        let exe_name = exe
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "app".to_string());
+        let exe_canonical = exe
+            .canonicalize()
+            .unwrap_or(exe.clone());
 
-        let cache_dir = std::env::temp_dir()
+        let profile_key = profile_id.unwrap_or_else(|| {
+            fnv1a_64(&exe_canonical)
+        });
+
+        let base_dir = dirs::cache_dir()
+            .unwrap_or_else(|| std::env::temp_dir());
+
+        let cache_dir = base_dir
             .join("kurogane")
-            .join(&exe_name);
+            .join(profile_key);
 
         std::fs::create_dir_all(&cache_dir).ok();
 
@@ -89,7 +100,7 @@ impl Runtime {
             locales_dir_path: CefString::from(locales_dir.to_string_lossy().as_ref()),
             cache_path: CefString::from(cache_dir.to_string_lossy().as_ref()),
             root_cache_path: CefString::from(cache_dir.to_string_lossy().as_ref()),
-            persist_session_cookies: 1,
+            persist_session_cookies: if persist_session_cookies { 1 } else { 0 },
             no_sandbox,
 
             ..Default::default()
@@ -103,7 +114,7 @@ impl Runtime {
                 locales_dir_path: CefString::from(locales_dir.to_string_lossy().as_ref()),
                 cache_path: CefString::from(cache_dir.to_string_lossy().as_ref()),
                 root_cache_path: CefString::from(cache_dir.to_string_lossy().as_ref()),
-                persist_session_cookies: 1,
+                persist_session_cookies: if persist_session_cookies { 1 } else { 0 },
                 no_sandbox,
 
                 ..Default::default()
@@ -187,4 +198,15 @@ fn find_cef_root() -> Result<PathBuf, RuntimeError> {
     }
 
     Err(RuntimeError::CefNotInstalled)
+}
+
+fn fnv1a_64(path: &Path) -> String {
+    let mut hash: u64 = 14695981039346656037;
+
+    for byte in path.to_string_lossy().as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(1099511628211);
+    }
+
+    format!("{:016x}", hash)
 }

@@ -29,6 +29,9 @@ pub struct App {
     source: Source,
     commands: Vec<(String, CommandHandler)>,
     binary_commands: Vec<(String, BinaryHandler)>,
+
+    profile_id: Option<String>,
+    persist_session_cookies: bool,
 }
 
 impl App {
@@ -38,6 +41,9 @@ impl App {
             source: Source::Path(path.into()),
             commands: Vec::new(),
             binary_commands: Vec::new(),
+
+            profile_id: None,
+            persist_session_cookies: true,
         }
     }
 
@@ -47,6 +53,9 @@ impl App {
             source: Source::Url(url.into()),
             commands: Vec::new(),
             binary_commands: Vec::new(),
+
+            profile_id: None,
+            persist_session_cookies: true,
         }
     }
 
@@ -72,6 +81,16 @@ impl App {
         self
     }
 
+    pub fn profile_id(mut self, id: impl Into<String>) -> Self {
+        self.profile_id = Some(id.into());
+        self
+    }
+
+    pub fn persist_session_cookies(mut self, value: bool) -> Self {
+        self.persist_session_cookies = value;
+        self
+    }
+
     /// Start the application
     pub fn run(self) -> Result<(), RuntimeError> {
         let (asset_root, url) = resolver::resolve(&self.source)?;
@@ -90,7 +109,12 @@ impl App {
             register_binary_command(name, handler);
         }
 
-        Runtime::run(url, require_assets)
+        Runtime::run(
+            url,
+            require_assets,
+            self.profile_id,
+            self.persist_session_cookies,
+        )
     }
 
     /// Run the application and terminate the process on failure.
