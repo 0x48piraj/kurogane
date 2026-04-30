@@ -1,6 +1,6 @@
 use cef::{args::Args, *};
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -18,6 +18,23 @@ static ASSET_ROOT: OnceLock<CanonicalRoot> = OnceLock::new();
 /// - Starting the browser process
 /// - Running the CEF message loop
 pub struct Runtime;
+
+wrap_task! {
+    struct CloseMainWindowTask {
+        window: Arc<Mutex<Option<Window>>>,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            if let Some(window) = self.window.lock().unwrap().as_ref() {
+                let w = window.clone();
+                w.close();
+            } else {
+                quit_message_loop();
+            }
+        }
+    }
+}
 
 impl Runtime {
     /// Launches the CEF runtime and blocks until shutdown.
@@ -134,6 +151,24 @@ impl Runtime {
         ) != 1 {
             return Err(RuntimeError::CefInitializeFailed);
         }
+
+        let quitting = Arc::new(AtomicBool::new(false));
+        let main = window.clone();
+
+        ctrlc::set_handler({
+            let quitting = quitting.clone();
+            let main = main.clone();
+
+            move || {
+                if quitting.swap(true, Ordering::SeqCst) {
+                    return;
+                }
+
+                let mut task = CloseMainWindowTask::new(main.clone());
+                post_task(ThreadId::UI, Some(&mut task));
+            }
+        })
+        .expect("failed to install SIGINT handler");
 
         run_message_loop();
         shutdown();
