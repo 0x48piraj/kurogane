@@ -319,6 +319,11 @@ pub fn safe_join(root: &Path, request: &str) -> Result<PathBuf, ResolveError> {
 pub fn resolve_asset(root: &Path, rel_path: &str) -> Result<ResolvedAsset, ResolveError> {
     let path = safe_join(root, rel_path)?;
 
+    // Treat directories as not found
+    if !path.is_file() {
+        return Err(ResolveError::NotFound(path));
+    }
+
     let bytes = std::fs::read(&path).map_err(|e| ResolveError::Io(e))?;
 
     let mime = mime_from_path(&path);
