@@ -49,22 +49,11 @@ pub fn run(name: Option<String>, template: Option<String>) -> Result<()> {
     // .cargo/config.toml
     fs::create_dir_all(root.join(".cargo"))?;
 
-    let cef_path = dirs::home_dir()
-        .unwrap()
-        .join(".local/share/cef")
-        .join(env!("KUROGANE_CEF_VERSION"));
-
     fs::write(
         root.join(".cargo/config.toml"),
-        format!(
-            r#"[env]
-CEF_PATH = {{ value = "{}", force = true }}
-
-[target.x86_64-unknown-linux-gnu]
+        r#"[target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN/cef"]
 "#,
-            cef_path.display().to_string().replace("\\", "\\\\")
-        ),
     )?;
 
     tui::success("Project created");
