@@ -86,7 +86,8 @@
             echo "$CURRENT_HASH" > "$HASH_FILE"
           fi
 
-          exec "$BUILD_DIR/target/debug/kurogane" "$@"
+          exec env LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath runtimeDeps}:$CEF_PATH" \
+            "$BUILD_DIR/target/debug/kurogane" "$@"
         '';
       in {
         devShells.default = pkgs.mkShell {
@@ -101,7 +102,6 @@
             export PKG_CONFIG_PATH="${
               pkgs.lib.makeSearchPath "lib/pkgconfig" runtimeDeps
             }"
-            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath runtimeDeps}:$CEF_PATH:$LD_LIBRARY_PATH"
 
             echo "Kurogane Dev Shell"
             echo "    kurogane init   - Create new project"
