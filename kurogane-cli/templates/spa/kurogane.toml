@@ -1,4 +1,4 @@
 [app]
-name = "kurogane-server-template"
+name = "kurogane-spa-template"
 frontend = "content"
 dev_url = ""
