@@ -19,3 +19,4 @@ tempfile = "3"
 
 [features]
 debug = []
+html_canvas_compositor = []

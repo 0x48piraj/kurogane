@@ -31,6 +31,14 @@ wrap_app! {
 
             let Some(cmd) = command_line else { return };
 
+            #[cfg(feature = "html_canvas_compositor")]
+            {
+                cmd.append_switch_with_value(
+                    Some(&CefString::from("enable-blink-features")),
+                    Some(&CefString::from("CanvasDrawElement")),
+                );
+            }
+
             #[cfg(target_os = "windows")]
             {
                 // Sandbox disable
