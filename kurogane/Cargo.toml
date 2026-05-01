@@ -4,7 +4,7 @@ version = "0.0.1"
 edition = "2024"
 
 [dependencies]
-cef = { git = "https://github.com/tauri-apps/cef-rs" }
+cef = { git = "https://github.com/tauri-apps/cef-rs", rev = "dab51658a8a6317040eb0ebab39b68ede42c836f" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 dirs = "6"

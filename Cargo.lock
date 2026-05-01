@@ -178,8 +178,8 @@ dependencies = [
 
 [[package]]
 name = "cef"
-version = "147.0.0+147.0.9"
-source = "git+https://github.com/tauri-apps/cef-rs#e19754d386cf1d6aaedbc9d4851a6f1ed77fb31f"
+version = "147.1.0+147.0.10"
+source = "git+https://github.com/tauri-apps/cef-rs?rev=dab51658a8a6317040eb0ebab39b68ede42c836f#dab51658a8a6317040eb0ebab39b68ede42c836f"
 dependencies = [
  "anyhow",
  "cargo_metadata",
@@ -197,12 +197,12 @@ dependencies = [
 
 [[package]]
 name = "cef-dll-sys"
-version = "147.0.0+147.0.9"
-source = "git+https://github.com/tauri-apps/cef-rs#e19754d386cf1d6aaedbc9d4851a6f1ed77fb31f"
+version = "147.1.0+147.0.10"
+source = "git+https://github.com/tauri-apps/cef-rs?rev=dab51658a8a6317040eb0ebab39b68ede42c836f#dab51658a8a6317040eb0ebab39b68ede42c836f"
 dependencies = [
  "anyhow",
  "cmake",
- "download-cef 2.3.1 (git+https://github.com/tauri-apps/cef-rs)",
+ "download-cef 2.3.1 (git+https://github.com/tauri-apps/cef-rs?rev=dab51658a8a6317040eb0ebab39b68ede42c836f)",
  "serde_json",
 ]
 
@@ -427,7 +427,7 @@ dependencies = [
 [[package]]
 name = "download-cef"
 version = "2.3.1"
-source = "git+https://github.com/tauri-apps/cef-rs#e19754d386cf1d6aaedbc9d4851a6f1ed77fb31f"
+source = "git+https://github.com/tauri-apps/cef-rs?rev=dab51658a8a6317040eb0ebab39b68ede42c836f#dab51658a8a6317040eb0ebab39b68ede42c836f"
 dependencies = [
  "bzip2",
  "clap",

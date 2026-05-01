@@ -152,6 +152,7 @@ impl Runtime {
             return Err(RuntimeError::CefInitializeFailed);
         }
 
+        // Prevent double-fire (dev hammers Ctrl+C twice)
         let quitting = Arc::new(AtomicBool::new(false));
         let main = window.clone();
 
@@ -160,6 +161,7 @@ impl Runtime {
             let main = main.clone();
 
             move || {
+                // Only act on the first signal
                 if quitting.swap(true, Ordering::SeqCst) {
                     return;
                 }
