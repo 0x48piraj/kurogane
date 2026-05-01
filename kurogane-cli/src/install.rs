@@ -1,7 +1,7 @@
 use anyhow::Result;
 use download_cef::{CefIndex, DEFAULT_TARGET};
 use std::time::Duration;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::tui;
 
@@ -63,8 +63,6 @@ pub fn run() -> Result<()> {
     tui::success("Chromium engine installed");
     tui::field("path", tui::format_path(&install_dir));
 
-    print_env_instructions(&install_dir);
-
     Ok(())
 }
 
@@ -73,45 +71,4 @@ fn install_dir_for(version: &str) -> PathBuf {
         .expect("no home dir")
         .join(".local/share/cef")
         .join(version)
-}
-
-fn print_env_instructions(root: &Path) {
-    println!();
-    tui::section("Environment setup (optional)");
-
-    #[cfg(target_os = "windows")]
-    {
-        tui::info("PowerShell");
-        println!(r#"    $env:CEF_PATH="{}""#, tui::format_path(root));
-        println!(r#"    $env:PATH="$env:PATH;$env:CEF_PATH""#);
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        println!(r#"    export CEF_PATH="{}""#, tui::format_path(root));
-        println!(r#"    export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$CEF_PATH""#);
-        println!();
-        tui::warn("Run once");
-        println!(
-            "    sudo chown root:root {}/chrome-sandbox",
-            tui::format_path(root)
-        );
-        println!(
-            "    sudo chmod 4755 {}/chrome-sandbox",
-            tui::format_path(root)
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        println!(r#"    export CEF_PATH="{}""#, tui::format_path(root));
-        println!(
-            r#"    export DYLD_FALLBACK_LIBRARY_PATH="$DYLD_FALLBACK_LIBRARY_PATH:$CEF_PATH:$CEF_PATH/Chromium Embedded Framework.framework/Libraries""#
-        );
-    }
-
-    println!();
-    tui::step("Restart your terminal after running these commands");
-    tui::step("Then run: kurogane dev");
-    println!();
 }
