@@ -84,16 +84,20 @@ impl Runtime {
             .canonicalize()
             .unwrap_or(exe.clone());
 
-        let profile_key = profile_id.unwrap_or_else(|| {
-            fnv1a_64(&exe_canonical)
-        });
+        let exe_hash = fnv1a_64(&exe_canonical);
+
+        let profile_name = profile_id.unwrap_or_else(|| "kurogane-app".to_string());
+        let profile_name = profile_name.replace(['/', '\\', ':'], "_"); // shallow sanitize
+
+        let profile_dir_name = format!("{}-{}", profile_name, exe_hash);
 
         let base_dir = dirs::cache_dir()
             .unwrap_or_else(|| std::env::temp_dir());
 
         let cache_dir = base_dir
             .join("kurogane")
-            .join(profile_key);
+            .join("profiles")
+            .join(profile_dir_name);
 
         std::fs::create_dir_all(&cache_dir).ok();
 
