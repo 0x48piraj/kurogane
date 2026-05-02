@@ -2,270 +2,122 @@
 
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Kurogane: IPC template</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8">
+  <title>Kurogane: IPC template</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<style>
-body{
-    margin:0;
-    font-family:system-ui;
-    background:#0f172a;
-    color:#e5e7eb;
-}
-header{
-    padding:20px;
-    border-bottom:1px solid #1f2937;
-}
-h1{margin:0;font-size:20px}
-.container{padding:20px;max-width:900px;margin:auto}
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #171923;
+      --text: #e6e6e6;
+      --muted: #9aa0a6;
+      --accent: #4f8cff;
+    }
 
-.grid{
-display:grid;
-grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
-gap:10px;
-margin-bottom:20px;
-}
+    * {
+      box-sizing: border-box;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
 
-button{
-background:#2563eb;
-color:white;
-border:none;
-padding:12px;
-border-radius:8px;
-cursor:pointer;
-font-weight:600;
-}
-button:hover{background:#1d4ed8}
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      display: grid;
+      place-items: center;
+      height: 100vh;
+    }
 
-pre{
-background:#020617;
-padding:16px;
-border-radius:8px;
-height:420px;
-overflow:auto;
-}
+    main {
+      width: 420px;
+    }
 
-.ok{color:#4ade80}
-.err{color:#f87171}
-.info{color:#93c5fd}
-.dim{color:#6b7280}
-</style>
+    h1 {
+      margin: 0 0 4px;
+      font-size: 20px;
+    }
 
+    .subtitle {
+      margin: 0 0 20px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .card {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    button {
+      flex: 1;
+      padding: 10px;
+      background: var(--panel);
+      border: 1px solid #222;
+      color: var(--text);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    button:hover {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+
+    pre {
+      background: var(--panel);
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      min-height: 100px;
+      overflow: auto;
+    }
+  </style>
 </head>
-
 <body>
-<header>
-<h1>Kurogane: IPC test suite</h1>
-</header>
+  <main>
+    <h1>Kurogane: IPC template</h1>
+    <p class="subtitle">Send and handle messages between UI and native Rust</p>
 
-<div class="container">
+    <div class="card">
+      <button onclick="ping()">Ping</button>
+      <button onclick="greet()">Greet</button>
+      <button onclick="divide()">Divide</button>
+    </div>
 
-<div class="grid">
-<button onclick="demo.echo()">Echo object</button>
-<button onclick="demo.greet()">Greeting</button>
-<button onclick="demo.divide()">Divide numbers</button>
-<button onclick="demo.error()">Division error</button>
-<button onclick="demo.types()">Type inspection</button>
-<button onclick="demo.fs()">File read</button>
-<button onclick="demo.parallel()">Parallel 10</button>
-<button onclick="demo.slow()">Slow blocking</button>
-<button onclick="demo.batch()">Batch 100</button>
-<button onclick="demo.binarySmall()">Binary small</button>
-<button onclick="demo.binaryLarge()">Binary large</button>
-<button onclick="demo.binaryCorruption()">Binary verify</button>
-<button onclick="demo.binaryStress()">Binary stress 50</button>
-<button onclick="demo.binaryThreshold()">Binary threshold</button>
-<button onclick="demo.binaryHuge()">Binary huge</button>
-<button onclick="clearLog()">Clear</button>
-</div>
+    <pre id="output">Ready…</pre>
+  </main>
 
-<pre id="log">runtime ready…</pre>
+    <script>
+    const out = document.getElementById("output");
 
-</div>
-
-<script type="module">
-const logEl = document.getElementById("log");
-
-function log(msg,cls="info"){
-logEl.innerHTML+=`\n<span class="${cls}">${msg}</span>`;
-logEl.scrollTop=logEl.scrollHeight;
-}
-const ok=m=>log("[OK] "+m,"ok");
-const err=m=>log("[ERROR] "+m,"err");
-
-window.clearLog=()=>logEl.textContent="";
-
-async function timed(name,fn){
-const t=performance.now();
-try{
-const r=await fn();
-const dt=(performance.now()-t).toFixed(2);
-ok(`${name} (${dt}ms)`);
-if(r!==undefined)log(JSON.stringify(r,null,2),"dim");
-}catch(e){
-err(`${name}: ${e}`);
-}
-}
-
-window.demo={
-
-echo(){
-timed("echo roundtrip",()=>kurogane.invoke("echo",{hello:"world",n:42}));
-},
-
-greet(){
-timed("greet",()=>kurogane.invoke("greet","Alice"));
-},
-
-divide(){
-timed("20 / 4",()=>kurogane.invoke("divide",{a:20,b:4}));
-},
-
-error(){
-timed("division by zero",()=>kurogane.invoke("divide",{a:1,b:0}));
-},
-
-types(){
-timed("type inspection",()=>kurogane.invoke("types",{a:1,b:true,c:null,d:[1,2]}));
-},
-
-fs(){
-timed("fs.read config",()=>kurogane.invoke("fs.read","config.json"));
-},
-
-parallel(){
-timed("parallel 10",async()=>{
-const arr=[];
-for(let i=0;i<10;i++)arr.push(kurogane.invoke("echo",{id:i}));
-return await Promise.all(arr);
-});
-},
-
-slow(){
-timed("slow operation",()=>kurogane.invoke("slow_operation",{payload:"demo"}));
-},
-
-batch(){
-timed("100 parallel calls",async()=>{
-    const arr=[];
-    for(let i=0;i<100;i++)
-        arr.push(kurogane.invoke("echo",{i}));
-    return await Promise.all(arr);
-});
-},
-
-binarySmall(){
-timed("binary small", async()=>{
-    const data = new Uint8Array([1,2,3,4,5]);
-
-    const out = await kurogane.invokeBinary("echo_binary", data);
-
-    return Array.from(new Uint8Array(out));
-});
-},
-
-binaryLarge(){
-timed("binary large (2MB)", async()=>{
-
-    const data = new Uint8Array(2_000_000);
-    data.fill(7);
-
-    const out = await kurogane.invokeBinary("echo_binary", data);
-
-    return {
-        input:data.length,
-        output:new Uint8Array(out).length
-    };
-});
-},
-
-binaryCorruption(){
-timed("binary integrity", async()=>{
-
-    const data = new Uint8Array(1000);
-
-    for(let i=0;i<data.length;i++)
-        data[i]=i%255;
-
-    const out = new Uint8Array(
-        await kurogane.invokeBinary("echo_binary", data)
-    );
-
-    for(let i=0;i<data.length;i++){
-        if(out[i]!==data[i])
-            throw new Error("corruption at "+i);
+    function setOutput(value) {
+        out.textContent =
+        typeof value === "string"
+            ? value
+            : JSON.stringify(value, null, 2);
     }
 
-    return "verified";
-});
-},
-
-binaryStress(){
-timed("binary stress 50", async()=>{
-
-    const arr=[];
-
-    for(let i=0;i<50;i++){
-
-        const data = new Uint8Array(50000);
-        data.fill(i);
-
-        arr.push(kurogane.invokeBinary("echo_binary",data));
+    async function ping() {
+        const res = await kurogane.invoke("ping");
+        setOutput(res); // "pong"
     }
 
-    await Promise.all(arr).then(res=>{
-        for(const r of res){
-            if(new Uint8Array(r).length===0)
-                throw new Error("empty binary response");
+    async function greet() {
+        const res = await kurogane.invoke("greet", "Alice");
+        setOutput(res); // "Hello, Alice"
+    }
+
+    async function divide() {
+        try {
+        const res = await kurogane.invoke("divide", { a: 10, b: 2 });
+        setOutput(`${10} ÷ ${2} = ${res}`);
+        } catch (e) {
+        setOutput("Error: " + e);
         }
-    });
-
-    return "50 binary calls ok";
-});
-},
-
-binaryThreshold(){
-timed("binary threshold test", async()=>{
-
-    const size = 65000; // near threshold
-    const data = new Uint8Array(size);
-
-    for(let i=0;i<size;i++)
-        data[i]=i%255;
-
-    const out = new Uint8Array(
-        await kurogane.invokeBinary("echo_binary", data)
-    );
-
-    return {
-        input:data.length,
-        output:out.length
-    };
-});
-},
-
-binaryHuge(){
-timed("binary huge (10MB)", async()=>{
-
-    const data = new Uint8Array(10_000_000);
-    data.fill(3);
-
-    const out = await kurogane.invokeBinary("echo_binary", data);
-
-    return {
-        input:data.length,
-        output:new Uint8Array(out).length
-    };
-});
-}
-
-};
-
-// startup smoke test
-timed("startup check",()=>kurogane.invoke("echo",{runtime:"online"}));
-
-</script>
-
+    }
+    </script>
 </body>
 </html>

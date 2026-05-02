@@ -23,3 +23,6 @@ path = "files-cors.rs"
 name = "dom"
 path = "dom.rs"
 
+[[bin]]
+name = "ipc"
+path = "ipc.rs"
