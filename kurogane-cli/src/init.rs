@@ -44,6 +44,7 @@ pub fn run(name: Option<String>, template: Option<String>) -> Result<()> {
     tui::field("template", &template);
 
     // Extract template from embedded assets
+    fs::create_dir_all(&root)?;
     extract_template(&template, root)?;
 
     // .cargo/config.toml

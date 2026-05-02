@@ -1,3 +1,4 @@
+use std::fs;
 use anyhow::{Result, bail};
 use std::process::Command;
 use crate::tui;
@@ -14,6 +15,8 @@ pub fn run() -> Result<()> {
     tui::step("Preparing showcase environment");
     tui::field("path", root.to_string_lossy());
 
+    // Extract showcase template from embedded assets
+    fs::create_dir_all(&root)?;
     extract_template("showcase", &root)?;
 
     tui::step("Launching showcase...");
