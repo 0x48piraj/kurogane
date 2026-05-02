@@ -1,14 +1,10 @@
-use anyhow::{Result, bail};
 use std::fs;
+use anyhow::{Result, bail};
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-
-use include_dir::{include_dir, Dir};
+use std::path::Path;
 
 use crate::tui;
-
-// Embed templates into the binary
-static TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/templates");
+use crate::templates::extract_template;
 
 pub fn run(name: Option<String>, template: Option<String>) -> Result<()> {
     tui::section("Kurogane project setup");
@@ -67,45 +63,6 @@ rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN/cef"]
     println!("    kurogane dev");
 
     println!();
-
-    Ok(())
-}
-
-//
-// Extract template from embedded dir
-//
-fn extract_template(name: &str, dest: &Path) -> Result<()> {
-    let dir = TEMPLATES
-        .get_dir(name)
-        .ok_or_else(|| anyhow::anyhow!("Template '{}' not found", name))?;
-
-    copy_embedded_dir(dir, dest)
-}
-
-//
-// Copy embedded directory recursively
-//
-fn copy_embedded_dir(dir: &Dir, dest: &Path) -> Result<()> {
-    for file in dir.files() {
-        let rel_path = file.path();
-
-        let stripped = rel_path
-            .components()
-            .skip(1) // remove template root
-            .collect::<PathBuf>();
-
-        let path = dest.join(stripped);
-
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        fs::write(path, file.contents())?;
-    }
-
-    for subdir in dir.dirs() {
-        copy_embedded_dir(subdir, dest)?;
-    }
 
     Ok(())
 }

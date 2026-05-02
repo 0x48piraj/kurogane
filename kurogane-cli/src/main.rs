@@ -9,6 +9,7 @@ mod init;
 mod doctor;
 mod info;
 
+mod templates;
 mod tui;
 mod collector;
 
