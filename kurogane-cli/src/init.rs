@@ -35,6 +35,10 @@ pub fn run(name: Option<String>, template: Option<String>) -> Result<()> {
     // Choose template
     let template = template.unwrap_or_else(|| "vanilla".to_string());
 
+    if template == "showcase" {
+        bail!("Use 'kurogane showcase' to run the showcase demo");
+    }
+
     tui::step("Creating project");
     tui::field("name", &name);
     tui::field("template", &template);
