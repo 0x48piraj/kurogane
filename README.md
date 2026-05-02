@@ -5,7 +5,7 @@ A Rust-native Chromium runtime for building high-performance, GPU-accelerated de
 Kurogane is a low-level Rust runtime built directly on the **Chromium Embedded Framework (CEF)** for developers who need control, performance and consistency beyond OS-managed WebViews.
 
 <p align="center">
-  <img alt="Kurogane demo" src="docs/images/output.gif" width="400"><br>
+  <img alt="Kurogane demo" src="docs/media/output.gif" width="400"><br>
   <b>Native Rust. No WebView. No Electron.</b>
 </p>
 
