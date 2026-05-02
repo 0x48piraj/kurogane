@@ -26,3 +26,7 @@ path = "dom.rs"
 [[bin]]
 name = "ipc"
 path = "ipc.rs"
+
+[[bin]]
+name = "wasm"
+path = "wasm.rs"

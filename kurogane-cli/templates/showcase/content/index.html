@@ -2,40 +2,245 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Kurogane: canvas template</title>
+  <title>Kurogane: Showcase</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.cdnfonts.com/css/satoshi" rel="stylesheet">
 
   <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #060b18;
+      --surface:  #0d1526;
+      --border:   rgba(255,255,255,0.07);
+      --accent-a: #38bdf8;   /* canvas tab */
+      --accent-b: #a78bfa;   /* webgl tab */
+      --text:     #e2e8f0;
+      --muted:    #64748b;
+      --bar-h:    52px;
+    }
+
     html, body {
-      margin: 0;
-      padding: 0;
-      background: #0f172a;
-      overflow: hidden;
       height: 100%;
+      background: var(--bg);
+      overflow: hidden;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text);
     }
 
-    #fps {
+    #tab-bar {
       position: fixed;
-      top: 12px;
-      left: 12px;
-      padding: 6px 10px;
-      background: rgba(0,0,0,0.5);
-      color: #e5e7eb;
-      border-radius: 6px;
-      font-family: system-ui, sans-serif;
-      font-size: 18px;
-      z-index: 999;
+      top: 0; left: 0; right: 0;
+      height: var(--bar-h);
+      display: flex;
+      align-items: stretch;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      z-index: 100;
+      padding: 0 16px;
+      gap: 4px;
     }
 
-    canvas {
+    .brand {
+      display: flex;
+      align-items: center;
+      padding-right: 20px;
+      margin-right: 8px;
+      border-right: 1px solid var(--border);
+      font-family: 'Satoshi', 'JetBrains Mono', sans-serif;
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      white-space: nowrap;
+      color: var(--text);
+    }
+    .brand span { color: var(--muted); font-weight: 700; margin-left: 4px; }
+
+    .tab-btn {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 18px;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      transition: color 0.2s;
+    }
+    .tab-btn:hover { color: var(--text); }
+
+    .tab-btn .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: 0.5;
+      transition: opacity 0.2s, transform 0.2s;
+    }
+
+    /* active state driven by data-active */
+    #tab-bar[data-active="canvas"] .tab-btn[data-tab="canvas"],
+    #tab-bar[data-active="webgl2"] .tab-btn[data-tab="webgl2"] {
+      color: var(--text);
+    }
+    #tab-bar[data-active="canvas"] .tab-btn[data-tab="canvas"] .dot {
+      background: var(--accent-a);
+      opacity: 1;
+      transform: scale(1.3);
+      box-shadow: 0 0 6px var(--accent-a);
+    }
+    #tab-bar[data-active="webgl2"] .tab-btn[data-tab="webgl2"] .dot {
+      background: var(--accent-b);
+      opacity: 1;
+      transform: scale(1.3);
+      box-shadow: 0 0 6px var(--accent-b);
+    }
+
+    /* sliding underline indicator */
+    .tab-btn::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 18px; right: 18px;
+      height: 2px;
+      border-radius: 2px 2px 0 0;
+      transform: scaleX(0);
+      transition: transform 0.25s cubic-bezier(.4,0,.2,1), background 0.2s;
+    }
+    #tab-bar[data-active="canvas"] .tab-btn[data-tab="canvas"]::after {
+      background: var(--accent-a);
+      box-shadow: 0 0 8px var(--accent-a);
+      transform: scaleX(1);
+    }
+    #tab-bar[data-active="webgl2"] .tab-btn[data-tab="webgl2"]::after {
+      background: var(--accent-b);
+      box-shadow: 0 0 8px var(--accent-b);
+      transform: scaleX(1);
+    }
+
+    /* kbd hint on the right */
+    .bar-hint {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .bar-hint kbd {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 6px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 10px;
+    }
+
+    /* HUD */
+    #hud {
+      position: fixed;
+      top: calc(var(--bar-h) + 12px);
+      left: 14px;
+      padding: 7px 12px;
+      background: rgba(6,11,24,0.72);
+      border: 1px solid var(--border);
+      backdrop-filter: blur(8px);
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      z-index: 99;
+      letter-spacing: 0.03em;
+      transition: border-color 0.3s;
+    }
+    #tab-bar[data-active="canvas"] ~ #hud { border-color: rgba(56,189,248,0.3); }
+    #tab-bar[data-active="webgl2"]  ~ #hud { border-color: rgba(167,139,250,0.3); }
+
+    .render-canvas {
+      position: fixed;
+      top: var(--bar-h);
+      left: 0;
       display: block;
+      width: 100%;
+      height: calc(100% - var(--bar-h));
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.35s ease;
+    }
+    .render-canvas.visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    /* glow badge shown on active tab area */
+    #mode-badge {
+      position: fixed;
+      bottom: 18px;
+      right: 20px;
+      font-family: 'Satoshi', 'JetBrains Mono', sans-serif;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      padding: 5px 10px;
+      border-radius: 4px;
+      z-index: 99;
+      opacity: 0.65;
+      pointer-events: none;
+      transition: all 0.3s;
+    }
+    #tab-bar[data-active="canvas"] ~ * ~ #mode-badge {
+      background: rgba(56,189,248,0.12);
+      border: 1px solid rgba(56,189,248,0.3);
+      color: var(--accent-a);
+    }
+    #tab-bar[data-active="webgl2"] ~ * ~ #mode-badge {
+      background: rgba(167,139,250,0.12);
+      border: 1px solid rgba(167,139,250,0.3);
+      color: var(--accent-b);
     }
   </style>
 </head>
-
 <body>
-  <div id="fps">FPS: 0</div>
-  <canvas id="canvas"></canvas>
-  <script type="module" src="app://app/main.js"></script>
+
+<!-- TAB BAR -->
+<div id="tab-bar" data-active="canvas">
+  <div class="brand">Kurogane<span>/showcase</span></div>
+
+  <button class="tab-btn" data-tab="canvas">
+    <span class="dot"></span>
+    Canvas 2D
+  </button>
+  <button class="tab-btn" data-tab="webgl2">
+    <span class="dot"></span>
+    WebGL 2
+  </button>
+
+  <div class="bar-hint">
+    <kbd>+</kbd><kbd>−</kbd> instances
+  </div>
+</div>
+
+<!-- HUD -->
+<div id="hud">Initializing…</div>
+
+<!-- CANVAS 2D surface -->
+<canvas id="canvas-2d" class="render-canvas visible"></canvas>
+
+<!-- WebGL2 surface -->
+<canvas id="canvas-gl" class="render-canvas"></canvas>
+
+<!-- badge -->
+<div id="mode-badge">Canvas 2D</div>
+
+<script type="module" src="app://app/main.js"></script>
 </body>
 </html>
