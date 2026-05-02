@@ -1,6 +1,6 @@
 use std::fs;
 use anyhow::Result;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use include_dir::{include_dir, Dir};
 
 // Embed templates into the binary
@@ -21,25 +21,29 @@ pub fn extract_template(name: &str, dest: &Path) -> Result<()> {
 // Copy embedded directory recursively
 //
 fn copy_embedded_dir(dir: &Dir, dest: &Path) -> Result<()> {
-    for file in dir.files() {
-        let rel_path = file.path();
+    // Ensure the destination directory exists
+    fs::create_dir_all(dest)?;
 
-        let stripped = rel_path
-            .components()
-            .skip(1) // remove template root
-            .collect::<PathBuf>();
+    for entry in dir.entries() {
+        match entry {
+            include_dir::DirEntry::Dir(subdir) => {
+                // Grab just the dir name
+                let dir_name = subdir.path().file_name().expect("Directories should have valid names");
+                let new_dest = dest.join(dir_name);
 
-        let path = dest.join(stripped);
+                // Recurse into this subdirectory with the new destination
+                copy_embedded_dir(subdir, &new_dest)?;
+            }
 
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            include_dir::DirEntry::File(file) => {
+                // Grab just the filename
+                let file_name = file.path().file_name().expect("Files should have valid names");
+                let file_path = dest.join(file_name);
+
+                // Write the file
+                fs::write(file_path, file.contents())?;
+            }
         }
-
-        fs::write(path, file.contents())?;
-    }
-
-    for subdir in dir.dirs() {
-        copy_embedded_dir(subdir, dest)?;
     }
 
     Ok(())
