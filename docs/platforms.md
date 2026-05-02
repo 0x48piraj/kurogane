@@ -1,26 +1,31 @@
-
 # Install notes
 
-CEF still has a few operating-system security/runtime requirements that are not automated as of now.
+Kurogane manages CEF setup and runtime configuration automatically.
 
-## Linux (Sandbox permission)
+Most platform-specific environment configuration is handled by the CLI.
 
-Chromium requires the SUID sandbox for renderer and GPU processes.
+Only minimal system dependencies are required.
 
-Run **once** after installing:
+## Linux
+
+No manual setup or environment variables are usually required.
+
+The Kurogane CLI handles CEF runtime configuration internally.
+
+### Optional (sandbox fallback)
+
+In some restricted Linux environments, Chromium may require the SUID sandbox for renderer and GPU processes.
+
+If you encounter startup or GPU issues, you may need to run:
 
 ```bash
-sudo chown root:root ~/.local/share/cef/chrome-sandbox
-sudo chmod 4755 ~/.local/share/cef/chrome-sandbox
+sudo chown root:root ~/.local/share/cef/{INSTALLED_CEF_VERSION}/chrome-sandbox
+sudo chmod 4755 ~/.local/share/cef/{INSTALLED_CEF_VERSION}/chrome-sandbox
 ```
 
-Without this, Chromium may fail to start or run without GPU acceleration.
+## Windows
 
-> The runtime intentionally does not modify system permissions automatically.
-
-## Windows (MSVC build environment)
-
-You must build the project inside a Visual Studio developer environment so CMake can find required build tools (Ninja/MSVC).
+You must build the project inside a **Visual Studio developer environment** so `CMake` can find required build tools (`Ninja` / `MSVC`).
 
 Open:
 
@@ -31,14 +36,17 @@ x64 Native Tools Command Prompt for VS
 Then run:
 
 ```bat
-cargo run
+kurogane init
+kurogane dev
 ```
 
-## macOS (experimental)
+## macOS
 
-macOS support currently works in development but proper `.app` bundling and signing are not finalized.
+While early development work exists, the runtime is not functional on macOS in its current state.
 
-No additional setup is required beyond installing CEF but distribution outside development environments may fail until bundling support is completed.
+App bundling, code signing and proper `.app` distribution are not implemented yet.
+
+Do not expect successful execution on macOS at this time.
 
 ## NixOS
 
@@ -62,3 +70,13 @@ The reason for this is intentional simplicity:
 * The workflow stays consistent outside of Nix environments
 
 As the project matures, more parts may be optionally expressed in Nix (such as packaging or CI builds) but the core development workflow will hopefully remain tool-native for simplicity and speed.
+
+## Notes
+
+On Linux, GPU diagnostics typically require `mesa-utils` (for `glxinfo`) or equivalent OpenGL utilities:
+
+```bash
+sudo apt install mesa-utils
+```
+
+This is only needed if you want detailed GPU introspection via the `doctor` command.
