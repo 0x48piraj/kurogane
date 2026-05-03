@@ -7,6 +7,7 @@ mod build;
 mod bundle;
 mod init;
 mod showcase;
+mod clean;
 mod doctor;
 mod info;
 
@@ -45,6 +46,7 @@ enum Commands {
         #[arg(long)]
         template: Option<String>,
     },
+    Clean,
     Showcase,
     Doctor {
         #[arg(long)]
@@ -64,6 +66,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Build => build::run(),
         Commands::Bundle { debug } => bundle::run(debug),
         Commands::Init { name, template } => init::run(name, template),
+        Commands::Clean => clean::run(),
         Commands::Showcase => showcase::run(),
         Commands::Doctor { json } => doctor::run(json),
         Commands::Info => info::run(),
