@@ -37,11 +37,28 @@ fn list_profiles() -> Result<()> {
 
     for entry in fs::read_dir(&base)? {
         let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            println!("  {}", name);
-            found = true;
+        if !entry.file_type()?.is_dir() {
+            continue;
         }
+
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+
+        if name.len() < 18 {
+            continue;
+        }
+
+        let (left, id) = name.split_at(name.len() - 16);
+
+        // Format: "<app>-<16 hex>"
+        let app = match left.strip_suffix('-') {
+            Some(a) if id.chars().all(|c| c.is_ascii_hexdigit()) => a,
+            _ => continue,
+        };
+
+        println!("    {:<20} {}", app, id);
+
+        found = true;
     }
 
     if !found {
