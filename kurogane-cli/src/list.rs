@@ -50,7 +50,7 @@ fn list_profiles() -> Result<()> {
 
         let (left, id) = name.split_at(name.len() - 16);
 
-        // Format: "<app>-<16 hex>"
+        // Format: "<app>-<uid16>"
         let app = match left.strip_suffix('-') {
             Some(a) if id.chars().all(|c| c.is_ascii_hexdigit()) => a,
             _ => continue,

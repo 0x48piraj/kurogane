@@ -1,66 +1,74 @@
 //! Internal frontend resolution logic.
 
-use std::path::PathBuf;
-use cef::CefString;
+use std::path::{Path, PathBuf};
 
 use super::Source;
 
 use crate::error::RuntimeError;
 
+/// Result of frontend resolution.
+pub struct ResolvedFrontend {
+    pub asset_root: Option<PathBuf>,
+    pub start_url: String,
+}
+
+const APP_URL: &str = "app://app/index.html";
+
 /// Resolve the frontend entrypoint.
 ///
 /// Priority:
-/// 1. Explicit URL (App::url)
-/// 2. CEF_DEV_URL (live dev server)
-/// 3. CEF_APP_PATH (custom frontend directory)
-/// 4. Explicit path via App::new (must contain index.html)
+/// 1. Explicit URL  (App::url)
+/// 2. Explicit path (App::new)
 ///
 /// Errors if no valid frontend is found.
-pub(crate) fn resolve(source: &Source) -> Result<(Option<PathBuf>, CefString), RuntimeError> {
+pub(crate) fn resolve(source: &Source) -> Result<ResolvedFrontend, RuntimeError> {
+    match source {
+        Source::Url(url) => {
+            Ok(ResolvedFrontend {
+                asset_root: None,
+                start_url: url.clone(),
+            })
+        }
 
-    const APP_URL: &str = "app://app/index.html";
+        Source::Path(dir) => {
+            let dir = normalize_path(dir)?;
 
-    // Explicit URL via App::url (dev server or remote site)
-    if let Source::Url(url) = source {
-        return Ok((None, CefString::from(url.as_str())));
-    }
+            validate_asset_root(&dir)?;
 
-    // Dev server override
-    if let Ok(url) = std::env::var("CEF_DEV_URL") {
-        return Ok((None, CefString::from(url.as_str())));
-    }
-
-    // Explicit directory override
-    if let Ok(path) = std::env::var("CEF_APP_PATH") {
-        let dir = PathBuf::from(path);
-
-        if dir.join("index.html").exists() {
-            return Ok((Some(dir), CefString::from(APP_URL)));
-        } else {
-            return Err(RuntimeError::AssetRootMissing(dir));
+            Ok(ResolvedFrontend {
+                asset_root: Some(dir),
+                start_url: APP_URL.to_string(),
+            })
         }
     }
+}
 
-    // Explicit path via App::new
-    if let Source::Path(dir) = source {
-        let dir = if dir.is_absolute() {
-            dir.clone()
-        } else {
-            std::env::current_dir()
-                .map_err(|_| RuntimeError::AssetRootMissing(dir.clone()))?
-                .join(dir)
-        };
+/// Convert path to absolute, stable form.
+fn normalize_path(path: &Path) -> Result<PathBuf, RuntimeError> {
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|_| RuntimeError::AssetRootMissing(path.to_path_buf()))?
+            .join(path)
+    };
 
-        if dir.join("index.html").exists() {
-            return Ok((Some(dir), CefString::from(APP_URL)));
-        } else {
-            return Err(RuntimeError::AssetRootMissing(dir));
-        }
+    // Canonicalize
+    abs.canonicalize()
+        .map_err(|_| RuntimeError::AssetRootMissing(abs))
+}
+
+/// Ensure directory exists and contains index.html.
+fn validate_asset_root(dir: &Path) -> Result<(), RuntimeError> {
+    if !dir.is_dir() {
+        return Err(RuntimeError::InvalidAssetRoot(dir.to_path_buf()));
     }
 
-    let fallback = std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("content");
+    let index = dir.join("index.html");
 
-    Err(RuntimeError::AssetRootMissing(fallback))
+    if !index.is_file() {
+        return Err(RuntimeError::AssetRootMissing(dir.to_path_buf()));
+    }
+
+    Ok(())
 }

@@ -5,6 +5,8 @@
 
 use std::path::PathBuf;
 use serde_json::Value;
+use cef::CefString;
+use crate::app::resolver::ResolvedFrontend;
 
 use crate::{Runtime, RuntimeError, register_command, register_binary_command};
 
@@ -93,7 +95,7 @@ impl App {
 
     /// Start the application
     pub fn run(self) -> Result<(), RuntimeError> {
-        let (asset_root, url) = resolver::resolve(&self.source)?;
+        let ResolvedFrontend { asset_root, start_url } = resolver::resolve(&self.source)?;
 
         let require_assets = asset_root.is_some();
 
@@ -110,7 +112,7 @@ impl App {
         }
 
         Runtime::run(
-            url,
+            CefString::from(start_url.as_str()),
             require_assets,
             self.profile_id,
             self.persist_session_cookies,
