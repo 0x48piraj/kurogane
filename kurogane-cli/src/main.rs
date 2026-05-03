@@ -9,6 +9,7 @@ mod init;
 mod showcase;
 mod clean;
 mod doctor;
+mod list;
 mod info;
 
 mod templates;
@@ -52,6 +53,10 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    List {
+        #[arg(value_parser = ["profiles", "version"])]
+        target: Option<String>,
+    },
     Info,
 }
 
@@ -69,6 +74,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Clean => clean::run(),
         Commands::Showcase => showcase::run(),
         Commands::Doctor { json } => doctor::run(json),
+        Commands::List { target } => list::run(target),
         Commands::Info => info::run(),
     }
 }
