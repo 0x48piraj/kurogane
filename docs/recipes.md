@@ -6,12 +6,17 @@ This document covers common workflows and advanced usage patterns when building 
 
 Kurogane can load a remote development server instead of bundled frontend files.
 
-This is useful for frameworks like Vite, React, Vue, etc. with hot reload.
+This is useful when working with frameworks like Vite, React, or Vue that provide hot reload.
 
 ### Example
 
-```bash
-CEF_START_URL=http://localhost:5173 kurogane dev
+```rust
+use kurogane::App;
+
+fn main() {
+    App::url("http://localhost:5173")
+        .run_or_exit();
+}
 ```
 
 The runtime will open the specified URL instead of loading local assets.
@@ -29,21 +34,63 @@ kurogane init --template server
 
 ## Loading frontend from disk
 
-You can override the frontend source directory directly.
+You can load the frontend directly from a local directory.
 
 ### Example
 
-```bash
-CEF_APP_PATH=/absolute/path/to/frontend kurogane dev
+```rust
+use kurogane::App;
+
+fn main() {
+    App::new("/absolute/path/to/frontend")
+        .run_or_exit();
+}
 ```
 
 The runtime will load `index.html` from the specified directory.
+
+## Optional: runtime switching
+
+If you want to switch without rebuilding yopur project, you can handle it in your application entrypoint:
+
+```rust
+use kurogane::App;
+
+fn main() {
+    let app = if std::env::var("DEV").is_ok() {
+        App::url("http://localhost:5173")
+    } else {
+        App::new("/absolute/path/to/frontend")
+    };
+
+    app.run_or_exit();
+}
+```
 
 ### Use cases
 
 * Testing static builds
 * Integrating external frontend pipelines
 * Debugging asset resolution issues
+
+## Switching between development and production
+
+Typically, you'll switch between:
+
+* a **dev server** during development
+* a **built frontend directory** in production
+
+### Development
+
+```rust
+App::url("http://localhost:5173")
+```
+
+### Production
+
+```rust
+App::new("dist")
+```
 
 ## WebAssembly (WASM) integration
 
@@ -126,22 +173,6 @@ All assets are resolved relative to the application root.
 * Treated as a secure origin by Chromium
 * Supports ES modules, CSS imports and static assets
 * Works with bundlers like Vite and Webpack
-
-## Production vs development
-
-Kurogane supports two primary frontend workflows:
-
-### Development
-
-* Use a dev server (`CEF_START_URL`)
-* Enables hot reload
-* Faster iteration
-
-### Production
-
-* Bundle frontend assets
-* Load via `app://app/`
-* No external dependencies
 
 ## Summary
 

@@ -21,8 +21,7 @@ You attempted to launch a local application but no frontend backend was set.
 
 Possible fixes:
   - Make sure your app is using App::new(\"your-frontend-directory\")
-  - Use a dev server URL: App::url(\"http://your-dev-server\")
-  - Set environment variable CEF_APP_PATH to your frontend directory"
+  - Use a dev server URL: App::url(\"http://your-dev-server\")"
             ),
 
             RuntimeError::AssetRootAlreadySet => write!(
