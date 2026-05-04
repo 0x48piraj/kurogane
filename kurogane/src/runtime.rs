@@ -2,13 +2,10 @@ use cef::{args::Args, *};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 use crate::cef_app::DemoApp;
 use crate::error::RuntimeError;
-use crate::scheme::{CanonicalRoot, ResolveError, fnv1a_64, sanitize_name};
-
-static ASSET_ROOT: OnceLock<CanonicalRoot> = OnceLock::new();
+use crate::scheme::{CanonicalRoot, fnv1a_64, sanitize_name};
 
 /// Public entry point for launching a CEF application.
 ///
@@ -41,15 +38,11 @@ impl Runtime {
     ///
     /// start_url determines what the browser loads on startup.
     pub fn run(
-        start_url: CefString,
-        require_assets: bool,
+        start_url: String,
+        asset_root: Option<CanonicalRoot>,
         profile_id: Option<String>,
         persist_session_cookies: bool,
     ) -> Result<(), RuntimeError> {
-        if require_assets {
-            Self::validate_asset_root()?;
-        }
-
         #[cfg(target_os = "macos")]
         crate::platform::macos::init_ns_app();
 
@@ -60,7 +53,12 @@ impl Runtime {
         let window_creation_started = Arc::new(AtomicBool::new(false));
 
         // ONE app for ALL processes
-        let mut app: App = DemoApp::new(window.clone(), start_url, window_creation_started);
+        let mut app: App = DemoApp::new(
+            window.clone(),
+            CefString::from(start_url.as_str()),
+            asset_root,
+            window_creation_started,
+        );
 
         // CEF internally determines process role here
         let exit_code = execute_process(
@@ -181,29 +179,6 @@ impl Runtime {
 
         run_message_loop();
         shutdown();
-        Ok(())
-    }
-
-    pub fn set_asset_root(path: PathBuf) -> Result<(), RuntimeError> {
-        let canonical = CanonicalRoot::new(&path).map_err(|e| match e {
-            ResolveError::InvalidRoot(p) => RuntimeError::InvalidAssetRoot(p),
-            _ => RuntimeError::AssetRootMissing(path.clone()),
-        })?;
-
-        ASSET_ROOT
-            .set(canonical)
-            .map_err(|_| RuntimeError::AssetRootAlreadySet)?;
-
-        Ok(())
-    }
-
-    pub fn asset_root() -> CanonicalRoot {
-        ASSET_ROOT.get().expect("asset root not set").clone()
-    }
-
-    fn validate_asset_root() -> Result<(), RuntimeError> {
-        ASSET_ROOT.get().ok_or(RuntimeError::AssetRootNotSet)?;
-
         Ok(())
     }
 }

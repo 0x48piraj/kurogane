@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use crate::browser::DemoBrowserProcessHandler;
 use crate::ipc::IpcRenderProcessHandler;
 use crate::debug;
+use crate::scheme::CanonicalRoot;
 
 use cef::sys::cef_scheme_options_t::*;
 
@@ -15,6 +16,7 @@ wrap_app! {
     pub struct DemoApp {
         window: Arc<Mutex<Option<Window>>>,
         start_url: CefString,
+        asset_root: Option<CanonicalRoot>,
         window_creation_started: Arc<AtomicBool>,
     }
 
@@ -114,6 +116,7 @@ wrap_app! {
                 DemoBrowserProcessHandler::new(
                     self.window.clone(),
                     self.start_url.clone(),
+                    self.asset_root.clone(),
                     RefCell::new(None),
                     self.window_creation_started.clone(),
                 )

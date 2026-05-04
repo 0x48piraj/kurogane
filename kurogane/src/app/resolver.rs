@@ -5,11 +5,12 @@ use std::path::{Path, PathBuf};
 use super::Source;
 
 use crate::error::RuntimeError;
+use crate::scheme::CanonicalRoot;
 
 /// Result of frontend resolution.
 #[derive(Debug)]
 pub struct ResolvedFrontend {
-    pub asset_root: Option<PathBuf>,
+    pub asset_root: Option<CanonicalRoot>,
     pub start_url: String,
 }
 
@@ -36,8 +37,11 @@ pub(crate) fn resolve(source: &Source) -> Result<ResolvedFrontend, RuntimeError>
 
             validate_asset_root(&dir)?;
 
+            let root = CanonicalRoot::new(&dir)
+                .map_err(|_| RuntimeError::InvalidAssetRoot(dir.clone()))?;
+
             Ok(ResolvedFrontend {
-                asset_root: Some(dir),
+                asset_root: Some(root),
                 start_url: APP_URL.to_string(),
             })
         }

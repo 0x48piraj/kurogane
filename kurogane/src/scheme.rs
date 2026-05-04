@@ -106,7 +106,9 @@ impl AsRef<Path> for CanonicalRoot {
 //
 
 wrap_scheme_handler_factory! {
-    pub struct AppSchemeHandlerFactory;
+    pub struct AppSchemeHandlerFactory {
+        root: CanonicalRoot,
+    }
 
     impl SchemeHandlerFactory {
         /// Resolves and loads an app:// resource for the request.
@@ -123,8 +125,8 @@ wrap_scheme_handler_factory! {
             let request = request.unwrap();
             let raw_url = CefString::from(&request.url()).to_string();
 
-            // Resolve relative to CWD (set by resolver)
-            let root = crate::runtime::Runtime::asset_root();
+            // Resolve relative to CWD
+            let root = self.root.clone();
 
             let (data, mime, status) = match extract_rel_path(&raw_url)
                 .and_then(|rel| resolve_asset(&root, &rel))
@@ -604,7 +606,8 @@ mod tests {
     #[test]
     fn safe_join_denied_for_absolute_path_injection() {
         let dir = tmp();
-        let err = safe_join(dir.path(), "/etc/passwd").unwrap_err();
+        let root = CanonicalRoot::new(dir.path()).unwrap();
+        let err = safe_join(&root, "/etc/passwd").unwrap_err();
         assert!(matches!(
             err,
             ResolveError::Forbidden(_) | ResolveError::NotFound(_)

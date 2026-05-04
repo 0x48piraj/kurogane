@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::scheme::CanonicalRoot;
 use crate::client::DemoClient;
 use crate::debug;
 
@@ -15,6 +16,7 @@ wrap_browser_process_handler! {
     pub struct DemoBrowserProcessHandler {
         window: Arc<Mutex<Option<Window>>>,
         start_url: CefString,
+        asset_root: Option<CanonicalRoot>,
 
         // Keep factory alive for browser lifetime; RefCell for interior mutability
         scheme_factory: RefCell<Option<SchemeHandlerFactory>>,
@@ -33,22 +35,26 @@ wrap_browser_process_handler! {
             if self.scheme_factory.borrow().is_none() {
                 debug!("Registering scheme handler factory for app://");
 
-                // create factory (temporary mutable)
-                let mut factory = crate::scheme::AppSchemeHandlerFactory::new();
+                // Only register the app:// scheme when serving local assets.
+                // In URL mode (App::url), there is no asset root and no scheme handler.
+                if let Some(root) = &self.asset_root {
+                    // Create factory
+                    let mut factory = crate::scheme::AppSchemeHandlerFactory::new(root.clone());
 
-                // Register the scheme handler factory for app:// URLs
-                let global = request_context_get_global_context().unwrap();
+                    // Register the scheme handler factory for app:// URLs
+                    let global = request_context_get_global_context().unwrap();
 
-                let result = global.register_scheme_handler_factory(
-                    Some(&CefString::from("app")),
-                    Some(&CefString::from("app")),
-                    Some(&mut factory),
-                );
+                    let result = global.register_scheme_handler_factory(
+                        Some(&CefString::from("app")),
+                        Some(&CefString::from("app")),
+                        Some(&mut factory),
+                    );
 
-                // store so CEF never calls freed memory
-                *self.scheme_factory.borrow_mut() = Some(factory);
+                    // Store so CEF never calls freed memory
+                    *self.scheme_factory.borrow_mut() = Some(factory);
 
-                debug!("register_scheme_handler_factory result: {}", result);
+                    debug!("register_scheme_handler_factory result: {}", result);
+                }
             }
 
             // Atomically claim the window creation slot; bail if already taken
