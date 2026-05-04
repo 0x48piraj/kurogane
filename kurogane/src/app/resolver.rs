@@ -125,7 +125,8 @@ mod tests {
         assert_eq!(result.start_url, APP_URL);
 
         let expected = dir.path().canonicalize().unwrap();
-        assert_eq!(result.asset_root.unwrap(), expected);
+        let root = result.asset_root.unwrap();
+        assert_eq!(root.as_path(), expected.as_path());
     }
 
     #[test]
@@ -143,7 +144,8 @@ mod tests {
         assert_eq!(result.start_url, APP_URL);
 
         let expected = dir.path().canonicalize().unwrap();
-        assert_eq!(result.asset_root.unwrap(), expected);
+        let root = result.asset_root.unwrap();
+        assert_eq!(root.as_path(), expected.as_path());
     }
 
     #[test]
@@ -157,7 +159,8 @@ mod tests {
         let result = resolve(&source).unwrap();
 
         let expected = dir.path().canonicalize().unwrap();
-        assert_eq!(result.asset_root.unwrap(), expected);
+        let root = result.asset_root.unwrap();
+        assert_eq!(root.as_path(), expected.as_path());
     }
 
     // Validation failure tests
@@ -258,7 +261,8 @@ mod property_tests {
 
             let expected = path.canonicalize().unwrap();
 
-            prop_assert_eq!(result.asset_root.unwrap(), expected);
+            let root = result.asset_root.unwrap();
+            prop_assert_eq!(root.as_path(), expected.as_path());
             prop_assert_eq!(result.start_url, APP_URL);
         }
     }
@@ -323,7 +327,8 @@ mod property_tests {
 
             let canonical = path.canonicalize().unwrap();
 
-            prop_assert_eq!(result.asset_root.unwrap(), canonical);
+            let root = result.asset_root.unwrap();
+            prop_assert_eq!(root.as_path(), canonical.as_path());
         }
     }
 

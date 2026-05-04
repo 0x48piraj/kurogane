@@ -793,16 +793,14 @@ mod property_tests {
         }
 
         #[test]
-        fn extract_rel_path_no_traversal_components(url in "app://app/.*") {
-            if let Ok(rel) = extract_rel_path(&url) {
-                // Note: safe_join handles the actual traversal prevention,
-                // but we can verify decoded output doesn't contain obvious markers
-                for component in Path::new(&rel).components() {
-                    prop_assert!(
-                        !matches!(component, std::path::Component::ParentDir),
-                        "decoded path contains .. component: {:?}", rel
-                    );
-                }
+        fn safe_join_never_escapes_root(rel in ".*") {
+            let dir = tempfile::tempdir().unwrap();
+            let root = CanonicalRoot::new(dir.path()).unwrap();
+
+            let _ = safe_join(&root, &rel);
+
+            if let Ok(path) = safe_join(&root, &rel) {
+                prop_assert!(path.starts_with(root.as_path()));
             }
         }
     }
