@@ -230,9 +230,9 @@ wrap_resource_handler! {
             _callback: Option<&mut ResourceReadCallback>,
         ) -> i32 {
             let br = bytes_read.unwrap();
- 
-            // Avoid invalid cast guard
-            if bytes_to_read <= 0 {
+
+            // FFI safety guard (invalid pointer or non-positive length)
+            if bytes_to_read <= 0 || data_out.is_null() {
                 *br = 0;
                 return 0;
             }
@@ -353,13 +353,6 @@ pub fn resolve_asset(root: &CanonicalRoot, rel_path: &str) -> Result<ResolvedAss
     let bytes = std::fs::read(&path).map_err(|e| ResolveError::Io(e))?;
 
     let mime = mime_from_path(&path);
-
-    debug!(
-        "[app://] 200  {}  ({}, {} bytes)",
-        path.display(),
-        mime,
-        bytes.len()
-    );
 
     Ok(ResolvedAsset {
         path,
