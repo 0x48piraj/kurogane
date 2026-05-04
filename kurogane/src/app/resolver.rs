@@ -226,3 +226,113 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn prop_valid_dirs_always_resolve(depth in 0usize..5) {
+            let dir = tempfile::tempdir().unwrap();
+            let mut path = dir.path().to_path_buf();
+
+            // create nested structure
+            for i in 0..depth {
+                path = path.join(format!("dir{}", i));
+            }
+
+            std::fs::create_dir_all(&path).unwrap();
+
+            // must contain index.html
+            std::fs::write(path.join("index.html"), b"ok").unwrap();
+
+            let source = Source::Path(path.clone());
+
+            let result = resolve(&source).unwrap();
+
+            let expected = path.canonicalize().unwrap();
+
+            prop_assert_eq!(result.asset_root.unwrap(), expected);
+            prop_assert_eq!(result.start_url, APP_URL);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_missing_index_always_fails(depth in 0usize..5) {
+            let dir = tempfile::tempdir().unwrap();
+            let mut path = dir.path().to_path_buf();
+
+            for i in 0..depth {
+                path = path.join(format!("dir{}", i));
+            }
+
+            std::fs::create_dir_all(&path).unwrap();
+
+            // no index.html
+
+            let source = Source::Path(path);
+
+            let err = resolve(&source).unwrap_err();
+
+            prop_assert!(matches!(err, RuntimeError::AssetRootMissing(_)));
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_file_path_is_invalid_root(name in "[a-z]{1,8}") {
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join(name);
+
+            std::fs::write(&file, b"data").unwrap();
+
+            let source = Source::Path(file);
+
+            let err = resolve(&source).unwrap_err();
+
+            prop_assert!(matches!(err, RuntimeError::InvalidAssetRoot(_)));
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_paths_are_always_canonicalized(depth in 0usize..5) {
+            let dir = tempfile::tempdir().unwrap();
+            let mut path = dir.path().to_path_buf();
+
+            for i in 0..depth {
+                path = path.join(format!("dir{}", i));
+            }
+
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join("index.html"), b"ok").unwrap();
+
+            // introduce weird path
+            let weird = path.join(".").join("././");
+
+            let source = Source::Path(weird);
+
+            let result = resolve(&source).unwrap();
+
+            let canonical = path.canonicalize().unwrap();
+
+            prop_assert_eq!(result.asset_root.unwrap(), canonical);
+        }
+    }
+
+    // URL inputs are always preserved
+    proptest! {
+        #[test]
+        fn prop_url_is_identity(url in "https?://[a-z]{1,10}\\.com(/[a-z]{0,5})?") {
+            let source = Source::Url(url.clone());
+
+            let result = resolve(&source).unwrap();
+
+            prop_assert_eq!(result.start_url, url);
+            prop_assert!(result.asset_root.is_none());
+        }
+    }
+}
