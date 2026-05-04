@@ -56,7 +56,6 @@ wrap_app! {
 
             #[cfg(target_os = "linux")]
             {
-                cmd.append_switch(Some(&CefString::from("no-sandbox")));
                 cmd.append_switch(Some(&CefString::from("disable-setuid-sandbox")));
 
                 let is_nvidia_gpu = std::fs::read_to_string("/proc/bus/pci/devices")
