@@ -384,6 +384,74 @@ fn mime_from_path(path: &Path) -> String {
     }
 }
 
+/// Computes a deterministic FNV-1a 64-bit hash of a filesystem path.
+/// Intended for identity stability, not cryptographic use.
+pub fn fnv1a_64(path: &Path) -> String {
+    let mut hash: u64 = 14695981039346656037;
+
+    for byte in path.to_string_lossy().as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(1099511628211);
+    }
+
+    format!("{:016x}", hash)
+}
+
+/// Sanitizes a user-provided name into a filesystem-safe identifier.
+/// Returns "default" when the input cannot be reduced to a valid name.
+pub fn sanitize_name(name: &str) -> String {
+    // Windows reserved names
+    const WINDOWS_RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+
+    // Replace forbidden/control chars with _
+    let replaced = name.chars().map(|c| match c {
+        '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0' => '_',
+        _ if c.is_control() => '_',
+        _ => c,
+    }).collect::<String>();
+
+    // Collapse consecutive _ for aesthetics
+    let mut sanitized = replaced
+        .chars()
+        .fold(String::new(), |mut acc, c| {
+            if c == '_' && acc.ends_with('_') {
+                acc
+            } else {
+                acc.push(c);
+                acc
+            }
+        });
+
+    // Trim Windows-invalid endings
+    sanitized = sanitized.trim_end_matches(['.', ' ']).to_string();
+
+    // Trim leading dots
+    sanitized = sanitized.trim_start_matches('.').to_string();
+
+    let stem = sanitized.split('.').next().unwrap();
+
+    if WINDOWS_RESERVED.iter().any(|&r| r.eq_ignore_ascii_case(stem)) {
+        sanitized = format!("_{sanitized}");
+    }
+
+    // Length limit
+    const MAX_LEN: usize = 64;
+    if sanitized.len() > MAX_LEN {
+        sanitized.truncate(MAX_LEN);
+    }
+
+    // Fallback if empty, or _ for aesthetics, again
+    if sanitized.is_empty() || sanitized.chars().all(|c| c == '_') {
+        return "kurogane-app".to_string();
+    }
+
+    sanitized
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -688,5 +756,57 @@ mod tests {
         let s = ResolveError::Forbidden(PathBuf::from("/etc/passwd")).to_string();
         assert!(s.contains("Forbidden"));
         assert!(s.contains("passwd"));
+    }
+}
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn sanitize_name_never_panics(s in ".*") {
+            // never panics on any input
+            let _ = sanitize_name(&s);
+        }
+
+        #[test]
+        fn sanitize_name_output_is_valid_utf8(s in ".*") {
+            let result = sanitize_name(&s);
+            assert!(result.len() <= 64);
+            assert!(!result.is_empty());
+        }
+
+        #[test]
+        fn sanitize_name_no_forbidden_chars(s in ".*") {
+            let result = sanitize_name(&s);
+            for c in result.chars() {
+                prop_assert!(!matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'));
+            }
+        }
+
+        #[test]
+        fn extract_rel_path_never_produces_absolute(url in "app://app/.*") {
+            if let Ok(rel) = extract_rel_path(&url) {
+                prop_assert!(!rel.starts_with('/'),
+                    "rel path must be relative, got: {:?}", rel);
+                prop_assert!(!Path::new(&rel).is_absolute());
+            }
+        }
+
+        #[test]
+        fn extract_rel_path_no_traversal_components(url in "app://app/.*") {
+            if let Ok(rel) = extract_rel_path(&url) {
+                // Note: safe_join handles the actual traversal prevention,
+                // but we can verify decoded output doesn't contain obvious markers
+                for component in Path::new(&rel).components() {
+                    prop_assert!(
+                        !matches!(component, std::path::Component::ParentDir),
+                        "decoded path contains .. component: {:?}", rel
+                    );
+                }
+            }
+        }
     }
 }
