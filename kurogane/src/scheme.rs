@@ -438,11 +438,12 @@ pub fn sanitize_name(name: &str) -> String {
         sanitized = format!("_{sanitized}");
     }
 
-    // Length limit
+    // Character length limit
     const MAX_LEN: usize = 64;
-    if sanitized.len() > MAX_LEN {
-        sanitized.truncate(MAX_LEN);
-    }
+    sanitized = sanitized
+        .chars()
+        .take(MAX_LEN)
+        .collect();
 
     // Fallback if empty, or _ for aesthetics, again
     if sanitized.is_empty() || sanitized.chars().all(|c| c == '_') {
@@ -774,7 +775,7 @@ mod property_tests {
         #[test]
         fn sanitize_name_output_is_valid_utf8(s in ".*") {
             let result = sanitize_name(&s);
-            assert!(result.len() <= 64);
+            prop_assert!(result.chars().count() <= 64);
             assert!(!result.is_empty());
         }
 
