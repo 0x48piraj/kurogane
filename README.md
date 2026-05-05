@@ -56,33 +56,14 @@ This project is not a replacement for Tauri or Electron.
 cargo install --git https://github.com/0x48piraj/kurogane kurogane-cli
 ```
 
-> Note: For platform-specific setup and troubleshooting, see [install notes](docs/platforms.md) for details.
+> Note: For platform-specific setup and troubleshooting (if needed), see [install notes](docs/platforms.md) for details.
 
-### 2. Create a new app
+### 2. Verify installation (optional)
 
-```bash
-kurogane init
-```
-
-A minimal starter template with a vanilla HTML frontend.
-
-### 3. Run your app
+Run the built-in showcase to confirm the runtime is working:
 
 ```bash
-cd my-app
-kurogane dev
-```
-
-The CLI automatically downloads the compatible Chromium build required by the Rust bindings.
-
-## Templates
-
-Kurogane includes built-in templates to help you get started.
-
-### Canvas demo (recommended)
-
-```bash
-kurogane init --template demo
+kurogane showcase
 ```
 
 Launches a native window rendering a **canvas-based animation** designed to reflect GPU-backed rendering performance.
@@ -92,6 +73,56 @@ This is the **primary demo** for evaluating rendering behavior and performance.
 > **Rendering note**
 >
 > Unlike Chrome or Electron, as of now, this runtime does not ship with a browser helper process model. Some GPU features may behave differently depending on platform and driver configuration. These differences are architectural and not regressions in rendering performance.
+
+## Creating an application
+
+### 3. Create a new project
+
+```bash
+kurogane init
+```
+
+A minimal starter template with a vanilla HTML frontend.
+
+### 4. Run your app
+
+```bash
+cd my-app
+kurogane dev
+```
+
+The CLI will resolve and load the appropriate Chromium runtime automatically.
+
+## Templates
+
+Kurogane includes built-in templates to help you get started.
+
+#### SPA
+
+The SPA template provides a basic HTML frontend and a dev-server-ready structure.
+
+```bash
+kurogane init --template spa
+```
+
+Use this for:
+
+* frontend apps
+* Vite / React / vanilla JS
+* dev-server workflows
+
+#### IPC
+
+Rust <-> frontend communication via structured commands.
+
+```bash
+kurogane init --template ipc
+```
+
+Use this for:
+
+* Desktop-style applications
+* Structured data exchange between UI and runtime
 
 ## Production packaging
 
@@ -134,16 +165,14 @@ Early days! Architecture and APIs may change as the project evolves.
 
 ## Philosophy
 
-Most desktop runtimes optimize for convenience first.
+Most desktop runtimes optimize for convenience and integration.
 
-Kurogane prioritizes control and consistency instead.
+Kurogane prioritizes control and predictable behavior.
 
-System WebViews trade control for simplicity. That trade-off works for many applications but it breaks down for high-frequency rendering, GPU-bound workloads and cases where consistency across platforms matters.
+System WebViews abstract rendering behind platform APIs. This simplifies application integration and provides platform-native behavior, but it also introduces variability across platforms and reduces visibility into performance-critical paths.
 
-Kurogane is built on a different assumption:
+Kurogane tries to expose the underlying rendering stack instead of hiding it behind high-level abstractions.
 
-> When rendering performance and behavior matter, the runtime should expose the underlying system rather than abstract it away.
+The goal is straightforward:
 
-This project avoids unnecessary abstraction, keeping core mechanisms accessible and predictable.
-
-You should be able to reason about rendering, performance and cross-platform behavior without fighting the runtime.
+> Avoid unnecessary layers between the application and the rendering engine.

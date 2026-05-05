@@ -41,13 +41,34 @@ A minimal frontend (Vite-style) test used to validate:
 * CORS behavior inside embedded Chromium
 * Static file serving correctness
 
-Run:
+#### Building the frontend
+
+* Source: `tests/files-cors`
+* Build output: `examples/files-cors`
+
+From the project root:
+
+```bash
+cd tests/files-cors
+bun install
+bun run build
+```
+
+This produces a production-ready build in:
+
+```text
+examples/files-cors/
+```
+
+Running the test:
 
 ```bash
 kurogane dev --bin files-cors
 ```
 
 This ensures real-world frontend builds work correctly inside the runtime.
+
+> **Note**: This test uses a production Vite build (`vite build`), not the Vite dev server.
 
 ### 3. DOM-based educational demo
 
