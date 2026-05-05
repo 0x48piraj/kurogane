@@ -148,13 +148,13 @@ wrap_render_process_handler! {
                 return 0;
             };
 
-            let Some(mut f) = frame.cloned() else {
+            let Some(frame) = frame else {
                 debug!("[IPC Renderer] missing frame");
                 return 0;
             };
 
             // Always call router for valid IPC message
-            let handled = router::route_renderer(&mut f, &args);
+            let handled = router::route_renderer(frame, &args);
 
             if !handled {
                 debug!("[IPC Renderer] unexpected ipc message type from browser");
