@@ -57,8 +57,6 @@ static PROMISE_REGISTRY: OnceLock<Mutex<PromiseRegistry>> = OnceLock::new();
 
 static OUTGOING_SHM: OnceLock<Mutex<HashMap<u32, SharedBuffer>>> = OnceLock::new();
 
-static RENDERER_FRAME: OnceLock<Mutex<Option<Frame>>> = OnceLock::new();
-
 // ACCESSORS
 
 pub fn registry() -> &'static Mutex<PromiseRegistry> {
@@ -69,10 +67,6 @@ pub fn outgoing_shm() -> &'static Mutex<HashMap<u32, SharedBuffer>> {
     OUTGOING_SHM.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub fn renderer_frame() -> &'static Mutex<Option<Frame>> {
-    RENDERER_FRAME.get_or_init(|| Mutex::new(None))
-}
-
 // HELPERS
 
 pub fn register_promise(ctx: V8Context, promise: V8Value) -> u32 {
@@ -81,9 +75,4 @@ pub fn register_promise(ctx: V8Context, promise: V8Value) -> u32 {
 
 pub fn clear_context_promises(ctx: &V8Context) {
     registry().lock().unwrap().clear_context(ctx);
-}
-
-#[inline(always)]
-pub fn get_frame() -> Option<Frame> {
-    renderer_frame().lock().unwrap().clone()
 }

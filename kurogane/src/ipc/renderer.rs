@@ -7,7 +7,7 @@ use cef::*;
 use crate::debug;
 use crate::ipc::protocol::{set_kind, IpcMsgKind};
 use crate::ipc::transport::shm::{SharedBuffer, SHM_THRESHOLD, SHM_HEADER_SIZE};
-use crate::ipc::renderer_state::{get_frame, register_promise, clear_context_promises, renderer_frame, outgoing_shm};
+use crate::ipc::renderer_state::{register_promise, clear_context_promises, outgoing_shm};
 use crate::ipc::router;
 use crate::bridge;
 
@@ -71,8 +71,6 @@ wrap_render_process_handler! {
             let context = context.unwrap();
             let frame = frame.unwrap();
 
-            *renderer_frame().lock().unwrap() = Some(frame.clone());
-
             let global = context.global().unwrap();
             let mut core = v8_value_create_object(None, None).unwrap();
 
@@ -127,7 +125,6 @@ wrap_render_process_handler! {
             if let Some(ctx) = context {
                 clear_context_promises(ctx);
             }
-            *renderer_frame().lock().unwrap() = None;
         }
 
         fn on_process_message_received(
@@ -225,24 +222,29 @@ wrap_v8_handler! {
                     return 0;
                 }
             };
+
+            let Some(frame) = context.frame() else {
+                if let Some(exc) = exception {
+                    *exc = CefString::from("invoke: no frame for current context");
+                }
+                return 0;
+            };
+
             let promise = v8_value_create_promise().unwrap();
 
             let id = register_promise(context.clone(), promise.clone());
 
             debug!("[IPC Renderer] JS invoke: '{}' (id={})", cmd, id);
 
-            // Use the captured frame
-            if let Some(frame) = get_frame() {
-                let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
-                let mut msg_args = msg.argument_list().unwrap();
+            let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
+            let mut msg_args = msg.argument_list().unwrap();
 
-                set_kind(&mut msg_args, IpcMsgKind::Invoke);
-                msg_args.set_int(1, id as i32);
-                msg_args.set_string(2, Some(&CefString::from(cmd.as_str())));
-                msg_args.set_string(3, Some(&CefString::from(payload.as_str())));
+            set_kind(&mut msg_args, IpcMsgKind::Invoke);
+            msg_args.set_int(1, id as i32);
+            msg_args.set_string(2, Some(&CefString::from(cmd.as_str())));
+            msg_args.set_string(3, Some(&CefString::from(payload.as_str())));
 
-                frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
-            }
+            frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
 
             if let Some(ret) = retval {
                 *ret = Some(promise);
@@ -322,47 +324,70 @@ wrap_v8_handler! {
                     return 0;
                 }
             };
+
+            let Some(frame) = context.frame() else {
+                if let Some(exc) = exception {
+                    *exc = CefString::from("invokeBinary: no frame for current context");
+                }
+                return 0;
+            };
+
             let promise = v8_value_create_promise().unwrap();
 
-            let id = register_promise(context.clone(), promise.clone());
-
+            // Build message first (no id yet)
             let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
             let mut msg_args = msg.argument_list().unwrap();
 
             set_kind(&mut msg_args, IpcMsgKind::BinaryInvoke);
-            msg_args.set_int(1, id as i32);
             msg_args.set_string(2, Some(&CefString::from(cmd.as_str())));
 
-            let result: Result<(), String> = with_array_buffer(ptr as *const u8, len, |data| {
-                if len < SHM_THRESHOLD {
-                    // inline: faster for small-medium sizes
-                    let mut binary = binary_value_create(Some(data)).unwrap();
-                    msg_args.set_binary(3, Some(&mut binary));
-                    Ok(())
-                } else {
-                    // shm: only for large payloads
-                    let mut shm = SharedBuffer::create(len)?;
-                    shm.write(data)?;
+            // Build payload before committing to promise/id
+            let payload_result: Result<Option<SharedBuffer>, String> =
+                with_array_buffer(ptr as *const u8, len, |data| {
+                    if len < SHM_THRESHOLD {
+                        // inline: faster for small-medium sizes
+                        let mut binary = binary_value_create(Some(data)).unwrap();
+                        msg_args.set_binary(3, Some(&mut binary));
+                        Ok(None)
+                    } else {
+                        // shm: only for large payloads
+                        let mut shm = SharedBuffer::create(len)?;
+                        shm.write(data)?;
 
-                    let name = shm.name();
-                    msg_args.set_string(3, Some(&CefString::from(name.as_str())));
-                    msg_args.set_int(4, (len + SHM_HEADER_SIZE) as i32);
+                        let name = shm.name();
+                        msg_args.set_string(3, Some(&CefString::from(name.as_str())));
+                        msg_args.set_int(4, (len + SHM_HEADER_SIZE) as i32);
 
-                    outgoing_shm().lock().unwrap().insert(id, shm);
+                        Ok(Some(shm))
+                    }
+                });
 
-                    Ok(())
+            let shm = match payload_result {
+                Ok(shm) => shm,
+                Err(e) => {
+                    let msg = CefString::from(e.as_str());
+                    // Payload construction failed before promise registration.
+                    // Reject directly instead of going through the registry (no id exists yet).
+                    promise.reject_promise(Some(&msg));
+                    // Reject and return the promise so the JS caller observes the failure.
+                    // The promise is not yet registered, so it must be returned directly.
+                    if let Some(ret) = retval {
+                        *ret = Some(promise);
+                    }
+                    return 1;
                 }
-            });
+            };
 
-            if let Err(e) = result {
-                let msg = CefString::from(e.as_str());
-                crate::ipc::rpc::resolve_cef_string(id, false, &msg);
-                return 1;
+            // Commit
+            let id = register_promise(context.clone(), promise.clone());
+            msg_args.set_int(1, id as i32);
+
+            // Store SHM only after id exists
+            if let Some(shm) = shm {
+                outgoing_shm().lock().unwrap().insert(id, shm);
             }
 
-            if let Some(frame) = get_frame() {
-                frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
-            }
+            frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
 
             if let Some(ret) = retval {
                 *ret = Some(promise);
