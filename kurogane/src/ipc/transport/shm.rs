@@ -52,19 +52,28 @@ impl SharedBuffer {
 
         let actual_size = shmem.len();
 
+        if actual_size < SHM_HEADER_SIZE {
+            return Err("SHM too small for header".into());
+        }
+
+        // Protocol mismatch detection
+        //
         // Shared memory mappings may be larger than requested due to OS page/alignment.
         // Only enforce a lower bound; equality is not guaranteed.
         if actual_size < expected_size {
             return Err(format!(
                 "SHM smaller than expected: expected={} actual={}",
-                expected_size,
-                actual_size
+                expected_size, actual_size
             ));
+        }
+
+        if actual_size > MAX_SHM_SIZE {
+            return Err(format!("SHM exceeds limit: {}", actual_size));
         }
 
         Ok(Self {
             shmem,
-            size: expected_size, // protocol boundary, not actual mapped size
+            size: actual_size, // actual mapped size
         })
     }
 
