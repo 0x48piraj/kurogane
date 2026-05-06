@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::ipc::protocol::IpcId;
 use crate::ipc::transport::shm::SharedBuffer;
 
 // HANDLER TYPES
@@ -75,16 +76,16 @@ static PENDING_COMMANDS: OnceLock<Mutex<Vec<(String, IpcHandler)>>> = OnceLock::
 static PENDING_BINARY_COMMANDS: OnceLock<Mutex<Vec<(String, BinaryHandler)>>> = OnceLock::new();
 
 /// Tracks pending RPC calls
-static PENDING_CALLS: OnceLock<Mutex<HashMap<u32, PendingCall>>> = OnceLock::new();
+static PENDING_CALLS: OnceLock<Mutex<HashMap<IpcId, PendingCall>>> = OnceLock::new();
 
 /// Keep SHM alive until the renderer signals it has finished reading (msg_type 5)
-static RESPONSE_SHM_STORE: OnceLock<Mutex<HashMap<u32, SharedBuffer>>> = OnceLock::new();
+static RESPONSE_SHM_STORE: OnceLock<Mutex<HashMap<IpcId, SharedBuffer>>> = OnceLock::new();
 
 //
 // State accessors
 //
 
-pub fn pending_calls() -> &'static Mutex<HashMap<u32, PendingCall>> {
+pub fn pending_calls() -> &'static Mutex<HashMap<IpcId, PendingCall>> {
     PENDING_CALLS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -96,7 +97,7 @@ pub fn pending_binary_commands() -> &'static Mutex<Vec<(String, BinaryHandler)>>
     PENDING_BINARY_COMMANDS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-pub fn response_shm_store() -> &'static Mutex<HashMap<u32, SharedBuffer>> {
+pub fn response_shm_store() -> &'static Mutex<HashMap<IpcId, SharedBuffer>> {
     RESPONSE_SHM_STORE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 

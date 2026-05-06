@@ -6,6 +6,7 @@ use cef::*;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
+use crate::ipc::protocol::IpcId;
 use crate::ipc::transport::shm::SharedBuffer;
 
 //
@@ -13,8 +14,8 @@ use crate::ipc::transport::shm::SharedBuffer;
 //
 
 pub struct PromiseRegistry {
-    next_id: u32,
-    pending: HashMap<u32, (V8Context, V8Value)>,
+    next_id: IpcId,
+    pending: HashMap<IpcId, (V8Context, V8Value)>,
 }
 
 impl PromiseRegistry {
@@ -25,15 +26,16 @@ impl PromiseRegistry {
         }
     }
 
-    pub fn register(&mut self, context: V8Context, promise: V8Value) -> u32 {
+    pub fn register(&mut self, context: V8Context, promise: V8Value) -> IpcId {
         let id = self.next_id;
         self.next_id = self.next_id.checked_add(1).unwrap_or(1);
 
         self.pending.insert(id, (context, promise));
+
         id
     }
 
-    pub fn take(&mut self, id: u32) -> Option<(V8Context, V8Value)> {
+    pub fn take(&mut self, id: IpcId) -> Option<(V8Context, V8Value)> {
         self.pending.remove(&id)
     }
 
@@ -55,7 +57,7 @@ static PROMISE_REGISTRY: OnceLock<Mutex<PromiseRegistry>> = OnceLock::new();
 // proving the browser has already read the data.
 //
 
-static OUTGOING_SHM: OnceLock<Mutex<HashMap<u32, SharedBuffer>>> = OnceLock::new();
+static OUTGOING_SHM: OnceLock<Mutex<HashMap<IpcId, SharedBuffer>>> = OnceLock::new();
 
 // ACCESSORS
 
@@ -63,13 +65,13 @@ pub fn registry() -> &'static Mutex<PromiseRegistry> {
     PROMISE_REGISTRY.get_or_init(|| Mutex::new(PromiseRegistry::new()))
 }
 
-pub fn outgoing_shm() -> &'static Mutex<HashMap<u32, SharedBuffer>> {
+pub fn outgoing_shm() -> &'static Mutex<HashMap<IpcId, SharedBuffer>> {
     OUTGOING_SHM.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 // HELPERS
 
-pub fn register_promise(ctx: V8Context, promise: V8Value) -> u32 {
+pub fn register_promise(ctx: V8Context, promise: V8Value) -> IpcId {
     registry().lock().unwrap().register(ctx, promise)
 }
 

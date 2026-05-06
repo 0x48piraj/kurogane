@@ -19,7 +19,7 @@ pub fn route_browser(
             return false;
         }
     };
-    let id = list_get_int(args, 1) as u32;
+    let id = list_get_int(args, 1);
     debug!("[IPC Browser] message type={:?} id={}", kind, id);
 
     match kind {
@@ -114,7 +114,7 @@ pub fn route_renderer(
         Some(k) => k,
         None => return false,
     };
-    let id = list_get_int(args, 1) as u32;
+    let id = list_get_int(args, 1);
 
     match kind {
         IpcMsgKind::Resolve => {

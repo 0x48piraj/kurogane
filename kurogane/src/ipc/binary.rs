@@ -5,7 +5,7 @@
 
 use cef::*;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use crate::ipc::protocol::{IpcMsgKind, set_kind};
+use crate::ipc::protocol::{IpcId, IpcMsgKind, set_kind};
 use crate::ipc::transport::shm::{SharedBuffer, SHM_THRESHOLD, SHM_HEADER_SIZE};
 use crate::ipc::renderer_state::{outgoing_shm, registry};
 use crate::ipc::browser_state::{response_shm_store, get_dispatcher};
@@ -15,7 +15,7 @@ use crate::debug;
 
 pub fn handle_invoke(
     frame: &mut Frame,
-    id: u32,
+    id: i32,
     command: String,
     data: &[u8],
 ) {
@@ -29,11 +29,11 @@ pub fn handle_invoke(
     send_response(frame, id, result);
 }
 
-pub fn handle_shm_free(id: u32) {
+pub fn handle_shm_free(id: i32) {
     response_shm_store().lock().unwrap().remove(&id);
 }
 
-pub fn send_error(frame: &Frame, id: u32, err: String) {
+pub fn send_error(frame: &Frame, id: i32, err: String) {
     if frame.is_valid() == 0 {
         return;
     }
@@ -42,7 +42,7 @@ pub fn send_error(frame: &Frame, id: u32, err: String) {
     let mut args = msg.argument_list().unwrap();
 
     set_kind(&mut args, IpcMsgKind::Reject);
-    args.set_int(1, id as i32);
+    args.set_int(1, id);
     args.set_string(2, Some(&CefString::from(err.as_str())));
 
     frame.send_process_message(ProcessId::RENDERER, Some(&mut msg));
@@ -50,7 +50,7 @@ pub fn send_error(frame: &Frame, id: u32, err: String) {
 
 pub fn send_response(
     frame: &Frame,
-    id: u32,
+    id: i32,
     result: Result<Vec<u8>, String>,
 ) {
     // Guard against destroyed frames
@@ -68,7 +68,7 @@ pub fn send_response(
     match result {
         Ok(data) => {
             set_kind(&mut args, IpcMsgKind::BinaryResponse);
-            args.set_int(1, id as i32);
+            args.set_int(1, id);
 
             if data.len() < SHM_THRESHOLD {
                 debug!("[IPC Browser] inline binary response: {} bytes", data.len());
@@ -93,7 +93,10 @@ pub fn send_response(
 
                 let name = shm.name();
                 args.set_string(2, Some(&CefString::from(name.as_str())));
-                args.set_int(3, (data.len() + SHM_HEADER_SIZE) as i32);
+
+                // SHM payloads are validated against MAX_SHM_SIZE during creation/open
+                // and MAX_SHM_SIZE is guaranteed to fit within IpcId.
+                args.set_int(3, (data.len() + SHM_HEADER_SIZE) as IpcId);
 
                 // Keep SHM alive; renderer sends msg_type 5 (SHM_FREE) after reading
                 response_shm_store().lock().unwrap().insert(id, shm);
@@ -102,7 +105,7 @@ pub fn send_response(
 
         Err(err) => {
             set_kind(&mut args, IpcMsgKind::Reject);
-            args.set_int(1, id as i32);
+            args.set_int(1, id);
             args.set_string(2, Some(&CefString::from(err.as_str())));
         }
     }
@@ -114,7 +117,7 @@ pub fn send_response(
 
 pub fn handle_response(
     frame: &mut Frame,
-    id: u32,
+    id: i32,
     args: &ListValue,
 ) {
     // Release outgoing SHM regardless of transport used in response
@@ -190,7 +193,7 @@ pub fn handle_response(
     }
 }
 
-fn resolve_binary(id: u32, payload: &[u8]) {
+fn resolve_binary(id: i32, payload: &[u8]) {
     let entry = registry().lock().unwrap().take(id);
 
     if let Some((context, promise)) = entry {
@@ -210,12 +213,12 @@ fn resolve_binary(id: u32, payload: &[u8]) {
 }
 
 /// Notify the browser that it can release its SHM response buffer.
-pub fn send_shm_free(frame: &mut Frame, id: u32) {
+pub fn send_shm_free(frame: &mut Frame, id: i32) {
     let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
     let mut args = msg.argument_list().unwrap();
 
     set_kind(&mut args, IpcMsgKind::ShmFree);
-    args.set_int(1, id as i32);
+    args.set_int(1, id);
 
     frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
     debug!("[IPC Renderer] SHM_FREE sent for id={}", id);

@@ -5,6 +5,8 @@
 
 use cef::{ListValue, ImplListValue};
 
+pub type IpcId = i32;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 pub enum IpcMsgKind {

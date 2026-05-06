@@ -5,7 +5,7 @@
 
 use cef::*;
 use crate::debug;
-use crate::ipc::protocol::{set_kind, IpcMsgKind};
+use crate::ipc::protocol::{set_kind, IpcMsgKind, IpcId};
 use crate::ipc::transport::shm::{SharedBuffer, SHM_THRESHOLD, SHM_HEADER_SIZE};
 use crate::ipc::renderer_state::{register_promise, clear_context_promises, outgoing_shm};
 use crate::ipc::router;
@@ -240,7 +240,7 @@ wrap_v8_handler! {
             let mut msg_args = msg.argument_list().unwrap();
 
             set_kind(&mut msg_args, IpcMsgKind::Invoke);
-            msg_args.set_int(1, id as i32);
+            msg_args.set_int(1, id);
             msg_args.set_string(2, Some(&CefString::from(cmd.as_str())));
             msg_args.set_string(3, Some(&CefString::from(payload.as_str())));
 
@@ -356,7 +356,10 @@ wrap_v8_handler! {
 
                         let name = shm.name();
                         msg_args.set_string(3, Some(&CefString::from(name.as_str())));
-                        msg_args.set_int(4, (len + SHM_HEADER_SIZE) as i32);
+
+                        // SHM payloads are validated against MAX_SHM_SIZE during creation/open
+                        // and MAX_SHM_SIZE is guaranteed to fit within IpcId.
+                        msg_args.set_int(4, (len + SHM_HEADER_SIZE) as IpcId);
 
                         Ok(Some(shm))
                     }
@@ -380,7 +383,7 @@ wrap_v8_handler! {
 
             // Commit
             let id = register_promise(context.clone(), promise.clone());
-            msg_args.set_int(1, id as i32);
+            msg_args.set_int(1, id);
 
             // Store SHM only after id exists
             if let Some(shm) = shm {
