@@ -91,7 +91,18 @@ impl SharedBuffer {
         Ok(())
     }
 
-    /// Read payload safely (validated via header)
+    /// Read payload safely-ish (validated via header)
+    ///
+    /// SHM is written completely before the sender publishes the
+    /// corresponding CEF IPC message.
+    ///
+    /// The receiver only reads SHM after receiving that message.
+    ///
+    /// Therefore IPC delivery itself acts as the synchronization
+    /// boundary for visibility of the shared memory contents.
+    ///
+    /// The returned slice is scoped to this closure to prevent
+    /// retention beyond the synchronous read boundary.
     pub fn with_read<R>(
         &self,
         f: impl FnOnce(&[u8]) -> R,
@@ -102,8 +113,6 @@ impl SharedBuffer {
 
         unsafe {
             let ptr = self.shmem.as_ptr();
-
-            std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
 
             let mut len_bytes = [0u8; 4];
 
