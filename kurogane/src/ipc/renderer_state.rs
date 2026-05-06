@@ -27,7 +27,7 @@ impl PromiseRegistry {
 
     pub fn register(&mut self, context: V8Context, promise: V8Value) -> u32 {
         let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1);
+        self.next_id = self.next_id.checked_add(1).unwrap_or(1);
 
         self.pending.insert(id, (context, promise));
         id
