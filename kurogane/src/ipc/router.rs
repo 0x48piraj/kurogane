@@ -20,6 +20,11 @@ pub fn route_browser(
         }
     };
     let id = list_get_int(args, 1);
+    if id <= 0 {
+        debug!("[IPC Router] invalid id {}", id);
+        return false;
+    }
+
     debug!("[IPC Browser] message type={:?} id={}", kind, id);
 
     match kind {
@@ -112,9 +117,16 @@ pub fn route_renderer(
 ) -> bool {
     let kind = match get_kind(args) {
         Some(k) => k,
-        None => return false,
+        None => {
+            debug!("[IPC Router] invalid ipc message type");
+            return false;
+        }
     };
     let id = list_get_int(args, 1);
+    if id <= 0 {
+        debug!("[IPC Router] invalid id {}", id);
+        return false;
+    }
 
     match kind {
         IpcMsgKind::Resolve => {
