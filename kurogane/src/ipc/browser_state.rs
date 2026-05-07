@@ -147,13 +147,13 @@ where
     F: Fn(Value) -> Result<Value, String> + Send + Sync + 'static,
 {
     let wrapped: IpcHandler = Box::new(move |payload: &str| {
-        let input: Value =
-            serde_json::from_str(payload).unwrap_or(Value::String(payload.to_string()));
+        let input: Value = serde_json::from_str(payload)
+            .map_err(|e| format!("invalid JSON payload: {}", e))?;
 
-        match handler(input) {
-            Ok(v) => Ok(serde_json::to_string(&v).unwrap()),
-            Err(e) => Err(e),
-        }
+        let output = handler(input)?;
+
+        serde_json::to_string(&output)
+            .map_err(|e| format!("JSON response serialization error: {}", e))
     });
 
     if let Some(dispatcher) = DISPATCHER.get() {
