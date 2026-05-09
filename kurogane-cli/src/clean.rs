@@ -1,14 +1,13 @@
 use anyhow::Result;
 use std::fs;
+use kurogane_layout::cache_root;
 
 use crate::tui;
 
 pub fn run() -> Result<()> {
     tui::section("Kurogane Clean");
 
-    let base = dirs::cache_dir()
-        .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?
-        .join("kurogane");
+    let base = cache_root();
 
     if !base.exists() {
         tui::info("Nothing to clean");

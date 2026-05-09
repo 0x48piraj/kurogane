@@ -1,7 +1,7 @@
 use anyhow::Result;
 use download_cef::{CefIndex, DEFAULT_TARGET};
+use kurogane_layout::install_root;
 use std::time::Duration;
-use std::path::PathBuf;
 
 use crate::tui;
 
@@ -9,7 +9,7 @@ pub fn run() -> Result<()> {
     tui::section("Kurogane installer");
 
     let cef_version = env!("KUROGANE_CEF_VERSION").to_string();
-    let install_dir = install_dir_for(&cef_version);
+    let install_dir = install_root().join(&cef_version);
 
     if install_dir.exists() {
         tui::success("Chromium engine already installed");
@@ -64,11 +64,4 @@ pub fn run() -> Result<()> {
     tui::field("path", tui::format_path(&install_dir));
 
     Ok(())
-}
-
-fn install_dir_for(version: &str) -> PathBuf {
-    dirs::home_dir()
-        .expect("no home dir")
-        .join(".local/share/cef")
-        .join(version)
 }

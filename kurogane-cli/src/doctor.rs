@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::path::PathBuf;
+use kurogane_layout::{detect_cef_root, install_root, installed_cef_root, validate_cef_root};
 
 use crate::tui;
 use crate::collector;
@@ -16,17 +16,17 @@ fn required_tools() -> Vec<ToolCheck> {
             ToolCheck {
                 name: "MSVC",
                 cmd: "cl",
-                hint: "not available",
+                hint: "Install Visual Studio C++ build tools",
             },
             ToolCheck {
                 name: "CMake",
                 cmd: "cmake",
-                hint: "not found",
+                hint: "Install CMake",
             },
             ToolCheck {
                 name: "Ninja",
                 cmd: "ninja",
-                hint: "not found",
+                hint: "Install Ninja build system",
             },
         ]
     } else {
@@ -34,12 +34,12 @@ fn required_tools() -> Vec<ToolCheck> {
             ToolCheck {
                 name: "C compiler (cc)",
                 cmd: "cc",
-                hint: "No C compiler found. Run: 'sudo apt install build-essential' # or distro equivalent",
+                hint: "Install build-essential or your distro's compiler toolchain",
             },
             ToolCheck {
                 name: "CMake",
                 cmd: "cmake",
-                hint: "Ninja not found. Run: 'sudo apt install cmake' # or distro equivalent",
+                hint: "Install CMake",
             },
         ]
     }
@@ -69,40 +69,91 @@ pub fn run(json: bool) -> Result<()> {
     // Check CEF installation
     let version = env!("KUROGANE_CEF_VERSION");
 
-    let cef_path = dirs::home_dir()
-        .map(|h| h.join(".local/share/cef").join(version))
-        .unwrap_or_else(|| PathBuf::from("~/.local/share/cef").join(version));
+    // Managed installed runtime
+    match installed_cef_root(version) {
+        Some(root) => {
+            match validate_cef_root(&root) {
+                Ok(_) => {
+                    tui::success("Installed Chromium runtime");
+                    tui::field("version", version);
+                    tui::field("path", tui::format_path(&root));
+                }
 
-    if cef_path.exists() {
-        tui::success("CEF installation");
-        tui::field("version", version);
-        tui::field("path", tui::format_path(&cef_path));
-    } else {
-        tui::error("CEF not found");
-        tui::field("required", version);
-        tui::field("expected", tui::format_path(&cef_path));
-        tui::info("Run: kurogane install");
-        fail += 1;
-    }
+                Err(e) => {
+                    tui::error("Installed Chromium runtime invalid");
+                    tui::field("reason", e);
 
-    let root = dirs::home_dir()
-        .map(|h| h.join(".local/share/cef"));
-
-    if let Some(root) = root {
-        if let Ok(entries) = std::fs::read_dir(&root) {
-            let versions: Vec<_> = entries
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().is_dir())
-                .map(|e| e.file_name().to_string_lossy().to_string())
-                .collect();
-
-            if !versions.is_empty() {
-                println!();
-                tui::info("Installed versions");
-                for v in versions {
-                    tui::field("cef", v);
+                    fail += 1;
                 }
             }
+        }
+
+        None => {
+            tui::error("Installed Chromium runtime not found");
+
+            tui::field("required", version);
+
+            tui::field("expected", tui::format_path(&install_root().join(version)));
+
+            tui::info("Run: kurogane install");
+
+            fail += 1;
+        }
+    }
+
+    let root = install_root();
+
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        let versions: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+
+        if !versions.is_empty() {
+            println!();
+
+            tui::info("Installed versions");
+
+            for version in versions {
+                tui::field("cef", version);
+            }
+        }
+    }
+
+    println!();
+
+    tui::section("Runtime Resolution");
+
+    match detect_cef_root() {
+        Ok(detected) => {
+            match validate_cef_root(&detected.root) {
+                Ok(_) => {
+                    tui::success("Active runtime resolved");
+
+                    tui::field("path", tui::format_path(&detected.root));
+
+                    tui::field("mode", format!("{:?}", detected.mode));
+                }
+
+                Err(e) => {
+                    tui::error("Resolved runtime invalid");
+
+                    tui::field("reason", e);
+
+                    fail += 1;
+                }
+            }
+        }
+
+        Err(_) => {
+            tui::warn("No active runtime resolved");
+
+            tui::info(
+                "Applications may fail to launch outside managed environments"
+            );
+
+            warn += 1;
         }
     }
 
@@ -111,13 +162,13 @@ pub fn run(json: bool) -> Result<()> {
     // Check CEF_PATH env
     match std::env::var("CEF_PATH") {
         Ok(v) => {
-            tui::success("Environment");
+            tui::success("Environment override");
             tui::field("CEF_PATH", v);
         }
+
         Err(_) => {
-            tui::warn("Environment");
+            tui::warn("Environment override");
             tui::field("CEF_PATH", "not set");
-            tui::step("Using versioned runtime path");
         }
     }
 
@@ -143,8 +194,8 @@ pub fn run(json: bool) -> Result<()> {
                 tui::error("Missing Visual Studio components");
                 tui::field("hint", "Install C++ workload via Visual Studio Installer");
             } else {
-                tui::error("Build toolchain not available");
-                tui::field("hint", "Run from 'Developer Command Prompt for VS' (search in Start menu)");
+                tui::error("Visual Studio environment unavailable");
+                tui::field("hint", "Run inside Developer Command Prompt for Visual Studio");
             }
         } else {
             tui::error("Build toolchain not found");
@@ -152,7 +203,7 @@ pub fn run(json: bool) -> Result<()> {
 
         println!();
 
-        tui::info("Components:");
+        tui::info("Missing components");
 
         // Structured details
         for tool in &missing {

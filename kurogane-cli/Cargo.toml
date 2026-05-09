@@ -8,6 +8,7 @@ name = "kurogane"
 path = "src/main.rs"
 
 [dependencies]
+kurogane-layout.workspace = true
 anyhow = "1"
 cargo_metadata = "0.23.1"
 clap = { version = "4", features = ["derive"] }

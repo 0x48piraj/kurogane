@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{PathBuf, Path};
 use std::process::Command;
 use cargo_metadata::{MetadataCommand, TargetKind};
+use kurogane_layout::{installed_cef_root, validate_cef_root};
 
 use crate::tui;
 
@@ -61,12 +62,19 @@ pub fn run(debug: bool) -> Result<()> {
     // Copy CEF
     tui::step("Copying Chromium engine...");
 
-    let cef_src = find_cef()?;
+    let version = env!("KUROGANE_CEF_VERSION");
+    let cef_root = installed_cef_root(version)
+        .ok_or_else(|| anyhow::anyhow!(
+            "Chromium runtime {} is not installed",
+            version
+        ))?;
 
-    tui::field("source", tui::format_path(&cef_src));
+    validate_cef_root(&cef_root)?;
+
+    tui::field("source", tui::format_path(&cef_root));
     tui::step("Preparing runtime...");
 
-    copy_cef_bundle(&cef_src, &dist)?;
+    copy_cef_bundle(&cef_root, &dist)?;
 
     tui::step("Verifying bundle");
 
@@ -157,26 +165,6 @@ fn copy_dir(src: &std::path::Path, dst: &Path) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn find_cef() -> Result<PathBuf> {
-    // Next to exe
-    let local = PathBuf::from("cef");
-    if local.exists() {
-        return Ok(local);
-    }
-
-    // User install
-    let version = env!("KUROGANE_CEF_VERSION");
-
-    if let Some(home) = dirs::home_dir() {
-        let path = home.join(".local/share/cef").join(version);
-        if path.exists() {
-            return Ok(path);
-        }
-    }
-
-    anyhow::bail!("Chromium engine not found. Run 'kurogane install'.");
 }
 
 /// Copy Chromium Embedded Framework for Windows.

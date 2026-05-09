@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::ffi::OsString;
 use std::process::Command;
+use kurogane_layout::cef_install_dir;
 
 use crate::tui;
 
@@ -8,10 +9,7 @@ pub fn run(cargo_args: Vec<OsString>) -> Result<()> {
     tui::section("Kurogane Dev");
 
     let version = env!("KUROGANE_CEF_VERSION");
-    let cef = dirs::home_dir()
-        .expect("no home dir")
-        .join(".local/share/cef")
-        .join(version);
+    let cef = cef_install_dir(version);
 
     tui::step("Checking Chromium engine");
 

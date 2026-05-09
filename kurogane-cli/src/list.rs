@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use std::fs;
+use kurogane_layout::cache_root;
 
 use crate::tui;
 
@@ -23,10 +24,7 @@ fn list_all() -> Result<()> {
 fn list_profiles() -> Result<()> {
     tui::section("Kurogane Profiles");
 
-    let base = dirs::cache_dir()
-        .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?
-        .join("kurogane")
-        .join("profiles");
+    let base = cache_root().join("profiles");
 
     if !base.exists() {
         tui::info("No profiles found");
