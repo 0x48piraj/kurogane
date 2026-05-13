@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::scheme::CanonicalRoot;
 use crate::client::DemoClient;
+use crate::ipc::IpcDispatcher;
 use crate::debug;
 
 wrap_browser_process_handler! {
@@ -17,6 +18,7 @@ wrap_browser_process_handler! {
         window: Arc<Mutex<Option<Window>>>,
         start_url: CefString,
         asset_root: Option<CanonicalRoot>,
+        dispatcher: Arc<IpcDispatcher>,
 
         // Keep factory alive for browser lifetime; RefCell for interior mutability
         scheme_factory: RefCell<Option<SchemeHandlerFactory>>,
@@ -26,10 +28,6 @@ wrap_browser_process_handler! {
     impl BrowserProcessHandler {
         fn on_context_initialized(&self) {
             debug!("on_context_initialized called");
-
-            // Initialize IPC dispatcher
-            crate::ipc::init_dispatcher();
-            debug!("IPC dispatcher initialized");
 
             // Register once per request context
             if self.scheme_factory.borrow().is_none() {
@@ -63,7 +61,7 @@ wrap_browser_process_handler! {
                 return;
             }
 
-            let mut client = DemoClient::new();
+            let mut client = DemoClient::new(self.dispatcher.clone());
             let url = self.start_url.clone();
 
             debug!("Creating main browser with URL: {}", url.to_string());

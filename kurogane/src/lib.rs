@@ -27,8 +27,4 @@ pub use error::RuntimeError;
 pub use app::App;
 
 // Re-export IPC types for public use
-pub use crate::ipc::{
-    IpcResult,
-    register_command,
-    register_binary_command
-};
+pub use crate::ipc::IpcResult;

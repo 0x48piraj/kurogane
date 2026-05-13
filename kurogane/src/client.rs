@@ -2,6 +2,8 @@
 
 use cef::*;
 use crate::debug;
+use std::sync::Arc;
+use crate::ipc::IpcDispatcher;
 
 //
 // LOAD HANDLER
@@ -53,7 +55,9 @@ wrap_load_handler! {
 // CLIENT
 //
 wrap_client! {
-    pub struct DemoClient;
+    pub struct DemoClient {
+        dispatcher: Arc<IpcDispatcher>,
+    }
 
     impl Client {
         fn load_handler(&self) -> Option<LoadHandler> {
@@ -77,7 +81,7 @@ wrap_client! {
             let msg = message.unwrap();
 
             // Delegate to IPC dispatcher
-            if crate::ipc::handle_ipc_message(browser, frame, msg) {
+            if crate::ipc::handle_ipc_message(browser, frame, msg, &self.dispatcher) {
                 return 1;
             }
 

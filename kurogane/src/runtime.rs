@@ -6,6 +6,7 @@ use crate::cef_app::DemoApp;
 use crate::error::RuntimeError;
 use crate::scheme::CanonicalRoot;
 use kurogane_layout::{detect_cef_root, validate_cef_root, profile_dir};
+use crate::ipc::IpcDispatcher;
 
 /// Public entry point for launching a CEF application.
 ///
@@ -40,6 +41,7 @@ impl Runtime {
     pub fn run(
         start_url: String,
         asset_root: Option<CanonicalRoot>,
+        dispatcher: Arc<IpcDispatcher>,
         profile_id: Option<String>,
         persist_session_cookies: bool,
     ) -> Result<(), RuntimeError> {
@@ -57,6 +59,7 @@ impl Runtime {
             window.clone(),
             CefString::from(start_url.as_str()),
             asset_root,
+            dispatcher,
             window_creation_started,
         );
 

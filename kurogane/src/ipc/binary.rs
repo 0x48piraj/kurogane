@@ -4,11 +4,13 @@
 //! inline and shared memory based on payload size.
 
 use cef::*;
+use std::sync::Arc;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use crate::ipc::protocol::{IpcId, IpcMsgKind, set_kind};
 use crate::ipc::transport::shm::{SharedBuffer, SHM_THRESHOLD, SHM_HEADER_SIZE};
 use crate::ipc::renderer_state::{outgoing_shm, registry};
-use crate::ipc::browser_state::{response_shm_store, get_dispatcher};
+use crate::ipc::browser_state::response_shm_store;
+use crate::ipc::IpcDispatcher;
 use crate::debug;
 
 // BROWSER SIDE
@@ -18,11 +20,10 @@ pub fn handle_invoke(
     id: i32,
     command: String,
     data: &[u8],
+    dispatcher: &Arc<IpcDispatcher>,
 ) {
-    let dispatcher = get_dispatcher();
-
     let result = catch_unwind(AssertUnwindSafe(|| {
-        dispatcher.lock().unwrap().dispatch_binary(&command, data)
+        dispatcher.dispatch_binary(&command, data)
     }))
     .unwrap_or_else(|_| Err("Binary handler panicked".to_string()));
 

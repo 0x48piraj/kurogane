@@ -3,7 +3,9 @@
 //! Central dispatch layer for all IPC messages between browser and renderer.
 
 use cef::*;
+use std::sync::Arc;
 use crate::ipc::protocol::{get_kind, IpcMsgKind};
+use crate::ipc::browser_state::IpcDispatcher;
 use crate::ipc::renderer_state::outgoing_shm;
 use crate::ipc::{rpc, binary};
 use crate::debug;
@@ -11,6 +13,7 @@ use crate::debug;
 pub fn route_browser(
     frame: &mut Frame,
     args: &ListValue,
+    dispatcher: &Arc<IpcDispatcher>,
 ) -> bool {
     let kind = match get_kind(args) {
         Some(k) => k,
@@ -33,7 +36,7 @@ pub fn route_browser(
             let command = list_get_string(args, 2);
             let payload = list_get_string(args, 3);
 
-            rpc::handle_invoke(frame, id, command, payload);
+            rpc::handle_invoke(frame, id, command, payload, dispatcher);
         }
 
         // Binary invoke
@@ -48,7 +51,7 @@ pub fn route_browser(
 
                 debug!("[IPC Browser] inline binary: {} bytes", written);
 
-                binary::handle_invoke(frame, id, command, &buf);
+                binary::handle_invoke(frame, id, command, &buf, dispatcher);
                 return true;
             }
 
@@ -59,10 +62,7 @@ pub fn route_browser(
                 let raw_size = list_get_int(args, 4);
 
                 if raw_size <= 0 {
-                    return Err(format!(
-                        "invalid SHM size: {}",
-                        raw_size
-                    ));
+                    return Err(format!("invalid SHM size: {}", raw_size));
                 }
 
                 let size = raw_size as usize;
@@ -80,12 +80,10 @@ pub fn route_browser(
                 shm.with_read(|data| {
                     debug!(
                         "[IPC Browser] binary invoke (SHM): '{}' (id={}, {} bytes)",
-                        command,
-                        id,
-                        data.len()
+                        command, id, data.len()
                     );
 
-                    binary::handle_invoke(frame, id, command, data);
+                    binary::handle_invoke(frame, id, command, data, dispatcher);
                 })?;
 
                 Ok(())

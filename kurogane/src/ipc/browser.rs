@@ -2,13 +2,16 @@
 //!
 //! Boundary between CEF's message system and the IPC infrastructure.
 
+use std::sync::Arc;
 use cef::*;
 use crate::debug;
+use crate::ipc::browser_state::IpcDispatcher;
 
 pub fn handle_ipc_message(
     _browser: &mut Browser,
     frame: &mut Frame,
     message: &mut ProcessMessage,
+    dispatcher: &Arc<IpcDispatcher>,
 ) -> bool {
     let name: CefString = (&message.name()).into();
     if name.to_string() != "ipc" {
@@ -20,5 +23,5 @@ pub fn handle_ipc_message(
         return false;
     };
 
-    crate::ipc::router::route_browser(frame, &args)
+    crate::ipc::router::route_browser(frame, &args, dispatcher)
 }
