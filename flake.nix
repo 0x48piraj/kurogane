@@ -60,6 +60,7 @@
         kurogane-cli = pkgs.writeShellScriptBin "kurogane" ''
           set -e
 
+          # Use $PWD for local development
           SRC=${./.}
           BUILD_DIR="$HOME/.kurogane-build"
           HASH_FILE="$BUILD_DIR/.src-hash"
@@ -86,7 +87,7 @@
             echo "$CURRENT_HASH" > "$HASH_FILE"
           fi
 
-          exec env LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath runtimeDeps}:$CEF_PATH" \
+          exec env LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath runtimeDeps}" \
             "$BUILD_DIR/target/debug/kurogane" "$@"
         '';
       in {
@@ -97,7 +98,6 @@
             ++ [ kurogane-cli ];
 
           shellHook = ''
-            export CEF_PATH="$HOME/.local/share/cef"
 
             export PKG_CONFIG_PATH="${
               pkgs.lib.makeSearchPath "lib/pkgconfig" runtimeDeps
