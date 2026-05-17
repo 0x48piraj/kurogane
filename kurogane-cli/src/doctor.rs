@@ -74,13 +74,13 @@ pub fn run(json: bool) -> Result<()> {
         Some(root) => {
             match validate_cef_root(&root) {
                 Ok(_) => {
-                    tui::success("Installed Chromium runtime");
+                    tui::success("Managed Chromium runtime");
                     tui::field("version", version);
                     tui::field("path", tui::format_path(&root));
                 }
 
                 Err(e) => {
-                    tui::error("Installed Chromium runtime invalid");
+                    tui::error("Managed Chromium runtime invalid");
                     tui::field("reason", e);
 
                     fail += 1;
@@ -89,7 +89,7 @@ pub fn run(json: bool) -> Result<()> {
         }
 
         None => {
-            tui::error("Installed Chromium runtime not found");
+            tui::error("Managed Chromium runtime not found");
 
             tui::field("required", version);
 
@@ -97,7 +97,7 @@ pub fn run(json: bool) -> Result<()> {
 
             tui::info("Run: kurogane install");
 
-            fail += 1;
+            warn += 1;
         }
     }
 
@@ -147,7 +147,7 @@ pub fn run(json: bool) -> Result<()> {
         }
 
         Err(_) => {
-            tui::warn("No active runtime resolved");
+            tui::warn("No usable Chromium runtime found");
 
             tui::info(
                 "Applications may fail to launch outside managed environments"

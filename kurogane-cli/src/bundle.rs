@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use cargo_metadata::{MetadataCommand, TargetKind};
-use kurogane_layout::{BundleLayout, installed_cef_root, validate_cef_root};
+use kurogane_layout::{BundleLayout, validate_cef_root};
 
 use crate::tui;
 
@@ -69,17 +69,13 @@ pub fn run(debug: bool) -> Result<()> {
 
     tui::step("Copying Chromium engine...");
 
-    let version = env!("KUROGANE_CEF_VERSION");
-    let cef_root = installed_cef_root(version)
-        .ok_or_else(|| anyhow::anyhow!(
-            "Chromium runtime {} is not installed",
-            version
-        ))?;
+    let detected = kurogane_layout::detect_cef_root()
+        .map_err(|e| anyhow::anyhow!(e))?;
 
-    validate_cef_root(&cef_root)?;
+    validate_cef_root(&detected.root)?;
 
     // Copy CEF
-    layout.install_cef(&cef_root)?;
+    layout.install_cef(&detected.root)?;
 
     tui::step("Verifying bundle");
 
