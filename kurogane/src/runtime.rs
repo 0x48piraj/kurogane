@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::cef_app::DemoApp;
 use crate::error::RuntimeError;
+use crate::gpu::GpuMode;
 use crate::scheme::CanonicalRoot;
 use kurogane_layout::{detect_cef_root, validate_cef_root, profile_dir};
 use crate::ipc::IpcDispatcher;
@@ -44,6 +45,7 @@ impl Runtime {
         dispatcher: Arc<IpcDispatcher>,
         profile_id: Option<String>,
         persist_session_cookies: bool,
+        gpu_mode: GpuMode,
     ) -> Result<(), RuntimeError> {
         #[cfg(target_os = "macos")]
         crate::platform::macos::init_ns_app();
@@ -61,6 +63,7 @@ impl Runtime {
             asset_root,
             dispatcher,
             window_creation_started,
+            gpu_mode,
         );
 
         // CEF internally determines process role here

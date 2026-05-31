@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use crate::app::resolver::ResolvedFrontend;
 use crate::ipc::browser_state::{IpcDispatcher, IpcHandler, BinaryHandler};
 use crate::{Runtime, RuntimeError};
+use crate::gpu::GpuMode;
 
 mod resolver;
 
@@ -29,6 +30,7 @@ pub struct App {
 
     profile_id: Option<String>,
     persist_session_cookies: bool,
+    gpu_mode: GpuMode,
 }
 
 impl App {
@@ -50,6 +52,7 @@ impl App {
 
             profile_id: None,
             persist_session_cookies: true,
+            gpu_mode: GpuMode::Auto,
         }
     }
 
@@ -114,6 +117,12 @@ impl App {
         self
     }
 
+    /// Override GPU backend selection
+    pub fn gpu_mode(mut self, mode: GpuMode) -> Self {
+        self.gpu_mode = mode;
+        self
+    }
+
     /// Start the application
     pub fn run(self) -> Result<(), RuntimeError> {
         let ResolvedFrontend { asset_root, start_url } = resolver::resolve(&self.source)?;
@@ -127,6 +136,7 @@ impl App {
             dispatcher,
             self.profile_id,
             self.persist_session_cookies,
+            self.gpu_mode,
         )
     }
 

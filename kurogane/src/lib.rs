@@ -15,6 +15,7 @@ mod window;
 mod client;
 mod scheme;
 mod error;
+mod gpu;
 pub mod ipc;
 pub mod bridge;
 pub mod logger;
