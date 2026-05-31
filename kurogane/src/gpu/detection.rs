@@ -1,12 +1,12 @@
 //! Environment detection for GPU backend selection.
 
 #[derive(Debug)]
-pub(crate) struct DetectedGpuEnvironment {
+pub(crate) struct RenderingEnvironment {
     /// True when the GPU appears to be a virtual device (VirtualBox, VMware, QEMU etc.)
     pub is_virtual_gpu: bool,
 }
 
-impl DetectedGpuEnvironment {
+impl RenderingEnvironment {
     /// Detect the current GPU environment
     pub(crate) fn detect() -> Self {
         Self {

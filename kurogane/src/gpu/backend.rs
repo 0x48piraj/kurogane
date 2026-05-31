@@ -1,6 +1,6 @@
 use cef::*;
 
-use super::detection::DetectedGpuEnvironment;
+use super::detection::RenderingEnvironment;
 
 #[cfg(target_os = "linux")]
 use super::linux as platform;
@@ -35,7 +35,7 @@ pub(crate) fn apply(
     cmd: &mut CommandLine,
     requested: GpuMode,
 ) {
-    let env = DetectedGpuEnvironment::detect();
+    let env = RenderingEnvironment::detect();
 
     let mode = resolve(requested, &env);
 
@@ -49,7 +49,7 @@ pub(crate) fn apply(
 
 fn resolve(
     requested: GpuMode,
-    env: &DetectedGpuEnvironment,
+    env: &RenderingEnvironment,
 ) -> GpuMode {
     match requested {
         GpuMode::Auto => default_mode(env),
@@ -57,7 +57,7 @@ fn resolve(
     }
 }
 
-fn default_mode(env: &DetectedGpuEnvironment) -> GpuMode {
+fn default_mode(env: &RenderingEnvironment) -> GpuMode {
     if env.is_virtual_gpu {
         GpuMode::Software
     } else {
