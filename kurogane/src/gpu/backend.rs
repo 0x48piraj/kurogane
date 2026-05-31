@@ -35,9 +35,6 @@ pub(crate) fn apply(
     cmd: &mut CommandLine,
     requested: GpuMode,
 ) {
-    // Apply default platform-dependent flags
-    platform::apply_platform_flags(cmd);
-
     let env = DetectedGpuEnvironment::detect();
 
     let mode = resolve(requested, &env);

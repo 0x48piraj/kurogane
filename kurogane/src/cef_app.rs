@@ -11,6 +11,7 @@ use crate::debug;
 use crate::scheme::CanonicalRoot;
 use crate::ipc::IpcDispatcher;
 use crate::gpu::{GpuMode, apply_gpu_flags};
+use crate::sandbox::apply_sandbox_flags;
 
 use cef::sys::cef_scheme_options_t::*;
 
@@ -51,6 +52,7 @@ wrap_app! {
                 Some(&CefString::from("--expose-gc")),
             );
 
+            apply_sandbox_flags(cmd);
             apply_gpu_flags(cmd, self.gpu_mode);
         }
 

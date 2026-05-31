@@ -10,12 +10,6 @@ enum LinuxGpuDriver {
     MesaX11,
 }
 
-pub(super) fn apply_platform_flags(
-    cmd: &mut CommandLine,
-) {
-    cmd.append_switch(Some(&CefString::from("disable-setuid-sandbox")));
-}
-
 pub(super) fn apply_hardware(
     cmd: &mut CommandLine,
 ) {
