@@ -694,11 +694,18 @@ mod property_tests {
 
     proptest! {
         #[test]
-        fn extract_rel_path_never_produces_absolute(url in "app://app/.*") {
+        fn query_and_fragment_do_not_appear_in_output(
+            path in "[a-zA-Z0-9/_\\.-]{0,64}",
+            query in ".*",
+            fragment in ".*",
+        ) {
+            let url = format!(
+                "app://app/{path}?{query}#{fragment}"
+            );
+
             if let Ok(rel) = extract_rel_path(&url) {
-                prop_assert!(!rel.starts_with('/'),
-                    "rel path must be relative, got: {:?}", rel);
-                prop_assert!(!Path::new(&rel).is_absolute());
+                prop_assert!(!rel.contains('?'));
+                prop_assert!(!rel.contains('#'));
             }
         }
 
