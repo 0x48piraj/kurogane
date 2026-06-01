@@ -1,10 +1,8 @@
 //! Windows GPU flags configuration.
 
-use cef::*;
+use crate::chromium_flags::ChromiumFlags;
 
-pub(super) fn apply_hardware(
-    cmd: &mut CommandLine,
-) {
+pub(super) fn apply_hardware(flags: &mut ChromiumFlags) {
     // Run GPU work inside the browser process rather than in a child.
     //
     // On Windows + NVIDIA, the sandboxed GPU subprocess cannot survive a D3D
@@ -12,5 +10,5 @@ pub(super) fn apply_hardware(
     // After 3 crashes Chromium falls back to software.
     // Keeping GPU in-process avoids the subprocess entirely and
     // gives stable hardware acceleration.
-    cmd.append_switch(Some(&CefString::from("in-process-gpu")));
+    flags.set("in-process-gpu");
 }

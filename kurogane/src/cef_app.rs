@@ -10,6 +10,7 @@ use crate::ipc::IpcRenderProcessHandler;
 use crate::debug;
 use crate::scheme::CanonicalRoot;
 use crate::ipc::IpcDispatcher;
+use crate::chromium_flags::{ChromiumFlag, ChromiumFlags};
 use crate::gpu::{GpuMode, apply_gpu_flags};
 use crate::sandbox::apply_sandbox_flags;
 
@@ -31,29 +32,30 @@ wrap_app! {
             process_type: Option<&CefString>,
             command_line: Option<&mut CommandLine>,
         ) {
+            // Startup policy is currently only applied to the main browser process
+            // Chromium propagates the relevant switches to child processes
             if process_type.is_some() {
-                // Only configure the main browser process
                 return;
             }
 
             let Some(cmd) = command_line else { return };
 
+            let mut flags = ChromiumFlags::default();
+
             #[cfg(feature = "html_canvas_compositor")]
             {
-                cmd.append_switch_with_value(
-                    Some(&CefString::from("enable-blink-features")),
-                    Some(&CefString::from("CanvasDrawElement")),
-                );
+                flags.set_with_value("enable-blink-features", "CanvasDrawElement");
             }
 
             #[cfg(feature = "debug")]
-            cmd.append_switch_with_value(
-                Some(&CefString::from("js-flags")),
-                Some(&CefString::from("--expose-gc")),
-            );
+            {
+                flags.set_with_value("js-flags", "--expose-gc");
+            }
 
-            apply_sandbox_flags(cmd);
-            apply_gpu_flags(cmd, self.gpu_mode);
+            apply_sandbox_flags(&mut flags);
+            apply_gpu_flags(&mut flags, self.gpu_mode);
+
+            flags.apply(cmd);
         }
 
         fn on_register_custom_schemes(

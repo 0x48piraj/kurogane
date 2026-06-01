@@ -1,5 +1,4 @@
-use cef::*;
-
+use crate::chromium_flags::ChromiumFlags;
 use super::detection::RenderingEnvironment;
 
 #[cfg(target_os = "linux")]
@@ -38,25 +37,19 @@ enum ResolvedGpuMode {
 }
 
 /// Apply Chromium command-line flags for the configured GPU mode
-pub(crate) fn apply(
-    cmd: &mut CommandLine,
-    requested: GpuMode,
-) {
+pub(crate) fn apply_gpu_flags(flags: &mut ChromiumFlags, requested: GpuMode) {
     let env = RenderingEnvironment::detect();
 
     let mode = resolve(requested, &env);
 
     match mode {
-        ResolvedGpuMode::Hardware => platform::apply_hardware(cmd),
-        ResolvedGpuMode::Software => apply_software(cmd),
-        ResolvedGpuMode::Disabled => apply_disabled(cmd),
+        ResolvedGpuMode::Hardware => platform::apply_hardware(flags),
+        ResolvedGpuMode::Software => apply_software(flags),
+        ResolvedGpuMode::Disabled => apply_disabled(flags),
     }
 }
 
-fn resolve(
-    requested: GpuMode,
-    env: &RenderingEnvironment,
-) -> ResolvedGpuMode {
+fn resolve(requested: GpuMode, env: &RenderingEnvironment) -> ResolvedGpuMode {
     match requested {
         GpuMode::Auto => resolve_auto(env),
 
@@ -76,21 +69,13 @@ fn resolve_auto(env: &RenderingEnvironment) -> ResolvedGpuMode {
     }
 }
 
-fn apply_software(cmd: &mut CommandLine) {
-    cmd.append_switch_with_value(
-        Some(&CefString::from("use-gl")),
-        Some(&CefString::from("angle")),
-    );
-
-    cmd.append_switch_with_value(
-        Some(&CefString::from("use-angle")),
-        Some(&CefString::from("swiftshader")),
-    );
+fn apply_software(flags: &mut ChromiumFlags) {
+    flags.set_with_value("use-gl", "angle");
+    flags.set_with_value("use-angle", "swiftshader");
 }
 
-fn apply_disabled(cmd: &mut CommandLine) {
-    cmd.append_switch(Some(&CefString::from("disable-gpu")));
-    cmd.append_switch(Some(&CefString::from("disable-gpu-compositing")));
-
-    cmd.append_switch(Some(&CefString::from("disable-software-rasterizer")));
+fn apply_disabled(flags: &mut ChromiumFlags) {
+    flags.set("disable-gpu");
+    flags.set("disable-gpu-compositing");
+    flags.set("disable-software-rasterizer");
 }

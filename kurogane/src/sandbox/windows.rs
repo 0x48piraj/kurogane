@@ -1,9 +1,7 @@
-use cef::*;
+use crate::chromium_flags::ChromiumFlags;
 
-pub(crate) fn apply_sandbox_flags(
-    cmd: &mut CommandLine,
-) {
+pub(crate) fn apply_sandbox_flags(flags: &mut ChromiumFlags) {
     // Sandbox disable
-    cmd.append_switch(Some(&CefString::from("no-sandbox")));
-    cmd.append_switch(Some(&CefString::from("disable-gpu-sandbox")));
+    flags.set("no-sandbox");
+    flags.set("disable-gpu-sandbox");
 }

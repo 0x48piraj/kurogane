@@ -1,7 +1,5 @@
-use cef::*;
+use crate::chromium_flags::ChromiumFlags;
 
-pub(crate) fn apply_sandbox_flags(
-    cmd: &mut CommandLine,
-) {
-    cmd.append_switch(Some(&CefString::from("disable-setuid-sandbox")));
+pub(crate) fn apply_sandbox_flags(flags: &mut ChromiumFlags) {
+    flags.set("disable-setuid-sandbox");
 }

@@ -16,12 +16,12 @@ pub(super) mod macos;
 
 pub use backend::GpuMode;
 
-use cef::CommandLine;
+use crate::chromium_flags::ChromiumFlags;
 
 /// Apply Chromium command-line flags for the configured GPU mode
 pub(crate) fn apply_gpu_flags(
-    cmd: &mut CommandLine,
+    flags: &mut ChromiumFlags,
     mode: GpuMode,
 ) {
-    backend::apply(cmd, mode);
+    backend::apply_gpu_flags(flags, mode);
 }
