@@ -96,3 +96,109 @@ impl std::fmt::Display for ChromiumFlags {
         Ok(())
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Normalization and precedence tests
+
+    #[test]
+    fn set_replaces_existing_switch() {
+        let mut flags = ChromiumFlags::default();
+
+        flags.set("disable-gpu");
+        flags.set("disable-gpu");
+
+        assert_eq!(flags.switches.len(), 1);
+    }
+
+    #[test]
+    fn last_value_wins() {
+        let mut flags = ChromiumFlags::default();
+
+        flags.set_with_value("use-gl", "angle");
+        flags.set_with_value("use-gl", "egl");
+
+        assert_eq!(
+            flags.switches.get("use-gl"),
+            Some(&SwitchValue::Value("egl".into()))
+        );
+    }
+
+    #[test]
+    fn value_replaces_flag() {
+        let mut flags = ChromiumFlags::default();
+
+        flags.set("disable-gpu");
+
+        flags.set_with_value(
+            "disable-gpu",
+            "ignored",
+        );
+
+        assert_eq!(
+            flags.switches.get("disable-gpu"),
+            Some(&SwitchValue::Value(
+                "ignored".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn user_flags_override_defaults() {
+        let mut flags = ChromiumFlags::default();
+
+        flags.set_with_value(
+            "use-gl",
+            "angle",
+        );
+
+        flags.extend_user_flags(&[
+            ChromiumFlag::WithValue(
+                "use-gl".into(),
+                "egl".into(),
+            )
+        ]);
+
+        assert_eq!(
+            flags.switches.get("use-gl"),
+            Some(&SwitchValue::Value(
+                "egl".into()
+            ))
+        );
+    }
+}
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn last_write_wins(
+            key in "[a-z0-9\\-]{1,32}",
+            first in ".*",
+            second in ".*",
+        ) {
+            let mut flags = ChromiumFlags::default();
+
+            flags.set_with_value(
+                key.clone(),
+                first,
+            );
+
+            flags.set_with_value(
+                key.clone(),
+                second.clone(),
+            );
+
+            prop_assert_eq!(
+                flags.switches.get(&key),
+                Some(&SwitchValue::Value(second))
+            );
+        }
+    }
+}
