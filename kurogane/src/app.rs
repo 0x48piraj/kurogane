@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use crate::app::resolver::ResolvedFrontend;
 use crate::ipc::browser_state::{IpcDispatcher, IpcHandler, BinaryHandler};
 use crate::{Runtime, RuntimeError};
+use crate::chromium_flags::ChromiumFlag;
 use crate::gpu::GpuMode;
 
 mod resolver;
@@ -31,6 +32,7 @@ pub struct App {
     profile_id: Option<String>,
     persist_session_cookies: bool,
     gpu_mode: GpuMode,
+    chromium_flags: Vec<ChromiumFlag>,
 }
 
 impl App {
@@ -53,6 +55,7 @@ impl App {
             profile_id: None,
             persist_session_cookies: true,
             gpu_mode: GpuMode::Auto,
+            chromium_flags: Vec::new(),
         }
     }
 
@@ -123,6 +126,23 @@ impl App {
         self
     }
 
+    /// Add a Chromium flag with no value
+    pub fn chromium_flag(mut self, name: impl Into<String>) -> Self {
+        self.chromium_flags.push(ChromiumFlag::Present(name.into()));
+        self
+    }
+
+    /// Add a Chromium flag with a value
+    pub fn chromium_flag_with_value(
+        mut self,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        self.chromium_flags
+            .push(ChromiumFlag::WithValue(name.into(), value.into()));
+        self
+    }
+
     /// Start the application
     pub fn run(self) -> Result<(), RuntimeError> {
         let ResolvedFrontend { asset_root, start_url } = resolver::resolve(&self.source)?;
@@ -137,6 +157,7 @@ impl App {
             self.profile_id,
             self.persist_session_cookies,
             self.gpu_mode,
+            self.chromium_flags,
         )
     }
 

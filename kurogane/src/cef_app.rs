@@ -24,6 +24,7 @@ wrap_app! {
         dispatcher: Arc<IpcDispatcher>,
         window_creation_started: Arc<AtomicBool>,
         gpu_mode: GpuMode,
+        chromium_flags: Vec<ChromiumFlag>,
     }
 
     impl App {
@@ -54,6 +55,11 @@ wrap_app! {
 
             apply_sandbox_flags(&mut flags);
             apply_gpu_flags(&mut flags, self.gpu_mode);
+
+            // Apply user overrides
+            flags.extend_user_flags(&self.chromium_flags);
+
+            debug!("Chromium flags: {:?}", flags);
 
             flags.apply(cmd);
         }
