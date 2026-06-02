@@ -12,13 +12,16 @@ mod doctor;
 mod list;
 mod info;
 
+mod collector;
 mod templates;
 mod tui;
-mod collector;
 
 #[derive(Parser)]
 #[command(name = "kurogane")]
-#[command(about = "Kurogane: GPU-accelerated runtime for building high-performance desktop apps", version)]
+#[command(
+    about = "Kurogane: GPU-accelerated runtime for building high-performance desktop apps",
+    version
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

@@ -1,10 +1,10 @@
-use std::fs;
 use anyhow::{Result, bail};
+use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 
-use crate::tui;
 use crate::templates::extract_template;
+use crate::tui;
 
 pub fn run(name: Option<String>, template: Option<String>) -> Result<()> {
     tui::section("Kurogane project setup");

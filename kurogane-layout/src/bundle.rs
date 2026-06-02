@@ -12,12 +12,8 @@ pub struct BundleLayout {
 }
 
 impl BundleLayout {
-    pub fn new(
-        root: impl Into<PathBuf>,
-    ) -> Self {
-        Self {
-            root: root.into(),
-        }
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
     }
 
     pub fn root(&self) -> &Path {
@@ -63,17 +59,11 @@ impl BundleLayout {
         self.root.join("content")
     }
 
-    pub fn launcher_path(
-        &self,
-        exe_name: &OsStr,
-    ) -> PathBuf {
+    pub fn launcher_path(&self, exe_name: &OsStr) -> PathBuf {
         self.root.join(exe_name)
     }
 
-    pub fn executable_path(
-        &self,
-        exe_name: &OsStr,
-    ) -> PathBuf {
+    pub fn executable_path(&self, exe_name: &OsStr) -> PathBuf {
         #[cfg(target_os = "windows")]
         {
             self.root.join(exe_name)
@@ -90,10 +80,7 @@ impl BundleLayout {
         }
     }
 
-    pub fn install_frontend(
-        &self,
-        src: &Path,
-    ) -> Result<()> {
+    pub fn install_frontend(&self, src: &Path) -> Result<()> {
         if !src.exists() {
             anyhow::bail!("frontend directory missing");
         }
@@ -117,10 +104,7 @@ impl BundleLayout {
     ///
     /// Linux may require chrome-sandbox to have setuid permissions
     /// for proper Chromium sandboxing support.
-    pub fn install_cef(
-        &self,
-        src: &Path,
-    ) -> Result<()> {
+    pub fn install_cef(&self, src: &Path) -> Result<()> {
         copy_dir(src, &self.cef_dir())?;
 
         #[cfg(target_os = "linux")]
@@ -137,16 +121,10 @@ impl BundleLayout {
     }
 
     #[cfg(target_os = "linux")]
-    pub fn write_launcher(
-        &self,
-        exe_name: &OsStr,
-    ) -> Result<()> {
+    pub fn write_launcher(&self, exe_name: &OsStr) -> Result<()> {
         let launcher = self.launcher_path(exe_name);
 
-        let runtime_target = format!(
-            "runtime/{}",
-            exe_name.to_string_lossy()
-        );
+        let runtime_target = format!("runtime/{}", exe_name.to_string_lossy());
 
         // Optional extra runtime libraries (for NixOS runtime closures)
         let extra_ld = std::env::var("KUROGANE_LD_LIBRARY_PATH").unwrap_or_default();
@@ -178,12 +156,8 @@ exec "$ROOT/{runtime_target}" "$@"
         Ok(())
     }
 
-    pub fn verify(
-        &self,
-        exe_name: &OsStr,
-    ) -> Result<()> {
-        let exe =
-            self.executable_path(exe_name);
+    pub fn verify(&self, exe_name: &OsStr) -> Result<()> {
+        let exe = self.executable_path(exe_name);
 
         if !exe.exists() {
             anyhow::bail!("bundle executable missing");
@@ -213,10 +187,7 @@ exec "$ROOT/{runtime_target}" "$@"
     }
 }
 
-fn copy_dir(
-    src: &Path,
-    dst: &Path,
-) -> Result<()> {
+fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
 
     for entry in fs::read_dir(src)? {

@@ -1,8 +1,9 @@
-use std::fs;
 use anyhow::{Result, bail};
+use std::fs;
 use std::process::Command;
-use crate::tui;
+
 use crate::templates::extract_template;
+use crate::tui;
 
 pub fn run() -> Result<()> {
     tui::section("Kurogane Showcase");
@@ -23,10 +24,7 @@ pub fn run() -> Result<()> {
 
     let exe = std::env::current_exe()?;
 
-    let status = Command::new(exe)
-        .arg("dev")
-        .current_dir(root)
-        .status()?;
+    let status = Command::new(exe).arg("dev").current_dir(root).status()?;
 
     if !status.success() {
         bail!("Showcase failed");

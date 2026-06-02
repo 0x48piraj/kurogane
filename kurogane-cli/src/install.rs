@@ -32,21 +32,11 @@ pub fn run() -> Result<()> {
 
     tui::step("Downloading Chromium engine...");
 
-    let archive = version.download_archive_with_retry(
-        parent,
-        true,
-        Duration::from_secs(15),
-        3,
-    )?;
+    let archive = version.download_archive_with_retry(parent, true, Duration::from_secs(15), 3)?;
 
     tui::step("Extracting...");
 
-    let extracted = download_cef::extract_target_archive(
-        DEFAULT_TARGET,
-        &archive,
-        parent,
-        true,
-    )?;
+    let extracted = download_cef::extract_target_archive(DEFAULT_TARGET, &archive, parent, true)?;
 
     // Write archive.json
     version.minimal()?.write_archive_json(&extracted)?;

@@ -1,8 +1,8 @@
 use anyhow::Result;
 use kurogane_layout::{detect_cef_root, install_root, installed_cef_root, validate_cef_root};
 
-use crate::tui;
 use crate::collector;
+use crate::tui;
 
 struct ToolCheck {
     name: &'static str,
@@ -53,7 +53,6 @@ fn probe(cmd: &str) -> bool {
 }
 
 pub fn run(json: bool) -> Result<()> {
-
     // JSON mode
     if json {
         let report = collector::collect_all();
@@ -71,22 +70,20 @@ pub fn run(json: bool) -> Result<()> {
 
     // Managed installed runtime
     match installed_cef_root(version) {
-        Some(root) => {
-            match validate_cef_root(&root) {
-                Ok(_) => {
-                    tui::success("Managed Chromium runtime");
-                    tui::field("version", version);
-                    tui::field("path", tui::format_path(&root));
-                }
-
-                Err(e) => {
-                    tui::error("Managed Chromium runtime invalid");
-                    tui::field("reason", e);
-
-                    fail += 1;
-                }
+        Some(root) => match validate_cef_root(&root) {
+            Ok(_) => {
+                tui::success("Managed Chromium runtime");
+                tui::field("version", version);
+                tui::field("path", tui::format_path(&root));
             }
-        }
+
+            Err(e) => {
+                tui::error("Managed Chromium runtime invalid");
+                tui::field("reason", e);
+
+                fail += 1;
+            }
+        },
 
         None => {
             tui::error("Managed Chromium runtime not found");
@@ -126,32 +123,28 @@ pub fn run(json: bool) -> Result<()> {
     tui::section("Runtime Resolution");
 
     match detect_cef_root() {
-        Ok(detected) => {
-            match validate_cef_root(&detected.root) {
-                Ok(_) => {
-                    tui::success("Active runtime resolved");
+        Ok(detected) => match validate_cef_root(&detected.root) {
+            Ok(_) => {
+                tui::success("Active runtime resolved");
 
-                    tui::field("path", tui::format_path(&detected.root));
+                tui::field("path", tui::format_path(&detected.root));
 
-                    tui::field("mode", format!("{:?}", detected.mode));
-                }
-
-                Err(e) => {
-                    tui::error("Resolved runtime invalid");
-
-                    tui::field("reason", e);
-
-                    fail += 1;
-                }
+                tui::field("mode", format!("{:?}", detected.mode));
             }
-        }
+
+            Err(e) => {
+                tui::error("Resolved runtime invalid");
+
+                tui::field("reason", e);
+
+                fail += 1;
+            }
+        },
 
         Err(_) => {
             tui::warn("No usable Chromium runtime found");
 
-            tui::info(
-                "Applications may fail to launch outside managed environments"
-            );
+            tui::info("Applications may fail to launch outside managed environments");
 
             warn += 1;
         }
@@ -195,7 +188,10 @@ pub fn run(json: bool) -> Result<()> {
                 tui::field("hint", "Install C++ workload via Visual Studio Installer");
             } else {
                 tui::error("Visual Studio environment unavailable");
-                tui::field("hint", "Run inside Developer Command Prompt for Visual Studio");
+                tui::field(
+                    "hint",
+                    "Run inside Developer Command Prompt for Visual Studio",
+                );
             }
         } else {
             tui::error("Build toolchain not found");

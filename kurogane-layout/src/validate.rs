@@ -11,10 +11,7 @@ pub enum CefValidationError {
     MissingFile(&'static str),
 }
 
-pub fn validate_cef_root(
-    root: &Path,
-) -> Result<(), CefValidationError> {
-
+pub fn validate_cef_root(root: &Path) -> Result<(), CefValidationError> {
     if !root.exists() {
         return Err(CefValidationError::MissingRoot);
     }
@@ -43,11 +40,7 @@ pub fn validate_cef_root(
     Ok(())
 }
 
-fn require(
-    root: &Path,
-    name: &'static str,
-) -> Result<(), CefValidationError> {
-
+fn require(root: &Path, name: &'static str) -> Result<(), CefValidationError> {
     if root.join(name).exists() {
         Ok(())
     } else {

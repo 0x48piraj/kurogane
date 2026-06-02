@@ -3,20 +3,13 @@ use std::path::{Path, PathBuf};
 use crate::platform;
 
 pub fn cache_root() -> PathBuf {
-    platform::cache_dir()
-        .join("kurogane")
+    platform::cache_dir().join("kurogane")
 }
 
-pub fn profile_dir(
-    app_id: &str,
-    exe: &Path,
-) -> PathBuf {
-
+pub fn profile_dir(app_id: &str, exe: &Path) -> PathBuf {
     // Isolate the CEF cache per executable.
     // Reusing a profile across runs can trigger session restore leading to multiple on_context_initialized invocations.
-    let exe = exe
-        .canonicalize()
-        .unwrap_or_else(|_| exe.to_path_buf());
+    let exe = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
 
     let hash = fnv1a_64(&exe);
 
@@ -45,29 +38,29 @@ pub fn fnv1a_64(path: &Path) -> String {
 pub fn sanitize_name(name: &str) -> String {
     // Windows reserved names
     const WINDOWS_RESERVED: &[&str] = &[
-        "CON", "PRN", "AUX", "NUL",
-        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
 
     // Replace forbidden/control chars with _
-    let replaced = name.chars().map(|c| match c {
-        '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0' => '_',
-        _ if c.is_control() => '_',
-        _ => c,
-    }).collect::<String>();
+    let replaced = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0' => '_',
+            _ if c.is_control() => '_',
+            _ => c,
+        })
+        .collect::<String>();
 
     // Collapse consecutive _ for aesthetics
-    let mut sanitized = replaced
-        .chars()
-        .fold(String::new(), |mut acc, c| {
-            if c == '_' && acc.ends_with('_') {
-                acc
-            } else {
-                acc.push(c);
-                acc
-            }
-        });
+    let mut sanitized = replaced.chars().fold(String::new(), |mut acc, c| {
+        if c == '_' && acc.ends_with('_') {
+            acc
+        } else {
+            acc.push(c);
+            acc
+        }
+    });
 
     // Trim Windows-invalid endings
     sanitized = sanitized.trim_end_matches(['.', ' ']).to_string();
@@ -77,16 +70,16 @@ pub fn sanitize_name(name: &str) -> String {
 
     let stem = sanitized.split('.').next().unwrap();
 
-    if WINDOWS_RESERVED.iter().any(|&r| r.eq_ignore_ascii_case(stem)) {
+    if WINDOWS_RESERVED
+        .iter()
+        .any(|&r| r.eq_ignore_ascii_case(stem))
+    {
         sanitized = format!("_{sanitized}");
     }
 
     // Character length limit
     const MAX_LEN: usize = 64;
-    sanitized = sanitized
-        .chars()
-        .take(MAX_LEN)
-        .collect();
+    sanitized = sanitized.chars().take(MAX_LEN).collect();
 
     // Fallback if empty, or _ for aesthetics, again
     if sanitized.is_empty() || sanitized.chars().all(|c| c == '_') {

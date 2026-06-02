@@ -26,9 +26,7 @@ pub enum DetectError {
 }
 
 /// Resolves the active CEF runtime using discovery precedence rules.
-pub fn detect_cef_root()
-    -> Result<DetectedCef, DetectError>
-{
+pub fn detect_cef_root() -> Result<DetectedCef, DetectError> {
     // Dev environment
     if let Ok(path) = std::env::var("CEF_PATH") {
         let root = PathBuf::from(path);

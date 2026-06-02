@@ -69,8 +69,7 @@ pub fn run(debug: bool) -> Result<()> {
 
     tui::step("Copying Chromium engine...");
 
-    let detected = kurogane_layout::detect_cef_root()
-        .map_err(|e| anyhow::anyhow!(e))?;
+    let detected = kurogane_layout::detect_cef_root().map_err(|e| anyhow::anyhow!(e))?;
 
     validate_cef_root(&detected.root)?;
 
@@ -83,18 +82,11 @@ pub fn run(debug: bool) -> Result<()> {
 
     tui::success("Bundle verified");
 
-    tui::field(
-        "binary",
-        tui::format_path(
-            &layout.launcher_path(exe_name)
-        ),
-    );
+    tui::field("binary", tui::format_path(&layout.launcher_path(exe_name)));
 
     tui::field(
         "entry",
-        tui::format_path(
-            &layout.content_dir().join("index.html")
-        ),
+        tui::format_path(&layout.content_dir().join("index.html")),
     );
 
     println!();
@@ -107,14 +99,17 @@ pub fn run(debug: bool) -> Result<()> {
 fn find_exe(debug: bool) -> Result<PathBuf> {
     let metadata = MetadataCommand::new().exec()?;
 
-    let pkg = metadata.root_package()
+    let pkg = metadata
+        .root_package()
         .ok_or_else(|| anyhow::anyhow!("No root package"))?;
 
     let profile = if debug { "debug" } else { "release" };
     let target_dir = metadata.target_directory.join(profile);
 
     // Find binary target
-    let target = pkg.targets.iter()
+    let target = pkg
+        .targets
+        .iter()
         .find(|t| t.kind.contains(&TargetKind::Bin))
         .ok_or_else(|| anyhow::anyhow!("No binary target found"))?;
 
@@ -127,7 +122,7 @@ fn find_exe(debug: bool) -> Result<PathBuf> {
     };
 
     if exe_path.exists() {
-        Ok(exe_path.into_std_path_buf()) 
+        Ok(exe_path.into_std_path_buf())
     } else {
         bail!("Executable not found: {:?}", exe_path)
     }

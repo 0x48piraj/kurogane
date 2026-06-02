@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::{fs, path::Path};
-use include_dir::{include_dir, Dir, DirEntry};
+use include_dir::{Dir, DirEntry, include_dir};
 
 // Embed templates into the binary
 pub static TEMPLATES: Dir = include_dir!("$CARGO_MANIFEST_DIR/templates");

@@ -3,9 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::platform;
 
 pub fn install_root() -> PathBuf {
-    platform::data_local_dir()
-        .join("kurogane")
-        .join("cef")
+    platform::data_local_dir().join("kurogane").join("cef")
 }
 
 pub fn cef_install_dir(version: &str) -> PathBuf {
@@ -22,8 +20,7 @@ pub fn installed_cef_root(version: &str) -> Option<PathBuf> {
 pub fn bundled_cef_root() -> Result<Option<PathBuf>, std::io::Error> {
     let exe = std::env::current_exe()?;
 
-    let dir = exe.parent()
-        .unwrap_or(Path::new("."));
+    let dir = exe.parent().unwrap_or(Path::new("."));
 
     #[cfg(target_os = "windows")]
     {

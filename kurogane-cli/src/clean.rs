@@ -20,10 +20,7 @@ pub fn run(target: Option<String>) -> Result<()> {
         let mut input = String::new();
         std::io::stdin().read_line(&mut input)?;
 
-        let confirmed = matches!(
-            input.trim().to_lowercase().as_str(),
-            "y" | "yes"
-        );
+        let confirmed = matches!(input.trim().to_lowercase().as_str(), "y" | "yes");
 
         println!();
 

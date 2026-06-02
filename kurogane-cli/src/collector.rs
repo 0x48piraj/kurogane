@@ -1,8 +1,5 @@
 use serde::Serialize;
-use std::{
-    collections::BTreeMap,
-    process::Command,
-};
+use std::{collections::BTreeMap, process::Command};
 
 //
 // Public API
