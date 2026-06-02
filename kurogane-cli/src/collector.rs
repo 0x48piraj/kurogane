@@ -134,7 +134,7 @@ mod system {
     fn display_server() -> String {
         #[cfg(target_os = "windows")]
         {
-            return "win32".into();
+            "win32".into()
         }
 
         #[cfg(target_os = "linux")]
@@ -239,7 +239,7 @@ mod gpu {
 
         #[cfg(target_os = "windows")]
         {
-            return collect_windows();
+            collect_windows()
         }
 
         #[cfg(not(any(target_os = "linux", target_os = "windows")))]

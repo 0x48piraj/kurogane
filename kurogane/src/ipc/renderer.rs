@@ -190,7 +190,7 @@ wrap_v8_handler! {
             };
 
             // first arg: command string
-            let cmd = match args.get(0) {
+            let cmd = match args.first() {
                 Some(Some(v)) if v.is_string() != 0 => {
                     let s = v8_to_string(v);
                     if s.is_empty() {
@@ -281,7 +281,7 @@ wrap_v8_handler! {
                 }
             };
 
-            let cmd = match args.get(0) {
+            let cmd = match args.first() {
                 Some(Some(v)) if v.is_string() != 0 => {
                     v8_to_string(v)
                 }

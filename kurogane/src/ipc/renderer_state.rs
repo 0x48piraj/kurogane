@@ -18,12 +18,18 @@ pub struct PromiseRegistry {
     pending: HashMap<IpcId, (V8Context, V8Value)>,
 }
 
-impl PromiseRegistry {
-    pub fn new() -> Self {
+impl Default for PromiseRegistry {
+    fn default() -> Self {
         Self {
             next_id: 1,
             pending: HashMap::new(),
         }
+    }
+}
+
+impl PromiseRegistry {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn register(&mut self, context: V8Context, promise: V8Value) -> IpcId {
@@ -62,7 +68,7 @@ static OUTGOING_SHM: OnceLock<Mutex<HashMap<IpcId, SharedBuffer>>> = OnceLock::n
 // ACCESSORS
 
 pub fn registry() -> &'static Mutex<PromiseRegistry> {
-    PROMISE_REGISTRY.get_or_init(|| Mutex::new(PromiseRegistry::new()))
+    PROMISE_REGISTRY.get_or_init(Default::default)
 }
 
 pub fn outgoing_shm() -> &'static Mutex<HashMap<IpcId, SharedBuffer>> {

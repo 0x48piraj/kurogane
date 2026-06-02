@@ -352,7 +352,7 @@ pub fn resolve_asset(root: &CanonicalRoot, rel_path: &str) -> Result<ResolvedAss
         return Err(ResolveError::NotFound(path));
     }
 
-    let bytes = std::fs::read(&path).map_err(|e| ResolveError::Io(e))?;
+    let bytes = std::fs::read(&path).map_err(ResolveError::Io)?;
 
     let mime = mime_from_path(&path);
 
@@ -672,7 +672,7 @@ mod tests {
         assert_eq!(ResolveError::InvalidUrl.http_status(), 400);
         assert_eq!(ResolveError::Forbidden(PathBuf::new()).http_status(), 403);
         assert_eq!(ResolveError::NotFound(PathBuf::new()).http_status(), 404);
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "disk on fire");
+        let io_err = std::io::Error::other("disk on fire");
         assert_eq!(ResolveError::Io(io_err).http_status(), 500);
     }
 
