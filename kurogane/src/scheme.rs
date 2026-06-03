@@ -306,7 +306,6 @@ fn mime_from_path(path: &Path) -> String {
         Some("js") | Some("mjs") | Some("cjs") => {
             "application/javascript".to_string()
         }
-        // Note: MIME resolution depends on mime_guess crate. Dependency updates can be fatal.
         _ => MimeGuess::from_path(path)
             .first_or_octet_stream()
             .essence_str()
