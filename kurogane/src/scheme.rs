@@ -19,7 +19,7 @@
 use cef::*;
 use std::sync::Arc;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use percent_encoding::percent_decode_str;
 use mime_guess::MimeGuess;
 use url::Url;
@@ -124,7 +124,7 @@ wrap_scheme_handler_factory! {
                 data,
                 Arc::new(AtomicUsize::new(0)),
                 mime,
-                Arc::new(AtomicI32::new(status)),
+                status,
             ))
         }
     }
@@ -139,7 +139,7 @@ wrap_resource_handler! {
         data: Arc<[u8]>,
         offset: Arc<AtomicUsize>,
         mime: String,
-        status: Arc<AtomicI32>,
+        status: i32,
     }
 
     impl ResourceHandler {
@@ -210,10 +210,9 @@ wrap_resource_handler! {
         ) {
             let response = response.unwrap();
 
-            let status = self.status.load(Ordering::Acquire);
             let data_len = self.data.len() as i64;
 
-            response.set_status(status);
+            response.set_status(self.status);
             response.set_mime_type(Some(&CefString::from(self.mime.as_str())));
 
             if let Some(len) = response_length {
