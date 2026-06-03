@@ -23,48 +23,10 @@ use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use percent_encoding::percent_decode_str;
 use mime_guess::MimeGuess;
 use url::Url;
+use crate::error::ResolveError;
+use crate::fs::CanonicalRoot;
 
 use crate::debug;
-
-/// Errors returned when resolving an app:// request.
-/// Each variant maps to an HTTP status code.
-#[derive(Debug)]
-pub enum ResolveError {
-    /// The URL could not be parsed, or its scheme is not app
-    InvalidUrl,
-    /// The configured asset root is invalid (exists but is not a directory)
-    InvalidRoot(PathBuf),
-    /// The resolved path escapes the asset root (path-traversal attempt)
-    Forbidden(PathBuf),
-    /// The path is inside the root but the file does not exist
-    NotFound(PathBuf),
-    /// An I/O error occurred after validation
-    Io(std::io::Error),
-}
-
-impl ResolveError {
-    pub fn http_status(&self) -> i32 {
-        match self {
-            Self::InvalidUrl => 400,
-            Self::InvalidRoot(_) => 500,
-            Self::Forbidden(_) => 403,
-            Self::NotFound(_) => 404,
-            Self::Io(_) => 500,
-        }
-    }
-}
-
-impl std::fmt::Display for ResolveError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidUrl => write!(f, "Invalid URL"),
-            Self::InvalidRoot(p) => write!(f, "Invalid asset root: {}", p.display()),
-            Self::Forbidden(p) => write!(f, "Forbidden: {}", p.display()),
-            Self::NotFound(p) => write!(f, "Not found: {}", p.display()),
-            Self::Io(e) => write!(f, "I/O error: {e}"),
-        }
-    }
-}
 
 /// A successfully resolved file asset.
 #[derive(Debug)]
@@ -72,33 +34,6 @@ pub struct ResolvedAsset {
     pub path: PathBuf,
     pub bytes: Vec<u8>,
     pub mime: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct CanonicalRoot(PathBuf);
-
-impl CanonicalRoot {
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, ResolveError> {
-        let canonical = path.as_ref()
-            .canonicalize()
-            .map_err(ResolveError::Io)?;
-
-        if !canonical.is_dir() {
-            return Err(ResolveError::InvalidRoot(canonical));
-        }
-
-        Ok(Self(canonical))
-    }
-
-    pub fn as_path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl AsRef<Path> for CanonicalRoot {
-    fn as_ref(&self) -> &Path {
-        &self.0
-    }
 }
 
 //

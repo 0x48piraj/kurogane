@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use super::Source;
 
 use crate::error::RuntimeError;
-use crate::scheme::CanonicalRoot;
+use crate::fs::CanonicalRoot;
 
 /// Result of frontend resolution.
 #[derive(Debug)]

@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::scheme::CanonicalRoot;
+use crate::fs::CanonicalRoot;
 use crate::client::DemoClient;
 use crate::ipc::IpcDispatcher;
 use crate::debug;

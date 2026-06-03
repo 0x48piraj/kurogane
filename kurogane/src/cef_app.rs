@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use crate::browser::DemoBrowserProcessHandler;
 use crate::ipc::IpcRenderProcessHandler;
 use crate::debug;
-use crate::scheme::CanonicalRoot;
+use crate::fs::CanonicalRoot;
 use crate::ipc::IpcDispatcher;
 use crate::chromium_flags::{ChromiumFlag, ChromiumFlags};
 use crate::gpu::{GpuMode, apply_gpu_flags};

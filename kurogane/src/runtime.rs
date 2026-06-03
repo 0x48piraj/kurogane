@@ -6,7 +6,7 @@ use crate::cef_app::DemoApp;
 use crate::error::RuntimeError;
 use crate::gpu::GpuMode;
 use crate::chromium_flags::ChromiumFlag;
-use crate::scheme::CanonicalRoot;
+use crate::fs::CanonicalRoot;
 use kurogane_layout::{detect_cef_root, validate_cef_root, profile_dir};
 use crate::ipc::IpcDispatcher;
 

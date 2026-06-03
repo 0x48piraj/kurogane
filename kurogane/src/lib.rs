@@ -10,6 +10,7 @@ mod window;
 mod client;
 mod scheme;
 mod error;
+mod fs;
 mod chromium_flags;
 mod sandbox;
 mod gpu;
