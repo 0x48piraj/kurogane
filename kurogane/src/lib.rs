@@ -2,11 +2,6 @@
 #![deny(unused_variables)]
 #![deny(dead_code)]
 
-//! Kurogane
-//!
-//! Minimal Rust runtime for building Chromium-based desktop apps using CEF.
-//! Provides a bootstrap API while exposing CEF underneath.
-
 mod runtime;
 mod app;
 mod cef_app;

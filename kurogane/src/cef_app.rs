@@ -43,11 +43,6 @@ wrap_app! {
 
             let mut flags = ChromiumFlags::default();
 
-            #[cfg(feature = "html_canvas_compositor")]
-            {
-                flags.set_with_value("enable-blink-features", "CanvasDrawElement");
-            }
-
             #[cfg(feature = "debug")]
             {
                 flags.set_with_value("js-flags", "--expose-gc");

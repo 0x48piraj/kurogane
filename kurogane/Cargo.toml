@@ -21,4 +21,3 @@ proptest = "1"
 
 [features]
 debug = []
-html_canvas_compositor = []
