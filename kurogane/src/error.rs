@@ -70,7 +70,14 @@ impl Display for RuntimeError {
     }
 }
 
-impl std::error::Error for RuntimeError {}
+impl std::error::Error for RuntimeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            RuntimeError::AssetRootUnavailable { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
 
 /// Errors returned when resolving an app:// request.
 /// Each variant maps to an HTTP status code.
