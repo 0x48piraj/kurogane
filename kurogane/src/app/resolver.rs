@@ -2,6 +2,7 @@
 
 use super::Source;
 
+use std::io::ErrorKind;
 use crate::error::RuntimeError;
 use crate::fs::CanonicalRoot;
 
@@ -29,8 +30,24 @@ pub(crate) fn resolve(source: &Source) -> Result<ResolvedFrontend, RuntimeError>
         }),
 
         Source::Path(dir) => {
-            let root = CanonicalRoot::new(dir)
-                .map_err(|_| RuntimeError::AssetRootMissing(dir.clone()))?;
+            let root = match CanonicalRoot::new(dir) {
+                Ok(root) => root,
+
+                Err(e) if e.kind() == ErrorKind::NotFound => {
+                    return Err(RuntimeError::AssetRootMissing(dir.clone()));
+                }
+
+                Err(e) if e.kind() == ErrorKind::NotADirectory => {
+                    return Err(RuntimeError::InvalidAssetRoot(dir.clone()));
+                }
+
+                Err(e) => {
+                    return Err(RuntimeError::AssetRootUnavailable {
+                        path: dir.clone(),
+                        source: e,
+                    });
+                }
+            };
 
             let index = root.as_path().join("index.html");
             if !index.is_file() {
