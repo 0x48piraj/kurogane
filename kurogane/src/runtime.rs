@@ -2,7 +2,7 @@ use cef::{args::Args, *};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::cef_app::DemoApp;
+use crate::cef_app::KuroganeApp;
 use crate::error::RuntimeError;
 use crate::gpu::GpuMode;
 use crate::chromium_flags::ChromiumFlag;
@@ -59,7 +59,7 @@ impl Runtime {
         let window_creation_started = Arc::new(AtomicBool::new(false));
 
         // ONE app for ALL processes
-        let mut app: App = DemoApp::new(
+        let mut app: App = KuroganeApp::new(
             window.clone(),
             CefString::from(start_url.as_str()),
             asset_root,

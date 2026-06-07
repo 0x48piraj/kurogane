@@ -9,12 +9,12 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::fs::CanonicalRoot;
-use crate::client::DemoClient;
+use crate::client::KuroganeClient;
 use crate::ipc::IpcDispatcher;
 use crate::debug;
 
 wrap_browser_process_handler! {
-    pub struct DemoBrowserProcessHandler {
+    pub struct KuroganeBrowserProcessHandler {
         window: Arc<Mutex<Option<Window>>>,
         start_url: CefString,
         asset_root: Option<CanonicalRoot>,
@@ -61,7 +61,7 @@ wrap_browser_process_handler! {
                 return;
             }
 
-            let mut client = DemoClient::new(self.dispatcher.clone());
+            let mut client = KuroganeClient::new(self.dispatcher.clone());
             let url = self.start_url.clone();
 
             debug!("Creating main browser with URL: {}", url.to_string());
@@ -75,7 +75,7 @@ wrap_browser_process_handler! {
             .expect("unrecoverable: browser_view_create failed");
 
             // Create delegate
-            let mut delegate = crate::window::DemoWindowDelegate::new(browser_view, self.window.clone());
+            let mut delegate = crate::window::KuroganeWindowDelegate::new(browser_view, self.window.clone());
 
             // Create window
             let window = window_create_top_level(Some(&mut delegate))

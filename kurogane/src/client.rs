@@ -9,7 +9,7 @@ use crate::ipc::IpcDispatcher;
 // LOAD HANDLER
 //
 wrap_load_handler! {
-    pub struct DemoLoadHandler;
+    pub struct KuroganeLoadHandler;
 
     impl LoadHandler {
         fn on_load_start(
@@ -55,13 +55,13 @@ wrap_load_handler! {
 // CLIENT
 //
 wrap_client! {
-    pub struct DemoClient {
+    pub struct KuroganeClient {
         dispatcher: Arc<IpcDispatcher>,
     }
 
     impl Client {
         fn load_handler(&self) -> Option<LoadHandler> {
-            Some(DemoLoadHandler::new())
+            Some(KuroganeLoadHandler::new())
         }
 
         fn on_process_message_received(

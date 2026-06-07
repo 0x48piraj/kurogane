@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicBool;
 use std::cell::RefCell;
 
-use crate::browser::DemoBrowserProcessHandler;
+use crate::browser::KuroganeBrowserProcessHandler;
 use crate::ipc::IpcRenderProcessHandler;
 use crate::debug;
 use crate::fs::CanonicalRoot;
@@ -17,7 +17,7 @@ use crate::sandbox::apply_sandbox_flags;
 use cef::sys::cef_scheme_options_t::*;
 
 wrap_app! {
-    pub struct DemoApp {
+    pub struct KuroganeApp {
         window: Arc<Mutex<Option<Window>>>,
         start_url: CefString,
         asset_root: Option<CanonicalRoot>,
@@ -83,7 +83,7 @@ wrap_app! {
 
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
             Some(
-                DemoBrowserProcessHandler::new(
+                KuroganeBrowserProcessHandler::new(
                     self.window.clone(),
                     self.start_url.clone(),
                     self.asset_root.clone(),

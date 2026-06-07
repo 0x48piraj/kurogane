@@ -7,7 +7,7 @@ use cef::*;
 use std::sync::{Arc, Mutex};
 
 wrap_window_delegate! {
-    pub struct DemoWindowDelegate {
+    pub struct KuroganeWindowDelegate {
         browser_view: BrowserView,
         window_ref: Arc<Mutex<Option<Window>>>,
     }
