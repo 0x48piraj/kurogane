@@ -211,6 +211,30 @@ mod tests {
             _ => panic!("expected AssetRootMissing"),
         }
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn startup_validation_rejects_index_outside_asset_root() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+
+        let root = parent.path().join("assets");
+        std::fs::create_dir(&root).unwrap();
+
+        let outside = parent.path().join("outside.html");
+        std::fs::write(&outside, b"secret").unwrap();
+
+        symlink(
+            &outside,
+            root.join("index.html"),
+        )
+        .unwrap();
+
+        let source = Source::Path(root);
+
+        assert!(resolve(&source).is_err());
+    }
 }
 
 #[cfg(test)]

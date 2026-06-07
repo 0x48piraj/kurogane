@@ -117,4 +117,29 @@ mod property_tests {
             }
         }
     }
+
+    #[test]
+    fn profile_dir_is_stable_for_same_inputs() {
+        let exe = Path::new("/some/path/app.exe");
+
+        let a = profile_dir("my-app", exe);
+        let b = profile_dir("my-app", exe);
+
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn profile_dir_isolated_per_executable() {
+        let a = profile_dir(
+            "my-app",
+            Path::new("/apps/a.exe"),
+        );
+
+        let b = profile_dir(
+            "my-app",
+            Path::new("/apps/b.exe"),
+        );
+
+        assert_ne!(a, b);
+    }
 }

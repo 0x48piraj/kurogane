@@ -27,3 +27,19 @@ impl AsRef<Path> for CanonicalRoot {
         &self.0
     }
 }
+
+
+#[test]
+fn canonical_root_is_always_absolute() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let root =
+        CanonicalRoot::new(
+            dir.path()
+        )
+        .unwrap();
+
+    assert!(
+        root.as_path().is_absolute()
+    );
+}
