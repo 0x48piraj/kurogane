@@ -27,6 +27,7 @@ wrap_browser_process_handler! {
 
     impl BrowserProcessHandler {
         fn on_context_initialized(&self) {
+            debug!("Browser context initialized");
             debug!("on_context_initialized called");
 
             // Register once per request context
@@ -66,6 +67,7 @@ wrap_browser_process_handler! {
 
             debug!("Creating main browser with URL: {}", url.to_string());
 
+            debug!("Creating BrowserView");
             let browser_view = browser_view_create(
                 Some(&mut client),
                 Some(&url),
@@ -74,12 +76,17 @@ wrap_browser_process_handler! {
             )
             .expect("unrecoverable: browser_view_create failed");
 
+            debug!("BrowserView created");
+
             // Create delegate
             let mut delegate = crate::window::KuroganeWindowDelegate::new(browser_view, self.window.clone());
 
             // Create window
+            debug!("Creating top-level window");
             let window = window_create_top_level(Some(&mut delegate))
                 .expect("unrecoverable: window_create_top_level failed");
+
+            debug!("Top-level window created");
 
             *self.window.lock().unwrap() = Some(window);
         }

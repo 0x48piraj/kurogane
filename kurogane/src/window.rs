@@ -5,6 +5,7 @@
 
 use cef::*;
 use std::sync::{Arc, Mutex};
+use crate::debug;
 
 wrap_window_delegate! {
     pub struct KuroganeWindowDelegate {
@@ -31,6 +32,7 @@ wrap_window_delegate! {
                 let view = self.browser_view.clone();
                 window.add_child_view(Some(&mut (&view).into()));
                 window.show();
+                debug!("Window shown");
 
                 // store live window reference so the browser process keeps
                 // an owning handle and we can clear it on destroy
@@ -39,6 +41,7 @@ wrap_window_delegate! {
         }
 
         fn on_window_destroyed(&self, _window: Option<&mut Window>) {
+            debug!("Window destroyed");
             // clear stored window reference to avoid use-after-destroy
             *self.window_ref.lock().unwrap() = None;
             quit_message_loop();
