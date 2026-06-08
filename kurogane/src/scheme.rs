@@ -50,6 +50,15 @@ impl ResolveError {
             Self::Io(_) => 500,
         }
     }
+
+    pub fn http_repr(&self) -> &'static [u8] {
+        match self {
+            Self::InvalidUrl => b"400 Bad Request",
+            Self::Forbidden(_) => b"403 Forbidden",
+            Self::NotFound(_) => b"404 Not Found",
+            Self::Io(_) => b"500 Internal Server Error",
+        }
+    }
 }
 
 impl std::fmt::Display for ResolveError {
@@ -119,36 +128,10 @@ wrap_scheme_handler_factory! {
                 Err(e) => {
                     let status = e.http_status();
 
-                    match &e {
-                        ResolveError::Forbidden(path) |
-                        ResolveError::NotFound(path) => {
-                            eprintln!(
-                                "[kurogane] status={} url=\"{}\" path=\"{}\" reason={:?}",
-                                status,
-                                raw_url,
-                                path.display(),
-                                e
-                            );
-                        }
-                        _ => {
-                            eprintln!(
-                                "[kurogane] status={} url=\"{}\" reason={:?}",
-                                status,
-                                raw_url,
-                                e
-                            );
-                        }
-                    }
-
-                    let body: Vec<u8> = match status {
-                        400 => b"400 Bad Request".to_vec(),
-                        403 => b"403 Forbidden".to_vec(),
-                        404 => b"404 Not Found".to_vec(),
-                        _ => b"500 Internal Server Error".to_vec(),
-                    };
+                    eprintln!("[kurogane] status={status} url=\"{raw_url}\" reason={e}");
 
                     (
-                        Arc::<[u8]>::from(body),
+                        Arc::<[u8]>::from(e.http_repr()),
                         "text/plain".to_string(),
                         status,
                     )
@@ -331,9 +314,7 @@ pub fn resolve_asset(root: &CanonicalRoot, rel_path: &str) -> Result<ResolvedAss
 }
 
 /// Validates the asset root by resolving its 'index.html' entrypoint.
-pub(crate) fn validate_asset_root(
-    root: &CanonicalRoot,
-) -> Result<(), ResolveError> {
+pub(crate) fn validate_asset_root(root: &CanonicalRoot) -> Result<(), ResolveError> {
     resolve_asset(root, "index.html")?;
     Ok(())
 }
@@ -343,9 +324,7 @@ pub(crate) fn validate_asset_root(
 fn mime_from_path(path: &Path) -> String {
     match path.extension().and_then(|e| e.to_str()) {
         // App-specific overrides
-        Some("js") | Some("mjs") | Some("cjs") => {
-            "application/javascript".to_string()
-        }
+        Some("js" | "mjs" | "cjs") => "application/javascript".to_string(),
         _ => MimeGuess::from_path(path)
             .first_or_octet_stream()
             .essence_str()
@@ -687,8 +666,6 @@ mod property_tests {
         fn safe_join_never_escapes_root(rel in ".*") {
             let dir = tempfile::tempdir().unwrap();
             let root = CanonicalRoot::new(dir.path()).unwrap();
-
-            let _ = safe_join(&root, &rel);
 
             if let Ok(path) = safe_join(&root, &rel) {
                 prop_assert!(path.starts_with(root.as_path()));
