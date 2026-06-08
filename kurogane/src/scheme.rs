@@ -255,7 +255,7 @@ pub fn extract_rel_path(raw_url: &str) -> Result<String, ResolveError> {
     }
 
     // Impose host rule
-    if parsed.host_str().is_some_and(|h| h != "app") {
+    if parsed.host_str() != Some("app") {
         return Err(ResolveError::InvalidUrl);
     }
 
@@ -273,6 +273,10 @@ pub fn extract_rel_path(raw_url: &str) -> Result<String, ResolveError> {
 /// Resolves a request path relative to root and returns a canonical path
 /// inside the allowed filesystem boundary.
 pub fn safe_join(root: &CanonicalRoot, request: &str) -> Result<PathBuf, ResolveError> {
+   if Path::new(request).is_absolute() {
+        return Err(ResolveError::Forbidden(PathBuf::from(request)));
+   }
+
     let joined = root.as_path().join(request);
 
     // Canonicalize and distinguish 404 (file missing) from 403 (path escapes root)
@@ -403,6 +407,12 @@ mod tests {
     }
 
     #[test]
+    fn rel_path_rejects_opaque_app_url_without_authority() {
+        let err = extract_rel_path("app:index.html").unwrap_err();
+        assert!(matches!(err, ResolveError::InvalidUrl));
+    }
+
+    #[test]
     fn rel_path_rejects_malformed_url() {
         let err = extract_rel_path("not a url at all").unwrap_err();
         assert!(matches!(err, ResolveError::InvalidUrl));
@@ -414,6 +424,23 @@ mod tests {
             extract_rel_path("app://app/My%20File.html").unwrap(),
             "My File.html"
         );
+    }
+
+    #[test]
+    fn safe_join_blocked_percent_encoded_traversal() {
+        let parent = tmp();
+        let root_path = parent.path().join("assets");
+        fs::create_dir(&root_path).unwrap();
+        fs::write(parent.path().join("secret.txt"), b"secret").unwrap();
+
+        let root = CanonicalRoot::new(&root_path).unwrap();
+        let rel = extract_rel_path("app://app/%2e%2e/secret.txt").unwrap();
+        let err = safe_join(&root, &rel).unwrap_err();
+
+        assert!(matches!(
+            err,
+            ResolveError::Forbidden(_) | ResolveError::NotFound(_)
+        ));
     }
 
     // Path safety and traversal checks
@@ -504,17 +531,18 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let parent = tmp();
-        let root = parent.path().join("assets");
-        std::fs::create_dir(&root).unwrap();
+        let root_path = parent.path().join("assets");
+        std::fs::create_dir(&root_path).unwrap();
 
         // Create a real file outside root
         let secret = parent.path().join("secret.txt");
         std::fs::write(&secret, b"secret").unwrap();
 
         // Create symlink inside root pointing outside
-        let link = root.join("escape");
+        let link = root_path.join("escape");
         symlink(&secret, &link).unwrap();
 
+        let root = CanonicalRoot::new(&root_path).unwrap();
         let err = safe_join(&root, "escape").unwrap_err();
 
         assert!(matches!(err, ResolveError::Forbidden(_)));
