@@ -29,4 +29,4 @@ pub use app::App;
 pub use message_loop::MessageLoopMode;
 
 // Re-export IPC types for public use
-pub use crate::ipc::{IpcResult, IpcDispatcher};
+pub use crate::ipc::IpcResult;

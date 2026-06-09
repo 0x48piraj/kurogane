@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use crate::app::resolver::ResolvedFrontend;
 use crate::ipc::browser_state::{IpcDispatcher, IpcHandler, BinaryHandler};
-use crate::{Runtime, RuntimeError};
+use crate::{Runtime, RuntimeError, RuntimeHandle};
 use crate::chromium_flags::ChromiumFlag;
 use crate::gpu::GpuMode;
 use crate::message_loop::MessageLoopMode;
@@ -152,11 +152,13 @@ impl App {
         self
     }
 
-    /// Start the application
+    /// Start the application and run the message loop.
+    ///
+    /// Kurogane owns the event loop and blocks until shutdown.
     pub fn run(self) -> Result<(), RuntimeError> {
         let ResolvedFrontend { asset_root, start_url } = resolver::resolve(&self.source)?;
 
-        // Freeze IPC configuration into an immutable dispatcher shared across the runtime object graph.
+        // Freeze IPC configuration into an immutable dispatcher shared across the runtime object graph
         let dispatcher = Arc::new(IpcDispatcher::new(self.commands, self.binary_commands));
 
         Runtime::run(
@@ -168,6 +170,26 @@ impl App {
             self.gpu_mode,
             self.chromium_flags,
             self.message_loop_mode,
+        )
+    }
+
+    /// Initialize the application without entering a message loop.
+    ///
+    /// The caller becomes responsible for driving the runtime via RuntimeHandle::pump().
+    pub fn start(self) -> Result<RuntimeHandle, RuntimeError> {
+        let ResolvedFrontend { asset_root, start_url } = resolver::resolve(&self.source)?;
+
+        // Freeze IPC configuration into an immutable dispatcher shared across the runtime object graph
+        let dispatcher = Arc::new(IpcDispatcher::new(self.commands, self.binary_commands));
+
+        Runtime::start(
+            start_url,
+            asset_root,
+            dispatcher,
+            self.profile_id,
+            self.persist_session_cookies,
+            self.gpu_mode,
+            self.chromium_flags,
         )
     }
 
