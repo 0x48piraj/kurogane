@@ -7,8 +7,7 @@ use crate::error::RuntimeError;
 use crate::gpu::GpuMode;
 use crate::chromium_flags::ChromiumFlag;
 use crate::fs::CanonicalRoot;
-use crate::message_loop::MessageLoopMode;
-use crate::message_loop::ShutdownSignal;
+use crate::ShutdownSignal;
 use kurogane_layout::{detect_cef_root, validate_cef_root, profile_dir};
 use crate::ipc::IpcDispatcher;
 use crate::debug;
@@ -320,9 +319,8 @@ impl Runtime {
         persist_session_cookies: bool,
         gpu_mode: GpuMode,
         chromium_flags: Vec<ChromiumFlag>,
-        message_loop_mode: MessageLoopMode,
     ) -> Result<(), RuntimeError> {
-        let state = initialize_cef(
+        let handle = Self::start(
             start_url,
             asset_root,
             dispatcher,
@@ -332,16 +330,11 @@ impl Runtime {
             chromium_flags,
         )?;
 
-        crate::message_loop::run(
-            message_loop_mode,
-            &state.shutdown_signal,
-        );
+        run_message_loop();
 
         debug!("Message loop exited");
 
-        debug!("Shutting down CEF");
-        shutdown();
-        debug!("CEF shutdown complete");
+        handle.shutdown();
 
         Ok(())
     }

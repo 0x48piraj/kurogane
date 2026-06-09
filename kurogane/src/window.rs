@@ -6,7 +6,7 @@
 use cef::*;
 use std::sync::{Arc, Mutex};
 
-use crate::message_loop::ShutdownSignal;
+use crate::ShutdownSignal;
 use crate::debug;
 
 wrap_window_delegate! {

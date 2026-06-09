@@ -13,7 +13,7 @@ use crate::ipc::IpcDispatcher;
 use crate::chromium_flags::{ChromiumFlag, ChromiumFlags};
 use crate::gpu::{GpuMode, apply_gpu_flags};
 use crate::sandbox::apply_sandbox_flags;
-use crate::message_loop::ShutdownSignal;
+use crate::ShutdownSignal;
 
 use cef::sys::cef_scheme_options_t::*;
 

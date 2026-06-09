@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::fs::CanonicalRoot;
 use crate::client::KuroganeClient;
 use crate::ipc::IpcDispatcher;
-use crate::message_loop::ShutdownSignal;
+use crate::ShutdownSignal;
 use crate::debug;
 
 wrap_browser_process_handler! {
