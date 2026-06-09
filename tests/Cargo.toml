@@ -25,6 +25,10 @@ path = "dom.rs"
 
 
 [[bin]]
+name = "pump"
+path = "pump.rs"
+
+[[bin]]
 name = "css-to-shader"
 path = "css-to-shader.rs"
 
