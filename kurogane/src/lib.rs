@@ -22,7 +22,7 @@ pub mod logger;
 #[cfg(target_os = "macos")]
 mod platform;
 
-pub use runtime::{Runtime, RuntimeHandle};
+pub use runtime::{Runtime, RuntimeHandle, BrowserBounds};
 pub use gpu::GpuMode;
 pub use error::RuntimeError;
 pub use app::App;

@@ -1,8 +1,9 @@
-use cef::{args::Args, *};
+use cef::{args::Args, sys::cef_window_handle_t, *};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::cef_app::KuroganeApp;
+use crate::client::KuroganeClient;
 use crate::error::RuntimeError;
 use crate::gpu::GpuMode;
 use crate::chromium_flags::ChromiumFlag;
@@ -177,6 +178,15 @@ wrap_task! {
 
 pub(crate) struct RuntimeState {
     shutdown_signal: ShutdownSignal,
+    dispatcher: Arc<IpcDispatcher>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BrowserBounds {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
 }
 
 /// Handle to a live initialized CEF runtime.
@@ -192,6 +202,26 @@ impl Drop for RuntimeHandle {
         // CEF requires shutdown on the same thread as initialize
         // Callers must not move RuntimeHandle across threads after start()
         self.shutdown();
+    }
+}
+
+fn native_to_cef_window(
+    handle: *mut std::ffi::c_void,
+) -> cef_window_handle_t {
+    #[cfg(target_os = "windows")]
+    {
+        use cef::sys::HWND;
+        HWND(handle as *mut cef::sys::HWND__)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        handle as cef_window_handle_t
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        handle as usize as cef_window_handle_t
     }
 }
 
@@ -219,13 +249,65 @@ impl RuntimeHandle {
         }
         debug!("Shutting down CEF via RuntimeHandle");
         shutdown();
+        self.state.shutdown_signal.request_shutdown();
         debug!("CEF shutdown complete via RuntimeHandle");
+    }
+
+    /// Creates a Chromium browser hosted inside an existing native window.
+    ///
+    /// The browser is attached to parent and positioned using the provided bounds.
+    ///
+    /// 'parent' must be a valid platform window handle ('HWND' on Windows,
+    /// 'NSView' on macOS, or the corresponding native handle on Linux)
+    ///
+    /// The runtime must have been started with Runtime::start_embedded,
+    /// and RuntimeHandle::pump must continue to be called regularly for
+    /// Chromium to process events.
+    ///
+    /// Returns true if browser creation succeeded.
+    pub fn create_child_browser(
+        &self,
+        parent: *mut std::ffi::c_void,
+        bounds: BrowserBounds,
+        url: &str,
+    ) -> bool
+    {
+        let info = WindowInfo {
+            runtime_style: RuntimeStyle::ALLOY,
+            ..WindowInfo::default()
+        }.set_as_child(
+            native_to_cef_window(parent),
+            &Rect {
+                x: bounds.x,
+                y: bounds.y,
+                width: bounds.width,
+                height: bounds.height,
+            },
+        );
+
+        let mut client = KuroganeClient::new(self.state.dispatcher.clone());
+
+        browser_host_create_browser_sync(
+            Some(&info),
+            Some(&mut client),
+            Some(&CefString::from(url)),
+            Some(&Default::default()),
+            None,
+            None,
+        )
+        .is_some()
     }
 }
 
-/// Performs all startup work before the message loop.
+/// Initializes CEF and prepares the browser process runtime.
 ///
-/// Returns a ShutdownSignal and the shared window reference on success.
+/// Executes subprocess dispatch, resolves the runtime layout,
+/// configures CEF settings and initializes the browser process.
+///
+/// Behavior differs slightly in embedded mode, where the host
+/// application owns window creation and lifecycle management.
+///
+/// Returns the initialized runtime state on success.
 fn initialize_cef(
     start_url: String,
     asset_root: Option<CanonicalRoot>,
@@ -234,6 +316,7 @@ fn initialize_cef(
     persist_session_cookies: bool,
     gpu_mode: GpuMode,
     chromium_flags: Vec<ChromiumFlag>,
+    embedded_mode: bool,
 ) -> Result<RuntimeState, RuntimeError> {
     #[cfg(target_os = "macos")]
     crate::platform::macos::init_ns_app();
@@ -254,10 +337,11 @@ fn initialize_cef(
         shutdown_signal.clone(),
         CefString::from(start_url.as_str()),
         asset_root,
-        dispatcher,
+        dispatcher.clone(),
         window_creation_started,
         gpu_mode,
         chromium_flags,
+        embedded_mode,
     );
 
     debug!("Executing subprocess dispatch");
@@ -279,10 +363,17 @@ fn initialize_cef(
 
     debug!("CEF initialized");
 
-    debug!("Installing shutdown handler");
-    install_ctrlc_handler(window.clone());
+    // Only install Ctrl+C handler if CEF Views owns the window (non-embedded mode)
+    // In embedded mode the host application manages its own lifecycle
+    if !embedded_mode {
+        debug!("Installing shutdown handler");
+        install_ctrlc_handler(window.clone());
+    }
 
-    Ok(RuntimeState { shutdown_signal })
+    Ok(RuntimeState {
+        shutdown_signal,
+        dispatcher,
+    })
 }
 
 impl Runtime {
@@ -308,6 +399,34 @@ impl Runtime {
             persist_session_cookies,
             gpu_mode,
             chromium_flags,
+            false,
+        )?;
+
+        Ok(RuntimeHandle {
+            state,
+            shutdown_called: AtomicBool::new(false),
+        })
+    }
+
+    /// Initialize CEF in embedded mode (no window created by CEF Views)
+    pub fn start_embedded(
+        start_url: String,
+        asset_root: Option<CanonicalRoot>,
+        dispatcher: Arc<IpcDispatcher>,
+        profile_id: Option<String>,
+        persist_session_cookies: bool,
+        gpu_mode: GpuMode,
+        chromium_flags: Vec<ChromiumFlag>,
+    ) -> Result<RuntimeHandle, RuntimeError> {
+        let state = initialize_cef(
+            start_url,
+            asset_root,
+            dispatcher,
+            profile_id,
+            persist_session_cookies,
+            gpu_mode,
+            chromium_flags,
+            true,
         )?;
 
         Ok(RuntimeHandle {

@@ -25,6 +25,10 @@ wrap_browser_process_handler! {
         // Keep factory alive for browser lifetime; RefCell for interior mutability
         scheme_factory: RefCell<Option<SchemeHandlerFactory>>,
         window_creation_started: Arc<AtomicBool>,
+
+        // When true, skip browser/window creation in on_context_initialized
+        // The host application creates its own window and embeds CEF as a child
+        embedded_mode: bool,
     }
 
     impl BrowserProcessHandler {
@@ -56,6 +60,13 @@ wrap_browser_process_handler! {
 
                     debug!("register_scheme_handler_factory result: {}", result);
                 }
+            }
+
+            // In embedded mode, the host application creates its own window
+            // We only register scheme handlers.
+            if self.embedded_mode {
+                debug!("Embedded mode; skipping window creation");
+                return;
             }
 
             // Atomically claim the window creation slot; bail if already taken

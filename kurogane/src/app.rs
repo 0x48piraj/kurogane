@@ -118,19 +118,19 @@ impl App {
         self
     }
 
-    /// Override GPU backend selection
+    /// Override GPU backend selection.
     pub fn gpu_mode(mut self, mode: GpuMode) -> Self {
         self.gpu_mode = mode;
         self
     }
 
-    /// Add a Chromium flag with no value
+    /// Add a Chromium flag with no value.
     pub fn chromium_flag(mut self, name: impl Into<String>) -> Self {
         self.chromium_flags.push(ChromiumFlag::Present(name.into()));
         self
     }
 
-    /// Add a Chromium flag with a value
+    /// Add a Chromium flag with a value.
     pub fn chromium_flag_with_value(
         mut self,
         name: impl Into<String>,
@@ -139,6 +139,34 @@ impl App {
         self.chromium_flags
             .push(ChromiumFlag::WithValue(name.into(), value.into()));
         self
+    }
+
+    /// Starts the runtime in embedded mode.
+    /// Intended for embedded integrations where the host application owns the
+    /// window hierarchy and event loop.
+    pub fn start_embedded(
+        self,
+    ) -> Result<RuntimeHandle, RuntimeError> {
+        let ResolvedFrontend {
+            asset_root,
+            start_url,
+        } = resolver::resolve(&self.source)?;
+
+        let dispatcher =
+            Arc::new(IpcDispatcher::new(
+                self.commands,
+                self.binary_commands,
+            ));
+
+        Runtime::start_embedded(
+            start_url,
+            asset_root,
+            dispatcher,
+            self.profile_id,
+            self.persist_session_cookies,
+            self.gpu_mode,
+            self.chromium_flags,
+        )
     }
 
     /// Start the application and run the message loop.

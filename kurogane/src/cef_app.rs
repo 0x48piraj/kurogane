@@ -27,6 +27,7 @@ wrap_app! {
         window_creation_started: Arc<AtomicBool>,
         gpu_mode: GpuMode,
         chromium_flags: Vec<ChromiumFlag>,
+        embedded_mode: bool,
     }
 
     impl App {
@@ -93,6 +94,7 @@ wrap_app! {
                     self.dispatcher.clone(),
                     RefCell::new(None),
                     self.window_creation_started.clone(),
+                    self.embedded_mode,
                 )
             )
         }
