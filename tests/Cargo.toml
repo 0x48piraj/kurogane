@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 kurogane = { path = "../kurogane" }
 serde_json = "1.0.149"
+winit = "0.30"
+raw-window-handle = "0.6"
 
 [[bin]]
 name = "benchmark"
@@ -39,3 +41,7 @@ path = "ipc.rs"
 [[bin]]
 name = "wasm"
 path = "wasm.rs"
+
+[[bin]]
+name = "winit"
+path = "winit.rs"
