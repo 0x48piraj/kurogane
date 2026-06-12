@@ -32,7 +32,6 @@ wrap_browser_process_handler! {
 
     impl BrowserProcessHandler {
         fn on_context_initialized(&self) {
-            debug!("Browser context initialized");
             debug!("on_context_initialized called");
 
             // Register once per request context

@@ -86,28 +86,49 @@
          <input id="count" type="number" min="1" max="1000" value="10" />
          <button onclick="openCustomCount()">Open N</button>
       </div>
-      <pre id="output">Click "Dump Registry" to view ownership graph.</pre>
-      <p class="note">Right-click → Inspect to open DevTools. Popups are given unique names so they create distinct windows.</p>
+      <pre id="output"></pre>
+      <p class="note">This page is intended for validating popup lifecycle behavior, window creation and registry stability under load.</p>
       <script>
         let popupCounter = 0;
         const openPopups = [];
+
+        const output = document.getElementById('output');
+
+        function log(message) {
+            output.textContent += message + '\n';
+        }
+
+        log('[READY] Popup torture test initialized, open popups and observe runtime behavior.');
 
         function openPopup() {
             popupCounter += 1;
             const name = 'popup_' + popupCounter;
             const w = window.open('about:blank', name, 'width=500,height=400');
-            if (w) openPopups.push(w);
+            if (w) {
+                openPopups.push(w);
+                log(`[POPUP] Created ${name} (total=${openPopups.length})`
+                );
+            } else {
+                log(`[POPUP] Failed to create ${name}`);
+            }
         }
 
         function openMany(n) {
+            log(`[BATCH] Creating ${n} popup(s)...`);
+
             for (let i = 0; i < n; i++) {
                 openPopup();
             }
+            log(`[BATCH] Complete. Total popups=${openPopups.length}`);
         }
 
         function openCustomCount() {
             const n = Math.max(1, Math.min(1000, parseInt(document.getElementById('count').value || '1', 10)));
+
+            log(`[CUSTOM] Requested ${n} popup(s)`);
+
             openMany(n);
+            log(`[BATCH] Complete. Total popups=${n}`);
         }
       </script>
    </body>
