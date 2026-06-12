@@ -14,6 +14,9 @@ pub enum RuntimeError {
     CefInitializeFailed,
     CefNotInstalled,
     InvalidCefInstallation(String),
+
+    BrowserCreationFailed,
+    WindowCreationFailed,
 }
 
 impl Display for RuntimeError {
@@ -96,6 +99,22 @@ impl Display for RuntimeError {
                     "  kurogane install"
                 ),
                 reason
+            ),
+
+            RuntimeError::BrowserCreationFailed => write!(
+                f,
+                concat!(
+                    "Failed to create browser.\n\n",
+                    "This usually indicates a Chromium internal error."
+                )
+            ),
+
+            RuntimeError::WindowCreationFailed => write!(
+                f,
+                concat!(
+                    "Failed to create window.\n\n",
+                    "This usually indicates a Chromium internal error."
+                )
             ),
         }
     }
