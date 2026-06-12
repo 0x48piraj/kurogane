@@ -16,7 +16,6 @@ impl BrowserId {
 pub enum BrowserType {
     Main,
     Popup,
-    #[allow(dead_code)]
     DevTools,
     #[allow(dead_code)]
     Osr,

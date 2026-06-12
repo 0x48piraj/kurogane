@@ -95,7 +95,7 @@ wrap_browser_view_delegate! {
             &self,
             browser_view: Option<&mut BrowserView>,
             popup_browser_view: Option<&mut BrowserView>,
-            _is_devtools: ::std::os::raw::c_int,
+            is_devtools: ::std::os::raw::c_int,
         ) -> ::std::os::raw::c_int {
             debug!("[BrowserViewDelegate] popup browser view created");
 
@@ -108,9 +108,10 @@ wrap_browser_view_delegate! {
                     });
 
                 // Register the popup browser before it hits on_after_created
+                let browser_type = if is_devtools != 0 { BrowserType::DevTools } else { BrowserType::Popup };
                 let browser_id = if let Some(browser) = pbv.browser() {
                     let mut reg = self.registry.lock().unwrap();
-                    let id = reg.register(browser.clone(), BrowserType::Popup, parent_id);
+                    let id = reg.register(browser.clone(), browser_type, parent_id);
                     if let Some(pid) = parent_id {
                         reg.set_opener(id, Some(pid));
                     }
