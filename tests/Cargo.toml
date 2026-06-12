@@ -49,3 +49,7 @@ path = "winit.rs"
 [[bin]]
 name = "popups"
 path = "popups.rs"
+
+[[bin]]
+name = "multi-window"
+path = "multi-window.rs"
