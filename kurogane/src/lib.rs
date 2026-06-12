@@ -24,7 +24,7 @@ pub mod logger;
 #[cfg(target_os = "macos")]
 mod platform;
 
-pub use runtime::{Runtime, RuntimeHandle, BrowserBounds, BrowserHandle};
+pub use runtime::{Runtime, RuntimeHandle, BrowserBounds, BrowserHandle, WindowOptions};
 pub use browser_registry::{BrowserId, BrowserMetadata, BrowserType};
 pub use window_registry::{WindowId, WindowMetadata};
 pub use gpu::GpuMode;

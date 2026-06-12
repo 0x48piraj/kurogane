@@ -11,6 +11,7 @@ use crate::fs::CanonicalRoot;
 use crate::ShutdownSignal;
 use crate::browser_registry::{BrowserRegistry, BrowserId, BrowserType, BrowserMetadata};
 use crate::window_registry::{WindowRegistry, WindowId, WindowMetadata};
+use crate::window::{KuroganeWindowDelegate, KuroganeBrowserViewDelegate};
 use kurogane_layout::{detect_cef_root, validate_cef_root, profile_dir};
 use crate::ipc::IpcDispatcher;
 use crate::debug;
@@ -190,6 +191,13 @@ pub struct BrowserBounds {
     pub y: i32,
     pub width: i32,
     pub height: i32,
+}
+
+/// Options for creating a new top-level window via RuntimeHandle::create_window.
+#[derive(Debug, Clone)]
+pub struct WindowOptions {
+    pub url: String,
+    pub bounds: BrowserBounds,
 }
 
 /// Handle to a live initialized CEF runtime.
@@ -528,6 +536,88 @@ impl RuntimeHandle {
     /// Returns the BrowserId hosted in the given window, if any.
     pub fn browser_for_window(&self, id: WindowId) -> Option<BrowserId> {
         self.state.window_registry.lock().unwrap().browser_for_window(id)
+    }
+
+    /// Creates a new top-level window with an embedded browser.
+    ///
+    /// The window is created using CEF Views (window_create_top_level + browser_view_create).
+    /// The browser is created asynchronously; use RuntimeHandle::wait_for_browser or poll
+    /// RuntimeHandle::browser_for_window to obtain the BrowserHandle once ready.
+    ///
+    /// Must be called on the UI thread.
+    pub fn create_window(&self, options: WindowOptions) -> Result<WindowId, RuntimeError> {
+        let mut client = KuroganeClient::new(
+            self.state.dispatcher.clone(),
+            self.state.shutdown_signal.clone(),
+            self.state.registry.clone(),
+            self.state.window_registry.clone(),
+        );
+
+        let mut bv_delegate = KuroganeBrowserViewDelegate::new(
+            self.state.registry.clone(),
+            self.state.window_registry.clone(),
+        );
+
+        let url = CefString::from(options.url.as_str());
+
+        let browser_view = browser_view_create(
+            Some(&mut client),
+            Some(&url),
+            Some(&Default::default()),
+            None,
+            None,
+            Some(&mut bv_delegate),
+        ).ok_or(RuntimeError::BrowserCreationFailed)?;
+
+        let window_id = {
+            let mut reg = self.state.window_registry.lock().unwrap();
+            reg.allocate_id()
+        };
+
+        let mut delegate = KuroganeWindowDelegate::new(
+            window_id,
+            browser_view,
+            self.state.window_registry.clone(),
+        );
+
+        window_create_top_level(Some(&mut delegate))
+            .ok_or(RuntimeError::WindowCreationFailed)?;
+
+        Ok(window_id)
+    }
+
+    /// Creates a BrowserHandle for a registered browser, if it exists.
+    ///
+    /// Returns None if no browser with the given BrowserId is registered.
+    pub fn get_browser_handle(&self, id: BrowserId) -> Option<BrowserHandle> {
+        let reg = self.state.registry.lock().unwrap();
+        if reg.get(id).is_some() {
+            Some(BrowserHandle {
+                id,
+                registry: self.state.registry.clone(),
+                ui_thread_id: self.state.ui_thread_id,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Blocks until the browser associated with the given window is registered,
+    /// or until the timeout expires.
+    ///
+    /// Pumps the message loop internally while waiting.
+    pub fn wait_for_browser(&self, window_id: WindowId, timeout: std::time::Duration) -> Option<BrowserHandle> {
+        let start = std::time::Instant::now();
+        loop {
+            if let Some(browser_id) = self.browser_for_window(window_id) {
+                return self.get_browser_handle(browser_id);
+            }
+            if start.elapsed() >= timeout {
+                return None;
+            }
+            self.pump();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 
     /// Perform orderly CEF shutdown.
