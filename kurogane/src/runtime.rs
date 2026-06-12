@@ -9,8 +9,8 @@ use crate::gpu::GpuMode;
 use crate::chromium_flags::ChromiumFlag;
 use crate::fs::CanonicalRoot;
 use crate::ShutdownSignal;
-use crate::browser_registry::{BrowserRegistry, BrowserId, BrowserType};
-use crate::window_registry::{WindowRegistry, WindowId};
+use crate::browser_registry::{BrowserRegistry, BrowserId, BrowserType, BrowserMetadata};
+use crate::window_registry::{WindowRegistry, WindowId, WindowMetadata};
 use kurogane_layout::{detect_cef_root, validate_cef_root, profile_dir};
 use crate::ipc::IpcDispatcher;
 use crate::debug;
@@ -311,6 +311,38 @@ impl RuntimeHandle {
             .window_id_for_browser(browser_id)
     }
 
+    /// Returns metadata for all live browsers.
+    pub fn browsers(&self) -> Vec<(BrowserId, BrowserMetadata)> {
+        let reg = self.state.registry.lock().unwrap();
+        reg.iter().map(|(id, s)| (*id, s.metadata.clone())).collect()
+    }
+
+    /// Returns metadata for all open windows.
+    pub fn windows(&self) -> Vec<(WindowId, WindowMetadata)> {
+        let reg = self.state.window_registry.lock().unwrap();
+        reg.iter().map(|(id, s)| (*id, s.metadata.clone())).collect()
+    }
+
+    /// Returns the parent BrowserId for a given browser, if any.
+    pub fn browser_parent(&self, id: BrowserId) -> Option<BrowserId> {
+        self.state.registry.lock().unwrap().browser_parent(id)
+    }
+
+    /// Returns the opener BrowserId for a given browser, if any.
+    pub fn browser_opener(&self, id: BrowserId) -> Option<BrowserId> {
+        self.state.registry.lock().unwrap().browser_opener(id)
+    }
+
+    /// Returns all browsers whose parent is the given BrowserId.
+    pub fn children_of(&self, id: BrowserId) -> Vec<BrowserId> {
+        self.state.registry.lock().unwrap().children_of(id)
+    }
+
+    /// Returns the BrowserId hosted in the given window, if any.
+    pub fn browser_for_window(&self, id: WindowId) -> Option<BrowserId> {
+        self.state.window_registry.lock().unwrap().browser_for_window(id)
+    }
+
     /// Perform orderly CEF shutdown.
     ///
     /// Safe to call multiple times. Subsequent calls are no-ops.
@@ -384,7 +416,7 @@ impl RuntimeHandle {
             },
         );
 
-        let mut client = KuroganeClient::new(self.state.dispatcher.clone(), self.state.shutdown_signal.clone(), self.state.registry.clone());
+        let mut client = KuroganeClient::new(self.state.dispatcher.clone(), self.state.shutdown_signal.clone(), self.state.registry.clone(), self.state.window_registry.clone());
 
         let mut rc = request_context;
         let browser = browser_host_create_browser_sync(

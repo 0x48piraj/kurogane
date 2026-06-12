@@ -25,8 +25,8 @@ pub mod logger;
 mod platform;
 
 pub use runtime::{Runtime, RuntimeHandle, BrowserBounds, BrowserHandle};
-pub use browser_registry::BrowserId;
-pub use window_registry::WindowId;
+pub use browser_registry::{BrowserId, BrowserMetadata, BrowserType};
+pub use window_registry::{WindowId, WindowMetadata};
 pub use gpu::GpuMode;
 pub use error::RuntimeError;
 pub use app::App;
