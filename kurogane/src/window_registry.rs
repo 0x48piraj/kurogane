@@ -22,7 +22,6 @@ pub struct WindowMetadata {
 
 pub(crate) struct WindowState {
     pub window: Window,
-    #[allow(dead_code)]
     pub browser_id: Option<BrowserId>,
     #[allow(dead_code)]
     pub metadata: WindowMetadata,
@@ -30,6 +29,7 @@ pub(crate) struct WindowState {
 
 pub(crate) struct WindowRegistry {
     windows: HashMap<WindowId, WindowState>,
+    lookup: HashMap<BrowserId, WindowId>,
     next_id: u32,
 }
 
@@ -37,6 +37,7 @@ impl WindowRegistry {
     pub fn new() -> Self {
         Self {
             windows: HashMap::new(),
+            lookup: HashMap::new(),
             next_id: 1,
         }
     }
@@ -68,11 +69,18 @@ impl WindowRegistry {
             browser_id
         );
 
+        if let Some(bid) = browser_id {
+            self.lookup.insert(bid, id);
+        }
+
         self.windows.insert(id, state);
     }
 
     pub fn unregister(&mut self, id: WindowId) -> bool {
-        if self.windows.remove(&id).is_some() {
+        if let Some(state) = self.windows.remove(&id) {
+            if let Some(bid) = state.browser_id {
+                self.lookup.remove(&bid);
+            }
             debug!("[WindowRegistry] unregistered window {}", id.0);
             true
         } else {
@@ -80,7 +88,6 @@ impl WindowRegistry {
         }
     }
 
-    #[allow(dead_code)]
     pub fn count(&self) -> usize {
         self.windows.len()
     }
@@ -107,7 +114,10 @@ impl WindowRegistry {
         }
     }
 
-    #[allow(dead_code)]
+    pub fn window_id_for_browser(&self, browser_id: BrowserId) -> Option<WindowId> {
+        self.lookup.get(&browser_id).copied()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&WindowId, &WindowState)> {
         self.windows.iter()
     }
