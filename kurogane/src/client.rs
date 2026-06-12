@@ -35,6 +35,10 @@ wrap_life_span_handler! {
                 if let Some(id) = reg.find_id_by_browser(b) {
                     reg.unregister(id);
                     debug!("Browser {} destroyed", id.as_u32());
+                    if reg.is_empty() {
+                        debug!("[BrowserRegistry] last browser removed, quitting message loop");
+                        quit_message_loop();
+                    }
                 }
             }
         }

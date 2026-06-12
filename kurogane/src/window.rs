@@ -7,12 +7,15 @@ use cef::*;
 use std::sync::{Arc, Mutex};
 
 use crate::debug;
-use crate::browser_registry::{BrowserRegistry, BrowserType};
+use crate::browser_registry::{BrowserId, BrowserRegistry, BrowserType};
+use crate::window_registry::WindowRegistry;
+use crate::window_registry::WindowId;
 
 wrap_window_delegate! {
     pub struct KuroganeWindowDelegate {
+        window_id: WindowId,
         browser_view: BrowserView,
-        window_ref: Arc<Mutex<Option<Window>>>,
+        registry: Arc<Mutex<WindowRegistry>>,
     }
 
     impl ViewDelegate {
@@ -36,17 +39,21 @@ wrap_window_delegate! {
                 window.show();
                 debug!("Window shown");
 
-                // store live window reference so the browser process keeps
-                // an owning handle and we can clear it on destroy
-                *self.window_ref.lock().unwrap() = Some(window.clone());
+                // Register in window registry
+                let mut reg = self.registry.lock().unwrap();
+                reg.insert(
+                    self.window_id,
+                    window.clone(),
+                    None,
+                );
             }
         }
 
         fn on_window_destroyed(&self, _window: Option<&mut Window>) {
             debug!("Window destroyed");
-            // clear stored window reference to avoid use-after-destroy
-            *self.window_ref.lock().unwrap() = None;
-            quit_message_loop();
+
+            let mut reg = self.registry.lock().unwrap();
+            reg.unregister(self.window_id);
         }
 
         fn with_standard_window_buttons(
@@ -77,6 +84,7 @@ wrap_window_delegate! {
 wrap_browser_view_delegate! {
     pub struct KuroganeBrowserViewDelegate {
         registry: Arc<Mutex<BrowserRegistry>>,
+        window_registry: Arc<Mutex<WindowRegistry>>,
     }
 
     impl ViewDelegate {}
@@ -92,15 +100,29 @@ wrap_browser_view_delegate! {
 
             if let Some(pbv) = popup_browser_view {
                 // Register the popup browser before it hits on_after_created
-                if let Some(browser) = pbv.browser() {
+                let browser_id = if let Some(browser) = pbv.browser() {
                     let mut reg = self.registry.lock().unwrap();
-                    reg.register(browser.clone(), BrowserType::Popup, None);
+                    let parent_id = reg.by_type(BrowserType::Main).first().copied();
+                    let id = reg.register(browser.clone(), BrowserType::Popup, parent_id);
                     debug!("[BrowserViewDelegate] registered popup browser");
-                }
+                    Some(id)
+                } else {
+                    None
+                };
 
-                // Create the popup window with a minimal delegate
+                // Create the popup window with a delegate that tracks the window
                 let bv_clone = pbv.clone();
-                let mut delegate = KuroganePopupDelegate::new(bv_clone);
+                let window_id = {
+                    let mut reg = self.window_registry.lock().unwrap();
+                    reg.allocate_id()
+                };
+
+                let mut delegate = KuroganePopupDelegate::new(
+                    window_id,
+                    bv_clone,
+                    self.window_registry.clone(),
+                    browser_id,
+                );
                 if let Some(window) = window_create_top_level(Some(&mut delegate)) {
                     window.show();
                     debug!("[BrowserViewDelegate] popup window created and shown");
@@ -115,7 +137,10 @@ wrap_browser_view_delegate! {
 
 wrap_window_delegate! {
     pub struct KuroganePopupDelegate {
+        window_id: WindowId,
         browser_view: BrowserView,
+        registry: Arc<Mutex<WindowRegistry>>,
+        browser_id: Option<BrowserId>,
     }
 
     impl ViewDelegate {}
@@ -129,11 +154,22 @@ wrap_window_delegate! {
                 window.add_child_view(Some(&mut (&view).into()));
                 window.show();
                 debug!("Popup window shown");
+
+                // Register popup window in registry, associated with its browser
+                let mut reg = self.registry.lock().unwrap();
+                reg.insert(
+                    self.window_id,
+                    window.clone(),
+                    self.browser_id,
+                );
             }
         }
 
         fn on_window_destroyed(&self, _window: Option<&mut Window>) {
             debug!("Popup window destroyed");
+
+            let mut reg = self.registry.lock().unwrap();
+            reg.unregister(self.window_id);
         }
 
         fn with_standard_window_buttons(

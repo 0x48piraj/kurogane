@@ -1,23 +1,21 @@
 //! Browser-process lifecycle handling.
-//! A BrowserProcessHandler exists per request context.
-//! We only want one native window per application,
-//! so we guard creation using the shared window handle.
 
 use cef::*;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::fs::CanonicalRoot;
 use crate::client::KuroganeClient;
 use crate::ipc::IpcDispatcher;
 use crate::ShutdownSignal;
 use crate::browser_registry::BrowserRegistry;
+use crate::window_registry::WindowRegistry;
+use crate::window::KuroganeWindowDelegate;
 use crate::debug;
 
 wrap_browser_process_handler! {
     pub struct KuroganeBrowserProcessHandler {
-        window: Arc<Mutex<Option<Window>>>,
+        window_registry: Arc<Mutex<WindowRegistry>>,
         registry: Arc<Mutex<BrowserRegistry>>,
         shutdown_signal: ShutdownSignal,
         start_url: CefString,
@@ -26,7 +24,6 @@ wrap_browser_process_handler! {
 
         // Keep factory alive for browser lifetime; RefCell for interior mutability
         scheme_factory: RefCell<Option<SchemeHandlerFactory>>,
-        window_creation_started: Arc<AtomicBool>,
 
         // When true, skip browser/window creation in on_context_initialized
         // The host application creates its own window and embeds CEF as a child
@@ -71,12 +68,6 @@ wrap_browser_process_handler! {
                 return;
             }
 
-            // Atomically claim the window creation slot; bail if already taken
-            if self.window_creation_started.swap(true, Ordering::SeqCst) { // returns the old value
-                debug!("Secondary request context; skipping window creation");
-                return;
-            }
-
             let mut client = KuroganeClient::new(self.dispatcher.clone(), self.shutdown_signal.clone(), self.registry.clone());
             let url = self.start_url.clone();
 
@@ -84,7 +75,10 @@ wrap_browser_process_handler! {
 
             debug!("Creating BrowserView");
 
-            let mut bv_delegate = crate::window::KuroganeBrowserViewDelegate::new(self.registry.clone());
+            let mut bv_delegate = crate::window::KuroganeBrowserViewDelegate::new(
+                self.registry.clone(),
+                self.window_registry.clone(),
+            );
 
             let browser_view = browser_view_create(
                 Some(&mut client),
@@ -98,16 +92,23 @@ wrap_browser_process_handler! {
             debug!("BrowserView created");
 
             // Create delegate
-            let mut delegate = crate::window::KuroganeWindowDelegate::new(browser_view, self.window.clone());
+            let window_id = {
+                let mut reg = self.window_registry.lock().unwrap();
+                reg.allocate_id()
+            };
+
+            let mut delegate = KuroganeWindowDelegate::new(
+                window_id,
+                browser_view,
+                self.window_registry.clone(),
+            );
 
             // Create window
             debug!("Creating top-level window");
-            let window = window_create_top_level(Some(&mut delegate))
+            let _window = window_create_top_level(Some(&mut delegate))
                 .expect("unrecoverable: window_create_top_level failed");
 
             debug!("Top-level window created");
-
-            *self.window.lock().unwrap() = Some(window);
         }
 
         fn on_schedule_message_pump_work(&self, delay_ms: i64) {

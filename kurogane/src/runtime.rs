@@ -10,6 +10,7 @@ use crate::chromium_flags::ChromiumFlag;
 use crate::fs::CanonicalRoot;
 use crate::ShutdownSignal;
 use crate::browser_registry::{BrowserRegistry, BrowserId, BrowserType};
+use crate::window_registry::WindowRegistry;
 use kurogane_layout::{detect_cef_root, validate_cef_root, profile_dir};
 use crate::ipc::IpcDispatcher;
 use crate::debug;
@@ -135,10 +136,10 @@ fn execute_subprocesses(args: &Args, app: &mut App) {
     debug!("Continuing as browser process");
 }
 
-fn install_ctrlc_handler(window: Arc<Mutex<Option<Window>>>) {
+fn install_ctrlc_handler(window_registry: Arc<Mutex<WindowRegistry>>) {
     // Prevent double-fire (dev hammers Ctrl+C twice)
     let quitting = Arc::new(AtomicBool::new(false));
-    let main = window.clone();
+    let main = window_registry.clone();
 
     ctrlc::set_handler({
         let quitting = quitting.clone();
@@ -155,7 +156,7 @@ fn install_ctrlc_handler(window: Arc<Mutex<Option<Window>>>) {
 
             debug!("Scheduling window shutdown on UI thread");
 
-            let mut task = CloseMainWindowTask::new(main.clone());
+            let mut task = CloseWindowsTask::new(main.clone());
             post_task(ThreadId::UI, Some(&mut task));
         }
     })
@@ -163,18 +164,14 @@ fn install_ctrlc_handler(window: Arc<Mutex<Option<Window>>>) {
 }
 
 wrap_task! {
-    struct CloseMainWindowTask {
-        window: Arc<Mutex<Option<Window>>>,
+    struct CloseWindowsTask {
+        registry: Arc<Mutex<WindowRegistry>>,
     }
 
     impl Task {
         fn execute(&self) {
-            if let Some(window) = self.window.lock().unwrap().as_ref() {
-                let w = window.clone();
-                w.close();
-            } else {
-                quit_message_loop();
-            }
+            let reg = self.registry.lock().unwrap();
+            reg.close_all_windows();
         }
     }
 }
@@ -183,6 +180,8 @@ pub(crate) struct RuntimeState {
     shutdown_signal: ShutdownSignal,
     dispatcher: Arc<IpcDispatcher>,
     registry: Arc<Mutex<BrowserRegistry>>,
+    #[allow(dead_code)]
+    window_registry: Arc<Mutex<WindowRegistry>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -413,21 +412,19 @@ fn initialize_cef(
     debug!("Runtime initializing");
 
     let args = Args::new();
-    let window = Arc::new(Mutex::new(None));
-    let window_creation_started = Arc::new(AtomicBool::new(false));
 
     let shutdown_signal = ShutdownSignal::new();
     let registry = Arc::new(Mutex::new(BrowserRegistry::new(shutdown_signal.clone())));
+    let window_registry = Arc::new(Mutex::new(WindowRegistry::new()));
 
     // ONE app for ALL processes
     let mut app: App = KuroganeApp::new(
-        window.clone(),
+        window_registry.clone(),
         registry.clone(),
         shutdown_signal.clone(),
         CefString::from(start_url.as_str()),
         asset_root,
         dispatcher.clone(),
-        window_creation_started,
         gpu_mode,
         chromium_flags,
         embedded_mode,
@@ -456,13 +453,15 @@ fn initialize_cef(
     // In embedded mode the host application manages its own lifecycle
     if !embedded_mode {
         debug!("Installing shutdown handler");
-        install_ctrlc_handler(window.clone());
+        install_ctrlc_handler(window_registry.clone());
     }
 
     Ok(RuntimeState {
         shutdown_signal,
         dispatcher,
         registry,
+        #[allow(dead_code)]
+        window_registry,
     })
 }
 

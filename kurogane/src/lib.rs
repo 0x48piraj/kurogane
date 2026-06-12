@@ -7,6 +7,7 @@ mod app;
 mod cef_app;
 mod browser;
 mod browser_registry;
+mod window_registry;
 mod window;
 mod client;
 mod scheme;
@@ -25,6 +26,7 @@ mod platform;
 
 pub use runtime::{Runtime, RuntimeHandle, BrowserBounds, BrowserHandle};
 pub use browser_registry::BrowserId;
+pub use window_registry::WindowId;
 pub use gpu::GpuMode;
 pub use error::RuntimeError;
 pub use app::App;

@@ -2,7 +2,6 @@
 
 use cef::*;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool};
 use std::cell::RefCell;
 
 use crate::browser::KuroganeBrowserProcessHandler;
@@ -15,18 +14,18 @@ use crate::gpu::{GpuMode, apply_gpu_flags};
 use crate::sandbox::apply_sandbox_flags;
 use crate::ShutdownSignal;
 use crate::browser_registry::BrowserRegistry;
+use crate::window_registry::WindowRegistry;
 
 use cef::sys::cef_scheme_options_t::*;
 
 wrap_app! {
     pub struct KuroganeApp {
-        window: Arc<Mutex<Option<Window>>>,
+        window_registry: Arc<Mutex<WindowRegistry>>,
         registry: Arc<Mutex<BrowserRegistry>>,
         shutdown_signal: ShutdownSignal,
         start_url: CefString,
         asset_root: Option<CanonicalRoot>,
         dispatcher: Arc<IpcDispatcher>,
-        window_creation_started: Arc<AtomicBool>,
         gpu_mode: GpuMode,
         chromium_flags: Vec<ChromiumFlag>,
         embedded_mode: bool,
@@ -89,14 +88,13 @@ wrap_app! {
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
             Some(
                 KuroganeBrowserProcessHandler::new(
-                    self.window.clone(),
+                    self.window_registry.clone(),
                     self.registry.clone(),
                     self.shutdown_signal.clone(),
                     self.start_url.clone(),
                     self.asset_root.clone(),
                     self.dispatcher.clone(),
                     RefCell::new(None),
-                    self.window_creation_started.clone(),
                     self.embedded_mode,
                 )
             )
