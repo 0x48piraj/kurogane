@@ -47,6 +47,7 @@ pub(crate) struct BrowserState {
 
 pub(crate) struct BrowserRegistry {
     browsers: HashMap<BrowserId, BrowserState>,
+    lookup: HashMap<i32, BrowserId>,
     next_id: u32,
     shutdown_signal: ShutdownSignal,
 }
@@ -55,6 +56,7 @@ impl BrowserRegistry {
     pub fn new(shutdown_signal: ShutdownSignal) -> Self {
         Self {
             browsers: HashMap::new(),
+            lookup: HashMap::new(),
             next_id: 1,
             shutdown_signal,
         }
@@ -78,6 +80,7 @@ impl BrowserRegistry {
     ) -> BrowserId {
         let id = BrowserId(self.next_id);
         self.next_id += 1;
+        let cef_id = browser.identifier();
         let state = BrowserState {
             browser,
             metadata: BrowserMetadata {
@@ -90,12 +93,15 @@ impl BrowserRegistry {
             request_context,
         };
         debug!("[BrowserRegistry] registered browser {} (type={:?})", id.0, browser_type);
+        self.lookup.insert(cef_id, id);
         self.browsers.insert(id, state);
         id
     }
 
     pub fn unregister(&mut self, id: BrowserId) {
-        if self.browsers.remove(&id).is_some() {
+        if let Some(state) = self.browsers.remove(&id) {
+            let cef_id = state.browser.identifier();
+            self.lookup.remove(&cef_id);
             debug!("[BrowserRegistry] unregistered browser {}", id.0);
             if self.browsers.is_empty() {
                 debug!("[BrowserRegistry] last browser removed, signaling shutdown");
@@ -122,13 +128,8 @@ impl BrowserRegistry {
         self.browsers.get_mut(&id)
     }
 
-    pub fn find_id_by_browser(&self, browser: &mut Browser) -> Option<BrowserId> {
-        for (id, state) in &self.browsers {
-            if state.browser.is_same(Some(browser)) == 0 {
-                return Some(*id);
-            }
-        }
-        None
+    pub fn find_id_by_browser(&self, browser: &Browser) -> Option<BrowserId> {
+        self.lookup.get(&browser.identifier()).copied()
     }
 
     #[allow(dead_code)]
