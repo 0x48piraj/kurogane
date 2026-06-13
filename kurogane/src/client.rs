@@ -20,6 +20,8 @@ wrap_life_span_handler! {
     impl LifeSpanHandler {
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             if let Some(b) = browser {
+                debug!("on_after_created cef_id={}", b.identifier());
+
                 let mut reg = self.registry.lock().unwrap();
 
                 // Only register if not already registered
@@ -39,8 +41,9 @@ wrap_life_span_handler! {
         }
 
         fn on_before_close(&self, browser: Option<&mut Browser>) {
-            debug!("on_before_close: Native window destroyed, browser object destroyed");
+            debug!("on_before_close called");
             if let Some(b) = browser {
+                debug!("on_before_close cef_id={}",b.identifier());
                 let mut reg = self.registry.lock().unwrap();
                 if let Some(id) = reg.find_id_by_browser(b) {
                     reg.unregister(id);

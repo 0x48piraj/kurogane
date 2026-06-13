@@ -183,6 +183,7 @@ wrap_task! {
             };
             for browser in browsers {
                 if let Some(host) = browser.host() {
+                    debug!("closing browser cef_id={}", browser.identifier());
                     host.close_browser(false as i32);
                 }
             }
@@ -280,6 +281,7 @@ impl BrowserHandle {
             reg.get(self.id).map(|s| s.browser.clone())
         };
         if let Some(b) = browser {
+            debug!("close browser cef_id={} is_loading={}", b.identifier(), b.is_loading());
             b.host().map(|h| h.close_browser(force as i32));
         }
     }
@@ -527,6 +529,7 @@ impl RuntimeHandle {
             reg.iter().map(|(_, s)| s.browser.clone()).collect()
         };
         for browser in browsers {
+            debug!("calling close_browser on cef_id={}", browser.identifier());
             if let Some(host) = browser.host() {
                 host.close_browser(force as i32);
             }
@@ -750,6 +753,7 @@ impl RuntimeHandle {
             None,
             rc,
         );
+        debug!("create_child_browser_impl cef_id={}", browser.identifier());
         Some(BrowserHandle { id, registry: self.state.registry.clone(), ui_thread_id: self.state.ui_thread_id })
     }
 }
