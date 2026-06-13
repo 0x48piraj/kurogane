@@ -25,7 +25,6 @@ path = "files-cors.rs"
 name = "dom"
 path = "dom.rs"
 
-
 [[bin]]
 name = "pump"
 path = "pump.rs"
@@ -45,6 +44,10 @@ path = "wasm.rs"
 [[bin]]
 name = "winit_views_poll"
 path = "winit/views_poll.rs"
+
+[[bin]]
+name = "winit_views_timer"
+path = "winit/views_timer.rs"
 
 [[bin]]
 name = "popups"
