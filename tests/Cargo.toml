@@ -50,6 +50,10 @@ name = "winit_views_timer"
 path = "winit/views_timer.rs"
 
 [[bin]]
+name = "winit_views_scheduler"
+path = "winit/views_scheduler.rs"
+
+[[bin]]
 name = "popups"
 path = "popups.rs"
 
