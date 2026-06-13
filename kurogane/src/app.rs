@@ -4,6 +4,7 @@
 //! This helps in the abstraction of asset resolution, environment overrides and command registration.
 
 use std::path::PathBuf;
+use std::time::Duration;
 use std::sync::Arc;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -14,6 +15,23 @@ use crate::chromium_flags::ChromiumFlag;
 use crate::gpu::GpuMode;
 
 mod resolver;
+
+/// A request from CEF indicating when it next needs to be serviced.
+///
+/// Passed to the scheduler closure supplied via App::scheduler.
+#[derive(Debug, Clone)]
+pub enum PumpRequest {
+    /// CEF needs work immediately.
+    Now,
+    /// CEF needs work after the given delay.
+    After(Duration),
+}
+
+/// Callback type for pump scheduling.
+///
+/// CEF calls this whenever it wants RuntimeHandle::pump to be called.
+/// The integrator decides how to honour the request via a winit proxy, a glib timeout, a Tokio task, or anything else.
+pub type PumpScheduler = Arc<dyn Fn(PumpRequest) + Send + Sync>;
 
 /// Describes where the frontend comes from
 pub(crate) enum Source {
@@ -33,6 +51,7 @@ pub struct App {
     persist_session_cookies: bool,
     gpu_mode: GpuMode,
     chromium_flags: Vec<ChromiumFlag>,
+    scheduler: Option<PumpScheduler>,
 }
 
 impl App {
@@ -56,7 +75,23 @@ impl App {
             persist_session_cookies: true,
             gpu_mode: GpuMode::Auto,
             chromium_flags: Vec::new(),
+            scheduler: None,
         }
+    }
+
+    /// Supply a scheduler callback for pump timing.
+    ///
+    /// When CEF determines it needs work done, it will call this closure
+    /// with a PumpRequest indicating how urgently. The integrator is
+    /// responsible for calling RuntimeHandle::pump accordingly.
+    ///
+    /// Only meaningful when using App::start_embedded / App::start
+    pub fn scheduler<F>(mut self, f: F) -> Self
+    where
+        F: Fn(PumpRequest) + Send + Sync + 'static,
+    {
+        self.scheduler = Some(Arc::new(f));
+        self
     }
 
     /// Register a JSON command handler.
@@ -144,20 +179,9 @@ impl App {
     /// Starts the runtime in embedded mode.
     /// Intended for embedded integrations where the host application owns the
     /// window hierarchy and event loop.
-    pub fn start_embedded(
-        self,
-    ) -> Result<RuntimeHandle, RuntimeError> {
-        let ResolvedFrontend {
-            asset_root,
-            start_url,
-        } = resolver::resolve(&self.source)?;
-
-        let dispatcher =
-            Arc::new(IpcDispatcher::new(
-                self.commands,
-                self.binary_commands,
-            ));
-
+    pub fn start_embedded(self) -> Result<RuntimeHandle, RuntimeError> {
+        let ResolvedFrontend { asset_root, start_url } = resolver::resolve(&self.source)?;
+        let dispatcher = Arc::new(IpcDispatcher::new(self.commands, self.binary_commands));
         Runtime::start_embedded(
             start_url,
             asset_root,
@@ -166,6 +190,7 @@ impl App {
             self.persist_session_cookies,
             self.gpu_mode,
             self.chromium_flags,
+            self.scheduler,
         )
     }
 
@@ -206,6 +231,7 @@ impl App {
             self.persist_session_cookies,
             self.gpu_mode,
             self.chromium_flags,
+            self.scheduler,
         )
     }
 

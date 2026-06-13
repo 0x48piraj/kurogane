@@ -34,3 +34,4 @@ pub use shutdown::ShutdownSignal;
 
 // Re-export IPC types for public use
 pub use crate::ipc::IpcResult;
+pub use app::{PumpRequest, PumpScheduler};

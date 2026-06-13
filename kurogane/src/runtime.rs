@@ -14,6 +14,7 @@ use crate::window_registry::{WindowRegistry, WindowId, WindowMetadata};
 use crate::window::{KuroganeWindowDelegate, KuroganeBrowserViewDelegate};
 use kurogane_layout::{detect_cef_root, validate_cef_root, profile_dir};
 use crate::ipc::IpcDispatcher;
+use crate::app::PumpScheduler;
 use crate::debug;
 
 /// Public entry point for launching a CEF application.
@@ -777,6 +778,7 @@ fn initialize_cef(
     chromium_flags: Vec<ChromiumFlag>,
     embedded_mode: bool,
     external_message_pump: bool,
+    scheduler: Option<PumpScheduler>,
 ) -> Result<RuntimeState, RuntimeError> {
     #[cfg(target_os = "macos")]
     crate::platform::macos::init_ns_app();
@@ -802,6 +804,7 @@ fn initialize_cef(
         gpu_mode,
         chromium_flags,
         embedded_mode,
+        scheduler,
     );
 
     debug!("Executing subprocess dispatch");
@@ -853,6 +856,7 @@ impl Runtime {
         persist_session_cookies: bool,
         gpu_mode: GpuMode,
         chromium_flags: Vec<ChromiumFlag>,
+        scheduler: Option<PumpScheduler>,
     ) -> Result<RuntimeHandle, RuntimeError> {
         let state = initialize_cef(
             start_url,
@@ -864,6 +868,7 @@ impl Runtime {
             chromium_flags,
             false,
             false,
+            scheduler,
         )?;
 
         Ok(RuntimeHandle {
@@ -881,6 +886,7 @@ impl Runtime {
         persist_session_cookies: bool,
         gpu_mode: GpuMode,
         chromium_flags: Vec<ChromiumFlag>,
+        scheduler: Option<PumpScheduler>,
     ) -> Result<RuntimeHandle, RuntimeError> {
         let state = initialize_cef(
             start_url,
@@ -892,6 +898,7 @@ impl Runtime {
             chromium_flags,
             true,
             true,
+            scheduler,
         )?;
 
         Ok(RuntimeHandle {
@@ -921,6 +928,7 @@ impl Runtime {
             persist_session_cookies,
             gpu_mode,
             chromium_flags,
+            None,
         )?;
 
         run_message_loop();

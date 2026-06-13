@@ -3,6 +3,7 @@
 use cef::*;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::fs::CanonicalRoot;
 use crate::client::KuroganeClient;
@@ -11,6 +12,7 @@ use crate::ShutdownSignal;
 use crate::browser_registry::BrowserRegistry;
 use crate::window_registry::WindowRegistry;
 use crate::window::KuroganeWindowDelegate;
+use crate::app::{PumpRequest, PumpScheduler};
 use crate::debug;
 
 wrap_browser_process_handler! {
@@ -28,6 +30,7 @@ wrap_browser_process_handler! {
         // When true, skip browser/window creation in on_context_initialized
         // The host application creates its own window and embeds CEF as a child
         embedded_mode: bool,
+        scheduler: Option<PumpScheduler>,
     }
 
     impl BrowserProcessHandler {
@@ -112,7 +115,14 @@ wrap_browser_process_handler! {
         }
 
         fn on_schedule_message_pump_work(&self, delay_ms: i64) {
-            debug!("CEF requested pump in {}ms", delay_ms);
+            if let Some(ref scheduler) = self.scheduler {
+                let request = if delay_ms <= 0 {
+                    PumpRequest::Now
+                } else {
+                    PumpRequest::After(Duration::from_millis(delay_ms as u64))
+                };
+                scheduler(request);
+            }
         }
     }
 }

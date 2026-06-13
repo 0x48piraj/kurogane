@@ -15,6 +15,7 @@ use crate::sandbox::apply_sandbox_flags;
 use crate::ShutdownSignal;
 use crate::browser_registry::BrowserRegistry;
 use crate::window_registry::WindowRegistry;
+use crate::app::PumpScheduler;
 
 use cef::sys::cef_scheme_options_t::*;
 
@@ -29,6 +30,7 @@ wrap_app! {
         gpu_mode: GpuMode,
         chromium_flags: Vec<ChromiumFlag>,
         embedded_mode: bool,
+        scheduler: Option<PumpScheduler>,
     }
 
     impl App {
@@ -96,6 +98,7 @@ wrap_app! {
                     self.dispatcher.clone(),
                     RefCell::new(None),
                     self.embedded_mode,
+                    self.scheduler.clone(),
                 )
             )
         }
