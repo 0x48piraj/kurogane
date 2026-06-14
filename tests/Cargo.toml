@@ -54,6 +54,10 @@ name = "winit_views_scheduler"
 path = "winit/views_scheduler.rs"
 
 [[bin]]
+name = "winit_native_embedding"
+path = "winit/host_window.rs"
+
+[[bin]]
 name = "popups"
 path = "popups.rs"
 
