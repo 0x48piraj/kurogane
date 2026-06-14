@@ -1,6 +1,6 @@
 //! Winit + Kurogane: Views mode (polling)
 //!
-//! CEF owns the native window via the Views framework.
+//! Chromium owns the native window via the Views framework.
 //! The host application owns the outer winit event loop.
 //!
 //! This example calls Kurogane's pump() on every
@@ -32,8 +32,10 @@ impl ApplicationHandler for ViewsDriver {
     ) {}
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Pump Chromium on every event loop iteration
         self.handle.pump();
 
+        // Exit after all Chromium Views windows have been closed
         if self.handle.should_shutdown() {
             event_loop.exit();
         }
@@ -46,6 +48,8 @@ fn main() {
         .unwrap();
 
     let event_loop = EventLoop::new().unwrap();
+
+    // Continuously iterate the event loop
     event_loop.set_control_flow(ControlFlow::Poll);
 
     let mut app = ViewsDriver { handle };

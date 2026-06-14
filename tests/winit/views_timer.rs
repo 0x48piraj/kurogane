@@ -1,6 +1,6 @@
 //! Winit + Kurogane: Views mode (fixed interval pumping)
 //!
-//! CEF owns the native window via the Views framework.
+//! Chromium owns the native window via the Views framework.
 //! The host application owns the outer winit event loop.
 //!
 //! This example pumps Chromium at a fixed interval
@@ -39,7 +39,7 @@ impl ViewsDriver {
 
 impl ApplicationHandler for ViewsDriver {
     fn resumed(&mut self, _event_loop: &ActiveEventLoop) {
-        // CEF Views owns its own window; nothing for winit to create
+        // Window creation is handled by Chromium Views
     }
 
     fn window_event(
@@ -48,10 +48,11 @@ impl ApplicationHandler for ViewsDriver {
         _id: winit::window::WindowId,
         _event: winit::event::WindowEvent,
     ) {
-        // No winit windows to handle events for
+        // Chromium Views owns all native windows
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Maintain a fixed pumping cadence independent of OS event frequency
         if Instant::now() >= self.next_pump {
             self.pump();
         }
@@ -61,6 +62,7 @@ impl ApplicationHandler for ViewsDriver {
             return;
         }
 
+        // Continue waking at fixed intervals even when Chromium is idle
         event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_pump));
     }
 }
@@ -71,6 +73,8 @@ fn main() {
         .expect("failed to start kurogane runtime");
 
     let event_loop = EventLoop::new().expect("failed to create event loop");
+    
+    // Initialize the fixed-interval pumping schedule
     event_loop.set_control_flow(ControlFlow::WaitUntil(
         Instant::now() + PUMP_INTERVAL,
     ));

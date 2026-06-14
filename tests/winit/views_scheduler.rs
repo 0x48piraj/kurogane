@@ -1,6 +1,6 @@
 //! Winit + Kurogane: Views mode (scheduler driven)
 //!
-//! CEF owns the native window via the Views framework.
+//! Chromium owns the native window via the Views framework.
 //! The host application owns the outer winit event loop.
 //!
 //! Unlike polling-based integrations, this example uses
@@ -31,6 +31,8 @@ impl ApplicationHandler for ViewsDriver {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Invoked after an OS event or scheduler-triggered wakeup.
+        // Pump pending Chromium work before the event loop sleeps again.
         self.handle.pump();
 
         if self.handle.should_shutdown() {
@@ -40,6 +42,7 @@ impl ApplicationHandler for ViewsDriver {
 }
 
 fn main() {
+    // Enable user events so Chromium's scheduler callback can wake the event loop
     let event_loop = EventLoop::<()>::with_user_event()
         .build()
         .unwrap();
@@ -48,12 +51,15 @@ fn main() {
 
     let handle = App::url("https://example.com")
         .scheduler(move |_request: PumpRequest| {
-            // Wake the event loop whenever CEF requests work
+            // Executed on Chromium's UI thread
+            // EventLoopProxy provides a thread-safe wakeup mechanism
+            // The request payload is ignored because any wakeup triggers a pump
             let _ = proxy.send_event(());
         })
         .start()
         .expect("failed to start kurogane runtime");
 
+    // Sleep until an OS event or scheduler wakeup is received
     event_loop.set_control_flow(ControlFlow::Wait);
 
     let mut app = ViewsDriver { handle };

@@ -8,7 +8,7 @@
 //!
 //! Browser shutdown is asynchronous.
 //! After requesting browser closure the host must continue
-//! pumping CEF until on_before_close has completed and all
+//! pumping Chromium until on_before_close has completed and all
 //! browser instances have been destroyed.
 
 use kurogane::{App, BrowserBounds, PumpRequest};
@@ -43,6 +43,7 @@ impl ApplicationHandler for EmbeddedDriver {
         let size = window.inner_size();
         let hwnd = native_handle(&window);
 
+        // Map the child browser layout bounds 1:1 with the parent container
         self.browser = self.handle.create_child_browser(
             hwnd,
             BrowserBounds {
@@ -67,13 +68,18 @@ impl ApplicationHandler for EmbeddedDriver {
         match event {
             WindowEvent::CloseRequested => {
                 self.closing = true;
+
+                // Begin asynchronous browser shutdown
                 self.handle.close_all_browsers(true);
 
+                // Release the host window
+                // Browser destruction continues asynchronously via pump()
                 if let Some(window) = self.window.take() {
                     drop(window);
                 }
             }
             WindowEvent::Resized(_) => {
+                // Notify Chromium that the host window size has changed
                 if let Some(browser) = &self.browser {
                     browser.notify_resized();
                 }
@@ -83,16 +89,18 @@ impl ApplicationHandler for EmbeddedDriver {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Drive pending Chromium work, including browser shutdown
         self.handle.pump();
 
         if self.closing && self.handle.browser_count() == 0 {
-            // All browsers gone
+            // Shutdown after the final browser has been destroyed
             self.handle.shutdown();
             event_loop.exit();
         }
     }
 }
 
+/// Helper function to extract a platform-native window handle for browser embedding
 fn native_handle(window: &Window) -> *mut std::ffi::c_void {
     let handle = window.window_handle().unwrap();
     match handle.as_raw() {
@@ -113,7 +121,8 @@ fn main() {
     let proxy = event_loop.create_proxy();
 
     let handle = App::new("dom")
-        .scheduler(move |request: PumpRequest| {
+        .scheduler(move |_request: PumpRequest| {
+            // Marshal Chromium wake requests onto the event loop thread
             let _ = proxy.send_event(());
         })
         .start_embedded()
