@@ -127,6 +127,45 @@ wrap_render_process_handler! {
             }
         }
 
+        fn on_uncaught_exception(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _context: Option<&mut V8Context>,
+            exception: Option<&mut V8Exception>,
+            _stack_trace: Option<&mut V8StackTrace>,
+        ) {
+            if let Some(ex) = exception {
+                let msg: CefString = (&ex.message()).into();
+                let src: CefString = (&ex.script_resource_name()).into();
+                let line = ex.line_number();
+                debug!("[Renderer] Uncaught exception at {}:{} - {}", src.to_string(), line, msg.to_string());
+            }
+        }
+
+        fn on_focused_node_changed(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            node: Option<&mut Domnode>,
+        ) {
+            let Some(node) = node else { return };
+
+            let is_editable = node.is_editable() != 0;
+            let is_form = node.is_form_control_element() != 0;
+
+            debug!(
+                "[Renderer] Focused node changed: type={} editable={} form={} form_type={}",
+                node.get_type().get_raw(),
+                is_editable,
+                is_form,
+                is_form
+                    .then(|| format!("{:?}", node.form_control_element_type()))
+                    .as_deref()
+                    .unwrap_or("-"),
+            );
+        }
+
         fn on_process_message_received(
             &self,
             _browser: Option<&mut Browser>,
