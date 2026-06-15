@@ -1,7 +1,7 @@
 fn main() {
     let runtime = kurogane::App::url("https://xkcd.com")
         .start()
-        .unwrap();
+        .expect("Kurogane failed to initialize");
 
     // Visible immediately
     runtime.create_window(kurogane::WindowOptions {
@@ -13,7 +13,7 @@ fn main() {
             height: 600,
         },
         show_state: kurogane::WindowState::Normal,
-    }).unwrap();
+    }).expect("failed to create browser window");
 
     // Starts maximized
     runtime.create_window(kurogane::WindowOptions {
@@ -25,7 +25,7 @@ fn main() {
             height: 600,
         },
         show_state: kurogane::WindowState::Maximized,
-    }).unwrap();
+    }).expect("failed to create browser window");
 
     // Starts minimized
     runtime.create_window(kurogane::WindowOptions {
@@ -37,7 +37,7 @@ fn main() {
             height: 600,
         },
         show_state: kurogane::WindowState::Minimized,
-    }).unwrap();
+    }).expect("failed to create browser window");
 
     // Starts hidden
     // TODO: Verify hidden-window shutdown behavior.
@@ -52,7 +52,7 @@ fn main() {
             height: 600,
         },
         show_state: kurogane::WindowState::Hidden,
-    }).unwrap();
+    }).expect("failed to create browser window");
 
     while !runtime.should_shutdown() {
         runtime.pump();

@@ -45,7 +45,7 @@ impl ApplicationHandler for ViewsDriver {
 fn main() {
     let handle = App::url("https://example.com")
         .start()
-        .unwrap();
+        .expect("Kurogane failed to initialize");
 
     let event_loop = EventLoop::new().unwrap();
 

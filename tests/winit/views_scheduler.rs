@@ -57,7 +57,7 @@ fn main() {
             let _ = proxy.send_event(());
         })
         .start()
-        .expect("failed to start kurogane runtime");
+        .expect("Kurogane failed to initialize");
 
     // Sleep until an OS event or scheduler wakeup is received
     event_loop.set_control_flow(ControlFlow::Wait);

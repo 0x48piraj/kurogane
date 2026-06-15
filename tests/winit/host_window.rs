@@ -126,7 +126,7 @@ fn main() {
             let _ = proxy.send_event(());
         })
         .start_embedded()
-        .unwrap();
+        .expect("Kurogane failed to initialize");
 
     event_loop.set_control_flow(ControlFlow::Wait);
 
