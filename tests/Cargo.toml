@@ -73,3 +73,7 @@ path = "multi-window.rs"
 [[bin]]
 name = "window-management"
 path = "window-management.rs"
+
+[[bin]]
+name = "delegates"
+path = "delegates.rs"
