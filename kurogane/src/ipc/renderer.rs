@@ -4,6 +4,8 @@
 //! Defines the boundary between JavaScript and the native IPC system.
 
 use cef::*;
+use std::sync::Arc;
+use crate::app::ClientAppRendererDelegate;
 use crate::debug;
 use crate::ipc::protocol::{set_kind, IpcMsgKind, IpcId};
 use crate::ipc::transport::shm::{SharedBuffer, SHM_THRESHOLD, SHM_HEADER_SIZE};
@@ -59,12 +61,44 @@ fn with_array_buffer<R>(
 //
 
 wrap_render_process_handler! {
-    pub struct IpcRenderProcessHandler;
+    pub struct IpcRenderProcessHandler {
+        delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
+    }
 
     impl RenderProcessHandler {
+        fn on_web_kit_initialized(&self) {
+            for delegate in &self.delegates {
+                delegate.on_web_kit_initialized();
+            }
+        }
+
+        fn on_browser_created(
+            &self,
+            browser: Option<&mut Browser>,
+            extra_info: Option<&mut DictionaryValue>,
+        ) {
+            let browser_ref = browser.as_deref();
+            let extra_info_ref = extra_info.as_deref();
+
+            for delegate in &self.delegates {
+                delegate.on_browser_created(browser_ref, extra_info_ref);
+            }
+        }
+
+        fn on_browser_destroyed(
+            &self,
+            browser: Option<&mut Browser>,
+        ) {
+            let browser_ref = browser.as_deref();
+
+            for delegate in &self.delegates {
+                delegate.on_browser_destroyed(browser_ref);
+            }
+        }
+
         fn on_context_created(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             frame: Option<&mut Frame>,
             context: Option<&mut V8Context>,
         ) {
@@ -113,15 +147,27 @@ wrap_render_process_handler! {
             );
 
             debug!("[IPC Renderer] Injected window.core.* + kurogane bridge");
+
+            let browser_ref = browser.as_deref();
+            for delegate in &self.delegates {
+                delegate.on_context_created(browser_ref, Some(&frame), Some(&context));
+            }
         }
 
         fn on_context_released(
             &self,
-            _browser: Option<&mut Browser>,
-            _frame: Option<&mut Frame>,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
             context: Option<&mut V8Context>,
         ) {
-            // cleanup
+            let context_ref = context.as_deref();
+            let browser_ref = browser.as_deref();
+            let frame_ref = frame.as_deref();
+
+            for delegate in &self.delegates {
+                delegate.on_context_released(browser_ref, frame_ref, context_ref);
+            }
+
             if let Some(ctx) = context {
                 clear_context_promises(ctx);
             }
@@ -129,12 +175,24 @@ wrap_render_process_handler! {
 
         fn on_uncaught_exception(
             &self,
-            _browser: Option<&mut Browser>,
-            _frame: Option<&mut Frame>,
-            _context: Option<&mut V8Context>,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            context: Option<&mut V8Context>,
             exception: Option<&mut V8Exception>,
-            _stack_trace: Option<&mut V8StackTrace>,
+            stack_trace: Option<&mut V8StackTrace>,
         ) {
+            let browser_ref = browser.as_deref();
+            let frame_ref = frame.as_deref();
+            let context_ref = context.as_deref();
+            let exception_ref = exception.as_deref();
+            let stack_trace_ref = stack_trace.as_deref();
+
+            for delegate in &self.delegates {
+                delegate.on_uncaught_exception(
+                    browser_ref, frame_ref, context_ref, exception_ref, stack_trace_ref,
+                );
+            }
+
             if let Some(ex) = exception {
                 let msg: CefString = (&ex.message()).into();
                 let src: CefString = (&ex.script_resource_name()).into();
@@ -145,34 +203,65 @@ wrap_render_process_handler! {
 
         fn on_focused_node_changed(
             &self,
-            _browser: Option<&mut Browser>,
-            _frame: Option<&mut Frame>,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
             node: Option<&mut Domnode>,
         ) {
-            let Some(node) = node else { return };
+            if node.is_none() {
+                let browser_ref = browser.as_deref();
+                let frame_ref = frame.as_deref();
 
-            let is_editable = node.is_editable() != 0;
-            let is_form = node.is_form_control_element() != 0;
+                for delegate in &self.delegates {
+                    delegate.on_focused_node_changed(browser_ref, frame_ref, None);
+                }
+                return;
+            }
+
+            let node_data = node.as_ref().unwrap();
+            let is_editable = node_data.is_editable() != 0;
+            let is_form = node_data.is_form_control_element() != 0;
 
             debug!(
                 "[Renderer] Focused node changed: type={} editable={} form={} form_type={}",
-                node.get_type().get_raw(),
+                node_data.get_type().get_raw(),
                 is_editable,
                 is_form,
                 is_form
-                    .then(|| format!("{:?}", node.form_control_element_type()))
+                    .then(|| format!("{:?}", node_data.form_control_element_type()))
                     .as_deref()
                     .unwrap_or("-"),
             );
+
+            let browser_ref = browser.as_deref();
+            let frame_ref = frame.as_deref();
+            let node_ref = Some(&**node_data);
+
+            for delegate in &self.delegates {
+                delegate.on_focused_node_changed(browser_ref, frame_ref, node_ref);
+            }
         }
 
         fn on_process_message_received(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             frame: Option<&mut Frame>,
             source_process: ProcessId,
             message: Option<&mut ProcessMessage>,
         ) -> i32 {
+            {
+                let browser_ref = browser.as_deref();
+                let frame_ref = frame.as_deref();
+                let message_ref = message.as_deref();
+
+                for delegate in &self.delegates {
+                    if delegate.on_process_message_received(
+                        browser_ref, frame_ref, source_process, message_ref,
+                    ) != 0 {
+                        return 1;
+                    }
+                }
+            }
+
             if source_process != ProcessId::BROWSER { return 0; }
             let msg = message.unwrap();
 
@@ -197,6 +286,15 @@ wrap_render_process_handler! {
             }
 
             1
+        }
+
+        fn load_handler(&self) -> Option<LoadHandler> {
+            for delegate in &self.delegates {
+                if let Some(handler) = delegate.load_handler() {
+                    return Some(handler);
+                }
+            }
+            None
         }
     }
 }

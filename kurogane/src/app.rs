@@ -45,8 +45,7 @@ pub(crate) enum Source {
 /// Register via App::delegate to customize browser-process startup
 /// without replacing Kurogane's built-in runtime.
 ///
-/// Delegates are invoked in registration order. The first delegate
-/// returning a client from Self::default_client wins.
+/// Delegates are invoked in registration order. The first delegate returning a client from Self::default_client wins.
 pub trait ClientAppBrowserDelegate: Send + Sync {
     /// Invoked before Chromium processes command-line arguments.
     ///
@@ -56,19 +55,98 @@ pub trait ClientAppBrowserDelegate: Send + Sync {
 
     /// Invoked after the browser process has initialized its request context.
     ///
-    /// At this point global browser-process initialization has completed and
-    /// browser creation may begin.
+    /// At this point global browser-process initialization has completed and browser creation may begin.
     fn on_context_initialized(&self) {}
 
     /// Supplies a custom default Client implementation.
     ///
     /// The returned client will be used when Kurogane creates browser
-    /// instances unless another delegate registered earlier has already
-    /// supplied one.
+    /// instances unless another delegate registered earlier has already supplied one.
     ///
-    /// Returning None defers to subsequent delegates or Kurogane's
-    /// built-in client implementation.
+    /// Returning None defers to subsequent delegates or Kurogane's built-in client implementation.
     fn default_client(&self) -> Option<Client> {
+        None
+    }
+}
+
+/// Customizes render-process behavior.
+///
+/// Register via App::renderer_delegate to observe or extend renderer-side lifecycle events.
+///
+/// Delegates are invoked in registration order. Depending on the callback,
+/// Kurogane may perform built-in renderer processing before or after
+/// delegate dispatch. Delegate implementations should not rely on a
+/// specific ordering unless documented for a particular callback.
+pub trait ClientAppRendererDelegate: Send + Sync {
+    /// Invoked once after WebKit initialization.
+    ///
+    /// Typically used to register V8 extensions and renderer-global state.
+    fn on_web_kit_initialized(&self) {}
+
+    /// Invoked when a renderer-side browser instance is created.
+    fn on_browser_created(
+        &self,
+        _browser: Option<&Browser>,
+        _extra_info: Option<&DictionaryValue>,
+    ) {}
+
+    /// Invoked before a renderer-side browser instance is destroyed.
+    fn on_browser_destroyed(&self, _browser: Option<&Browser>) {}
+
+    /// Invoked when a JavaScript execution context is created.
+    ///
+    /// Kurogane's built-in IPC bridge has already been installed when this callback is dispatched.
+    fn on_context_created(
+        &self,
+        _browser: Option<&Browser>,
+        _frame: Option<&Frame>,
+        _context: Option<&V8Context>,
+    ) {}
+
+    /// Invoked when a JavaScript execution context is released.
+    fn on_context_released(
+        &self,
+        _browser: Option<&Browser>,
+        _frame: Option<&Frame>,
+        _context: Option<&V8Context>,
+    ) {}
+
+    /// Invoked when an uncaught JavaScript exception occurs.
+    fn on_uncaught_exception(
+        &self,
+        _browser: Option<&Browser>,
+        _frame: Option<&Frame>,
+        _context: Option<&V8Context>,
+        _exception: Option<&V8Exception>,
+        _stack_trace: Option<&V8StackTrace>,
+    ) {}
+
+    /// Invoked when the focused DOM node changes.
+    fn on_focused_node_changed(
+        &self,
+        _browser: Option<&Browser>,
+        _frame: Option<&Frame>,
+        _node: Option<&Domnode>,
+    ) {}
+
+    /// Invoked when a process message is received from another CEF process.
+    ///
+    /// Returning a non-zero value marks the message as handled and prevents
+    /// subsequent delegates and Kurogane's default processing from running.
+    fn on_process_message_received(
+        &self,
+        _browser: Option<&Browser>,
+        _frame: Option<&Frame>,
+        _source_process: ProcessId,
+        _message: Option<&ProcessMessage>,
+    ) -> i32 {
+        0
+    }
+
+    /// Supplies a renderer-side load handler.
+    ///
+    /// Delegates are consulted in registration order. The first delegate returning Some(LoadHandler) wins.
+    fn load_handler(&self) -> Option<LoadHandler> {
         None
     }
 }
@@ -87,6 +165,7 @@ pub struct App {
     chromium_flags: Vec<ChromiumFlag>,
     scheduler: Option<PumpScheduler>,
     delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
+    renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
 }
 
 impl App {
@@ -112,12 +191,19 @@ impl App {
             chromium_flags: Vec::new(),
             scheduler: None,
             delegates: Vec::new(),
+            renderer_delegates: Vec::new(),
         }
     }
 
     /// Register a browser lifecycle delegate.
     pub fn delegate<D: ClientAppBrowserDelegate + 'static>(mut self, delegate: D) -> Self {
         self.delegates.push(Arc::new(delegate));
+        self
+    }
+
+    /// Register a render process lifecycle delegate.
+    pub fn renderer_delegate<D: ClientAppRendererDelegate + 'static>(mut self, delegate: D) -> Self {
+        self.renderer_delegates.push(Arc::new(delegate));
         self
     }
 
@@ -234,6 +320,7 @@ impl App {
             self.chromium_flags,
             self.scheduler,
             self.delegates,
+            self.renderer_delegates,
         )
     }
 
@@ -255,6 +342,7 @@ impl App {
             self.gpu_mode,
             self.chromium_flags,
             self.delegates,
+            self.renderer_delegates,
         )
     }
 
@@ -277,6 +365,7 @@ impl App {
             self.chromium_flags,
             self.scheduler,
             self.delegates,
+            self.renderer_delegates,
         )
     }
 

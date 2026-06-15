@@ -15,7 +15,7 @@ use crate::sandbox::apply_sandbox_flags;
 use crate::ShutdownSignal;
 use crate::browser_registry::BrowserRegistry;
 use crate::window_registry::WindowRegistry;
-use crate::app::{PumpScheduler, ClientAppBrowserDelegate};
+use crate::app::{PumpScheduler, ClientAppBrowserDelegate, ClientAppRendererDelegate};
 
 use cef::sys::cef_scheme_options_t::*;
 
@@ -32,6 +32,7 @@ wrap_app! {
         embedded_mode: bool,
         scheduler: Option<PumpScheduler>,
         delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
+        renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
     }
 
     impl App {
@@ -112,7 +113,7 @@ wrap_app! {
         }
 
         fn render_process_handler(&self) -> Option<RenderProcessHandler> {
-            Some(IpcRenderProcessHandler::new())
+            Some(IpcRenderProcessHandler::new(self.renderer_delegates.clone()))
         }
     }
 }

@@ -14,7 +14,7 @@ use crate::window_registry::{WindowRegistry, WindowId, WindowMetadata};
 use crate::window::{KuroganeWindowDelegate, KuroganeBrowserViewDelegate};
 use kurogane_layout::{detect_cef_root, validate_cef_root, profile_dir};
 use crate::ipc::IpcDispatcher;
-use crate::app::{PumpScheduler, ClientAppBrowserDelegate};
+use crate::app::{PumpScheduler, ClientAppBrowserDelegate, ClientAppRendererDelegate};
 use crate::debug;
 
 /// Public entry point for launching a CEF application.
@@ -536,7 +536,10 @@ impl RuntimeHandle {
     /// Advances Chromium by one iteration of its internal message loop.
     ///
     /// When using external event-loop ownership via App::start,
-    /// this must be called repeatedly on the same thread.
+    /// this must be called repeatedly on the thread that initialized CEF.
+    ///
+    /// Note: Kurogane currently assumes pump calls are non-reentrant and
+    /// originate from a single UI thread.
     pub fn pump(&self) {
         do_message_loop_work();
     }
@@ -837,6 +840,7 @@ fn initialize_cef(
     external_message_pump: bool,
     scheduler: Option<PumpScheduler>,
     delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
+    renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
 ) -> Result<RuntimeState, RuntimeError> {
     #[cfg(target_os = "macos")]
     crate::platform::macos::init_ns_app();
@@ -864,6 +868,7 @@ fn initialize_cef(
         embedded_mode,
         scheduler,
         delegates,
+        renderer_delegates,
     );
 
     debug!("Executing subprocess dispatch");
@@ -917,6 +922,7 @@ impl Runtime {
         chromium_flags: Vec<ChromiumFlag>,
         scheduler: Option<PumpScheduler>,
         delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
+        renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
     ) -> Result<RuntimeHandle, RuntimeError> {
         let state = initialize_cef(
             start_url,
@@ -930,6 +936,7 @@ impl Runtime {
             false,
             scheduler,
             delegates,
+            renderer_delegates,
         )?;
 
         Ok(RuntimeHandle {
@@ -949,6 +956,7 @@ impl Runtime {
         chromium_flags: Vec<ChromiumFlag>,
         scheduler: Option<PumpScheduler>,
         delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
+        renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
     ) -> Result<RuntimeHandle, RuntimeError> {
         let state = initialize_cef(
             start_url,
@@ -962,6 +970,7 @@ impl Runtime {
             true,
             scheduler,
             delegates,
+            renderer_delegates,
         )?;
 
         Ok(RuntimeHandle {
@@ -983,6 +992,7 @@ impl Runtime {
         gpu_mode: GpuMode,
         chromium_flags: Vec<ChromiumFlag>,
         delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
+        renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
     ) -> Result<(), RuntimeError> {
         let handle = Self::start(
             start_url,
@@ -994,6 +1004,7 @@ impl Runtime {
             chromium_flags,
             None,
             delegates,
+            renderer_delegates,
         )?;
 
         run_message_loop();
