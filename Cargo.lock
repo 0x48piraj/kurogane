@@ -1192,6 +1192,7 @@ dependencies = [
 name = "kurogane-tests"
 version = "0.0.4-beta.1"
 dependencies = [
+ "cef",
  "kurogane",
  "raw-window-handle",
  "serde_json",

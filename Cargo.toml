@@ -17,4 +17,5 @@ authors = [
 repository = "https://github.com/0x48piraj/kurogane"
 
 [workspace.dependencies]
+cef = { git = "https://github.com/tauri-apps/cef-rs", rev = "dab51658a8a6317040eb0ebab39b68ede42c836f" }
 kurogane-layout = { path = "kurogane-layout" }
