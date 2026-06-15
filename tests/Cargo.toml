@@ -68,3 +68,7 @@ path = "popups.rs"
 [[bin]]
 name = "multi-window"
 path = "multi-window.rs"
+
+[[bin]]
+name = "window-management"
+path = "window-management.rs"
