@@ -57,7 +57,9 @@ wrap_window_delegate! {
 
                 let view = self.browser_view.clone();
                 window.add_child_view(Some(&mut (&view).into()));
-                window.show();
+                if self.show_state != ShowState::HIDDEN {
+                    window.show();
+                }
                 debug!("Window shown");
             }
         }
@@ -175,7 +177,7 @@ wrap_window_delegate! {
         browser_view: BrowserView,
         registry: Arc<Mutex<WindowRegistry>>,
         browser_id: Option<BrowserId>,
-        initial_show_state: ShowState,
+        show_state: ShowState,
         is_closing: Arc<AtomicBool>,
     }
 
@@ -185,14 +187,16 @@ wrap_window_delegate! {
 
     impl WindowDelegate {
         fn initial_show_state(&self, _window: Option<&mut Window>) -> ShowState {
-            self.initial_show_state
+            self.show_state
         }
 
         fn on_window_created(&self, window: Option<&mut Window>) {
             if let Some(window) = window {
                 let view = self.browser_view.clone();
                 window.add_child_view(Some(&mut (&view).into()));
-                window.show();
+                if self.show_state != ShowState::HIDDEN {
+                    window.show();
+                }
                 debug!("Popup window shown");
 
                 // Register popup window in registry, associated with its browser

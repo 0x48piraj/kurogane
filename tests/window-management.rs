@@ -40,6 +40,9 @@ fn main() {
     }).unwrap();
 
     // Starts hidden
+    // TODO: Verify hidden-window shutdown behavior.
+    // On Windows a hidden browser may continue running after
+    // all visible windows close, preventing runtime shutdown.
     runtime.create_window(kurogane::WindowOptions {
         url: "https://docs.rs".into(),
         bounds: kurogane::BrowserBounds {
