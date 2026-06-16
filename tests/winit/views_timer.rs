@@ -11,7 +11,7 @@
 
 use std::time::{Duration, Instant};
 
-use kurogane::{App, RuntimeHandle};
+use kurogane::{App, Runtime};
 
 use winit::application::ApplicationHandler;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -19,12 +19,12 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 const PUMP_INTERVAL: Duration = Duration::from_millis(16);
 
 struct ViewsDriver {
-    handle: RuntimeHandle,
+    handle: Runtime,
     next_pump: Instant,
 }
 
 impl ViewsDriver {
-    fn new(handle: RuntimeHandle) -> Self {
+    fn new(handle: Runtime) -> Self {
         Self {
             handle,
             next_pump: Instant::now(),

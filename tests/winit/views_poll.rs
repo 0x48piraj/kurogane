@@ -15,7 +15,7 @@ use winit::application::ApplicationHandler;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 
 struct ViewsDriver {
-    handle: kurogane::RuntimeHandle,
+    handle: kurogane::Runtime,
 }
 
 impl ApplicationHandler for ViewsDriver {

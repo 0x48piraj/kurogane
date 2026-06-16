@@ -21,7 +21,7 @@ use crate::debug;
 /// - Spawning CEF subprocesses
 /// - Starting the browser process
 /// - Running the CEF message loop
-pub(crate) struct Runtime;
+pub(crate) struct RuntimeBootstrap;
 
 struct RuntimeLayout {
     exe: std::path::PathBuf,
@@ -276,15 +276,16 @@ pub struct WindowOptions {
 /// Handle to a live initialized CEF runtime.
 ///
 /// Enables external event-loop integration by separating runtime polling from loop ownership.
-pub struct RuntimeHandle {
+pub struct Runtime {
     state: RuntimeState,
     shutdown_called: AtomicBool,
 }
 
-impl Drop for RuntimeHandle {
+impl Drop for Runtime {
     fn drop(&mut self) {
-        // CEF requires shutdown on the same thread as initialize
-        // Callers must not move RuntimeHandle across threads after start()
+        // CEF requires shutdown to occur on the same thread that performed initialization
+        // The runtime must remain on its originating UI thread for its entire lifetime
+        // Do NOT move the runtime to another thread after startup
         self.shutdown();
     }
 }
@@ -533,7 +534,7 @@ impl BrowserHandle {
     }
 }
 
-impl RuntimeHandle {
+impl Runtime {
     /// Advances Chromium by one iteration of its internal message loop.
     ///
     /// When using external event-loop ownership via App::start,
@@ -631,8 +632,8 @@ impl RuntimeHandle {
     /// Creates a new top-level window with an embedded browser.
     ///
     /// The window is created using CEF Views (window_create_top_level + browser_view_create).
-    /// The browser is created asynchronously; use RuntimeHandle::wait_for_browser or poll
-    /// RuntimeHandle::browser_for_window to obtain the BrowserHandle once ready.
+    /// The browser is created asynchronously; use Runtime::wait_for_browser or poll
+    /// Runtime::browser_for_window to obtain the BrowserHandle once ready.
     ///
     /// Must be called on the UI thread.
     pub fn create_window(&self, options: WindowOptions) -> Result<WindowId, RuntimeError> {
@@ -725,10 +726,10 @@ impl RuntimeHandle {
         if self.shutdown_called.swap(true, Ordering::SeqCst) {
             return;
         }
-        debug!("Shutting down CEF via RuntimeHandle");
+        debug!("Shutting down Kurogane runtime");
         shutdown();
         self.state.services.shutdown_signal.request_shutdown();
-        debug!("CEF shutdown complete via RuntimeHandle");
+        debug!("Kurogane runtime shutdown complete");
     }
 
     /// Creates a Chromium browser hosted inside an existing native window.
@@ -739,7 +740,7 @@ impl RuntimeHandle {
     /// 'NSView' on macOS, or the corresponding native handle on Linux)
     ///
     /// The runtime must have been started with Runtime::start_embedded,
-    /// and RuntimeHandle::pump must continue to be called regularly for
+    /// and Runtime::pump must continue to be called regularly for
     /// Chromium to process events.
     ///
     /// Returns true if browser creation succeeded.
@@ -887,18 +888,17 @@ fn initialize_cef(
     })
 }
 
-impl Runtime {
-    /// Initialize CEF and return a RuntimeHandle without entering a message loop.
+impl RuntimeBootstrap {
+    /// Initialize CEF and return a Runtime without entering a message loop.
     ///
     /// The caller takes ownership of the event loop and must periodically call
-    /// RuntimeHandle::pump when using Pump mode, then call
-    /// RuntimeHandle::shutdown to clean up.
+    /// Runtime::pump when using Pump mode then call Runtime::shutdown to clean up.
     pub(crate) fn start(
         spec: RuntimeSpec,
         dispatcher: Arc<IpcDispatcher>,
-    ) -> Result<RuntimeHandle, RuntimeError> {
+    ) -> Result<Runtime, RuntimeError> {
         let state = initialize_cef(spec, dispatcher, false)?;
-        Ok(RuntimeHandle {
+        Ok(Runtime {
             state,
             shutdown_called: AtomicBool::new(false),
         })
@@ -908,9 +908,9 @@ impl Runtime {
     pub(crate) fn start_embedded(
         spec: RuntimeSpec,
         dispatcher: Arc<IpcDispatcher>,
-    ) -> Result<RuntimeHandle, RuntimeError> {
+    ) -> Result<Runtime, RuntimeError> {
         let state = initialize_cef(spec, dispatcher, true)?;
-        Ok(RuntimeHandle {
+        Ok(Runtime {
             state,
             shutdown_called: AtomicBool::new(false),
         })

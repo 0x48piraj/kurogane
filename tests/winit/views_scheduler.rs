@@ -10,13 +10,13 @@
 //! This minimizes unnecessary wakeups and is the
 //! preferred event-driven integration pattern.
 
-use kurogane::{App, PumpRequest, RuntimeHandle};
+use kurogane::{App, PumpRequest, Runtime};
 
 use winit::application::ApplicationHandler;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 
 struct ViewsDriver {
-    handle: RuntimeHandle,
+    handle: Runtime,
 }
 
 impl ApplicationHandler for ViewsDriver {

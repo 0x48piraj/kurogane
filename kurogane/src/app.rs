@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use cef::*;
 use crate::app::resolver::ResolvedFrontend;
 use crate::ipc::browser_state::{IpcDispatcher, IpcHandler, BinaryHandler};
-use crate::runtime::{Runtime, RuntimeHandle};
+use crate::runtime::{RuntimeBootstrap, Runtime};
 use crate::error::RuntimeError;
 use crate::spec::{RuntimeSpec, RuntimeMode};
 use crate::chromium_flags::ChromiumFlag;
@@ -32,7 +32,7 @@ pub enum PumpRequest {
 
 /// Callback type for pump scheduling.
 ///
-/// CEF calls this whenever it wants RuntimeHandle::pump to be called.
+/// CEF calls this whenever it wants Runtime::pump to be called.
 /// The integrator decides how to honour the request via a winit proxy, a glib timeout, a Tokio task, or anything else.
 pub type PumpScheduler = Arc<dyn Fn(PumpRequest) + Send + Sync>;
 
@@ -213,7 +213,7 @@ impl App {
     ///
     /// When CEF determines it needs work done, it will call this closure
     /// with a PumpRequest indicating how urgently. The integrator is
-    /// responsible for calling RuntimeHandle::pump accordingly.
+    /// responsible for calling Runtime::pump accordingly.
     ///
     /// Only meaningful when using App::start_embedded / App::start
     pub fn scheduler<F>(mut self, f: F) -> Self
@@ -309,7 +309,7 @@ impl App {
     /// Starts the runtime in embedded mode.
     /// Intended for embedded integrations where the host application owns the
     /// window hierarchy and event loop.
-    pub fn start_embedded(self) -> Result<RuntimeHandle, RuntimeError> {
+    pub fn start_embedded(self) -> Result<Runtime, RuntimeError> {
         let Self {
             source,
             commands,
@@ -339,7 +339,7 @@ impl App {
             renderer_delegates,
         };
 
-        Runtime::start_embedded(spec, dispatcher)
+        RuntimeBootstrap::start_embedded(spec, dispatcher)
     }
 
     /// Start the application and run the message loop.
@@ -376,13 +376,13 @@ impl App {
             renderer_delegates,
         };
 
-        Runtime::run(spec, dispatcher)
+        RuntimeBootstrap::run(spec, dispatcher)
     }
 
     /// Initialize the application without entering a message loop.
     ///
-    /// The caller becomes responsible for driving the runtime via RuntimeHandle::pump().
-    pub fn start(self) -> Result<RuntimeHandle, RuntimeError> {
+    /// The caller becomes responsible for driving the runtime via Runtime::pump().
+    pub fn start(self) -> Result<Runtime, RuntimeError> {
         let Self {
             source,
             commands,
@@ -413,7 +413,7 @@ impl App {
             renderer_delegates,
         };
 
-        Runtime::start(spec, dispatcher)
+        RuntimeBootstrap::start(spec, dispatcher)
     }
 
     /// Run the application and terminate the process on failure.

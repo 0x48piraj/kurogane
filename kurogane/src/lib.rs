@@ -26,7 +26,7 @@ mod browser_info_map;
 #[cfg(target_os = "macos")]
 mod platform;
 
-pub use runtime::{RuntimeHandle, BrowserBounds, BrowserHandle, WindowOptions, WindowState};
+pub use runtime::{Runtime, BrowserBounds, BrowserHandle, WindowOptions, WindowState};
 pub use browser_registry::{BrowserId, BrowserMetadata, BrowserType};
 pub use window_registry::{WindowId, WindowMetadata};
 pub use gpu::GpuMode;

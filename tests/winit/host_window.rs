@@ -21,7 +21,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::Window;
 
 struct EmbeddedDriver {
-    handle: kurogane::RuntimeHandle,
+    handle: kurogane::Runtime,
     window: Option<Window>,
     browser: Option<kurogane::BrowserHandle>,
     closing: bool,

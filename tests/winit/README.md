@@ -17,7 +17,7 @@ Kurogane supports multiple event-loop integration strategies when embedding Chro
 
 ## Continuous polling loop _(aka the Brute-forcer)_
 
-The minimal-viable integration. On every `winit` event-loop iteration, the host calls Kurogane's [`RuntimeHandle::pump`](https://github.com/0x48piraj/kurogane/blob/86ce9810bcfa6b3b0d2f9a87f04907be7e799829/kurogane/src/runtime.rs#L491) which in turn calls [`CefDoMessageLoopWork`](https://magpcss.org/ceforum/apidocs3/projects/(default)/(_globals).html#CefDoMessageLoopWork()) then immediately schedules the next iteration.
+The minimal-viable integration. On every `winit` event-loop iteration, the host calls Kurogane's [`Runtime::pump`](https://github.com/0x48piraj/kurogane/blob/86ce9810bcfa6b3b0d2f9a87f04907be7e799829/kurogane/src/runtime.rs#L491) which in turn calls [`CefDoMessageLoopWork`](https://magpcss.org/ceforum/apidocs3/projects/(default)/(_globals).html#CefDoMessageLoopWork()) then immediately schedules the next iteration.
 
 ```rust
 event_loop.run(move |event, _, control_flow| {
@@ -40,7 +40,7 @@ event_loop.run(move |event, _, control_flow| {
 
 ## Fixed-interval timer loop _(aka the Clockwatcher)_
 
-A fixed-interval pump using winit's [`ControlFlow::WaitUntil`](https://docs.rs/winit/latest/winit/event_loop/enum.ControlFlow.html#variant.WaitUntil). The host wakes every 16 ms (~60 Hz) and calls Kurogane's [`RuntimeHandle::pump`](https://github.com/0x48piraj/kurogane/blob/86ce9810bcfa6b3b0d2f9a87f04907be7e799829/kurogane/src/runtime.rs#L491), approximating the behaviour of a naive `SetTimer`-based integration common in legacy Win32 Chromium hosts.
+A fixed-interval pump using winit's [`ControlFlow::WaitUntil`](https://docs.rs/winit/latest/winit/event_loop/enum.ControlFlow.html#variant.WaitUntil). The host wakes every 16 ms (~60 Hz) and calls Kurogane's [`Runtime::pump`](https://github.com/0x48piraj/kurogane/blob/86ce9810bcfa6b3b0d2f9a87f04907be7e799829/kurogane/src/runtime.rs#L491), approximating the behaviour of a naive `SetTimer`-based integration common in legacy Win32 Chromium hosts.
 
 ```rust
 const PUMP_INTERVAL: Duration = Duration::from_millis(16);
