@@ -5,16 +5,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::cef_app::KuroganeApp;
 use crate::client::KuroganeClient;
 use crate::error::RuntimeError;
-use crate::gpu::GpuMode;
-use crate::chromium_flags::ChromiumFlag;
-use crate::fs::CanonicalRoot;
 use crate::ShutdownSignal;
 use crate::browser_registry::{BrowserRegistry, BrowserId, BrowserMetadata};
 use crate::window_registry::{WindowRegistry, WindowId, WindowMetadata};
 use crate::window::{KuroganeWindowDelegate, KuroganeBrowserViewDelegate};
 use kurogane_layout::{detect_cef_root, validate_cef_root, profile_dir};
 use crate::ipc::IpcDispatcher;
-use crate::app::{PumpScheduler, ClientAppBrowserDelegate, ClientAppRendererDelegate};
+use crate::spec::RuntimeSpec;
 use crate::debug;
 
 /// Public entry point for launching a CEF application.
@@ -24,7 +21,7 @@ use crate::debug;
 /// - Spawning CEF subprocesses
 /// - Starting the browser process
 /// - Running the CEF message loop
-pub struct Runtime;
+pub(crate) struct Runtime;
 
 struct RuntimeLayout {
     exe: std::path::PathBuf,
@@ -139,7 +136,7 @@ fn execute_subprocesses(args: &Args, app: &mut App) {
 }
 
 fn install_ctrlc_handler(
-    registry: Arc<Mutex<BrowserRegistry>>,
+    browser_registry: Arc<Mutex<BrowserRegistry>>,
     window_registry: Arc<Mutex<WindowRegistry>>,
 ) {
     // Prevent double-fire (dev hammers Ctrl+C twice)
@@ -147,7 +144,7 @@ fn install_ctrlc_handler(
 
     ctrlc::set_handler({
         let quitting = quitting.clone();
-        let registry = registry.clone();
+        let browser_registry = browser_registry.clone();
         let window_registry = window_registry.clone();
 
         move || {
@@ -161,7 +158,7 @@ fn install_ctrlc_handler(
 
             debug!("Scheduling browser shutdown on UI thread");
 
-            let mut task = CloseAllTask::new(registry.clone(), window_registry.clone());
+            let mut task = CloseAllTask::new(browser_registry.clone(), window_registry.clone());
             post_task(ThreadId::UI, Some(&mut task));
         }
     })
@@ -170,7 +167,7 @@ fn install_ctrlc_handler(
 
 wrap_task! {
     struct CloseAllTask {
-        registry: Arc<Mutex<BrowserRegistry>>,
+        browser_registry: Arc<Mutex<BrowserRegistry>>,
         window_registry: Arc<Mutex<WindowRegistry>>,
     }
 
@@ -179,7 +176,7 @@ wrap_task! {
             // Close all browsers first in Views mode this cascades to close their parent windows
             // In embedded mode there are no views windows
             let browsers: Vec<Browser> = {
-                let reg = self.registry.lock().unwrap();
+                let reg = self.browser_registry.lock().unwrap();
                 reg.iter().map(|(_, s)| s.browser.clone()).collect()
             };
             for browser in browsers {
@@ -196,12 +193,20 @@ wrap_task! {
     }
 }
 
+/// Live shared runtime services.
+///
+/// Handlers and delegates should depend on RuntimeServices
+/// instead of receiving individual registries and dispatchers separately.
+pub(crate) struct RuntimeServices {
+    pub shutdown_signal: ShutdownSignal,
+    pub dispatcher: Arc<IpcDispatcher>,
+    pub browser_registry: Arc<Mutex<BrowserRegistry>>,
+    pub window_registry: Arc<Mutex<WindowRegistry>>,
+}
+
 pub(crate) struct RuntimeState {
-    shutdown_signal: ShutdownSignal,
-    dispatcher: Arc<IpcDispatcher>,
-    registry: Arc<Mutex<BrowserRegistry>>,
-    window_registry: Arc<Mutex<WindowRegistry>>,
-    ui_thread_id: std::thread::ThreadId,
+    pub services: Arc<RuntimeServices>,
+    pub ui_thread_id: std::thread::ThreadId,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -306,7 +311,7 @@ fn native_to_cef_window(
 
 pub struct BrowserHandle {
     id: BrowserId,
-    registry: Arc<Mutex<BrowserRegistry>>,
+    browser_registry: Arc<Mutex<BrowserRegistry>>,
     ui_thread_id: std::thread::ThreadId,
 }
 
@@ -327,7 +332,7 @@ impl BrowserHandle {
     pub fn close(&self, force: bool) {
         self.assert_ui_thread();
         let browser = {
-            let reg = self.registry.lock().unwrap();
+            let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
         if let Some(b) = browser {
@@ -341,7 +346,7 @@ impl BrowserHandle {
     pub fn notify_resized(&self) {
         self.assert_ui_thread();
         let browser = {
-            let reg = self.registry.lock().unwrap();
+            let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
         if let Some(b) = browser && let Some(h) = b.host() {
@@ -352,7 +357,7 @@ impl BrowserHandle {
     pub fn notify_move_or_resize_started(&self) {
         self.assert_ui_thread();
         let browser = {
-            let reg = self.registry.lock().unwrap();
+            let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
         if let Some(b) = browser && let Some(h) = b.host() {
@@ -365,7 +370,7 @@ impl BrowserHandle {
         self.assert_ui_thread();
 
         let browser = {
-            let reg = self.registry.lock().unwrap();
+            let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
 
@@ -379,7 +384,7 @@ impl BrowserHandle {
     pub fn reload(&self) {
         self.assert_ui_thread();
         let browser = {
-            let reg = self.registry.lock().unwrap();
+            let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
         if let Some(b) = browser {
@@ -391,7 +396,7 @@ impl BrowserHandle {
     pub fn reload_ignore_cache(&self) {
         self.assert_ui_thread();
         let browser = {
-            let reg = self.registry.lock().unwrap();
+            let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
         if let Some(b) = browser {
@@ -403,7 +408,7 @@ impl BrowserHandle {
     pub fn go_back(&self) {
         self.assert_ui_thread();
         let browser = {
-            let reg = self.registry.lock().unwrap();
+            let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
         if let Some(b) = browser {
@@ -415,7 +420,7 @@ impl BrowserHandle {
     pub fn go_forward(&self) {
         self.assert_ui_thread();
         let browser = {
-            let reg = self.registry.lock().unwrap();
+            let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
         if let Some(b) = browser {
@@ -427,7 +432,7 @@ impl BrowserHandle {
     pub fn can_go_back(&self) -> bool {
         self.assert_ui_thread();
         let browser = {
-            let reg = self.registry.lock().unwrap();
+            let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
         browser.map(|b| b.can_go_back() != 0).unwrap_or(false)
@@ -437,7 +442,7 @@ impl BrowserHandle {
     pub fn can_go_forward(&self) -> bool {
         self.assert_ui_thread();
         let browser = {
-            let reg = self.registry.lock().unwrap();
+            let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
         browser.map(|b| b.can_go_forward() != 0).unwrap_or(false)
@@ -447,7 +452,7 @@ impl BrowserHandle {
     pub fn is_loading(&self) -> bool {
         self.assert_ui_thread();
         let browser = {
-            let reg = self.registry.lock().unwrap();
+            let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
         browser.map(|b| b.is_loading() != 0).unwrap_or(false)
@@ -457,7 +462,7 @@ impl BrowserHandle {
     pub fn url(&self) -> String {
         self.assert_ui_thread();
         let browser = {
-            let reg = self.registry.lock().unwrap();
+            let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
         browser
@@ -474,7 +479,7 @@ impl BrowserHandle {
         self.assert_ui_thread();
 
         let browser = {
-            let reg = self.registry.lock().unwrap();
+            let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
 
@@ -494,7 +499,7 @@ impl BrowserHandle {
     pub fn show_devtools(&self) {
         self.assert_ui_thread();
         let browser = {
-            let reg = self.registry.lock().unwrap();
+            let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
         if let Some(b) = browser && let Some(h) = b.host() {
@@ -506,7 +511,7 @@ impl BrowserHandle {
     pub fn close_devtools(&self) {
         self.assert_ui_thread();
         let browser = {
-            let reg = self.registry.lock().unwrap();
+            let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
         if let Some(b) = browser && let Some(h) = b.host() {
@@ -518,7 +523,7 @@ impl BrowserHandle {
     pub fn has_devtools(&self) -> bool {
         self.assert_ui_thread();
         let browser = {
-            let reg = self.registry.lock().unwrap();
+            let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
         browser
@@ -543,28 +548,28 @@ impl RuntimeHandle {
     /// Returns true when shutdown has been requested
     /// e.g. the window was closed or Ctrl+C was received.
     pub fn should_shutdown(&self) -> bool {
-        self.state.shutdown_signal.is_shutdown_requested()
+        self.state.services.shutdown_signal.is_shutdown_requested()
     }
 
     /// Returns the number of currently live browser instances.
     pub fn browser_count(&self) -> usize {
-        self.state.registry.lock().unwrap().count()
+        self.state.services.browser_registry.lock().unwrap().count()
     }
 
     /// Returns the number of currently open windows.
     pub fn window_count(&self) -> usize {
-        self.state.window_registry.lock().unwrap().count()
+        self.state.services.window_registry.lock().unwrap().count()
     }
 
     /// Returns the IDs of all open windows.
     pub fn window_ids(&self) -> Vec<WindowId> {
-        let reg = self.state.window_registry.lock().unwrap();
+        let reg = self.state.services.window_registry.lock().unwrap();
         reg.iter().map(|(id, _)| *id).collect()
     }
 
     /// Close all open windows.
     pub fn close_all_windows(&self) {
-        let reg = self.state.window_registry.lock().unwrap();
+        let reg = self.state.services.window_registry.lock().unwrap();
         reg.close_all_windows();
     }
 
@@ -574,7 +579,7 @@ impl RuntimeHandle {
     /// When true, browsers are closed unconditionally.
     pub fn close_all_browsers(&self, force: bool) {
         let browsers: Vec<Browser> = {
-            let reg = self.state.registry.lock().unwrap();
+            let reg = self.state.services.browser_registry.lock().unwrap();
             reg.iter().map(|(_, s)| s.browser.clone()).collect()
         };
         for browser in browsers {
@@ -587,40 +592,40 @@ impl RuntimeHandle {
 
     /// Look up the window that hosts a given browser, if any.
     pub fn find_window_by_browser(&self, browser_id: BrowserId) -> Option<WindowId> {
-        self.state.window_registry.lock().unwrap()
+        self.state.services.window_registry.lock().unwrap()
             .window_id_for_browser(browser_id)
     }
 
     /// Returns metadata for all live browsers.
     pub fn browsers(&self) -> Vec<(BrowserId, BrowserMetadata)> {
-        let reg = self.state.registry.lock().unwrap();
+        let reg = self.state.services.browser_registry.lock().unwrap();
         reg.iter().map(|(id, s)| (*id, s.metadata.clone())).collect()
     }
 
     /// Returns metadata for all open windows.
     pub fn windows(&self) -> Vec<(WindowId, WindowMetadata)> {
-        let reg = self.state.window_registry.lock().unwrap();
+        let reg = self.state.services.window_registry.lock().unwrap();
         reg.iter().map(|(id, s)| (*id, s.metadata.clone())).collect()
     }
 
     /// Returns the parent BrowserId for a given browser, if any.
     pub fn browser_parent(&self, id: BrowserId) -> Option<BrowserId> {
-        self.state.registry.lock().unwrap().browser_parent(id)
+        self.state.services.browser_registry.lock().unwrap().browser_parent(id)
     }
 
     /// Returns the opener BrowserId for a given browser, if any.
     pub fn browser_opener(&self, id: BrowserId) -> Option<BrowserId> {
-        self.state.registry.lock().unwrap().browser_opener(id)
+        self.state.services.browser_registry.lock().unwrap().browser_opener(id)
     }
 
     /// Returns all browsers whose parent is the given BrowserId.
     pub fn children_of(&self, id: BrowserId) -> Vec<BrowserId> {
-        self.state.registry.lock().unwrap().children_of(id)
+        self.state.services.browser_registry.lock().unwrap().children_of(id)
     }
 
     /// Returns the BrowserId hosted in the given window, if any.
     pub fn browser_for_window(&self, id: WindowId) -> Option<BrowserId> {
-        self.state.window_registry.lock().unwrap().browser_for_window(id)
+        self.state.services.window_registry.lock().unwrap().browser_for_window(id)
     }
 
     /// Creates a new top-level window with an embedded browser.
@@ -634,16 +639,13 @@ impl RuntimeHandle {
         let is_closing = Arc::new(AtomicBool::new(false));
 
         let mut client = KuroganeClient::new(
-            self.state.dispatcher.clone(),
-            self.state.shutdown_signal.clone(),
-            self.state.registry.clone(),
-            self.state.window_registry.clone(),
+            self.state.services.clone(),
             is_closing.clone(),
         );
 
         let mut bv_delegate = KuroganeBrowserViewDelegate::new(
-            self.state.registry.clone(),
-            self.state.window_registry.clone(),
+            self.state.services.browser_registry.clone(),
+            self.state.services.window_registry.clone(),
         );
 
         let url = CefString::from(options.url.as_str());
@@ -658,14 +660,14 @@ impl RuntimeHandle {
         ).ok_or(RuntimeError::BrowserCreationFailed)?;
 
         let window_id = {
-            let mut reg = self.state.window_registry.lock().unwrap();
+            let mut reg = self.state.services.window_registry.lock().unwrap();
             reg.allocate_id()
         };
 
         let mut delegate = KuroganeWindowDelegate::new(
             window_id,
             browser_view,
-            self.state.window_registry.clone(),
+            self.state.services.window_registry.clone(),
             Rect {
                 x: options.bounds.x,
                 y: options.bounds.y,
@@ -686,11 +688,11 @@ impl RuntimeHandle {
     ///
     /// Returns None if no browser with the given BrowserId is registered.
     pub fn get_browser_handle(&self, id: BrowserId) -> Option<BrowserHandle> {
-        let reg = self.state.registry.lock().unwrap();
+        let reg = self.state.services.browser_registry.lock().unwrap();
         if reg.get(id).is_some() {
             Some(BrowserHandle {
                 id,
-                registry: self.state.registry.clone(),
+                browser_registry: self.state.services.browser_registry.clone(),
                 ui_thread_id: self.state.ui_thread_id,
             })
         } else {
@@ -725,7 +727,7 @@ impl RuntimeHandle {
         }
         debug!("Shutting down CEF via RuntimeHandle");
         shutdown();
-        self.state.shutdown_signal.request_shutdown();
+        self.state.services.shutdown_signal.request_shutdown();
         debug!("CEF shutdown complete via RuntimeHandle");
     }
 
@@ -790,7 +792,7 @@ impl RuntimeHandle {
         );
 
         let is_closing = Arc::new(AtomicBool::new(false));
-        let mut client = KuroganeClient::new(self.state.dispatcher.clone(), self.state.shutdown_signal.clone(), self.state.registry.clone(), self.state.window_registry.clone(), is_closing);
+        let mut client = KuroganeClient::new(self.state.services.clone(), is_closing);
 
         let mut rc = request_context;
         let browser = browser_host_create_browser_sync(
@@ -805,13 +807,13 @@ impl RuntimeHandle {
         debug!("create_child_browser_impl cef_id={}", browser.identifier());
 
         let id = {
-            let reg = self.state.registry.lock().unwrap();
+            let reg = self.state.services.browser_registry.lock().unwrap();
 
             reg.find_id_by_cef_id(browser.identifier())
                 .expect("browser should have been registered by on_after_created")
         };
 
-        Some(BrowserHandle { id, registry: self.state.registry.clone(), ui_thread_id: self.state.ui_thread_id })
+        Some(BrowserHandle { id, browser_registry: self.state.services.browser_registry.clone(), ui_thread_id: self.state.ui_thread_id })
     }
 }
 
@@ -825,18 +827,9 @@ impl RuntimeHandle {
 ///
 /// Returns the initialized runtime state on success.
 fn initialize_cef(
-    start_url: String,
-    asset_root: Option<CanonicalRoot>,
+    spec: RuntimeSpec,
     dispatcher: Arc<IpcDispatcher>,
-    profile_id: Option<String>,
-    persist_session_cookies: bool,
-    gpu_mode: GpuMode,
-    chromium_flags: Vec<ChromiumFlag>,
     embedded_mode: bool,
-    external_message_pump: bool,
-    scheduler: Option<PumpScheduler>,
-    delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
-    renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
 ) -> Result<RuntimeState, RuntimeError> {
     #[cfg(target_os = "macos")]
     crate::platform::macos::init_ns_app();
@@ -848,30 +841,25 @@ fn initialize_cef(
     let args = Args::new();
 
     let shutdown_signal = ShutdownSignal::new();
-    let registry = Arc::new(Mutex::new(BrowserRegistry::new(shutdown_signal.clone())));
+    let browser_registry = Arc::new(Mutex::new(BrowserRegistry::new(shutdown_signal.clone())));
     let window_registry = Arc::new(Mutex::new(WindowRegistry::new()));
 
+    let services = Arc::new(RuntimeServices {
+        shutdown_signal,
+        dispatcher,
+        browser_registry,
+        window_registry,
+    });
+
     // ONE app for ALL processes
-    let mut app: App = KuroganeApp::new(
-        window_registry.clone(),
-        registry.clone(),
-        shutdown_signal.clone(),
-        CefString::from(start_url.as_str()),
-        asset_root,
-        dispatcher.clone(),
-        gpu_mode,
-        chromium_flags,
-        embedded_mode,
-        scheduler,
-        delegates,
-        renderer_delegates,
-    );
+    let mut app: App = KuroganeApp::new(services.clone(), spec.clone());
 
     debug!("Executing subprocess dispatch");
     execute_subprocesses(&args, &mut app);
 
-    let layout = resolve_layout(profile_id)?;
-    let settings = build_settings(&layout, persist_session_cookies, external_message_pump);
+    let layout = resolve_layout(spec.profile_id)?;
+    let external_message_pump = spec.scheduler.is_some();
+    let settings = build_settings(&layout, spec.persist_session_cookies, external_message_pump);
 
     debug!("Initializing CEF");
 
@@ -890,14 +878,11 @@ fn initialize_cef(
     // In embedded mode the host application manages its own lifecycle
     if !embedded_mode {
         debug!("Installing shutdown handler");
-        install_ctrlc_handler(registry.clone(), window_registry.clone());
+        install_ctrlc_handler(services.browser_registry.clone(), services.window_registry.clone());
     }
 
     Ok(RuntimeState {
-        shutdown_signal,
-        dispatcher,
-        registry,
-        window_registry,
+        services,
         ui_thread_id: std::thread::current().id(),
     })
 }
@@ -908,33 +893,11 @@ impl Runtime {
     /// The caller takes ownership of the event loop and must periodically call
     /// RuntimeHandle::pump when using Pump mode, then call
     /// RuntimeHandle::shutdown to clean up.
-    pub fn start(
-        start_url: String,
-        asset_root: Option<CanonicalRoot>,
+    pub(crate) fn start(
+        spec: RuntimeSpec,
         dispatcher: Arc<IpcDispatcher>,
-        profile_id: Option<String>,
-        persist_session_cookies: bool,
-        gpu_mode: GpuMode,
-        chromium_flags: Vec<ChromiumFlag>,
-        scheduler: Option<PumpScheduler>,
-        delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
-        renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
     ) -> Result<RuntimeHandle, RuntimeError> {
-        let state = initialize_cef(
-            start_url,
-            asset_root,
-            dispatcher,
-            profile_id,
-            persist_session_cookies,
-            gpu_mode,
-            chromium_flags,
-            false,
-            false,
-            scheduler,
-            delegates,
-            renderer_delegates,
-        )?;
-
+        let state = initialize_cef(spec, dispatcher, false)?;
         Ok(RuntimeHandle {
             state,
             shutdown_called: AtomicBool::new(false),
@@ -942,33 +905,11 @@ impl Runtime {
     }
 
     /// Initialize CEF in embedded mode (no window created by CEF Views)
-    pub fn start_embedded(
-        start_url: String,
-        asset_root: Option<CanonicalRoot>,
+    pub(crate) fn start_embedded(
+        spec: RuntimeSpec,
         dispatcher: Arc<IpcDispatcher>,
-        profile_id: Option<String>,
-        persist_session_cookies: bool,
-        gpu_mode: GpuMode,
-        chromium_flags: Vec<ChromiumFlag>,
-        scheduler: Option<PumpScheduler>,
-        delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
-        renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
     ) -> Result<RuntimeHandle, RuntimeError> {
-        let state = initialize_cef(
-            start_url,
-            asset_root,
-            dispatcher,
-            profile_id,
-            persist_session_cookies,
-            gpu_mode,
-            chromium_flags,
-            true,
-            true,
-            scheduler,
-            delegates,
-            renderer_delegates,
-        )?;
-
+        let state = initialize_cef(spec, dispatcher, true)?;
         Ok(RuntimeHandle {
             state,
             shutdown_called: AtomicBool::new(false),
@@ -979,30 +920,11 @@ impl Runtime {
     ///
     /// Uses CEF's internal message loop (external_message_pump = false).
     /// Existing applications using this API continue to work unchanged.
-    pub fn run(
-        start_url: String,
-        asset_root: Option<CanonicalRoot>,
+    pub(crate) fn run(
+        spec: RuntimeSpec,
         dispatcher: Arc<IpcDispatcher>,
-        profile_id: Option<String>,
-        persist_session_cookies: bool,
-        gpu_mode: GpuMode,
-        chromium_flags: Vec<ChromiumFlag>,
-        delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
-        renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
     ) -> Result<(), RuntimeError> {
-        let handle = Self::start(
-            start_url,
-            asset_root,
-            dispatcher,
-            profile_id,
-            persist_session_cookies,
-            gpu_mode,
-            chromium_flags,
-            None,
-            delegates,
-            renderer_delegates,
-        )?;
-
+        let handle = Self::start(spec, dispatcher)?;
         run_message_loop();
 
         debug!("Message loop exited");

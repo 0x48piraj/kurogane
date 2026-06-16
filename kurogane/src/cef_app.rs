@@ -1,38 +1,24 @@
 //! Root CEF application object.
 
 use cef::*;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::cell::RefCell;
 
 use crate::browser::KuroganeBrowserProcessHandler;
 use crate::ipc::IpcRenderProcessHandler;
+use crate::runtime::RuntimeServices;
+use crate::spec::RuntimeSpec;
 use crate::debug;
-use crate::fs::CanonicalRoot;
-use crate::ipc::IpcDispatcher;
-use crate::chromium_flags::{ChromiumFlag, ChromiumFlags};
-use crate::gpu::{GpuMode, apply_gpu_flags};
+use crate::chromium_flags::ChromiumFlags;
+use crate::gpu::apply_gpu_flags;
 use crate::sandbox::apply_sandbox_flags;
-use crate::ShutdownSignal;
-use crate::browser_registry::BrowserRegistry;
-use crate::window_registry::WindowRegistry;
-use crate::app::{PumpScheduler, ClientAppBrowserDelegate, ClientAppRendererDelegate};
 
 use cef::sys::cef_scheme_options_t::*;
 
 wrap_app! {
     pub struct KuroganeApp {
-        window_registry: Arc<Mutex<WindowRegistry>>,
-        registry: Arc<Mutex<BrowserRegistry>>,
-        shutdown_signal: ShutdownSignal,
-        start_url: CefString,
-        asset_root: Option<CanonicalRoot>,
-        dispatcher: Arc<IpcDispatcher>,
-        gpu_mode: GpuMode,
-        chromium_flags: Vec<ChromiumFlag>,
-        embedded_mode: bool,
-        scheduler: Option<PumpScheduler>,
-        delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
-        renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
+        services: Arc<RuntimeServices>,
+        spec: RuntimeSpec,
     }
 
     impl App {
@@ -44,7 +30,7 @@ wrap_app! {
             let Some(cmd) = command_line else { return };
 
             // Dispatch to lifecycle delegates first
-            for delegate in &self.delegates {
+            for delegate in &self.spec.delegates {
                 delegate.on_before_command_line_processing(cmd);
             }
 
@@ -62,10 +48,10 @@ wrap_app! {
             }
 
             apply_sandbox_flags(&mut flags);
-            apply_gpu_flags(&mut flags, self.gpu_mode);
+            apply_gpu_flags(&mut flags, self.spec.gpu_mode);
 
             // Apply user overrides
-            flags.extend_user_flags(&self.chromium_flags);
+            flags.extend_user_flags(&self.spec.chromium_flags);
 
             debug!("Chromium startup flags:\n{}", flags);
 
@@ -97,23 +83,16 @@ wrap_app! {
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
             Some(
                 KuroganeBrowserProcessHandler::new(
-                    self.window_registry.clone(),
-                    self.registry.clone(),
-                    self.shutdown_signal.clone(),
-                    self.start_url.clone(),
-                    self.asset_root.clone(),
-                    self.dispatcher.clone(),
+                    self.services.clone(),
+                    self.spec.clone(),
                     RefCell::new(None),
-                    self.embedded_mode,
-                    self.scheduler.clone(),
-                    self.delegates.clone(),
                     RefCell::new(None),
                 )
             )
         }
 
         fn render_process_handler(&self) -> Option<RenderProcessHandler> {
-            Some(IpcRenderProcessHandler::new(self.renderer_delegates.clone()))
+            Some(IpcRenderProcessHandler::new(self.spec.renderer_delegates.clone()))
         }
     }
 }

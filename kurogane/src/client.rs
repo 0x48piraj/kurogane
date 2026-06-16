@@ -4,17 +4,16 @@ use cef::*;
 use crate::debug;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use crate::ipc::IpcDispatcher;
+use crate::runtime::RuntimeServices;
 use crate::browser_registry::{BrowserRegistry, BrowserType};
 use crate::window_registry::WindowRegistry;
-use crate::ShutdownSignal;
 
 //
 // LifeSpanHandler
 //
 wrap_life_span_handler! {
     pub struct KuroganeLifeSpanHandler {
-        registry: Arc<Mutex<BrowserRegistry>>,
+        browser_registry: Arc<Mutex<BrowserRegistry>>,
         window_registry: Arc<Mutex<WindowRegistry>>,
         is_closing: Arc<AtomicBool>,
     }
@@ -24,7 +23,7 @@ wrap_life_span_handler! {
             if let Some(b) = browser {
                 debug!("on_after_created cef_id={}", b.identifier());
 
-                let mut reg = self.registry.lock().unwrap();
+                let mut reg = self.browser_registry.lock().unwrap();
 
                 // Only register if not already registered
                 // Popups are registered by BrowserViewDelegate::on_popup_browser_view_created
@@ -43,7 +42,7 @@ wrap_life_span_handler! {
         }
 
         fn do_close(&self, _browser: Option<&mut Browser>) -> i32 {
-            let reg = self.registry.lock().unwrap();
+            let reg = self.browser_registry.lock().unwrap();
             if reg.count() == 1 {
                 self.is_closing.store(true, Ordering::Release);
             }
@@ -54,7 +53,7 @@ wrap_life_span_handler! {
             debug!("on_before_close called");
             if let Some(b) = browser {
                 debug!("on_before_close cef_id={}", b.identifier());
-                let mut reg = self.registry.lock().unwrap();
+                let mut reg = self.browser_registry.lock().unwrap();
                 if let Some(id) = reg.find_id_by_browser(b) {
                     reg.unregister(id);
                     debug!("Browser {} destroyed", id.as_u32());
@@ -127,10 +126,7 @@ wrap_load_handler! {
 //
 wrap_client! {
     pub struct KuroganeClient {
-        dispatcher: Arc<IpcDispatcher>,
-        shutdown_signal: ShutdownSignal,
-        registry: Arc<Mutex<BrowserRegistry>>,
-        window_registry: Arc<Mutex<WindowRegistry>>,
+        services: Arc<RuntimeServices>,
         is_closing: Arc<AtomicBool>,
     }
 
@@ -140,7 +136,11 @@ wrap_client! {
         }
 
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
-            Some(KuroganeLifeSpanHandler::new(self.registry.clone(), self.window_registry.clone(), self.is_closing.clone()))
+            Some(KuroganeLifeSpanHandler::new(
+                self.services.browser_registry.clone(),
+                self.services.window_registry.clone(),
+                self.is_closing.clone(),
+            ))
         }
 
         fn on_process_message_received(
@@ -161,12 +161,12 @@ wrap_client! {
 
             // Resolve browser identity from the registry
             let browser_id = {
-                let reg = self.registry.lock().unwrap();
+                let reg = self.services.browser_registry.lock().unwrap();
                 reg.find_id_by_browser(browser)
             };
 
             // Delegate to IPC dispatcher with browser context
-            if crate::ipc::handle_ipc_message(browser, frame, msg, &self.dispatcher, browser_id) {
+            if crate::ipc::handle_ipc_message(browser, frame, msg, &self.services.dispatcher, browser_id) {
                 return 1;
             }
 

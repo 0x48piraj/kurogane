@@ -3,36 +3,23 @@
 use cef::*;
 use std::cell::RefCell;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
-use crate::fs::CanonicalRoot;
+use crate::runtime::RuntimeServices;
+use crate::spec::{RuntimeSpec, RuntimeMode};
 use crate::client::KuroganeClient;
-use crate::ipc::IpcDispatcher;
-use crate::ShutdownSignal;
-use crate::browser_registry::BrowserRegistry;
-use crate::window_registry::WindowRegistry;
 use crate::window::KuroganeWindowDelegate;
-use crate::app::{PumpRequest, PumpScheduler, ClientAppBrowserDelegate};
+use crate::app::PumpRequest;
 use crate::debug;
 
 wrap_browser_process_handler! {
     pub struct KuroganeBrowserProcessHandler {
-        window_registry: Arc<Mutex<WindowRegistry>>,
-        registry: Arc<Mutex<BrowserRegistry>>,
-        shutdown_signal: ShutdownSignal,
-        start_url: CefString,
-        asset_root: Option<CanonicalRoot>,
-        dispatcher: Arc<IpcDispatcher>,
+        services: Arc<RuntimeServices>,
+        spec: RuntimeSpec,
 
         // Keep factory alive for browser lifetime; RefCell for interior mutability
         scheme_factory: RefCell<Option<SchemeHandlerFactory>>,
-
-        // When true, skip browser/window creation in on_context_initialized
-        // The host application creates its own window and embeds CEF as a child
-        embedded_mode: bool,
-        scheduler: Option<PumpScheduler>,
-        delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
         default_client_stored: RefCell<Option<Client>>,
     }
 
@@ -41,7 +28,7 @@ wrap_browser_process_handler! {
             debug!("on_context_initialized called");
 
             // Dispatch to lifecycle delegates first
-            for delegate in &self.delegates {
+            for delegate in &self.spec.delegates {
                 delegate.on_context_initialized();
             }
 
@@ -51,7 +38,7 @@ wrap_browser_process_handler! {
 
                 // Only register the app:// scheme when serving local assets.
                 // In URL mode (App::url), there is no asset root and no scheme handler.
-                if let Some(root) = &self.asset_root {
+                if let Some(root) = &self.spec.asset_root {
                     // Create factory
                     let mut factory = crate::scheme::AppSchemeHandlerFactory::new(root.clone());
 
@@ -76,36 +63,36 @@ wrap_browser_process_handler! {
             // Check if any delegate provides a custom default client
             let mut client: Client = {
                 let mut delegate_client = None;
-                for delegate in &self.delegates {
+                for delegate in &self.spec.delegates {
                     if let Some(c) = delegate.default_client() {
                         delegate_client = Some(c);
                         break;
                     }
                 }
                 delegate_client.unwrap_or_else(|| {
-                    KuroganeClient::new(self.dispatcher.clone(), self.shutdown_signal.clone(), self.registry.clone(), self.window_registry.clone(), is_closing.clone())
+                    KuroganeClient::new(self.services.clone(), is_closing.clone())
                 })
             };
 
             // Store for subsequent default_client calls
             *self.default_client_stored.borrow_mut() = Some(client.clone());
 
-            // In embedded mode, the host application creates its own window
-            // We only register scheme handlers.
-            if self.embedded_mode {
+            // Embedded mode delegates window creation to the host application which embeds CEF as a child
+            // Skip browser/window creation in on_context_initialized; only register scheme handlers
+            if matches!(self.spec.mode, RuntimeMode::Embedded) {
                 debug!("Embedded mode; skipping window creation");
                 return;
             }
 
-            let url = self.start_url.clone();
+            let url = CefString::from(self.spec.start_url.as_str());
 
             debug!("Creating main browser with URL: {}", url.to_string());
 
             debug!("Creating BrowserView");
 
             let mut bv_delegate = crate::window::KuroganeBrowserViewDelegate::new(
-                self.registry.clone(),
-                self.window_registry.clone(),
+                self.services.browser_registry.clone(),
+                self.services.window_registry.clone(),
             );
 
             let browser_view = browser_view_create(
@@ -121,14 +108,14 @@ wrap_browser_process_handler! {
 
             // Create delegate
             let window_id = {
-                let mut reg = self.window_registry.lock().unwrap();
+                let mut reg = self.services.window_registry.lock().unwrap();
                 reg.allocate_id()
             };
 
             let mut delegate = KuroganeWindowDelegate::new(
                 window_id,
                 browser_view,
-                self.window_registry.clone(),
+                self.services.window_registry.clone(),
                 Rect::default(),
                 ShowState::NORMAL,
                 is_closing,
@@ -147,7 +134,7 @@ wrap_browser_process_handler! {
         }
 
         fn on_schedule_message_pump_work(&self, delay_ms: i64) {
-            if let Some(ref scheduler) = self.scheduler {
+            if let Some(ref scheduler) = self.spec.scheduler {
                 let request = if delay_ms <= 0 {
                     PumpRequest::Now
                 } else {

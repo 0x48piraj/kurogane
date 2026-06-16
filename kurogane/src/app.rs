@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use cef::*;
 use crate::app::resolver::ResolvedFrontend;
 use crate::ipc::browser_state::{IpcDispatcher, IpcHandler, BinaryHandler};
-use crate::{Runtime, RuntimeError, RuntimeHandle};
+use crate::runtime::{Runtime, RuntimeHandle};
+use crate::error::RuntimeError;
+use crate::spec::{RuntimeSpec, RuntimeMode};
 use crate::chromium_flags::ChromiumFlag;
 use crate::gpu::GpuMode;
 
@@ -308,65 +310,110 @@ impl App {
     /// Intended for embedded integrations where the host application owns the
     /// window hierarchy and event loop.
     pub fn start_embedded(self) -> Result<RuntimeHandle, RuntimeError> {
-        let ResolvedFrontend { asset_root, start_url } = resolver::resolve(&self.source)?;
-        let dispatcher = Arc::new(IpcDispatcher::new(self.commands, self.binary_commands));
-        Runtime::start_embedded(
+        let Self {
+            source,
+            commands,
+            binary_commands,
+            profile_id,
+            persist_session_cookies,
+            gpu_mode,
+            chromium_flags,
+            scheduler,
+            delegates,
+            renderer_delegates,
+        } = self;
+
+        let ResolvedFrontend { asset_root, start_url } = resolver::resolve(&source)?;
+        let dispatcher = Arc::new(IpcDispatcher::new(commands, binary_commands));
+
+        let spec = RuntimeSpec {
+            mode: RuntimeMode::Embedded,
             start_url,
             asset_root,
-            dispatcher,
-            self.profile_id,
-            self.persist_session_cookies,
-            self.gpu_mode,
-            self.chromium_flags,
-            self.scheduler,
-            self.delegates,
-            self.renderer_delegates,
-        )
+            profile_id,
+            persist_session_cookies,
+            gpu_mode,
+            chromium_flags,
+            scheduler,
+            delegates,
+            renderer_delegates,
+        };
+
+        Runtime::start_embedded(spec, dispatcher)
     }
 
     /// Start the application and run the message loop.
     ///
     /// Kurogane owns the event loop and blocks until shutdown.
     pub fn run(self) -> Result<(), RuntimeError> {
-        let ResolvedFrontend { asset_root, start_url } = resolver::resolve(&self.source)?;
+        let Self {
+            source,
+            commands,
+            binary_commands,
+            profile_id,
+            persist_session_cookies,
+            gpu_mode,
+            chromium_flags,
+            delegates,
+            renderer_delegates,
+            ..
+        } = self;
 
+        let ResolvedFrontend { asset_root, start_url } = resolver::resolve(&source)?;
         // Freeze IPC configuration into an immutable dispatcher shared across the runtime object graph
-        let dispatcher = Arc::new(IpcDispatcher::new(self.commands, self.binary_commands));
+        let dispatcher = Arc::new(IpcDispatcher::new(commands, binary_commands));
 
-        Runtime::run(
+        let spec = RuntimeSpec {
+            mode: RuntimeMode::Views,
             start_url,
             asset_root,
-            dispatcher,
-            self.profile_id,
-            self.persist_session_cookies,
-            self.gpu_mode,
-            self.chromium_flags,
-            self.delegates,
-            self.renderer_delegates,
-        )
+            profile_id,
+            persist_session_cookies,
+            gpu_mode,
+            chromium_flags,
+            scheduler: None,
+            delegates,
+            renderer_delegates,
+        };
+
+        Runtime::run(spec, dispatcher)
     }
 
     /// Initialize the application without entering a message loop.
     ///
     /// The caller becomes responsible for driving the runtime via RuntimeHandle::pump().
     pub fn start(self) -> Result<RuntimeHandle, RuntimeError> {
-        let ResolvedFrontend { asset_root, start_url } = resolver::resolve(&self.source)?;
+        let Self {
+            source,
+            commands,
+            binary_commands,
+            profile_id,
+            persist_session_cookies,
+            gpu_mode,
+            chromium_flags,
+            scheduler,
+            delegates,
+            renderer_delegates,
+        } = self;
 
+        let ResolvedFrontend { asset_root, start_url } = resolver::resolve(&source)?;
         // Freeze IPC configuration into an immutable dispatcher shared across the runtime object graph
-        let dispatcher = Arc::new(IpcDispatcher::new(self.commands, self.binary_commands));
+        let dispatcher = Arc::new(IpcDispatcher::new(commands, binary_commands));
 
-        Runtime::start(
+        let spec = RuntimeSpec {
+            mode: RuntimeMode::Views,
             start_url,
             asset_root,
-            dispatcher,
-            self.profile_id,
-            self.persist_session_cookies,
-            self.gpu_mode,
-            self.chromium_flags,
-            self.scheduler,
-            self.delegates,
-            self.renderer_delegates,
-        )
+            profile_id,
+            persist_session_cookies,
+            gpu_mode,
+            chromium_flags,
+            scheduler,
+            delegates,
+            renderer_delegates,
+        };
+
+        Runtime::start(spec, dispatcher)
     }
 
     /// Run the application and terminate the process on failure.
