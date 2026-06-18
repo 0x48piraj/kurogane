@@ -533,14 +533,27 @@ wrap_v8_handler! {
                     payload.extend_from_slice(cmd_bytes);
                     payload.extend_from_slice(data);
 
-                    let mut msg = cef_shm::create(
+                    match cef_shm::create(
                         "ipc",
                         IpcMsgKind::BinaryInvoke as i32,
                         id,
                         &payload,
-                    ).expect("CEF SHM creation failed");
-
-                    frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+                    ) {
+                        Some(mut msg) => {
+                            frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+                        }
+                        None => {
+                            debug!("[IPC Renderer] SHM creation failed for id={}, falling back to inline ({} bytes)", id, data.len());
+                            let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
+                            let mut msg_args = msg.argument_list().unwrap();
+                            set_kind(&mut msg_args, IpcMsgKind::BinaryInvoke);
+                            msg_args.set_int(1, id);
+                            msg_args.set_string(2, Some(&CefString::from(cmd.as_str())));
+                            let mut binary = binary_value_create(Some(data)).unwrap();
+                            msg_args.set_binary(3, Some(&mut binary));
+                            frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+                        }
+                    }
                 });
             }
 
