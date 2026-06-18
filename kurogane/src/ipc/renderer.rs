@@ -602,6 +602,17 @@ wrap_v8_handler! {
                 }
             };
 
+            // Send CancelRequest to browser so it can abort the pending async handler
+            if let Some(context) = v8_context_get_current_context() {
+                if let Some(frame) = context.frame() {
+                    let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
+                    let mut msg_args = msg.argument_list().unwrap();
+                    set_kind(&mut msg_args, IpcMsgKind::CancelRequest);
+                    msg_args.set_int(1, id);
+                    frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+                }
+            }
+
             if let Some((ctx, promise)) = cancel_promise(id) {
                 if ctx.enter() == 0 {
                     eprintln!("[IPC] cancel: failed to enter V8 context for promise id={}", id);

@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use crate::runtime::RuntimeServices;
 use crate::browser_registry::{BrowserRegistry, BrowserType};
 use crate::window_registry::WindowRegistry;
+use crate::ipc::IpcDispatcher;
 
 //
 // LifeSpanHandler
@@ -16,6 +17,7 @@ wrap_life_span_handler! {
         browser_registry: Arc<Mutex<BrowserRegistry>>,
         window_registry: Arc<Mutex<WindowRegistry>>,
         is_closing: Arc<AtomicBool>,
+        dispatcher: Arc<IpcDispatcher>,
     }
 
     impl LifeSpanHandler {
@@ -53,23 +55,27 @@ wrap_life_span_handler! {
             debug!("on_before_close called");
             if let Some(b) = browser {
                 debug!("on_before_close cef_id={}", b.identifier());
-                let mut reg = self.browser_registry.lock().unwrap();
-                if let Some(id) = reg.find_id_by_browser(b) {
-                    reg.unregister(id);
-                    debug!("Browser {} destroyed", id.as_u32());
-                    if reg.is_empty() {
-                        debug!("[BrowserRegistry] last browser removed, quitting message loop");
+                let browser_id = {
+                    let mut reg = self.browser_registry.lock().unwrap();
+                    if let Some(id) = reg.find_id_by_browser(b) {
+                        reg.unregister(id);
+                        debug!("Browser {} destroyed", id.as_u32());
+                        if reg.is_empty() {
+                            debug!("[BrowserRegistry] last browser removed, quitting message loop");
 
-                        // quit_message_loop() is only meaningful when CEF owns the main loop
-                        //
-                        // In embedded mode the host event loop owns shutdown and this call is effectively a no-op.
-                        //
-                        // TODO: Move shutdown coordination behind a single runtime lifecycle abstraction instead of
-                        // mixing quit_message_loop() and shutdown_signal.
+                            // quit_message_loop() is only meaningful when CEF owns the main loop
+                            // In embedded mode the host event loop owns shutdown and this call is effectively a no-op
+                            // TODO: Move shutdown coordination behind a single runtime lifecycle abstraction instead of mixing quit_message_loop() and shutdown_signal
 
-                        quit_message_loop();
+                            quit_message_loop();
+                        }
+                        id
+                    } else {
+                        return;
                     }
-                }
+                };
+                // Cancel any pending async handlers for this browser
+                self.dispatcher.cancel_all_for_browser(browser_id);
             }
         }
     }
@@ -140,6 +146,7 @@ wrap_client! {
                 self.services.browser_registry.clone(),
                 self.services.window_registry.clone(),
                 self.is_closing.clone(),
+                self.services.dispatcher.clone(),
             ))
         }
 

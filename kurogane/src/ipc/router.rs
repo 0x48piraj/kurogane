@@ -60,6 +60,13 @@ pub fn route_browser(
             return true;
         }
 
+        // Cancel request (renderer to browser)
+        IpcMsgKind::CancelRequest => {
+            debug!("[IPC Browser] CancelRequest id={}", id);
+            dispatcher.cancel_pending(id);
+            return true;
+        }
+
         _ => return false,
     }
 
@@ -86,12 +93,13 @@ pub fn route_renderer(
     match kind {
         IpcMsgKind::Resolve => {
             let payload = list_cef_string(args, 2);
-            rpc::resolve_cef_string(id, true, &payload);
+            rpc::resolve_cef_string(id, true, &payload, 0);
         }
 
         IpcMsgKind::Reject => {
             let payload = list_cef_string(args, 2);
-            rpc::resolve_cef_string(id, false, &payload);
+            let error_code = args.int(3);
+            rpc::resolve_cef_string(id, false, &payload, error_code);
         }
 
         IpcMsgKind::BinaryResponse => {

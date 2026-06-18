@@ -20,6 +20,8 @@ pub enum IpcMsgKind {
     BinaryInvoke = 3,
     /// Binary response (browser to renderer)
     BinaryResponse = 4,
+    /// Cancel request (renderer to browser)
+    CancelRequest = 5,
 }
 
 impl IpcMsgKind {
@@ -31,6 +33,7 @@ impl IpcMsgKind {
             2 => Some(Self::Reject),
             3 => Some(Self::BinaryInvoke),
             4 => Some(Self::BinaryResponse),
+            5 => Some(Self::CancelRequest),
             _ => None,
         }
     }

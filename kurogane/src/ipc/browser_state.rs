@@ -193,4 +193,35 @@ impl IpcDispatcher {
     pub fn remove_pending(&self, id: i32) {
         self.pending.lock().unwrap().remove(&id);
     }
+
+    /// Cancel a pending handler by id. Returns true if found.
+    pub fn cancel_pending(&self, id: i32) -> bool {
+        if let Some(entry) = self.pending.lock().unwrap().remove(&id) {
+            entry.aborted.store(true, Ordering::SeqCst);
+            debug!("[IPC Browser] canceled pending id={}", id);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Cancel all pending handlers for a given browser.
+    pub fn cancel_all_for_browser(&self, browser_id: BrowserId) -> usize {
+        let mut pending = self.pending.lock().unwrap();
+        let to_cancel: Vec<i32> = pending
+            .iter()
+            .filter(|(_, e)| e.browser_id == Some(browser_id))
+            .map(|(id, _)| *id)
+            .collect();
+        let count = to_cancel.len();
+        for id in &to_cancel {
+            if let Some(entry) = pending.remove(id) {
+                entry.aborted.store(true, Ordering::SeqCst);
+            }
+        }
+        if count > 0 {
+            debug!("[IPC Browser] canceled {} pending handlers for browser", count);
+        }
+        count
+    }
 }
