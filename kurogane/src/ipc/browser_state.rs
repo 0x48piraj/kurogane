@@ -184,4 +184,13 @@ impl IpcDispatcher {
         }
     }
 
+    // Pending handler registry
+
+    pub fn insert_pending(&self, id: i32, entry: PendingEntry) {
+        self.pending.lock().unwrap().insert(id, entry);
+    }
+
+    pub fn remove_pending(&self, id: i32) {
+        self.pending.lock().unwrap().remove(&id);
+    }
 }

@@ -4,13 +4,14 @@
 //! inline and shared memory based on payload size.
 
 use cef::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use crate::ipc::protocol::IpcMsgKind;
 use crate::ipc::transport::cef_shm;
 use crate::ipc::binary_buffer::SharedBinary;
 use crate::ipc::renderer_state::registry;
-use crate::ipc::browser_state::IpcContext;
+use crate::ipc::browser_state::{IpcContext, BinaryResponder, PendingEntry};
 use crate::ipc::IpcDispatcher;
 use crate::debug;
 
@@ -27,6 +28,30 @@ pub fn handle_invoke(
     dispatcher: &Arc<IpcDispatcher>,
     ctx: IpcContext,
 ) {
+    // Check for async binary handler first
+    if dispatcher.is_async_binary(&command) {
+        let aborted = Arc::new(AtomicBool::new(false));
+        dispatcher.insert_pending(id, PendingEntry {
+            browser_id: ctx.browser_id,
+            aborted: aborted.clone(),
+        });
+        let responder = BinaryResponder::new(Box::new({
+            let aborted = aborted.clone();
+            let frame = frame.clone();
+            let dispatcher = Arc::clone(dispatcher);
+            move |result, error_code| {
+                dispatcher.remove_pending(id);
+                if !aborted.load(Ordering::SeqCst) {
+                    send_response(&frame, id, result, error_code);
+                } else {
+                    debug!("[IPC Browser] dropping binary response for canceled id={}", id);
+                }
+            }
+        }));
+        dispatcher.dispatch_async_binary(&command, data, responder);
+        return;
+    }
+
     let result = catch_unwind(AssertUnwindSafe(|| {
         dispatcher.dispatch_binary_with_context(&command, data, ctx)
     }));

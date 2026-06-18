@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use crate::ipc::protocol::{set_kind, IpcMsgKind, IpcId};
 use crate::ipc::renderer_state::registry;
-use crate::ipc::browser_state::{IpcDispatcher, IpcResult, IpcContext};
+use crate::ipc::browser_state::{IpcDispatcher, IpcResult, IpcContext, IpcResponder, PendingEntry};
 use crate::debug;
 
 // Browser
