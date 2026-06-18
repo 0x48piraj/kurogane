@@ -10,7 +10,7 @@ use crate::debug;
 use crate::ipc::protocol::{set_kind, IpcMsgKind};
 use crate::ipc::binary::SHM_THRESHOLD;
 use crate::ipc::transport::cef_shm;
-use crate::ipc::renderer_state::{register_promise, clear_context_promises};
+use crate::ipc::renderer_state::{register_promise, cancel_promise, clear_context_promises};
 use crate::ipc::binary;
 use crate::ipc::router;
 use crate::bridge;
@@ -133,6 +133,19 @@ wrap_render_process_handler! {
             core.set_value_bykey(
                 Some(&CefString::from("invokeBinary")),
                 Some(&mut invoke_binary),
+                V8Propertyattribute::default(),
+            );
+
+            // Cancel pending promise
+            let mut cancel_handler = IpcCancelHandler::new();
+            let mut cancel = v8_value_create_function(
+                Some(&CefString::from("cancel")),
+                Some(&mut cancel_handler),
+            ).unwrap();
+
+            core.set_value_bykey(
+                Some(&CefString::from("cancel")),
+                Some(&mut cancel),
                 V8Propertyattribute::default(),
             );
 
@@ -533,6 +546,64 @@ wrap_v8_handler! {
 
             if let Some(ret) = retval {
                 *ret = Some(promise);
+            }
+
+            1
+        }
+    }
+}
+
+//
+// Cancel handler
+//
+
+wrap_v8_handler! {
+    pub struct IpcCancelHandler;
+
+    impl V8Handler {
+        fn execute(
+            &self,
+            _name: Option<&CefString>,
+            _object: Option<&mut V8Value>,
+            arguments: Option<&[Option<V8Value>]>,
+            retval: Option<&mut Option<V8Value>>,
+            exception: Option<&mut CefString>,
+        ) -> i32 {
+            let args = match arguments {
+                Some(a) if !a.is_empty() => a,
+                _ => {
+                    if let Some(exc) = exception {
+                        *exc = CefString::from("cancel requires an id argument");
+                    }
+                    return 0;
+                }
+            };
+
+            let id = match args.first() {
+                Some(Some(v)) if v.is_int() != 0 || v.is_uint() != 0 => v.int_value(),
+                _ => {
+                    if let Some(exc) = exception {
+                        *exc = CefString::from("cancel: id must be an integer");
+                    }
+                    return 0;
+                }
+            };
+
+            if let Some((ctx, promise)) = cancel_promise(id) {
+                if ctx.enter() == 0 {
+                    eprintln!("[IPC] cancel: failed to enter V8 context for promise id={}", id);
+                    return 1;
+                }
+                let reject_msg = CefString::from("ERR_0: Canceled");
+                promise.reject_promise(Some(&reject_msg));
+                ctx.exit();
+                if let Some(ret) = retval {
+                    *ret = v8_value_create_bool(1);
+                }
+            } else {
+                if let Some(ret) = retval {
+                    *ret = v8_value_create_bool(0);
+                }
             }
 
             1

@@ -68,6 +68,10 @@ pub fn register_promise(ctx: V8Context, promise: V8Value) -> IpcId {
     registry().lock().unwrap().register(ctx, promise)
 }
 
+pub fn cancel_promise(id: IpcId) -> Option<(V8Context, V8Value)> {
+    registry().lock().unwrap().take(id)
+}
+
 pub fn clear_context_promises(ctx: &V8Context) {
     registry().lock().unwrap().clear_context(ctx);
 }

@@ -60,10 +60,21 @@
         return window.core.invokeBinary(command, buffer);
     }
 
+    /**
+     * Cancel a pending IPC request by its promise id.
+     *
+     * @param {number} id - The promise id returned by invoke/invokeBinary
+     * @returns {boolean} true if the promise was found and canceled
+     */
+    function cancel(id) {
+        return !!window.core.cancel(id);
+    }
+
     window.kurogane = Object.freeze({
         invoke,
         invokeBinary,
-        version: "0.0.2"
+        cancel,
+        version: "0.0.4"
     });
 
 })();
