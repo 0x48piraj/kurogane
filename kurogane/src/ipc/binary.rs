@@ -29,13 +29,18 @@ pub fn handle_invoke(
 ) {
     let result = catch_unwind(AssertUnwindSafe(|| {
         dispatcher.dispatch_binary_with_context(&command, data, ctx)
-    }))
-    .unwrap_or_else(|_| Err("Binary handler panicked".to_string()));
+    }));
 
-    send_response(frame, id, result);
+    let (response, error_code) = match result {
+        Ok(Ok(data)) => (Ok(data), 0),
+        Ok(Err(msg)) => (Err(msg), 0),
+        Err(_) => (Err("Binary handler panicked".to_string()), -1),
+    };
+
+    send_response(frame, id, response, error_code);
 }
 
-pub fn send_error(frame: &Frame, id: i32, err: String) {
+pub fn send_error(frame: &Frame, id: i32, err: String, error_code: i32) {
     if frame.is_valid() == 0 {
         return;
     }
@@ -46,6 +51,7 @@ pub fn send_error(frame: &Frame, id: i32, err: String) {
     crate::ipc::protocol::set_kind(&mut args, IpcMsgKind::Reject);
     args.set_int(1, id);
     args.set_string(2, Some(&CefString::from(err.as_str())));
+    args.set_int(3, error_code);
 
     frame.send_process_message(ProcessId::RENDERER, Some(&mut msg));
 }
@@ -54,6 +60,7 @@ pub fn send_response(
     frame: &Frame,
     id: i32,
     result: Result<Vec<u8>, String>,
+    error_code: i32,
 ) {
     // Guard against destroyed frames
     if frame.is_valid() == 0 {
@@ -111,6 +118,7 @@ pub fn send_response(
             crate::ipc::protocol::set_kind(&mut args, IpcMsgKind::Reject);
             args.set_int(1, id);
             args.set_string(2, Some(&CefString::from(err.as_str())));
+            args.set_int(3, error_code);
             frame.send_process_message(ProcessId::RENDERER, Some(&mut msg));
         }
     }
@@ -178,7 +186,8 @@ fn resolve_binary(id: i32, payload: &[u8]) {
             }
 
             None => {
-                promise.reject_promise(Some(&CefString::from("Failed to create ArrayBuffer backing store")));
+                let reject_msg = CefString::from("ERR_-2: Failed to create ArrayBuffer backing store");
+                promise.reject_promise(Some(&reject_msg));
             }
         }
 
@@ -201,7 +210,8 @@ fn resolve_binary_shm(id: i32, buffer: SharedBinary) {
             }
 
             None => {
-                promise.reject_promise(Some(&CefString::from("Failed to create SHM-backed ArrayBuffer")));
+                let reject_msg = CefString::from("ERR_-2: Failed to create SHM-backed ArrayBuffer");
+                promise.reject_promise(Some(&reject_msg));
             }
         }
 

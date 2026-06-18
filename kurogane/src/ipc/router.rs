@@ -56,7 +56,7 @@ pub fn route_browser(
             }
 
             debug!("[IPC Router] inline BinaryInvoke missing binary arg");
-            binary::send_error(frame, id, "missing binary data".into());
+            binary::send_error(frame, id, "missing binary data".into(), 1);
             return true;
         }
 

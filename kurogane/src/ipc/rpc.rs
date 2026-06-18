@@ -24,14 +24,19 @@ pub fn handle_invoke(
 
     let result = catch_unwind(AssertUnwindSafe(|| {
         dispatcher.dispatch_with_context(&command, &payload, ctx)
-    }))
-    .unwrap_or_else(|_| Err("IPC handler panicked".to_string()));
+    }));
 
-    send_response(frame, id, result);
+    let (response, error_code) = match result {
+        Ok(Ok(payload)) => (Ok(payload), 0),
+        Ok(Err(msg)) => (Err(msg), 0),
+        Err(_) => (Err("IPC handler panicked".to_string()), -1),
+    };
+
+    send_response(frame, id, response, error_code);
 }
 
 /// Send JSON response to renderer
-pub fn send_response(frame: &Frame, id: IpcId, result: IpcResult) {
+pub fn send_response(frame: &Frame, id: IpcId, result: IpcResult, error_code: i32) {
     // frame no longer exists
     if frame.is_valid() == 0 {
         debug!("[IPC Browser] frame destroyed, dropping id={}", id);
@@ -65,6 +70,7 @@ pub fn send_response(frame: &Frame, id: IpcId, result: IpcResult) {
             set_kind(&mut args, IpcMsgKind::Reject);
             args.set_int(1, id);
             args.set_string(2, Some(&CefString::from(err.as_str())));
+            args.set_int(3, error_code);
         }
     }
 
@@ -73,7 +79,7 @@ pub fn send_response(frame: &Frame, id: IpcId, result: IpcResult) {
 
 // Renderer
 
-pub fn resolve_cef_string(id: IpcId, success: bool, payload: &CefString) {
+pub fn resolve_cef_string(id: IpcId, success: bool, payload: &CefString, error_code: i32) {
     // Remove entry under lock; drop it before touching V8.
     // Holding the mutex across context.exit() can deadlock due to microtask reentrancy.
     let entry = {
@@ -98,7 +104,9 @@ pub fn resolve_cef_string(id: IpcId, success: bool, payload: &CefString) {
                 let mut v = v8_value_create_string(Some(payload)).unwrap();
                 promise.resolve_promise(Some(&mut v));
             } else {
-                promise.reject_promise(Some(payload));
+                let reject_msg = format!("ERR_{}: {}", error_code, payload);
+                let reject_cef = CefString::from(reject_msg.as_str());
+                promise.reject_promise(Some(&reject_cef));
             }
 
             context.exit(); // microtask checkpoint fires; lock is not held
