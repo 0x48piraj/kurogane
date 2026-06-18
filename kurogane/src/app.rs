@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use cef::*;
 use crate::app::resolver::ResolvedFrontend;
-use crate::ipc::browser_state::{IpcDispatcher, IpcHandler, BinaryHandler, AsyncIpcHandler, AsyncBinaryHandler, IpcResponder, BinaryResponder};
+use crate::ipc::browser_state::{IpcDispatcher, IpcHandler, BinaryHandler, AsyncIpcHandler, AsyncBinaryHandler, IpcResponder, BinaryResponder, IpcContext};
 use crate::runtime::{RuntimeBootstrap, Runtime};
 use crate::error::RuntimeError;
 use crate::spec::{RuntimeSpec, RuntimeMode};
@@ -246,7 +246,7 @@ impl App {
         }
 
         // Wrap the typed handler into the wire-level IpcHandler once
-        let wrapped: IpcHandler = Box::new(move |payload: &str| {
+        let wrapped: IpcHandler = Box::new(move |payload: &str, _ctx: IpcContext| {
             let input: Value = if payload.is_empty() {
                 Value::Null
             } else {
@@ -281,7 +281,10 @@ impl App {
             panic!("command '{name}' registered twice");
         }
 
-        self.binary_commands.insert(name, Box::new(handler));
+        let wrapped: BinaryHandler = Box::new(move |payload: &[u8], _ctx: IpcContext| {
+            handler(payload)
+        });
+        self.binary_commands.insert(name, wrapped);
         self
     }
 
@@ -305,7 +308,10 @@ impl App {
             panic!("command '{name}' registered twice");
         }
 
-        self.async_commands.insert(name, Box::new(handler));
+        let wrapped: AsyncIpcHandler = Box::new(move |value: Value, responder: IpcResponder, _ctx: IpcContext| {
+            handler(value, responder)
+        });
+        self.async_commands.insert(name, wrapped);
         self
     }
 
@@ -329,7 +335,10 @@ impl App {
             panic!("command '{name}' registered twice");
         }
 
-        self.async_binary_commands.insert(name, Box::new(handler));
+        let wrapped: AsyncBinaryHandler = Box::new(move |payload: Vec<u8>, responder: BinaryResponder, _ctx: IpcContext| {
+            handler(payload, responder)
+        });
+        self.async_binary_commands.insert(name, wrapped);
         self
     }
 

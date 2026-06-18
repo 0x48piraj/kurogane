@@ -48,13 +48,7 @@
                 data.byteOffset + data.byteLength,
             );
         } else {
-            return Promise.reject(
-                new TypeError(
-                    `invokeBinary: expected ArrayBuffer or ArrayBufferView, got ${
-                        data === null ? 'null' : typeof data
-                    }`
-                )
-            );
+            return Promise.reject(new TypeError(`invokeBinary: expected ArrayBuffer or ArrayBufferView, got ${data === null ? 'null' : typeof data}`));
         }
 
         return window.core.invokeBinary(command, buffer);

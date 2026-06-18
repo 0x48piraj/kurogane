@@ -14,8 +14,8 @@ use crate::debug;
 // Handler types
 
 pub type IpcResult = Result<String, String>;
-pub type IpcHandler = Box<dyn Fn(&str) -> IpcResult + Send + Sync>;
-pub type BinaryHandler = Box<dyn Fn(&[u8]) -> Result<Vec<u8>, String> + Send + Sync>;
+pub type IpcHandler = Box<dyn Fn(&str, IpcContext) -> IpcResult + Send + Sync>;
+pub type BinaryHandler = Box<dyn Fn(&[u8], IpcContext) -> Result<Vec<u8>, String> + Send + Sync>;
 
 /// Responder for async JSON IPC handlers.
 /// Holds a single-use callback that sends the response to the renderer.
@@ -61,8 +61,8 @@ impl BinaryResponder {
     }
 }
 
-pub type AsyncIpcHandler = Box<dyn Fn(serde_json::Value, IpcResponder) + Send + Sync>;
-pub type AsyncBinaryHandler = Box<dyn Fn(Vec<u8>, BinaryResponder) + Send + Sync>;
+pub type AsyncIpcHandler = Box<dyn Fn(serde_json::Value, IpcResponder, IpcContext) + Send + Sync>;
+pub type AsyncBinaryHandler = Box<dyn Fn(Vec<u8>, BinaryResponder, IpcContext) + Send + Sync>;
 
 /// A pending async handler entry that can be cancelled.
 pub struct PendingEntry {
@@ -117,30 +117,20 @@ impl IpcDispatcher {
         }
     }
 
-    pub fn dispatch(&self, command: &str, payload: &str) -> IpcResult {
+    /// Dispatch a JSON command with browser context.
+    pub fn dispatch(&self, command: &str, payload: &str, ctx: IpcContext) -> IpcResult {
         match self.handlers.get(command) {
-            Some(h) => h(payload),
+            Some(h) => h(payload, ctx),
             None => Err(format!("[IPC] unknown command '{command}'")),
         }
     }
 
-    pub fn dispatch_binary(&self, command: &str, payload: &[u8]) -> Result<Vec<u8>, String> {
+    /// Dispatch a binary command with browser context.
+    pub fn dispatch_binary(&self, command: &str, payload: &[u8], ctx: IpcContext) -> Result<Vec<u8>, String> {
         match self.binary_handlers.get(command) {
-            Some(h) => h(payload),
+            Some(h) => h(payload, ctx),
             None => Err(format!("[IPC] unknown binary command '{command}'")),
         }
-    }
-
-    /// Dispatch a JSON command with browser context.
-    /// Currently delegates to dispatch - handlers do not yet receive IpcContext.
-    pub fn dispatch_with_context(&self, command: &str, payload: &str, _ctx: IpcContext) -> IpcResult {
-        self.dispatch(command, payload)
-    }
-
-    /// Dispatch a binary command with browser context.
-    /// Currently delegates to dispatch_binary - handlers do not yet receive IpcContext.
-    pub fn dispatch_binary_with_context(&self, command: &str, payload: &[u8], _ctx: IpcContext) -> Result<Vec<u8>, String> {
-        self.dispatch_binary(command, payload)
     }
 
     /// Check if a command is registered as an async handler.
@@ -153,8 +143,8 @@ impl IpcDispatcher {
         self.async_binary_handlers.contains_key(command)
     }
 
-    /// Dispatch an async JSON command. Returns true if handled.
-    pub fn dispatch_async(&self, command: &str, payload: &str, responder: IpcResponder) -> bool {
+    /// Dispatch an async JSON command with browser context. Returns true if handled.
+    pub fn dispatch_async(&self, command: &str, payload: &str, responder: IpcResponder, ctx: IpcContext) -> bool {
         if let Some(handler) = self.async_handlers.get(command) {
             let value: serde_json::Value = if payload.is_empty() {
                 serde_json::Value::Null
@@ -167,17 +157,17 @@ impl IpcDispatcher {
                     }
                 }
             };
-            handler(value, responder);
+            handler(value, responder, ctx);
             true
         } else {
             false
         }
     }
 
-    /// Dispatch an async binary command. Returns true if handled.
-    pub fn dispatch_async_binary(&self, command: &str, payload: &[u8], responder: BinaryResponder) -> bool {
+    /// Dispatch an async binary command with browser context. Returns true if handled.
+    pub fn dispatch_async_binary(&self, command: &str, payload: &[u8], responder: BinaryResponder, ctx: IpcContext) -> bool {
         if let Some(handler) = self.async_binary_handlers.get(command) {
-            handler(payload.to_vec(), responder);
+            handler(payload.to_vec(), responder, ctx);
             true
         } else {
             false
