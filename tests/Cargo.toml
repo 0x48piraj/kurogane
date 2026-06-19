@@ -14,66 +14,66 @@ serde_json = "1.0.149"
 winit = "0.30"
 raw-window-handle = "0.6"
 
-[[bin]]
+[[example]]
 name = "benchmark"
 path = "benchmark.rs"
 
-[[bin]]
+[[example]]
 name = "gpu"
 path = "gpu.rs"
 
-[[bin]]
+[[example]]
 name = "files-cors"
 path = "files-cors.rs"
 
-[[bin]]
+[[example]]
 name = "dom"
 path = "dom.rs"
 
-[[bin]]
+[[example]]
 name = "pump"
 path = "pump.rs"
 
-[[bin]]
+[[example]]
 name = "css-to-shader"
 path = "css-to-shader.rs"
 
-[[bin]]
+[[example]]
 name = "ipc"
 path = "ipc.rs"
 
-[[bin]]
+[[example]]
 name = "wasm"
 path = "wasm.rs"
 
-[[bin]]
+[[example]]
 name = "winit_views_poll"
 path = "winit/views_poll.rs"
 
-[[bin]]
+[[example]]
 name = "winit_views_timer"
 path = "winit/views_timer.rs"
 
-[[bin]]
+[[example]]
 name = "winit_views_scheduler"
 path = "winit/views_scheduler.rs"
 
-[[bin]]
+[[example]]
 name = "winit_native_embedding"
 path = "winit/host_window.rs"
 
-[[bin]]
+[[example]]
 name = "popups"
 path = "popups.rs"
 
-[[bin]]
+[[example]]
 name = "multi-window"
 path = "multi-window.rs"
 
-[[bin]]
+[[example]]
 name = "window-management"
 path = "window-management.rs"
 
-[[bin]]
+[[example]]
 name = "delegates"
 path = "delegates.rs"

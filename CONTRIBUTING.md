@@ -105,8 +105,10 @@ Kurogane includes a dedicated `tests` workspace crate featuring automated and ma
 You can execute a specific test case (such as the hardware acceleration / GPU status test) directly through the repository's local CLI package:
 
 ```bash
-cargo run -p kurogane-cli -- dev --bin gpu
+cargo run -p kurogane-cli -- dev --example gpu
 ```
+
+> **Tip:** Relying on `cargo run -p kurogane-cli` is the ideal workflow if you are actively modifying the CLI codebase itself, as it eliminates the need to repeatedly run a global `cargo install` to test your changes.
 
 ### Optimizing your workflow
 
@@ -116,8 +118,11 @@ If your changes are focused entirely on the runtime or application layers rather
 # Install the Kurogane CLI globally from the repository source
 cargo install --git https://github.com/0x48piraj/kurogane kurogane-cli
 
+# Or locally
+cargo install --path . --force
+
 # Execute the target test binary directly
-kurogane dev --bin gpu
+kurogane dev --example gpu
 ```
 
 ### Creating custom test applications
@@ -137,7 +142,6 @@ path = "test-feature-1.rs"
 
 ```bash
 kurogane dev --bin test-feature-1
-
 ```
 
 > **Important working directory Note:** If your test application initializes a local frontend via `App::new()` using relative file paths, ensure your working directory is set to the `tests/` directory prior to execution. Running the binary from the workspace root may result in path resolution errors for frontend assets.

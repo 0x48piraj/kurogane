@@ -40,7 +40,7 @@ This produces a production-ready build in:
 Once built, run it via:
 
 ```bash
-cargo run --bin files-cors
+kurogane dev --example files-cors
 ```
 
 The runtime will load the built `index.html` using the `app://app/` scheme and serve all assets through the custom CEF resource handler.

@@ -11,7 +11,7 @@ From the workspace root:
 ```bash
 cd tests
 
-kurogane dev --bin <test-name>
+kurogane dev --example <test-name>
 ```
 
 ## List of tests
@@ -27,7 +27,7 @@ A lightweight benchmarking suite for measuring:
 Run:
 
 ```bash
-kurogane dev --bin benchmark
+kurogane dev --example benchmark
 ```
 
 Used to evaluate and optimize communication between renderer and browser processes.
@@ -63,7 +63,7 @@ examples/files-cors/
 Running the test:
 
 ```bash
-kurogane dev --bin files-cors
+kurogane dev --example files-cors
 ```
 
 This ensures real-world frontend builds work correctly inside the runtime.
@@ -77,7 +77,7 @@ This demo intentionally animates many DOM elements illustrating DOM animation li
 Run:
 
 ```bash
-kurogane dev --bin dom
+kurogane dev --example dom
 ```
 
 This is not a performance benchmark.
