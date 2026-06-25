@@ -7,11 +7,8 @@ use cef::*;
 use std::sync::Arc;
 use crate::app::ClientAppRendererDelegate;
 use crate::debug;
-use crate::ipc::protocol::{set_kind, IpcMsgKind};
-use crate::ipc::binary::SHM_THRESHOLD;
-use crate::ipc::transport::cef_shm;
-use crate::ipc::renderer_state::{register_promise, cancel_promise, clear_context_promises};
-use crate::ipc::binary;
+use crate::ipc::envelope::*;
+use crate::ipc::transport::message::{build_message, build_message_parts, extract_message};
 use crate::ipc::router;
 use crate::bridge;
 
@@ -56,6 +53,15 @@ fn with_array_buffer<R>(
     };
 
     f(slice)
+}
+
+/// Encode [cmd_len:u16 LE][cmd_bytes] into a Vec.
+fn encode_cmd_header(cmd: &str) -> Vec<u8> {
+    let cmd_bytes = cmd.as_bytes();
+    let mut v = Vec::with_capacity(2 + cmd_bytes.len());
+    v.extend_from_slice(&(cmd_bytes.len() as u16).to_le_bytes());
+    v.extend_from_slice(cmd_bytes);
+    v
 }
 
 //
@@ -281,41 +287,22 @@ wrap_render_process_handler! {
             let msg = message.unwrap();
 
             let name: CefString = (&msg.name()).into();
-            if name.to_string() != "ipc" { return 0; }
+            if !name.to_string().starts_with("kurogane_") { return 0; }
 
             let Some(frame) = frame else {
                 debug!("[IPC Renderer] missing frame");
                 return 0;
             };
 
-            // SHM-backed messages have no ListValue; dispatch by SHM header
-            if let Some(region) = msg.shared_memory_region() {
-                if let Some((kind, id)) = cef_shm::read_header(&region) {
-                    match kind {
-                        k if k == IpcMsgKind::BinaryResponse as i32 => {
-                            binary::handle_response_shm(frame, &region, id);
-                        }
-                        _ => {
-                            debug!("[IPC Renderer] unexpected SHM message kind {}", kind);
-                        }
-                    }
+            let received = match extract_message(msg) {
+                Some(m) => m,
+                None => {
+                    debug!("[IPC Renderer] failed to extract message");
+                    return 1;
                 }
-                return 1;
-            }
-
-            // Inline message via ListValue
-            let Some(args) = msg.argument_list() else {
-                debug!("[IPC Renderer] missing argument list");
-                return 0;
             };
 
-            // Always call router for valid IPC message
-            let handled = router::route_renderer(frame, &args);
-
-            if !handled {
-                debug!("[IPC Renderer] unexpected ipc message type from browser");
-            }
-
+            router::route_renderer(frame, received.as_bytes());
             1
         }
 
@@ -400,19 +387,39 @@ wrap_v8_handler! {
 
             let promise = v8_value_create_promise().unwrap();
 
-            let id = register_promise(context.clone(), promise.clone());
+            let id = register_promise(context.clone(), promise.clone(), SUB_RPC);
 
             debug!("[IPC Renderer] JS invoke: '{}' (id={})", cmd, id);
 
-            let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
-            let mut msg_args = msg.argument_list().unwrap();
+            let envelope = Envelope {
+                version: ENVELOPE_VERSION,
+                subsystem: SUB_RPC,
+                opcode: RPC_INVOKE,
+                flags: 0,
+                correlation_id: id as u32,
+                payload_kind: PAYLOAD_STRING,
+            };
 
-            set_kind(&mut msg_args, IpcMsgKind::Invoke);
-            msg_args.set_int(1, id);
-            msg_args.set_string(2, Some(&CefString::from(cmd.as_str())));
-            msg_args.set_string(3, Some(&CefString::from(payload.as_str())));
+            // Build parts separately to avoid intermediate Vec
+            let cmd_header = encode_cmd_header(&cmd);
+            let payload_bytes = payload.as_bytes();
 
-            frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+            if let Some(mut msg) = build_message_parts("kurogane_rpc", &envelope, &[&cmd_header, payload_bytes]) {
+                frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+            } else {
+                if context.enter() == 0 {
+                    registry().lock().unwrap().take(id);
+                    return 0;
+                }
+                let reject_msg = CefString::from("ERR_-1: Failed to build IPC message");
+                promise.reject_promise(Some(&reject_msg));
+                context.exit();
+                registry().lock().unwrap().take(id);
+                if let Some(ret) = retval {
+                    *ret = Some(promise);
+                }
+                return 1;
+            }
 
             if let Some(ret) = retval {
                 *ret = Some(promise);
@@ -501,64 +508,48 @@ wrap_v8_handler! {
             };
 
             let promise = v8_value_create_promise().unwrap();
+            let promise_for_retval = promise.clone();
+            let id = register_promise(context.clone(), promise.clone(), SUB_BINARY);
 
-            let cmd_bytes = cmd.as_bytes();
-            let cmd_len = cmd_bytes.len();
+            let mut build_failed = false;
+            with_array_buffer(ptr as *const u8, len, |data| {
+                let cmd_header = encode_cmd_header(&cmd);
 
-            if len < SHM_THRESHOLD {
-                // inline: faster for small-medium sizes
-                let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
-                let mut msg_args = msg.argument_list().unwrap();
+                let envelope = Envelope {
+                    version: ENVELOPE_VERSION,
+                    subsystem: SUB_BINARY,
+                    opcode: BINARY_INVOKE,
+                    flags: 0,
+                    correlation_id: id as u32,
+                    payload_kind: PAYLOAD_BINARY,
+                };
 
-                set_kind(&mut msg_args, IpcMsgKind::BinaryInvoke);
-                msg_args.set_string(2, Some(&CefString::from(cmd.as_str())));
-
-                with_array_buffer(ptr as *const u8, len, |data| {
-                    let mut binary = binary_value_create(Some(data)).unwrap();
-                    msg_args.set_binary(3, Some(&mut binary));
-                });
-
-                let id = register_promise(context.clone(), promise.clone());
-                msg_args.set_int(1, id);
-
-                frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
-            } else {
-                // CEF SHM: large payload, no ListValue
-                let id = register_promise(context.clone(), promise.clone());
-
-                with_array_buffer(ptr as *const u8, len, |data| {
-                    let payload_len = 2 + cmd_len + data.len();
-                    let mut payload = Vec::with_capacity(payload_len);
-                    payload.extend_from_slice(&(cmd_len as u16).to_le_bytes());
-                    payload.extend_from_slice(cmd_bytes);
-                    payload.extend_from_slice(data);
-
-                    match cef_shm::create(
-                        "ipc",
-                        IpcMsgKind::BinaryInvoke as i32,
-                        id,
-                        &payload,
-                    ) {
-                        Some(mut msg) => {
-                            frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+                if let Some(mut msg) = build_message_parts("kurogane_binary", &envelope, &[&cmd_header, data]) {
+                    frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+                } else {
+                    build_failed = true;
+                    if let Some(ctx) = v8_context_get_current_context() {
+                        if ctx.enter() == 0 {
+                            registry().lock().unwrap().take(id);
+                            return;
                         }
-                        None => {
-                            debug!("[IPC Renderer] SHM creation failed for id={}, falling back to inline ({} bytes)", id, data.len());
-                            let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
-                            let mut msg_args = msg.argument_list().unwrap();
-                            set_kind(&mut msg_args, IpcMsgKind::BinaryInvoke);
-                            msg_args.set_int(1, id);
-                            msg_args.set_string(2, Some(&CefString::from(cmd.as_str())));
-                            let mut binary = binary_value_create(Some(data)).unwrap();
-                            msg_args.set_binary(3, Some(&mut binary));
-                            frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
-                        }
+                        let reject_msg = CefString::from("ERR_-1: Failed to build IPC message");
+                        promise.reject_promise(Some(&reject_msg));
+                        ctx.exit();
                     }
-                });
+                    registry().lock().unwrap().take(id);
+                }
+            });
+
+            if build_failed {
+                if let Some(ret) = retval {
+                    *ret = Some(promise_for_retval);
+                }
+                return 1;
             }
 
             if let Some(ret) = retval {
-                *ret = Some(promise);
+                *ret = Some(promise_for_retval);
             }
 
             1
