@@ -64,11 +64,87 @@
         return !!window.core.cancel(id);
     }
 
+    /**
+     * Subscribe to a browser-side event.
+     *
+     * @param {string} eventName
+     * @param {Function} callback - receives (payload) when the event fires
+     * @returns {number} subscription id (pass to off() to unsubscribe)
+     */
+    function on(eventName, callback) {
+        if (typeof eventName !== 'string') {
+            throw new TypeError('on: eventName must be a string');
+        }
+        if (typeof callback !== 'function') {
+            throw new TypeError('on: callback must be a function');
+        }
+        return window.core.on(eventName, callback);
+    }
+
+    /**
+     * Unsubscribe from an event.
+     *
+     * @param {number} id - subscription id returned by on()
+     * @returns {boolean} true if the subscription was found and removed
+     */
+    function off(id) {
+        return !!window.core.off(id);
+    }
+
+    /**
+     * Open a stream to the browser process.
+     *
+     * @param {string} handlerName - registered stream handler name
+     * @param {string} [metadata] - optional metadata string
+     * @returns {Promise<number>} resolves with the stream id
+     */
+    function openStream(handlerName, metadata) {
+        return window.core.openStream(handlerName, metadata || '');
+    }
+
+    /**
+     * Write a chunk of data to an open stream.
+     *
+     * @param {number} streamId
+     * @param {ArrayBuffer | ArrayBufferView} data
+     */
+    function writeStream(streamId, data) {
+        let buffer;
+
+        if (data instanceof ArrayBuffer) {
+            buffer = data;
+        } else if (ArrayBuffer.isView(data)) {
+            buffer = data.buffer.slice(
+                data.byteOffset,
+                data.byteOffset + data.byteLength,
+            );
+        } else {
+            throw new TypeError('writeStream: expected ArrayBuffer or ArrayBufferView');
+        }
+
+        window.core.writeStream(streamId, buffer);
+    }
+
+    /**
+     * Close a stream.
+     *
+     * @param {number} streamId
+     * @param {string} [result] - optional result string
+     */
+    function endStream(streamId, result) {
+        window.core.endStream(streamId, result || '');
+    }
+
     window.kurogane = Object.freeze({
         invoke,
         invokeBinary,
         cancel,
-        version: "0.0.4"
+        on,
+        off,
+        openStream,
+        writeStream,
+        endStream,
+        version: "0.0.5"
     });
 
 })();
