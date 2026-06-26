@@ -738,3 +738,258 @@ wrap_v8_handler! {
         }
     }
 }
+
+//
+// Stream open handler
+//
+
+wrap_v8_handler! {
+    pub struct IpcOpenStreamHandler;
+
+    impl V8Handler {
+        fn execute(
+            &self,
+            _name: Option<&CefString>,
+            _object: Option<&mut V8Value>,
+            arguments: Option<&[Option<V8Value>]>,
+            retval: Option<&mut Option<V8Value>>,
+            exception: Option<&mut CefString>,
+        ) -> i32 {
+            let args = match arguments {
+                Some(a) if !a.is_empty() => a,
+                _ => {
+                    if let Some(exc) = exception { *exc = CefString::from("openStream requires a handler name argument"); }
+                    return 0;
+                }
+            };
+
+            let handler_name = match args.first() {
+                Some(Some(v)) if v.is_string() != 0 => v8_to_string(v),
+                _ => {
+                    if let Some(exc) = exception { *exc = CefString::from("handler name must be a string"); }
+                    return 0;
+                }
+            };
+
+            if handler_name.is_empty() {
+                if let Some(exc) = exception { *exc = CefString::from("handler name cannot be empty"); }
+                return 0;
+            }
+
+            let metadata = match args.get(1) {
+                Some(Some(v)) if v.is_string() != 0 => v8_to_string(v),
+                _ => String::new(),
+            };
+
+            let context = match v8_context_get_current_context() {
+                Some(ctx) => ctx,
+                None => {
+                    if let Some(exc) = exception { *exc = CefString::from("openStream: no active renderer context"); }
+                    return 0;
+                }
+            };
+
+            let Some(frame) = context.frame() else {
+                if let Some(exc) = exception { *exc = CefString::from("openStream: no frame for current context"); }
+                return 0;
+            };
+
+            let promise = v8_value_create_promise().unwrap();
+            let stream_id = register_promise(context.clone(), promise.clone(), SUB_STREAM);
+
+            debug!("[IPC Renderer] openStream '{}' stream_id={}", handler_name, stream_id);
+
+            let envelope = Envelope {
+                version: ENVELOPE_VERSION,
+                subsystem: SUB_STREAM,
+                opcode: STREAM_OPEN,
+                flags: 0,
+                correlation_id: stream_id as u32,
+                payload_kind: PAYLOAD_STRING,
+            };
+
+            let payload = encode_cmd_payload(&handler_name, metadata.as_bytes());
+            if let Some(mut msg) = build_message("kurogane_stream", &envelope, &payload) {
+                frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+            } else {
+                if context.enter() == 0 {
+                    registry().lock().unwrap().take(stream_id);
+                    return 0;
+                }
+                let reject_msg = CefString::from("ERR_-1: Failed to build IPC message");
+                promise.reject_promise(Some(&reject_msg));
+                context.exit();
+                registry().lock().unwrap().take(stream_id);
+                if let Some(ret) = retval {
+                    *ret = Some(promise);
+                }
+                return 1;
+            }
+
+            if let Some(ret) = retval {
+                *ret = Some(promise);
+            }
+
+            1
+        }
+    }
+}
+
+//
+// Stream write handler
+//
+
+wrap_v8_handler! {
+    pub struct IpcWriteStreamHandler;
+
+    impl V8Handler {
+        fn execute(
+            &self,
+            _name: Option<&CefString>,
+            _object: Option<&mut V8Value>,
+            arguments: Option<&[Option<V8Value>]>,
+            retval: Option<&mut Option<V8Value>>,
+            exception: Option<&mut CefString>,
+        ) -> i32 {
+            let args = match arguments {
+                Some(a) if a.len() >= 2 => a,
+                _ => {
+                    if let Some(exc) = exception { *exc = CefString::from("writeStream(streamId, ArrayBuffer)"); }
+                    return 0;
+                }
+            };
+
+            let stream_id = match args.first() {
+                Some(Some(v)) if v.is_int() != 0 || v.is_uint() != 0 => v.int_value(),
+                _ => {
+                    if let Some(exc) = exception { *exc = CefString::from("writeStream: streamId must be an integer"); }
+                    return 0;
+                }
+            };
+
+            let buffer = match args.get(1) {
+                Some(Some(v)) if v.is_array_buffer() != 0 => v,
+                _ => {
+                    if let Some(exc) = exception { *exc = CefString::from("writeStream: second argument must be an ArrayBuffer"); }
+                    return 0;
+                }
+            };
+
+            let ptr = buffer.array_buffer_data();
+            let len = buffer.array_buffer_byte_length();
+
+            if ptr.is_null() {
+                if let Some(exc) = exception { *exc = CefString::from("writeStream: ArrayBuffer has null data"); }
+                return 0;
+            }
+
+            let context = match v8_context_get_current_context() {
+                Some(ctx) => ctx,
+                None => {
+                    if let Some(exc) = exception { *exc = CefString::from("writeStream: no active renderer context"); }
+                    return 0;
+                }
+            };
+
+            let Some(frame) = context.frame() else {
+                if let Some(exc) = exception { *exc = CefString::from("writeStream: no frame for current context"); }
+                return 0;
+            };
+
+            with_array_buffer(ptr as *const u8, len, |data| {
+                let envelope = Envelope {
+                    version: ENVELOPE_VERSION,
+                    subsystem: SUB_STREAM,
+                    opcode: STREAM_DATA,
+                    flags: 0,
+                    correlation_id: stream_id as u32,
+                    payload_kind: PAYLOAD_BINARY,
+                };
+
+                if let Some(mut msg) = build_message("kurogane_stream", &envelope, data) {
+                    frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+                }
+            });
+
+            if let Some(ret) = retval {
+                *ret = v8_value_create_uint(1);
+            }
+
+            1
+        }
+    }
+}
+
+//
+// Stream end handler
+//
+
+wrap_v8_handler! {
+    pub struct IpcEndStreamHandler;
+
+    impl V8Handler {
+        fn execute(
+            &self,
+            _name: Option<&CefString>,
+            _object: Option<&mut V8Value>,
+            arguments: Option<&[Option<V8Value>]>,
+            retval: Option<&mut Option<V8Value>>,
+            exception: Option<&mut CefString>,
+        ) -> i32 {
+            let args = match arguments {
+                Some(a) if !a.is_empty() => a,
+                _ => {
+                    if let Some(exc) = exception { *exc = CefString::from("endStream requires a streamId argument"); }
+                    return 0;
+                }
+            };
+
+            let stream_id = match args.first() {
+                Some(Some(v)) if v.is_int() != 0 || v.is_uint() != 0 => v.int_value(),
+                _ => {
+                    if let Some(exc) = exception { *exc = CefString::from("endStream: streamId must be an integer"); }
+                    return 0;
+                }
+            };
+
+            let result = match args.get(1) {
+                Some(Some(v)) if v.is_string() != 0 => v8_to_string(v),
+                _ => String::new(),
+            };
+
+            let context = match v8_context_get_current_context() {
+                Some(ctx) => ctx,
+                None => {
+                    if let Some(exc) = exception { *exc = CefString::from("endStream: no active renderer context"); }
+                    return 0;
+                }
+            };
+
+            let Some(frame) = context.frame() else {
+                if let Some(exc) = exception { *exc = CefString::from("endStream: no frame for current context"); }
+                return 0;
+            };
+
+            let payload = result.as_bytes();
+
+            let envelope = Envelope {
+                version: ENVELOPE_VERSION,
+                subsystem: SUB_STREAM,
+                opcode: STREAM_END,
+                flags: 0,
+                correlation_id: stream_id as u32,
+                payload_kind: PAYLOAD_STRING,
+            };
+
+            if let Some(mut msg) = build_message("kurogane_stream", &envelope, payload) {
+                frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+            }
+
+            if let Some(ret) = retval {
+                *ret = v8_value_create_uint(1);
+            }
+
+            1
+        }
+    }
+}
