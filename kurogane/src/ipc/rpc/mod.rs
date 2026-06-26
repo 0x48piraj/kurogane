@@ -1,3 +1,8 @@
+//! JSON-based request/response IPC subsystem.
+//!
+//! Supports synchronous and asynchronous command handlers, pending
+//! request tracking, cancellation and promise resolution.
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

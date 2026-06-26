@@ -1,3 +1,9 @@
+//! Binary IPC subsystem.
+//!
+//! Request/response IPC for arbitrary binary payloads.
+//! Supports synchronous and asynchronous handlers, cancellation of
+//! pending requests and dispatch of binary responses or structured error payloads.
+
 use std::collections::HashMap;
 
 use crate::ipc::browser_state::IpcContext;

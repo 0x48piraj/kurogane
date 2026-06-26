@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use cef::*;
 use crate::app::resolver::ResolvedFrontend;
-use crate::ipc::browser_state::{IpcDispatcher, IpcHandler, BinaryHandler, AsyncIpcHandler, AsyncBinaryHandler, IpcResponder, BinaryResponder, IpcContext};
+use crate::ipc::{IpcRouter, RpcSubsystem, BinarySubsystem, EventSubsystem, StreamSubsystem, StreamHandler, IpcResponder, BinaryResponder, SyncRpcHandler, SyncBinaryHandler, AsyncRpcHandler, AsyncBinaryHandler, IpcContext};
 use crate::runtime::{RuntimeBootstrap, Runtime};
 use crate::error::RuntimeError;
 use crate::spec::{RuntimeSpec, RuntimeMode};
@@ -158,10 +158,11 @@ pub trait ClientAppRendererDelegate: Send + Sync {
 /// Configures how the first browser instance starts.
 pub struct App {
     source: Source,
-    commands: HashMap<String, IpcHandler>,
-    binary_commands: HashMap<String, BinaryHandler>,
-    async_commands: HashMap<String, AsyncIpcHandler>,
+    sync_commands: HashMap<String, SyncRpcHandler>,
+    sync_binary_commands: HashMap<String, SyncBinaryHandler>,
+    async_commands: HashMap<String, AsyncRpcHandler>,
     async_binary_commands: HashMap<String, AsyncBinaryHandler>,
+    stream_handlers: HashMap<String, StreamHandler>,
 
     profile_id: Option<String>,
     persist_session_cookies: bool,
@@ -186,10 +187,11 @@ impl App {
     fn with_source(source: Source) -> Self {
         Self {
             source,
-            commands: HashMap::new(),
-            binary_commands: HashMap::new(),
+            sync_commands: HashMap::new(),
+            sync_binary_commands: HashMap::new(),
             async_commands: HashMap::new(),
             async_binary_commands: HashMap::new(),
+            stream_handlers: HashMap::new(),
 
             profile_id: None,
             persist_session_cookies: true,
@@ -237,16 +239,16 @@ impl App {
     {
         let name = name.into();
 
-        if self.commands.contains_key(&name)
-            || self.binary_commands.contains_key(&name)
+        if self.sync_commands.contains_key(&name)
+            || self.sync_binary_commands.contains_key(&name)
             || self.async_commands.contains_key(&name)
             || self.async_binary_commands.contains_key(&name)
+            || self.stream_handlers.contains_key(&name)
         {
             panic!("command '{name}' registered twice");
         }
 
-        // Wrap the typed handler into the wire-level IpcHandler once
-        let wrapped: IpcHandler = Box::new(move |payload: &str, _ctx: IpcContext| {
+        let wrapped: SyncRpcHandler = Box::new(move |payload: &str, _ctx: IpcContext| {
             let input: Value = if payload.is_empty() {
                 Value::Null
             } else {
@@ -260,7 +262,7 @@ impl App {
                 .map_err(|e| format!("JSON serialization error: {e}"))
         });
 
-        self.commands.insert(name, wrapped);
+        self.sync_commands.insert(name, wrapped);
         self
     }
 
@@ -273,18 +275,19 @@ impl App {
     {
         let name = name.into();
 
-        if self.commands.contains_key(&name)
-            || self.binary_commands.contains_key(&name)
+        if self.sync_commands.contains_key(&name)
+            || self.sync_binary_commands.contains_key(&name)
             || self.async_commands.contains_key(&name)
             || self.async_binary_commands.contains_key(&name)
+            || self.stream_handlers.contains_key(&name)
         {
             panic!("command '{name}' registered twice");
         }
 
-        let wrapped: BinaryHandler = Box::new(move |payload: &[u8], _ctx: IpcContext| {
+        let wrapped: SyncBinaryHandler = Box::new(move |payload: &[u8], _ctx: IpcContext| {
             handler(payload)
         });
-        self.binary_commands.insert(name, wrapped);
+        self.sync_binary_commands.insert(name, wrapped);
         self
     }
 
@@ -300,15 +303,16 @@ impl App {
     {
         let name = name.into();
 
-        if self.commands.contains_key(&name)
-            || self.binary_commands.contains_key(&name)
+        if self.sync_commands.contains_key(&name)
+            || self.sync_binary_commands.contains_key(&name)
             || self.async_commands.contains_key(&name)
             || self.async_binary_commands.contains_key(&name)
+            || self.stream_handlers.contains_key(&name)
         {
             panic!("command '{name}' registered twice");
         }
 
-        let wrapped: AsyncIpcHandler = Box::new(move |value: Value, responder: IpcResponder, _ctx: IpcContext| {
+        let wrapped: AsyncRpcHandler = Box::new(move |value: Value, responder: IpcResponder, _ctx: IpcContext| {
             handler(value, responder)
         });
         self.async_commands.insert(name, wrapped);
@@ -327,10 +331,11 @@ impl App {
     {
         let name = name.into();
 
-        if self.commands.contains_key(&name)
-            || self.binary_commands.contains_key(&name)
+        if self.sync_commands.contains_key(&name)
+            || self.sync_binary_commands.contains_key(&name)
             || self.async_commands.contains_key(&name)
             || self.async_binary_commands.contains_key(&name)
+            || self.stream_handlers.contains_key(&name)
         {
             panic!("command '{name}' registered twice");
         }
@@ -339,6 +344,33 @@ impl App {
             handler(payload, responder)
         });
         self.async_binary_commands.insert(name, wrapped);
+        self
+    }
+
+    /// Registers a stream handler.
+    ///
+    /// Stream handlers process data chunks sent from the renderer. Each
+    /// invocation receives the stream id, payload chunk, completion flag,
+    /// handler name and execution context.
+    ///
+    /// Panics if a handler with the same name is already registered.
+    pub fn stream_handler<F>(mut self, name: impl Into<String>, handler: F) -> Self
+    where
+        F: Fn(u32, &[u8], bool, &str, IpcContext) -> Result<(), String> + Send + Sync + 'static,
+    {
+        let name = name.into();
+
+        if self.sync_commands.contains_key(&name)
+            || self.sync_binary_commands.contains_key(&name)
+            || self.async_commands.contains_key(&name)
+            || self.async_binary_commands.contains_key(&name)
+            || self.stream_handlers.contains_key(&name)
+        {
+            panic!("handler '{name}' registered twice");
+        }
+
+        let wrapped: StreamHandler = Box::new(handler);
+        self.stream_handlers.insert(name, wrapped);
         self
     }
 
@@ -381,10 +413,11 @@ impl App {
     pub fn start_embedded(self) -> Result<Runtime, RuntimeError> {
         let Self {
             source,
-            commands,
-            binary_commands,
+            sync_commands,
+            sync_binary_commands,
             async_commands,
             async_binary_commands,
+            stream_handlers,
             profile_id,
             persist_session_cookies,
             gpu_mode,
@@ -394,8 +427,13 @@ impl App {
             renderer_delegates,
         } = self;
 
+        let rpc = RpcSubsystem::new(sync_commands, async_commands);
+        let binary = BinarySubsystem::new(sync_binary_commands, async_binary_commands);
+        let event = EventSubsystem::new();
+        let stream = StreamSubsystem::new(stream_handlers);
+        let router = Arc::new(IpcRouter::new(rpc, binary, event, stream));
+
         let ResolvedFrontend { asset_root, start_url } = resolver::resolve(&source)?;
-        let dispatcher = Arc::new(IpcDispatcher::with_async(commands, binary_commands, async_commands, async_binary_commands));
 
         let spec = RuntimeSpec {
             mode: RuntimeMode::Embedded,
@@ -410,7 +448,7 @@ impl App {
             renderer_delegates,
         };
 
-        RuntimeBootstrap::start_embedded(spec, dispatcher)
+        RuntimeBootstrap::start_embedded(spec, router)
     }
 
     /// Start the application and run the message loop.
@@ -419,10 +457,11 @@ impl App {
     pub fn run(self) -> Result<(), RuntimeError> {
         let Self {
             source,
-            commands,
-            binary_commands,
+            sync_commands,
+            sync_binary_commands,
             async_commands,
             async_binary_commands,
+            stream_handlers,
             profile_id,
             persist_session_cookies,
             gpu_mode,
@@ -432,9 +471,13 @@ impl App {
             ..
         } = self;
 
+        let rpc = RpcSubsystem::new(sync_commands, async_commands);
+        let binary = BinarySubsystem::new(sync_binary_commands, async_binary_commands);
+        let event = EventSubsystem::new();
+        let stream = StreamSubsystem::new(stream_handlers);
+        let router = Arc::new(IpcRouter::new(rpc, binary, event, stream));
+
         let ResolvedFrontend { asset_root, start_url } = resolver::resolve(&source)?;
-        // Freeze IPC configuration into an immutable dispatcher shared across the runtime object graph
-        let dispatcher = Arc::new(IpcDispatcher::with_async(commands, binary_commands, async_commands, async_binary_commands));
 
         let spec = RuntimeSpec {
             mode: RuntimeMode::Views,
@@ -449,7 +492,7 @@ impl App {
             renderer_delegates,
         };
 
-        RuntimeBootstrap::run(spec, dispatcher)
+        RuntimeBootstrap::run(spec, router)
     }
 
     /// Initialize the application without entering a message loop.
@@ -458,10 +501,11 @@ impl App {
     pub fn start(self) -> Result<Runtime, RuntimeError> {
         let Self {
             source,
-            commands,
-            binary_commands,
+            sync_commands,
+            sync_binary_commands,
             async_commands,
             async_binary_commands,
+            stream_handlers,
             profile_id,
             persist_session_cookies,
             gpu_mode,
@@ -471,9 +515,13 @@ impl App {
             renderer_delegates,
         } = self;
 
+        let rpc = RpcSubsystem::new(sync_commands, async_commands);
+        let binary = BinarySubsystem::new(sync_binary_commands, async_binary_commands);
+        let event = EventSubsystem::new();
+        let stream = StreamSubsystem::new(stream_handlers);
+        let router = Arc::new(IpcRouter::new(rpc, binary, event, stream));
+
         let ResolvedFrontend { asset_root, start_url } = resolver::resolve(&source)?;
-        // Freeze IPC configuration into an immutable dispatcher shared across the runtime object graph
-        let dispatcher = Arc::new(IpcDispatcher::with_async(commands, binary_commands, async_commands, async_binary_commands));
 
         let spec = RuntimeSpec {
             mode: RuntimeMode::Views,
@@ -488,7 +536,7 @@ impl App {
             renderer_delegates,
         };
 
-        RuntimeBootstrap::start(spec, dispatcher)
+        RuntimeBootstrap::start(spec, router)
     }
 
     /// Run the application and terminate the process on failure.

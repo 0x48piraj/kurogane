@@ -119,9 +119,11 @@ pub fn clear_context_events(ctx: &V8Context) {
 // Promise registry: Tracks pending promises awaiting responses from the browser process
 //
 
+pub type IpcId = i32;
+
 pub struct PromiseRegistry {
     next_id: IpcId,
-    pending: HashMap<IpcId, (V8Context, V8Value)>,
+    pending: HashMap<IpcId, (V8Context, V8Value, u8)>,
 }
 
 impl Default for PromiseRegistry {
@@ -138,22 +140,22 @@ impl PromiseRegistry {
         Self::default()
     }
 
-    pub fn register(&mut self, context: V8Context, promise: V8Value) -> IpcId {
+    pub fn register(&mut self, context: V8Context, promise: V8Value, subsystem: u8) -> IpcId {
         let id = self.next_id;
         self.next_id = self.next_id.checked_add(1).unwrap_or(1);
 
-        self.pending.insert(id, (context, promise));
+        self.pending.insert(id, (context, promise, subsystem));
 
         id
     }
 
-    pub fn take(&mut self, id: IpcId) -> Option<(V8Context, V8Value)> {
-        self.pending.remove(&id)
+    pub fn take(&mut self, id: IpcId) -> Option<(V8Context, V8Value, u8)> {
+        self.pending.remove(&id).map(|(ctx, promise, sub)| (ctx, promise, sub))
     }
 
     pub fn clear_context(&mut self, ctx: &V8Context) {
         let mut target = ctx.clone();
-        self.pending.retain(|_, (stored_ctx, _)| {
+        self.pending.retain(|_, (stored_ctx, _, _)| {
             stored_ctx.is_same(Some(&mut target)) == 0
         });
     }
@@ -171,11 +173,11 @@ pub fn registry() -> &'static Mutex<PromiseRegistry> {
 
 // HELPERS
 
-pub fn register_promise(ctx: V8Context, promise: V8Value) -> IpcId {
-    registry().lock().unwrap().register(ctx, promise)
+pub fn register_promise(ctx: V8Context, promise: V8Value, subsystem: u8) -> IpcId {
+    registry().lock().unwrap().register(ctx, promise, subsystem)
 }
 
-pub fn cancel_promise(id: IpcId) -> Option<(V8Context, V8Value)> {
+pub fn cancel_promise(id: IpcId) -> Option<(V8Context, V8Value, u8)> {
     registry().lock().unwrap().take(id)
 }
 

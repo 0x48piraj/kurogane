@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use crate::runtime::RuntimeServices;
 use crate::browser_registry::{BrowserRegistry, BrowserType};
 use crate::window_registry::WindowRegistry;
-use crate::ipc::IpcDispatcher;
+use crate::ipc::IpcRouter;
 
 //
 // LifeSpanHandler
@@ -17,7 +17,7 @@ wrap_life_span_handler! {
         browser_registry: Arc<Mutex<BrowserRegistry>>,
         window_registry: Arc<Mutex<WindowRegistry>>,
         is_closing: Arc<AtomicBool>,
-        dispatcher: Arc<IpcDispatcher>,
+        router: Arc<IpcRouter>,
     }
 
     impl LifeSpanHandler {
@@ -75,7 +75,7 @@ wrap_life_span_handler! {
                     }
                 };
                 // Cancel any pending async handlers for this browser
-                self.dispatcher.cancel_all_for_browser(browser_id);
+                self.router.cancel_all_for_browser(browser_id);
             }
         }
     }
@@ -146,7 +146,7 @@ wrap_client! {
                 self.services.browser_registry.clone(),
                 self.services.window_registry.clone(),
                 self.is_closing.clone(),
-                self.services.dispatcher.clone(),
+                self.services.router.clone(),
             ))
         }
 
@@ -173,7 +173,7 @@ wrap_client! {
             };
 
             // Delegate to IPC dispatcher with browser context
-            if crate::ipc::handle_ipc_message(browser, frame, msg, &self.services.dispatcher, browser_id) {
+            if crate::ipc::handle_ipc_message(browser, frame, msg, &self.services.router, browser_id) {
                 return 1;
             }
 

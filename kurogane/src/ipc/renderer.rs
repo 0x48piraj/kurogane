@@ -10,6 +10,7 @@ use crate::debug;
 use crate::ipc::envelope::*;
 use crate::ipc::transport::message::{build_message, build_message_parts, extract_message};
 use crate::ipc::router;
+use crate::ipc::renderer_state::{register_promise, cancel_promise, clear_context_promises, clear_context_events, event_registry, registry};
 use crate::bridge;
 
 //
@@ -155,6 +156,68 @@ wrap_render_process_handler! {
                 V8Propertyattribute::default(),
             );
 
+            // Event subscription (on/off)
+            let mut on_handler = IpcOnHandler::new();
+            let mut on = v8_value_create_function(
+                Some(&CefString::from("on")),
+                Some(&mut on_handler),
+            ).unwrap();
+
+            core.set_value_bykey(
+                Some(&CefString::from("on")),
+                Some(&mut on),
+                V8Propertyattribute::default(),
+            );
+
+            let mut off_handler = IpcOffHandler::new();
+            let mut off = v8_value_create_function(
+                Some(&CefString::from("off")),
+                Some(&mut off_handler),
+            ).unwrap();
+
+            core.set_value_bykey(
+                Some(&CefString::from("off")),
+                Some(&mut off),
+                V8Propertyattribute::default(),
+            );
+
+            // Stream handlers
+            let mut open_stream_handler = IpcOpenStreamHandler::new();
+            let mut open_stream = v8_value_create_function(
+                Some(&CefString::from("openStream")),
+                Some(&mut open_stream_handler),
+            ).unwrap();
+
+            core.set_value_bykey(
+                Some(&CefString::from("openStream")),
+                Some(&mut open_stream),
+                V8Propertyattribute::default(),
+            );
+
+            let mut write_stream_handler = IpcWriteStreamHandler::new();
+            let mut write_stream = v8_value_create_function(
+                Some(&CefString::from("writeStream")),
+                Some(&mut write_stream_handler),
+            ).unwrap();
+
+            core.set_value_bykey(
+                Some(&CefString::from("writeStream")),
+                Some(&mut write_stream),
+                V8Propertyattribute::default(),
+            );
+
+            let mut end_stream_handler = IpcEndStreamHandler::new();
+            let mut end_stream = v8_value_create_function(
+                Some(&CefString::from("endStream")),
+                Some(&mut end_stream_handler),
+            ).unwrap();
+
+            core.set_value_bykey(
+                Some(&CefString::from("endStream")),
+                Some(&mut end_stream),
+                V8Propertyattribute::default(),
+            );
+
             global.set_value_bykey(
                 Some(&CefString::from("core")),
                 Some(&mut core),
@@ -191,6 +254,7 @@ wrap_render_process_handler! {
 
             if let Some(ctx) = context {
                 clear_context_promises(ctx);
+                clear_context_events(ctx);
             }
         }
 
@@ -593,18 +657,31 @@ wrap_v8_handler! {
                 }
             };
 
-            // Send CancelRequest to browser so it can abort the pending async handler
-            if let Some(context) = v8_context_get_current_context() {
-                if let Some(frame) = context.frame() {
-                    let mut msg = process_message_create(Some(&CefString::from("ipc"))).unwrap();
-                    let mut msg_args = msg.argument_list().unwrap();
-                    set_kind(&mut msg_args, IpcMsgKind::CancelRequest);
-                    msg_args.set_int(1, id);
-                    frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
-                }
-            }
+            if let Some((ctx, promise, sub)) = cancel_promise(id) {
+                let opcode = match sub {
+                    SUB_RPC => RPC_CANCEL,
+                    SUB_BINARY => BINARY_CANCEL,
+                    SUB_STREAM => STREAM_CANCEL,
+                    _ => RPC_CANCEL,
+                };
 
-            if let Some((ctx, promise)) = cancel_promise(id) {
+                let envelope = Envelope {
+                    version: ENVELOPE_VERSION,
+                    subsystem: sub,
+                    opcode,
+                    flags: 0,
+                    correlation_id: id as u32,
+                    payload_kind: PAYLOAD_EMPTY,
+                };
+
+                if let Some(context) = v8_context_get_current_context() {
+                    if let Some(frame) = context.frame() {
+                        if let Some(mut msg) = build_message("kurogane_rpc", &envelope, &[]) {
+                            frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+                        }
+                    }
+                }
+
                 if ctx.enter() == 0 {
                     eprintln!("[IPC] cancel: failed to enter V8 context for promise id={}", id);
                     return 1;

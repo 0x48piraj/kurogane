@@ -1,139 +1,134 @@
 //! IPC message router
 //!
 //! Central dispatch layer for all IPC messages between browser and renderer.
+//! Owns the per-subsystem handler maps and routes incoming messages by subsystem.
 
 use cef::*;
-use std::sync::Arc;
-use crate::ipc::protocol::{get_kind, IpcMsgKind};
-use crate::ipc::browser_state::{IpcDispatcher, IpcContext};
-use crate::ipc::{rpc, binary};
+
+use crate::browser_registry::BrowserId;
 use crate::debug;
+use crate::ipc::browser_state::IpcContext;
+use crate::ipc::envelope::*;
+use crate::ipc::binary::BinarySubsystem;
+use crate::ipc::event::EventSubsystem;
+use crate::ipc::rpc::RpcSubsystem;
+use crate::ipc::stream::StreamSubsystem;
 
-pub fn route_browser(
-    frame: &mut Frame,
-    args: &ListValue,
-    dispatcher: &Arc<IpcDispatcher>,
-    ctx: IpcContext,
-) -> bool {
-    let kind = match get_kind(args) {
-        Some(k) => k,
+/// Top-level IPC router that owns all subsystems.
+pub struct IpcRouter {
+    pub rpc: RpcSubsystem,
+    pub binary: BinarySubsystem,
+    pub event: EventSubsystem,
+    pub stream: StreamSubsystem,
+}
+
+/// Standalone renderer-side dispatcher.
+/// Parses the envelope from raw bytes and dispatches to the appropriate subsystem handler.
+/// Does NOT require an IpcRouter instance, so it works in both browser and renderer processes.
+pub fn route_renderer(frame: &mut Frame, data: &[u8]) -> bool {
+    let (envelope, payload) = match parse_envelope(data) {
+        Some(v) => v,
         None => {
-            debug!("[IPC Router] invalid ipc message type");
+            debug!("[Router Renderer] invalid envelope");
             return false;
         }
     };
-    let id = list_get_int(args, 1);
-    if id <= 0 {
-        debug!("[IPC Router] invalid id {}", id);
-        return false;
+
+    match envelope.subsystem {
+        SUB_RPC => crate::ipc::rpc::renderer::handle_rpc_renderer(frame, &envelope, payload),
+        SUB_BINARY => crate::ipc::binary::renderer::handle_binary_renderer(frame, &envelope, payload),
+        SUB_EVENT => crate::ipc::event::renderer::handle_event_renderer(frame, &envelope, payload),
+        _ => {
+            debug!("[Router Renderer] unknown subsystem {}", envelope.subsystem);
+            false
+        }
+    }
+}
+
+impl IpcRouter {
+    pub fn new(rpc: RpcSubsystem, binary: BinarySubsystem, event: EventSubsystem, stream: StreamSubsystem) -> Self {
+        Self { rpc, binary, event, stream }
     }
 
-    debug!("[IPC Browser] message type={:?} id={}", kind, id);
-
-    match kind {
-        // JSON invoke
-        IpcMsgKind::Invoke => {
-            let command = list_get_string(args, 2);
-            let payload = list_get_string(args, 3);
-
-            rpc::handle_invoke(frame, id, command, payload, dispatcher, ctx);
-        }
-
-        // Binary invoke (inline only; SHM handled in pre-dispatch)
-        IpcMsgKind::BinaryInvoke => {
-            let command = list_get_string(args, 2);
-
-            // CEF exposes binary via an internal buffer; copy into Vec<u8> to own the data
-            if let Some(bin) = args.binary(3) {
-                let mut buf = vec![0u8; bin.size()];
-                let written = bin.data(Some(&mut buf), 0);
-                buf.truncate(written);
-
-                debug!("[IPC Browser] inline binary: {} bytes", written);
-
-                binary::handle_invoke(frame, id, command, &buf, dispatcher, ctx);
-                return true;
+    /// Route a message received from the renderer (browser-side dispatch).
+    pub fn route_browser(
+        &self,
+        frame: &mut Frame,
+        data: &[u8],
+        ctx: IpcContext,
+    ) -> bool {
+        let (envelope, payload) = match parse_envelope(data) {
+            Some(v) => v,
+            None => {
+                debug!("[Router Browser] invalid envelope");
+                return false;
             }
+        };
 
-            debug!("[IPC Router] inline BinaryInvoke missing binary arg");
-            binary::send_error(frame, id, "missing binary data".into(), 1);
-            return true;
-        }
-
-        // Cancel request (renderer to browser)
-        IpcMsgKind::CancelRequest => {
-            debug!("[IPC Browser] CancelRequest id={}", id);
-            dispatcher.cancel_pending(ctx.browser_id, id);
-            return true;
-        }
-
-        _ => return false,
-    }
-
-    true
-}
-
-pub fn route_renderer(
-    frame: &mut Frame,
-    args: &ListValue,
-) -> bool {
-    let kind = match get_kind(args) {
-        Some(k) => k,
-        None => {
-            debug!("[IPC Router] invalid ipc message type");
+        let id = envelope.correlation_id as i32;
+        if id <= 0 {
+            debug!("[Router Browser] invalid correlation_id {}", id);
             return false;
         }
-    };
-    let id = list_get_int(args, 1);
-    if id <= 0 {
-        debug!("[IPC Router] invalid id {}", id);
-        return false;
+
+        match envelope.subsystem {
+            SUB_RPC => {
+                self.rpc.handle_browser(
+                    frame,
+                    &envelope,
+                    payload,
+                    ctx,
+                    self.rpc.pending.clone(),
+                )
+            }
+            SUB_BINARY => {
+                self.binary.handle_browser(
+                    frame,
+                    &envelope,
+                    payload,
+                    ctx,
+                    self.binary.pending.clone(),
+                )
+            }
+            SUB_EVENT => {
+                self.event.handle_browser(frame, &envelope, payload, ctx)
+            }
+            SUB_STREAM => {
+                self.stream.handle_browser(
+                    frame,
+                    &envelope,
+                    payload,
+                    ctx,
+                    self.stream.pending.clone(),
+                )
+            }
+            _ => {
+                debug!(
+                    "[Router Browser] unknown subsystem {}",
+                    envelope.subsystem
+                );
+                false
+            }
+        }
     }
 
-    match kind {
-        IpcMsgKind::Resolve => {
-            let payload = list_cef_string(args, 2);
-            rpc::resolve_cef_string(id, true, &payload, 0);
-        }
-
-        IpcMsgKind::Reject => {
-            let payload = list_cef_string(args, 2);
-            let error_code = args.int(3);
-            rpc::resolve_cef_string(id, false, &payload, error_code);
-        }
-
-        IpcMsgKind::BinaryResponse => {
-            binary::handle_response(frame, id, args);
-        }
-
-        _ => return false,
+    /// Route a message received from the browser (renderer-side dispatch).
+    pub fn route_renderer(&self, frame: &mut Frame, data: &[u8]) -> bool {
+        route_renderer(frame, data)
     }
 
-    true
-}
-
-//
-// Message helpers
-//
-
-fn list_get_int(args: &ListValue, idx: usize) -> i32 {
-    // binding exposes .int(index)
-    args.int(idx)
-}
-
-fn list_get_string(args: &ListValue, idx: usize) -> String {
-    // binding exposes .string(index) -> CefStringUserfree
-    let userfree = args.string(idx);
-    // Convert to CefString (borrow conversion) then to Rust String
-    let cef: CefString = (&userfree).into();
-    cef.to_string()
-}
-
-//
-// Helpers
-//
-
-#[inline(always)]
-fn list_cef_string(args: &ListValue, idx: usize) -> CefString {
-    (&args.string(idx)).into()
+    /// Cancel all pending async handlers for a given browser.
+    pub fn cancel_all_for_browser(&self, browser_id: BrowserId) -> usize {
+        let rpc_count = self.rpc.pending.cancel_all_for_browser(browser_id);
+        let bin_count = self.binary.pending.cancel_all_for_browser(browser_id);
+        let stream_count = self.stream.pending.cancel_all_for_browser(browser_id);
+        // Clean up event subscriptions and stream state
+        self.event.clear_for_browser(browser_id);
+        self.stream.clear_for_browser(browser_id);
+        let total = rpc_count + bin_count + stream_count;
+        if total > 0 {
+            debug!("[Router] canceled {} pending handlers for browser", total);
+        }
+        total
+    }
 }

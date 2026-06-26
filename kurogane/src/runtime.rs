@@ -10,7 +10,7 @@ use crate::browser_registry::{BrowserRegistry, BrowserId, BrowserMetadata};
 use crate::window_registry::{WindowRegistry, WindowId, WindowMetadata};
 use crate::window::{KuroganeWindowDelegate, KuroganeBrowserViewDelegate};
 use kurogane_layout::{detect_cef_root, validate_cef_root, profile_dir};
-use crate::ipc::IpcDispatcher;
+use crate::ipc::IpcRouter;
 use crate::spec::RuntimeSpec;
 use crate::debug;
 
@@ -199,7 +199,7 @@ wrap_task! {
 /// instead of receiving individual registries and dispatchers separately.
 pub(crate) struct RuntimeServices {
     pub shutdown_signal: ShutdownSignal,
-    pub dispatcher: Arc<IpcDispatcher>,
+    pub router: Arc<IpcRouter>,
     pub browser_registry: Arc<Mutex<BrowserRegistry>>,
     pub window_registry: Arc<Mutex<WindowRegistry>>,
 }
@@ -290,24 +290,26 @@ impl Drop for Runtime {
     }
 }
 
-fn native_to_cef_window(
-    handle: *mut std::ffi::c_void,
-) -> cef_window_handle_t {
+fn native_to_cef_window(handle: *mut std::ffi::c_void) -> cef_window_handle_t {
+    let result;
+
     #[cfg(target_os = "windows")]
     {
         use cef::sys::HWND;
-        HWND(handle as *mut cef::sys::HWND__)
+        result = HWND(handle as *mut cef::sys::HWND__);
     }
 
     #[cfg(target_os = "macos")]
     {
-        handle as cef_window_handle_t
+        result = handle as cef_window_handle_t;
     }
 
     #[cfg(target_os = "linux")]
     {
-        handle as usize as cef_window_handle_t
+        result = handle as usize as cef_window_handle_t;
     }
+
+    result
 }
 
 pub struct BrowserHandle {
@@ -829,7 +831,7 @@ impl Runtime {
 /// Returns the initialized runtime state on success.
 fn initialize_cef(
     spec: RuntimeSpec,
-    dispatcher: Arc<IpcDispatcher>,
+    router: Arc<IpcRouter>,
     embedded_mode: bool,
 ) -> Result<RuntimeState, RuntimeError> {
     #[cfg(target_os = "macos")]
@@ -847,7 +849,7 @@ fn initialize_cef(
 
     let services = Arc::new(RuntimeServices {
         shutdown_signal,
-        dispatcher,
+        router,
         browser_registry,
         window_registry,
     });
@@ -895,9 +897,9 @@ impl RuntimeBootstrap {
     /// Runtime::pump when using Pump mode then call Runtime::shutdown to clean up.
     pub(crate) fn start(
         spec: RuntimeSpec,
-        dispatcher: Arc<IpcDispatcher>,
+        router: Arc<IpcRouter>,
     ) -> Result<Runtime, RuntimeError> {
-        let state = initialize_cef(spec, dispatcher, false)?;
+        let state = initialize_cef(spec, router, false)?;
         Ok(Runtime {
             state,
             shutdown_called: AtomicBool::new(false),
@@ -907,9 +909,9 @@ impl RuntimeBootstrap {
     /// Initialize CEF in embedded mode (no window created by CEF Views)
     pub(crate) fn start_embedded(
         spec: RuntimeSpec,
-        dispatcher: Arc<IpcDispatcher>,
+        router: Arc<IpcRouter>,
     ) -> Result<Runtime, RuntimeError> {
-        let state = initialize_cef(spec, dispatcher, true)?;
+        let state = initialize_cef(spec, router, true)?;
         Ok(Runtime {
             state,
             shutdown_called: AtomicBool::new(false),
@@ -922,9 +924,9 @@ impl RuntimeBootstrap {
     /// Existing applications using this API continue to work unchanged.
     pub(crate) fn run(
         spec: RuntimeSpec,
-        dispatcher: Arc<IpcDispatcher>,
+        router: Arc<IpcRouter>,
     ) -> Result<(), RuntimeError> {
-        let handle = Self::start(spec, dispatcher)?;
+        let handle = Self::start(spec, router)?;
         run_message_loop();
 
         debug!("Message loop exited");

@@ -18,7 +18,6 @@ pub struct Envelope {
 /// Peers reject messages with an unsupported version.
 pub const ENVELOPE_VERSION: u8 = 2;
 
-
 /// Fixed-size envelope header (9 bytes).
 /// version (1) | subsystem (1) | opcode (1) | flags (1) | correlation_id (4 LE u32) | payload_kind (1)
 pub const ENVELOPE_SIZE: usize = 9;
@@ -39,6 +38,7 @@ pub const RPC_CANCEL: u8 = 3;
 pub const BINARY_INVOKE: u8 = 0;
 pub const BINARY_RESPONSE: u8 = 1;
 pub const BINARY_REJECT: u8 = 2;
+pub const BINARY_CANCEL: u8 = 3;
 
 /// Event protocol opcodes.
 /// Renderers subscribe to events. Browsers emit events to subscribed frames.
@@ -52,6 +52,7 @@ pub const STREAM_OPEN: u8 = 0;
 pub const STREAM_DATA: u8 = 1;
 pub const STREAM_END: u8 = 2;
 pub const STREAM_ERROR: u8 = 3;
+pub const STREAM_CANCEL: u8 = 4;
 
 /// Payload encoding identifiers.
 pub const PAYLOAD_EMPTY: u8 = 0;
