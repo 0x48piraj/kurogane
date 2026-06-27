@@ -23,22 +23,15 @@ pub struct IpcRouter {
 }
 
 /// Standalone renderer-side dispatcher.
-/// Parses the envelope from raw bytes and dispatches to the appropriate subsystem handler.
+///
+/// Routes a decoded envelope + payload to the appropriate subsystem handler.
 /// Does NOT require an IpcRouter instance, so it works in both browser and renderer processes.
-pub fn route_renderer(frame: &mut Frame, data: &[u8]) -> bool {
-    let (envelope, payload) = match parse_envelope(data) {
-        Some(v) => v,
-        None => {
-            debug!("[Router Renderer] invalid envelope");
-            return false;
-        }
-    };
-
+pub fn route_renderer(frame: &mut Frame, envelope: &Envelope, payload: &[u8]) -> bool {
     match envelope.subsystem {
-        SUB_RPC => crate::ipc::rpc::renderer::handle_rpc_renderer(frame, &envelope, payload),
-        SUB_BINARY => crate::ipc::binary::renderer::handle_binary_renderer(frame, &envelope, payload),
-        SUB_EVENT => crate::ipc::event::renderer::handle_event_renderer(frame, &envelope, payload),
-        SUB_STREAM => crate::ipc::stream::renderer::handle_stream_renderer(frame, &envelope, payload),
+        SUB_RPC => crate::ipc::rpc::renderer::handle_rpc_renderer(frame, envelope, payload),
+        SUB_BINARY => crate::ipc::binary::renderer::handle_binary_renderer(frame, envelope, payload),
+        SUB_EVENT => crate::ipc::event::renderer::handle_event_renderer(frame, envelope, payload),
+        SUB_STREAM => crate::ipc::stream::renderer::handle_stream_renderer(frame, envelope, payload),
         _ => {
             debug!("[Router Renderer] unknown subsystem {}", envelope.subsystem);
             false
@@ -55,22 +48,15 @@ impl IpcRouter {
     pub fn route_browser(
         &self,
         frame: &mut Frame,
-        data: &[u8],
+        envelope: &Envelope,
+        payload: &[u8],
         ctx: IpcContext,
     ) -> bool {
-        let (envelope, payload) = match parse_envelope(data) {
-            Some(v) => v,
-            None => {
-                debug!("[Router Browser] invalid envelope");
-                return false;
-            }
-        };
-
         match envelope.subsystem {
             SUB_RPC => {
                 self.rpc.handle_browser(
                     frame,
-                    &envelope,
+                    envelope,
                     payload,
                     ctx,
                     self.rpc.pending.clone(),
@@ -79,19 +65,19 @@ impl IpcRouter {
             SUB_BINARY => {
                 self.binary.handle_browser(
                     frame,
-                    &envelope,
+                    envelope,
                     payload,
                     ctx,
                     self.binary.pending.clone(),
                 )
             }
             SUB_EVENT => {
-                self.event.handle_browser(frame, &envelope, payload, ctx)
+                self.event.handle_browser(frame, envelope, payload, ctx)
             }
             SUB_STREAM => {
                 self.stream.handle_browser(
                     frame,
-                    &envelope,
+                    envelope,
                     payload,
                     ctx,
                     self.stream.pending.clone(),
@@ -108,8 +94,8 @@ impl IpcRouter {
     }
 
     /// Route a message received from the browser (renderer-side dispatch).
-    pub fn route_renderer(&self, frame: &mut Frame, data: &[u8]) -> bool {
-        route_renderer(frame, data)
+    pub fn route_renderer(&self, frame: &mut Frame, envelope: &Envelope, payload: &[u8]) -> bool {
+        route_renderer(frame, envelope, payload)
     }
 
     /// Cancel all pending async handlers for a given browser.

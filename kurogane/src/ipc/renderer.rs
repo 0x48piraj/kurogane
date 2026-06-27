@@ -404,7 +404,8 @@ wrap_render_process_handler! {
                 }
             };
 
-            router::route_renderer(frame, received.as_bytes());
+            let (envelope, payload) = received.as_envelope_payload();
+            router::route_renderer(frame, &envelope, payload);
             1
         }
 

@@ -34,10 +34,12 @@ pub fn handle_ipc_message(
         }
     };
 
+    let (envelope, payload) = received.as_envelope_payload();
+
     let ctx = IpcContext {
         browser_id,
         frame_id: None,
     };
 
-    router.route_browser(frame, received.as_bytes(), ctx)
+    router.route_browser(frame, &envelope, payload, ctx)
 }
