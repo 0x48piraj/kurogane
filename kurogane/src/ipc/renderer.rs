@@ -514,7 +514,7 @@ wrap_v8_handler! {
                     registry().lock().unwrap().take(id);
                     return 0;
                 }
-                let reject_msg = CefString::from("ERR_-1: Failed to build IPC message");
+                let reject_msg = CefString::from("-1: Failed to build IPC message");
                 promise.reject_promise(Some(&reject_msg));
                 context.exit();
                 registry().lock().unwrap().take(id);
@@ -636,7 +636,7 @@ wrap_v8_handler! {
                             registry().lock().unwrap().take(id);
                             return;
                         }
-                        let reject_msg = CefString::from("ERR_-1: Failed to build IPC message");
+                        let reject_msg = CefString::from("-1: Failed to build IPC message");
                         promise.reject_promise(Some(&reject_msg));
                         ctx.exit();
                     }
@@ -725,7 +725,7 @@ wrap_v8_handler! {
                     eprintln!("[IPC] cancel: failed to enter V8 context for promise id={}", id);
                     return 1;
                 }
-                let reject_msg = CefString::from("ERR_0: Canceled");
+                let reject_msg = CefString::from("0: Canceled");
                 promise.reject_promise(Some(&reject_msg));
                 ctx.exit();
                 if let Some(ret) = retval {
@@ -987,7 +987,7 @@ wrap_v8_handler! {
                     registry().lock().unwrap().take(stream_id);
                     return 0;
                 }
-                let reject_msg = CefString::from("ERR_-1: Failed to build IPC message");
+                let reject_msg = CefString::from("-1: Failed to build IPC message");
                 promise.reject_promise(Some(&reject_msg));
                 context.exit();
                 registry().lock().unwrap().take(stream_id);

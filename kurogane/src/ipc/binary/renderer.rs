@@ -45,7 +45,7 @@ fn on_reject(envelope: &Envelope, payload: &[u8]) -> bool {
                 return false;
             }
 
-            let reject_msg = CefString::from(format!("ERR_{}: {}", error_code, error_msg).as_str());
+            let reject_msg = CefString::from(format!("{}: {}", error_code, error_msg).as_str());
             promise.reject_promise(Some(&reject_msg));
 
             context.exit();
@@ -81,7 +81,7 @@ fn on_response(envelope: &Envelope, payload: &[u8]) -> bool {
                     promise.resolve_promise(Some(&mut buf));
                 }
                 None => {
-                    let reject_msg = CefString::from("ERR_-2: Failed to create ArrayBuffer");
+                    let reject_msg = CefString::from("-2: Failed to create ArrayBuffer");
                     promise.reject_promise(Some(&reject_msg));
                 }
             }

@@ -3,6 +3,26 @@
     if (window.kurogane) return; // prevent double injection
 
     /**
+     * Convert a native string rejection into a proper Error with a .code property.
+     *
+     * The native side sends errors in the format "{code}: {message}" (e.g. "-1: handler panicked").
+     * This parses that format and creates a proper Error object.
+     *
+     * If the value is not a string or doesn't match the expected format, it is passed through
+     * unchanged.
+     */
+    function toError(e) {
+        if (typeof e !== 'string') return e;
+        const colon = e.indexOf(':');
+        if (colon < 1) return e;
+        const code = parseInt(e.substring(0, colon), 10);
+        if (isNaN(code)) return e;
+        const err = new Error(e.substring(colon + 2).trimStart());
+        err.code = code;
+        return err;
+    }
+
+    /**
      * Invoke a named JSON command.
      *
      * Payload is serialized to JSON before sending and the response is deserialized.
@@ -13,7 +33,13 @@
      */
     async function invoke(command, payload) {
         const json = payload !== undefined ? JSON.stringify(payload) : '';
-        const result = await window.core.invoke(command, json);
+        let result;
+
+        try {
+            result = await window.core.invoke(command, json);
+        } catch (e) {
+            throw toError(e);
+        }
 
         try {
             return JSON.parse(result);
@@ -51,7 +77,7 @@
             return Promise.reject(new TypeError(`invokeBinary: expected ArrayBuffer or ArrayBufferView, got ${data === null ? 'null' : typeof data}`));
         }
 
-        return window.core.invokeBinary(command, buffer);
+        return window.core.invokeBinary(command, buffer).catch(toError);
     }
 
     /**

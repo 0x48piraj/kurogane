@@ -59,7 +59,7 @@ pub fn resolve_cef_string(id: i32, success: bool, payload: &CefString, error_cod
                 let mut v = v8_value_create_string(Some(payload)).unwrap();
                 promise.resolve_promise(Some(&mut v));
             } else {
-                let reject_msg = format!("ERR_{}: {}", error_code, payload);
+                let reject_msg = format!("{}: {}", error_code, payload);
                 let reject_cef = CefString::from(reject_msg.as_str());
                 promise.reject_promise(Some(&reject_cef));
             }
