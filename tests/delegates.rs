@@ -73,12 +73,12 @@ fn main() {
     let runtime = App::url("https://example.com")
         .delegate(BrowserDelegate)
         .renderer_delegate(RendererDelegate)
-        .command("ping", |payload| {
+        .command("ping", kurogane::sync_json(|payload| {
             Ok(serde_json::json!({
                 "ok": true,
                 "echo": payload
             }))
-        })
+        }))
         .start()
         .expect("Kurogane failed to initialize");
 

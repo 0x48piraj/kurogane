@@ -1,22 +1,22 @@
-use kurogane::App;
+use kurogane::{App, sync_json, sync_binary};
 use serde_json::{Value, json};
 
 fn main() {
     App::new("ipc")
         // Echo: returns exactly what was sent
-        .command("echo", |payload: Value| {
+        .command("echo", sync_json(|payload: Value| {
             println!("[echo] {:?}", payload);
             Ok(payload)
-        })
+        }))
         // Greeting: expects a string, returns a string
-        .command("greet", |payload: Value| {
+        .command("greet", sync_json(|payload: Value| {
             let name = payload.as_str().unwrap_or("anonymous");
             println!("[greet] {}", name);
 
             Ok(json!(format!("Hello, {}!", name)))
-        })
+        }))
         // Divide: expects { a: number, b: number }
-        .command("divide", |payload: Value| {
+        .command("divide", sync_json(|payload: Value| {
             println!("[divide] {:?}", payload);
 
             let a = payload["a"].as_f64().ok_or("Missing or invalid 'a'")?;
@@ -28,9 +28,9 @@ fn main() {
             }
 
             Ok(json!(a / b))
-        })
+        }))
         // File system mock
-        .command("fs.read", |payload: Value| {
+        .command("fs.read", sync_json(|payload: Value| {
             let file = payload.as_str().unwrap_or("");
             println!("[fs.read] {}", file);
 
@@ -42,9 +42,9 @@ fn main() {
                 "data.txt" => Ok(json!("Sample file contents")),
                 _ => Err(format!("File not found: {}", file)),
             }
-        })
+        }))
         // Slow operation: demonstrates blocking behavior
-        .command("slow_operation", |payload: Value| {
+        .command("slow_operation", sync_json(|payload: Value| {
             println!("[slow_operation] starting...");
 
             std::thread::sleep(std::time::Duration::from_millis(500));
@@ -53,9 +53,9 @@ fn main() {
                 "status": "done",
                 "input": payload
             }))
-        })
+        }))
         // Type inspector: proves structured JSON transport
-        .command("types", |payload: Value| {
+        .command("types", sync_json(|payload: Value| {
             Ok(json!({
                 "is_object": payload.is_object(),
                 "is_array": payload.is_array(),
@@ -64,7 +64,7 @@ fn main() {
                 "is_bool": payload.is_boolean(),
                 "is_null": payload.is_null(),
             }))
-        })
-        .binary_command("echo_binary", |data: &[u8]| Ok(data.to_vec()))
+        }))
+        .command("echo_binary", sync_binary(|data: &[u8]| Ok(data.to_vec())))
         .run_or_exit();
 }
