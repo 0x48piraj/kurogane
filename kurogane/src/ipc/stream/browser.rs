@@ -2,6 +2,7 @@
 //!
 //! Manages the lifecycle of incoming renderer streams, including creation,
 //! chunk delivery, completion, cancellation and cleanup of active streams.
+//! Each stream gets its own handler instance from the registered factory.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -26,10 +27,10 @@ impl StreamSubsystem {
     ) -> bool {
         match envelope.opcode {
             STREAM_OPEN => self.on_open(frame, envelope, payload, ctx, pending_clone),
-            STREAM_DATA => self.on_data(envelope, payload, ctx),
-            STREAM_END => self.on_end(envelope, payload, ctx),
-            STREAM_ERROR => self.on_error(envelope, payload, ctx),
-            STREAM_CANCEL => self.on_cancel(envelope, ctx),
+            STREAM_DATA => self.on_data(envelope, payload),
+            STREAM_END => self.on_end(envelope, payload),
+            STREAM_ERROR => self.on_error(envelope, payload),
+            STREAM_CANCEL => self.on_cancel(envelope),
             _ => {
                 debug!("[Stream Browser] unknown opcode {}", envelope.opcode);
                 false
@@ -37,11 +38,7 @@ impl StreamSubsystem {
         }
     }
 
-    fn on_cancel(&self, envelope: &Envelope, ctx: IpcContext) -> bool {
-        let id = envelope.correlation_id as i32;
-        if let Some(bid) = ctx.browser_id {
-            self.pending.cancel(bid, id);
-        }
+    fn on_cancel(&self, envelope: &Envelope) -> bool {
         let stream_id = envelope.correlation_id;
         self.streams.lock().unwrap().remove(&stream_id);
         true
@@ -55,7 +52,7 @@ impl StreamSubsystem {
         ctx: IpcContext,
         pending_clone: crate::ipc::pending::PendingMap,
     ) -> bool {
-        let (handler_name, _metadata) = match decode_cmd_payload(payload) {
+        let (handler_name, metadata_bytes) = match decode_cmd_payload(payload) {
             Some(v) => v,
             None => {
                 debug!("[Stream Browser] invalid open payload");
@@ -81,135 +78,92 @@ impl StreamSubsystem {
             },
         );
 
+        let factory = match self.factories.get(handler_name) {
+            Some(f) => f,
+            None => {
+                debug!("[Stream Browser] no factory '{}' for stream open", handler_name);
+                return false;
+            }
+        };
+
+        let mut handler = factory();
+        let responder = StreamResponder::new(frame.clone(), stream_id);
+
+        let metadata_str = std::str::from_utf8(metadata_bytes).unwrap_or("");
+        if let Err(e) = handler.on_open(metadata_str, responder) {
+            debug!("[Stream Browser] on_open error: {}", e);
+            return false;
+        }
+
         {
             let mut streams = self.streams.lock().unwrap();
-            streams.insert(stream_id, (handler_name.to_string(), browser_id, frame.clone()));
+            streams.insert(stream_id, (handler_name.to_string(), browser_id, handler));
         }
 
         debug!(
-            "[Stream Browser] open '{}' stream_id={} browser={}",
-            handler_name,
-            stream_id,
-            browser_id.as_u32()
+            "[Stream Browser] open '{}' stream_id={}",
+            handler_name, stream_id,
         );
         true
     }
 
-    fn on_data(
-        &self,
-        envelope: &Envelope,
-        payload: &[u8],
-        ctx: IpcContext,
-    ) -> bool {
+    fn on_data(&self, envelope: &Envelope, payload: &[u8]) -> bool {
         let stream_id = envelope.correlation_id;
-        let (handler_name, browser_id, frame) = {
-            let streams = self.streams.lock().unwrap();
-            match streams.get(&stream_id) {
-                Some((h, b, f)) => (h.clone(), *b, f.clone()),
-                None => {
-                    debug!("[Stream Browser] data for unknown stream {}", stream_id);
-                    return false;
-                }
-            }
-        };
 
-        if ctx.browser_id.map(|id| id != browser_id).unwrap_or(true) {
-            debug!("[Stream Browser] browser mismatch for stream {}", stream_id);
-            return false;
-        }
-
-        let handler = match self.handlers.get(&handler_name) {
-            Some(h) => h,
+        let mut streams = self.streams.lock().unwrap();
+        let handler = match streams.get_mut(&stream_id) {
+            Some((_, _, h)) => h,
             None => {
-                debug!("[Stream Browser] no handler '{}' for stream data", handler_name);
+                debug!("[Stream Browser] data for unknown stream {}", stream_id);
                 return false;
             }
         };
 
-        let responder = StreamResponder::new(frame, stream_id);
-        if let Err(e) = handler(stream_id, payload, false, &handler_name, responder, ctx) {
-            debug!("[Stream Browser] stream handler error: {}", e);
+        if let Err(e) = handler.on_chunk(payload) {
+            debug!("[Stream Browser] on_chunk error: {}", e);
         }
 
         true
     }
 
-    fn on_end(
-        &self,
-        envelope: &Envelope,
-        payload: &[u8],
-        ctx: IpcContext,
-    ) -> bool {
+    fn on_end(&self, envelope: &Envelope, payload: &[u8]) -> bool {
         let stream_id = envelope.correlation_id;
+        let result_str = String::from_utf8_lossy(payload).to_string();
 
-        let (handler_name, browser_id, frame) = {
-            let mut streams = self.streams.lock().unwrap();
-            match streams.remove(&stream_id) {
-                Some(s) => s,
-                None => {
-                    debug!("[Stream Browser] end for unknown stream {}", stream_id);
-                    return false;
+        let mut streams = self.streams.lock().unwrap();
+        match streams.get_mut(&stream_id) {
+            Some((_, _, h)) => {
+                if let Err(e) = h.on_end(&result_str) {
+                    debug!("[Stream Browser] on_end error: {}", e);
                 }
             }
-        };
-
-        if ctx.browser_id.map(|id| id != browser_id).unwrap_or(true) {
-            debug!("[Stream Browser] browser mismatch for stream end {}", stream_id);
-            return false;
-        }
-
-        // Remove pending entry
-        if let Some(bid) = ctx.browser_id {
-            self.pending.remove(bid, stream_id as i32);
-        }
-
-        let handler = match self.handlers.get(&handler_name) {
-            Some(h) => h,
             None => {
-                debug!("[Stream Browser] no handler '{}' for stream end", handler_name);
+                debug!("[Stream Browser] end for unknown stream {}", stream_id);
                 return false;
             }
-        };
-
-        let responder = StreamResponder::new(frame, stream_id);
-        if let Err(e) = handler(stream_id, payload, true, &handler_name, responder, ctx) {
-            debug!("[Stream Browser] stream end handler error: {}", e);
         }
+        streams.remove(&stream_id);
 
         debug!("[Stream Browser] end stream_id={}", stream_id);
         true
     }
 
-    fn on_error(
-        &self,
-        envelope: &Envelope,
-        payload: &[u8],
-        ctx: IpcContext,
-    ) -> bool {
+    fn on_error(&self, envelope: &Envelope, payload: &[u8]) -> bool {
         let stream_id = envelope.correlation_id;
-
-        let (_handler_name, browser_id) = {
-            let mut streams = self.streams.lock().unwrap();
-            match streams.remove(&stream_id) {
-                Some((h, b, _f)) => (h, b),
-                None => {
-                    debug!("[Stream Browser] error for unknown stream {}", stream_id);
-                    return false;
-                }
-            }
-        };
-
-        if ctx.browser_id.map(|id| id != browser_id).unwrap_or(true) {
-            debug!("[Stream Browser] browser mismatch for stream error {}", stream_id);
-            return false;
-        }
-
-        // Remove pending entry
-        if let Some(bid) = ctx.browser_id {
-            self.pending.remove(bid, stream_id as i32);
-        }
-
         let err_msg = String::from_utf8_lossy(payload).to_string();
+
+        let mut streams = self.streams.lock().unwrap();
+        match streams.get_mut(&stream_id) {
+            Some((_, _, h)) => {
+                h.on_error(&err_msg);
+            }
+            None => {
+                debug!("[Stream Browser] error for unknown stream {}", stream_id);
+                return false;
+            }
+        }
+        streams.remove(&stream_id);
+
         debug!("[Stream Browser] error stream_id={}: {}", stream_id, err_msg);
         true
     }

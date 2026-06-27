@@ -26,4 +26,4 @@ pub use request_response::{RequestResponseSubsystem, SyncHandler, AsyncHandler};
 pub use rpc::{IpcResponder, SyncRpcHandler, AsyncRpcHandler};
 pub use binary::{BinaryResponder, SyncBinaryHandler, AsyncBinaryHandler};
 pub use event::EventSubsystem;
-pub use stream::{StreamSubsystem, StreamHandler, StreamResponder};
+pub use stream::{StreamSubsystem, StreamHandler, StreamFactory, StreamResponder};

@@ -2,16 +2,19 @@
 //!
 //! Provides bidirectional streaming data transport. Streams are
 //! identified by a correlation ID and consist of open, data, end and error messages.
+//!
+//! Each stream gets its own handler instance via a factory closure,
+//! giving handlers natural per-stream mutable state.
 
 use std::collections::HashMap;
 use cef::*;
 
 use crate::browser_registry::BrowserId;
-use crate::ipc::browser_state::IpcContext;
 use crate::ipc::envelope::*;
 use crate::ipc::transport::message::build_message;
 
 /// Responder for sending data back to the renderer from the browser-side stream handler.
+#[derive(Clone)]
 pub struct StreamResponder {
     frame: Frame,
     stream_id: u32,
@@ -73,27 +76,49 @@ impl StreamResponder {
     }
 }
 
-/// Application handler for an incoming stream.
+/// Per-stream handler trait.
 ///
-/// Invoked for each data chunk and once more when the stream ends.
-pub type StreamHandler =
-    Box<dyn Fn(u32, &[u8], bool, &str, StreamResponder, IpcContext) -> Result<(), String> + Send + Sync>;
+/// Implement this trait to handle a stream's full lifecycle.
+/// The framework instantiates the handler via a factory closure
+/// when a stream opens, and drops it when the stream ends or errors.
+pub trait StreamHandler: Send + 'static {
+    /// Called when the stream opens. Receives metadata and a responder
+    /// for sending data back to the renderer.
+    fn on_open(&mut self, metadata: &str, responder: StreamResponder) -> Result<(), String> {
+        let _ = (metadata, responder);
+        Ok(())
+    }
+
+    /// Called for each data chunk from the renderer.
+    fn on_chunk(&mut self, data: &[u8]) -> Result<(), String>;
+
+    /// Called when the renderer closes the stream normally.
+    fn on_end(&mut self, result: &str) -> Result<(), String>;
+
+    /// Called if the stream errors.
+    fn on_error(&mut self, message: &str) {
+        let _ = message;
+    }
+}
+
+/// Factory type: creates a new handler instance per stream.
+pub type StreamFactory = Box<dyn Fn() -> Box<dyn StreamHandler> + Send + Sync>;
 
 pub mod browser;
 pub mod renderer;
 
 /// Browser-side stream manager.
 pub struct StreamSubsystem {
-    pub handlers: HashMap<String, StreamHandler>,
-    /// Track open streams per browser for cleanup
-    pub streams: std::sync::Mutex<HashMap<u32, (String, BrowserId, Frame)>>,
+    pub factories: HashMap<String, StreamFactory>,
+    /// Per-stream handler instances, keyed by stream_id.
+    pub streams: std::sync::Mutex<HashMap<u32, (String, BrowserId, Box<dyn StreamHandler>)>>,
     pub pending: crate::ipc::pending::PendingMap,
 }
 
 impl StreamSubsystem {
-    pub fn new(handlers: HashMap<String, StreamHandler>) -> Self {
+    pub fn new(factories: HashMap<String, StreamFactory>) -> Self {
         Self {
-            handlers,
+            factories,
             streams: std::sync::Mutex::new(HashMap::new()),
             pending: crate::ipc::pending::PendingMap::new(),
         }

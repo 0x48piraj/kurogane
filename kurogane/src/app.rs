@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use cef::*;
 use crate::app::resolver::ResolvedFrontend;
-use crate::ipc::{IpcRouter, RequestResponseSubsystem, EventSubsystem, StreamSubsystem, StreamHandler, StreamResponder, IpcResponder, BinaryResponder, SyncHandler, AsyncHandler, IpcContext};
+use crate::ipc::{IpcRouter, RequestResponseSubsystem, EventSubsystem, StreamSubsystem, StreamFactory, IpcResponder, BinaryResponder, SyncHandler, AsyncHandler, IpcContext};
 use crate::runtime::{RuntimeBootstrap, Runtime};
 use crate::error::RuntimeError;
 use crate::spec::{RuntimeSpec, RuntimeMode};
@@ -251,7 +251,7 @@ pub struct App {
     source: Source,
     sync_handlers: HashMap<String, SyncHandler>,
     async_handlers: HashMap<String, AsyncHandler>,
-    stream_handlers: HashMap<String, StreamHandler>,
+    stream_handlers: HashMap<String, StreamFactory>,
 
     profile_id: Option<String>,
     persist_session_cookies: bool,
@@ -342,14 +342,15 @@ impl App {
 
     /// Registers a stream handler.
     ///
-    /// Stream handlers process data chunks sent from the renderer. Each
-    /// invocation receives the stream id, payload chunk, completion flag,
-    /// handler name and execution context.
+    /// Stream handlers process data chunks sent from the renderer. The factory
+    /// closure is called once per stream open to create a dedicated handler
+    /// instance, giving each stream its own mutable state.
     ///
     /// Panics if a handler with the same name is already registered.
-    pub fn stream_handler<F>(mut self, name: impl Into<String>, handler: F) -> Self
+    pub fn stream<F, H>(mut self, name: impl Into<String>, factory: F) -> Self
     where
-        F: Fn(u32, &[u8], bool, &str, StreamResponder, IpcContext) -> Result<(), String> + Send + Sync + 'static,
+        F: Fn() -> H + Send + Sync + 'static,
+        H: crate::ipc::StreamHandler + 'static,
     {
         let name = name.into();
 
@@ -357,11 +358,10 @@ impl App {
             || self.async_handlers.contains_key(&name)
             || self.stream_handlers.contains_key(&name)
         {
-            panic!("handler '{name}' registered twice");
+            panic!("stream '{name}' registered twice");
         }
 
-        let wrapped: StreamHandler = Box::new(handler);
-        self.stream_handlers.insert(name, wrapped);
+        self.stream_handlers.insert(name, Box::new(move || Box::new(factory())));
         self
     }
 

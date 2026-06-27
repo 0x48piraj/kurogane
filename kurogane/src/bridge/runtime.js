@@ -65,10 +65,6 @@
         if (data instanceof ArrayBuffer) {
             buffer = data;
         } else if (ArrayBuffer.isView(data)) {
-            // If the input is a typed array or DataView, we cannot just pass its
-            // underlying buffer directly because it may start at a non-zero offset.
-
-            // Slice the buffer to get exactly the bytes this view represents.
             buffer = data.buffer.slice(
                 data.byteOffset,
                 data.byteOffset + data.byteLength,
@@ -118,84 +114,122 @@
     }
 
     /**
+     * Wraps a low-level stream ID with a high-level Stream API.
+     *
+     * A Stream object is returned from openStream() and provides
+     * a convenient interface for reading and writing stream data.
+     *
+     * @param {number} id - the native stream identifier
+     */
+    class Stream {
+        constructor(id) {
+            this._id = id;
+            this._dataCb = null;
+            this._endCb = null;
+            this._errorCb = null;
+
+            window.core.onStreamData(id, (data) => {
+                if (this._dataCb) this._dataCb(data);
+            });
+
+            window.core.onStreamEnd(id, (result) => {
+                if (this._endCb) this._endCb(result);
+            });
+
+            window.core.onStreamError(id, (msg) => {
+                if (this._errorCb) this._errorCb(msg);
+            });
+        }
+
+        /**
+         * Register a callback for incoming data chunks.
+         *
+         * The callback receives an ArrayBuffer with each chunk.
+         * The callback is persistent, it fires for every chunk
+         * until the stream ends or errors.
+         *
+         * @param {Function} callback - receives (ArrayBuffer data)
+         */
+        onData(callback) {
+            if (typeof callback !== 'function') {
+                throw new TypeError('Stream.onData: callback must be a function');
+            }
+            this._dataCb = callback;
+        }
+
+        /**
+         * Register a callback for stream completion.
+         *
+         * Fires once when the browser signals the stream is done.
+         *
+         * @param {Function} callback - receives (string result)
+         */
+        onEnd(callback) {
+            if (typeof callback !== 'function') {
+                throw new TypeError('Stream.onEnd: callback must be a function');
+            }
+            this._endCb = callback;
+        }
+
+        /**
+         * Register a callback for stream errors.
+         *
+         * Fires once when the browser signals a stream error.
+         *
+         * @param {Function} callback - receives (string errorMessage)
+         */
+        onError(callback) {
+            if (typeof callback !== 'function') {
+                throw new TypeError('Stream.onError: callback must be a function');
+            }
+            this._errorCb = callback;
+        }
+
+        /**
+         * Write a chunk of data to the stream.
+         *
+         * @param {ArrayBuffer | ArrayBufferView} data
+         */
+        write(data) {
+            let buffer;
+
+            if (data instanceof ArrayBuffer) {
+                buffer = data;
+            } else if (ArrayBuffer.isView(data)) {
+                buffer = data.buffer.slice(
+                    data.byteOffset,
+                    data.byteOffset + data.byteLength,
+                );
+            } else {
+                throw new TypeError('Stream.write: expected ArrayBuffer or ArrayBufferView');
+            }
+
+            window.core.writeStream(this._id, buffer);
+        }
+
+        /**
+         * Close the stream.
+         *
+         * @param {string} [result] - optional result string
+         */
+        end(result) {
+            window.core.endStream(this._id, result || '');
+        }
+    }
+
+    /**
      * Open a stream to the browser process.
+     *
+     * Resolves with a Stream object that provides methods for
+     * reading data, writing data, and handling completion.
      *
      * @param {string} handlerName - registered stream handler name
      * @param {string} [metadata] - optional metadata string
-     * @returns {Promise<number>} resolves with the stream id
+     * @returns {Promise<Stream>}
      */
-    function openStream(handlerName, metadata) {
-        return window.core.openStream(handlerName, metadata || '');
-    }
-
-    /**
-     * Write a chunk of data to an open stream.
-     *
-     * @param {number} streamId
-     * @param {ArrayBuffer | ArrayBufferView} data
-     */
-    function writeStream(streamId, data) {
-        let buffer;
-
-        if (data instanceof ArrayBuffer) {
-            buffer = data;
-        } else if (ArrayBuffer.isView(data)) {
-            buffer = data.buffer.slice(
-                data.byteOffset,
-                data.byteOffset + data.byteLength,
-            );
-        } else {
-            throw new TypeError('writeStream: expected ArrayBuffer or ArrayBufferView');
-        }
-
-        window.core.writeStream(streamId, buffer);
-    }
-
-    /**
-     * Close a stream.
-     *
-     * @param {number} streamId
-     * @param {string} [result] - optional result string
-     */
-    function endStream(streamId, result) {
-        window.core.endStream(streamId, result || '');
-    }
-
-    /**
-     * Register a callback for incoming data chunks on a stream.
-     *
-     * The callback receives an ArrayBuffer with each chunk.
-     * Callbacks are persistent - they fire for every chunk until the stream ends or errors.
-     *
-     * @param {number} streamId
-     * @param {Function} callback - receives (ArrayBuffer data)
-     */
-    function onStreamData(streamId, callback) {
-        window.core.onStreamData(streamId, callback);
-    }
-
-    /**
-     * Register a callback for stream completion.
-     *
-     * Fires once when the browser signals the stream is done.
-     *
-     * @param {number} streamId
-     * @param {Function} callback - receives (string result)
-     */
-    function onStreamEnd(streamId, callback) {
-        window.core.onStreamEnd(streamId, callback);
-    }
-
-    /**
-     * Register a callback for stream errors.
-     *
-     * Fires once when the browser signals a stream error.
-     *
-     * @param {number} streamId
-     * @param {Function} callback - receives (string errorMessage)
-     */
-    function onStreamError(streamId, callback) {
-        window.core.onStreamError(streamId, callback);
+    async function openStream(handlerName, metadata) {
+        const id = await window.core.openStream(handlerName, metadata || '');
+        return new Stream(id);
     }
 
     window.kurogane = Object.freeze({
@@ -205,11 +239,6 @@
         on,
         off,
         openStream,
-        writeStream,
-        endStream,
-        onStreamData,
-        onStreamEnd,
-        onStreamError,
         version: "0.0.5"
     });
 
