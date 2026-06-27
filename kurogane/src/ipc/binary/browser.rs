@@ -87,7 +87,7 @@ impl BinarySubsystem {
                 }
             }));
 
-            self.dispatch_async(cmd, data.to_vec(), responder, ctx);
+            self.dispatch_async(cmd, data, responder, ctx);
         } else {
             let result = catch_unwind(AssertUnwindSafe(|| {
                 self.dispatch(cmd, data, ctx)
@@ -112,7 +112,7 @@ impl BinarySubsystem {
         }
     }
 
-    fn dispatch_async(&self, command: &str, data: Vec<u8>, responder: BinaryResponder, ctx: IpcContext) {
+    fn dispatch_async(&self, command: &str, data: &[u8], responder: BinaryResponder, ctx: IpcContext) {
         if let Some(handler) = self.async_handlers.get(command) {
             handler(data, responder, ctx);
         }

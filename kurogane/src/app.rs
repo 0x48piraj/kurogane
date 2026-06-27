@@ -321,13 +321,13 @@ impl App {
 
     /// Register an async binary command handler.
     ///
-    /// The handler receives owned bytes and a BinaryResponder.
+    /// The handler receives a byte slice and a BinaryResponder.
     /// It should start async work and call responder.resolve() when done.
     ///
     /// Panics if name has already been registered.
     pub fn async_binary_command<F>(mut self, name: impl Into<String>, handler: F) -> Self
     where
-        F: Fn(Vec<u8>, BinaryResponder) + Send + Sync + 'static,
+        F: Fn(&[u8], BinaryResponder) + Send + Sync + 'static,
     {
         let name = name.into();
 
@@ -340,7 +340,7 @@ impl App {
             panic!("command '{name}' registered twice");
         }
 
-        let wrapped: AsyncBinaryHandler = Box::new(move |payload: Vec<u8>, responder: BinaryResponder, _ctx: IpcContext| {
+        let wrapped: AsyncBinaryHandler = Box::new(move |payload: &[u8], responder: BinaryResponder, _ctx: IpcContext| {
             handler(payload, responder)
         });
         self.async_binary_commands.insert(name, wrapped);

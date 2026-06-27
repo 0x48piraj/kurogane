@@ -10,7 +10,7 @@ use crate::ipc::browser_state::IpcContext;
 use crate::ipc::pending::PendingMap;
 
 pub type SyncBinaryHandler = Box<dyn Fn(&[u8], IpcContext) -> Result<Vec<u8>, String> + Send + Sync>;
-pub type AsyncBinaryHandler = Box<dyn Fn(Vec<u8>, BinaryResponder, IpcContext) + Send + Sync>;
+pub type AsyncBinaryHandler = Box<dyn Fn(&[u8], BinaryResponder, IpcContext) + Send + Sync>;
 
 /// Single-use callback for async binary responses.
 pub struct BinaryResponder {
