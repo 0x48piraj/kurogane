@@ -11,7 +11,7 @@ use cef::*;
 use crate::debug;
 use crate::ipc::browser_state::IpcContext;
 use crate::ipc::envelope::{Envelope, STREAM_OPEN, STREAM_DATA, STREAM_END, STREAM_ERROR, STREAM_CANCEL, decode_cmd_payload};
-use crate::ipc::rpc::PendingEntry;
+use crate::ipc::pending::PendingEntry;
 use crate::ipc::stream::{StreamResponder, StreamSubsystem};
 
 impl StreamSubsystem {
@@ -22,7 +22,7 @@ impl StreamSubsystem {
         envelope: &Envelope,
         payload: &[u8],
         ctx: IpcContext,
-        pending_clone: crate::ipc::rpc::PendingMap,
+        pending_clone: crate::ipc::pending::PendingMap,
     ) -> bool {
         match envelope.opcode {
             STREAM_OPEN => self.on_open(frame, envelope, payload, ctx, pending_clone),
@@ -53,7 +53,7 @@ impl StreamSubsystem {
         envelope: &Envelope,
         payload: &[u8],
         ctx: IpcContext,
-        pending_clone: crate::ipc::rpc::PendingMap,
+        pending_clone: crate::ipc::pending::PendingMap,
     ) -> bool {
         let (handler_name, _metadata) = match decode_cmd_payload(payload) {
             Some(v) => v,

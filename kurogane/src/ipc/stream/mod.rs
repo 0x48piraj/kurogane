@@ -87,7 +87,7 @@ pub struct StreamSubsystem {
     pub handlers: HashMap<String, StreamHandler>,
     /// Track open streams per browser for cleanup
     pub streams: std::sync::Mutex<HashMap<u32, (String, BrowserId, Frame)>>,
-    pub pending: crate::ipc::rpc::PendingMap,
+    pub pending: crate::ipc::pending::PendingMap,
 }
 
 impl StreamSubsystem {
@@ -95,7 +95,7 @@ impl StreamSubsystem {
         Self {
             handlers,
             streams: std::sync::Mutex::new(HashMap::new()),
-            pending: crate::ipc::rpc::PendingMap::new(),
+            pending: crate::ipc::pending::PendingMap::new(),
         }
     }
 

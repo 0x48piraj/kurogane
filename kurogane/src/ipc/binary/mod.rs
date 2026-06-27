@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use crate::ipc::browser_state::IpcContext;
-use crate::ipc::rpc::PendingMap;
+use crate::ipc::pending::PendingMap;
 
 pub type SyncBinaryHandler = Box<dyn Fn(&[u8], IpcContext) -> Result<Vec<u8>, String> + Send + Sync>;
 pub type AsyncBinaryHandler = Box<dyn Fn(Vec<u8>, BinaryResponder, IpcContext) + Send + Sync>;

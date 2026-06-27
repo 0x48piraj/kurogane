@@ -7,7 +7,8 @@ use crate::debug;
 use crate::ipc::browser_state::{IpcContext, IpcResult};
 use crate::ipc::envelope::*;
 use crate::ipc::transport::message::build_message;
-use crate::ipc::rpc::{IpcResponder, PendingEntry, PendingMap, RpcSubsystem};
+use crate::ipc::pending::{PendingEntry, PendingMap};
+use crate::ipc::rpc::{IpcResponder, RpcSubsystem};
 
 impl RpcSubsystem {
     /// Handle an RPC message arriving from the renderer (browser-side dispatch).

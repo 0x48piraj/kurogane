@@ -99,25 +99,6 @@ impl EventSubsystem {
         true
     }
 
-    /// Emit an event to a specific frame.
-    pub fn emit_to(&self, frame: &mut Frame, cmd: &str, data: &[u8]) {
-        let envelope = Envelope {
-            version: ENVELOPE_VERSION,
-            subsystem: SUB_EVENT,
-            opcode: EVENT_EMIT,
-            flags: 0,
-            correlation_id: 0,
-            payload_kind: PAYLOAD_JSON,
-        };
-
-        let payload = encode_cmd_payload(cmd, data);
-        if let Some(mut msg) = build_message("kurogane_event", &envelope, &payload) {
-            frame.send_process_message(ProcessId::RENDERER, Some(&mut msg));
-        } else {
-            debug!("[Event Browser] failed to build emit message");
-        }
-    }
-
     /// Broadcast an event to all subscribers of a given event name.
     pub fn broadcast(&self, cmd: &str, data: &[u8]) {
         let envelope = Envelope {

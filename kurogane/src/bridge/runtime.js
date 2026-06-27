@@ -139,7 +139,7 @@
      * Register a callback for incoming data chunks on a stream.
      *
      * The callback receives an ArrayBuffer with each chunk.
-     * Callbacks are persistent — they fire for every chunk until the stream ends or errors.
+     * Callbacks are persistent - they fire for every chunk until the stream ends or errors.
      *
      * @param {number} streamId
      * @param {Function} callback - receives (ArrayBuffer data)

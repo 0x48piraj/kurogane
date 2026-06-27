@@ -4,6 +4,7 @@ pub mod transport {
 }
 pub mod browser_state;
 pub mod renderer_state;
+pub mod pending;
 pub mod rpc;
 pub mod binary_buffer;
 pub mod binary;

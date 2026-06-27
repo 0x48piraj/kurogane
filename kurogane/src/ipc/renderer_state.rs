@@ -60,11 +60,6 @@ impl EventCallbackRegistry {
         false
     }
 
-    /// Unregister all callbacks for a specific event name.
-    pub fn unregister_all(&mut self, event: &str) -> bool {
-        self.callbacks.remove(event).is_some()
-    }
-
     /// Collect callbacks for an event without invoking them.
     /// Lock must be released before calling into JS to avoid reentrant deadlock.
     pub fn collect_callbacks(&mut self, event: &str) -> Vec<(V8Context, V8Value)> {
@@ -74,34 +69,6 @@ impl EventCallbackRegistry {
             }).collect(),
             None => Vec::new(),
         }
-    }
-
-    /// Trigger all callbacks for an event. Returns number of callbacks triggered.
-    pub fn trigger(&mut self, event: &str, payload: &str) -> usize {
-        let Some(entries) = self.callbacks.get(event) else {
-            return 0;
-        };
-
-        // Collect entries to call outside the mutable borrow
-        let to_call: Vec<(i64, V8Context, V8Value)> = entries.iter().map(|(id, ctx, cb)| {
-            (id.clone(), ctx.clone(), cb.clone())
-        }).collect();
-        let count = to_call.len();
-
-        for (_id, context, callback) in to_call {
-            if context.enter() == 0 {
-                continue;
-            }
-            let payload_v8 = v8_value_create_string(Some(&CefString::from(payload))).unwrap();
-            let args: [Option<V8Value>; 1] = [Some(payload_v8)];
-            callback.execute_function(
-                None,
-                Some(&args),
-            );
-            context.exit();
-        }
-
-        count
     }
 
     pub fn clear_context(&mut self, ctx: &V8Context) {

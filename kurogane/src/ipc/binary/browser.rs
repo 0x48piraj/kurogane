@@ -8,7 +8,7 @@ use crate::ipc::browser_state::IpcContext;
 use crate::ipc::envelope::*;
 use crate::ipc::transport::message::build_message;
 use crate::ipc::binary::{BinaryResponder, BinarySubsystem};
-use crate::ipc::rpc::{PendingEntry, PendingMap};
+use crate::ipc::pending::{PendingEntry, PendingMap};
 
 impl BinarySubsystem {
     /// Handle a binary message arriving from the renderer (browser-side dispatch).
