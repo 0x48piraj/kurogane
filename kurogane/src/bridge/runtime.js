@@ -127,9 +127,14 @@
             this._dataCb = null;
             this._endCb = null;
             this._errorCb = null;
+            this._buffer = []; // holds chunks arriving before onData is registered
 
             window.core.onStreamData(id, (data) => {
-                if (this._dataCb) this._dataCb(data);
+                if (this._dataCb) {
+                    this._dataCb(data);
+                } else {
+                    this._buffer.push(data);
+                }
             });
 
             window.core.onStreamEnd(id, (result) => {
@@ -155,6 +160,9 @@
                 throw new TypeError('Stream.onData: callback must be a function');
             }
             this._dataCb = callback;
+            // Drain any chunks that arrived before onData was registered
+            const buffered = this._buffer.splice(0);
+            for (const chunk of buffered) callback(chunk);
         }
 
         /**
