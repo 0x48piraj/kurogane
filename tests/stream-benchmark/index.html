@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stream IPC Throughput Benchmark</title>
+<link rel="stylesheet" href="app://app/dashboard.css">
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div class="header-title">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-6px;margin-right:5px">
+        <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+      </svg>
+      Stream IPC Throughput Benchmark
+    </div>
+    <div class="header-sub">Stream pipelining — kurogane IPC</div>
+  </header>
+
+  <div class="panel">
+    <div class="panel-title">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+      System
+    </div>
+    <div class="sysinfo-grid">
+      <div class="sysinfo-item">
+        <span class="sysinfo-label">Engine</span>
+        <span class="sysinfo-value" id="si-engine">—</span>
+      </div>
+      <div class="sysinfo-item">
+        <span class="sysinfo-label">Logical cores</span>
+        <span class="sysinfo-value" id="si-cores">—</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel overall-panel" id="overall-panel">
+    <div class="overall-header">
+      <span class="overall-label">Overall progress</span>
+      <span class="overall-pct" id="overall-pct">0 / 0</span>
+    </div>
+    <div class="bar-track">
+      <div class="bar-fill" id="overall-bar"></div>
+    </div>
+  </div>
+
+  <div class="card-grid" id="card-grid"></div>
+
+  <div class="summary-panel" id="summary-panel">
+    <div class="summary-header">
+      <div class="summary-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        Results
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="copy-ok" id="copy-ok">copied</span>
+        <button class="btn" id="copy-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          Copy JSON
+        </button>
+      </div>
+    </div>
+    <div class="summary-stats" id="summary-stats"></div>
+    <div class="summary-table" id="summary-table"></div>
+  </div>
+
+  <div>
+    <button class="console-toggle" id="console-toggle">
+      <svg class="console-chevron" id="console-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      Log
+    </button>
+    <div class="console-wrap" id="console-wrap"><pre id="console-log"></pre></div>
+  </div>
+</div>
+<script src="app://app/runner.js"></script>
+</body>
+</html>
