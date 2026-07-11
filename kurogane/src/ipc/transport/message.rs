@@ -91,14 +91,19 @@ fn build_inline_parts(
     args.set_int(4, envelope.correlation_id as i32);
     args.set_int(5, envelope.payload_kind as i32);
 
-    if !parts.is_empty() {
-        let total_payload: usize = parts.iter().map(|p| p.len()).sum();
-        let mut buf = Vec::with_capacity(total_payload);
-        for part in parts {
-            buf.extend_from_slice(part);
+    let total_payload: usize = parts.iter().map(|p| p.len()).sum();
+    if total_payload > 0 {
+        if parts.len() == 1 {
+            let mut binary = binary_value_create(Some(parts[0]))?;
+            args.set_binary(6, Some(&mut binary));
+        } else {
+            let mut buf = Vec::with_capacity(total_payload);
+            for part in parts {
+                buf.extend_from_slice(part);
+            }
+            let mut binary = binary_value_create(Some(&buf))?;
+            args.set_binary(6, Some(&mut binary));
         }
-        let mut binary = binary_value_create(Some(&buf))?;
-        args.set_binary(6, Some(&mut binary));
     }
 
     Some(msg)
