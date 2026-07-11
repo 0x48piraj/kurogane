@@ -28,6 +28,9 @@ impl StreamResponder {
 
     /// Send a data chunk to the renderer.
     pub fn send_data(&self, data: &[u8]) -> Result<(), String> {
+        if self.frame.is_valid() == 0 {
+            return Err("frame destroyed".into());
+        }
         let envelope = Envelope {
             version: ENVELOPE_VERSION,
             subsystem: SUB_STREAM,
@@ -44,6 +47,9 @@ impl StreamResponder {
 
     /// Signal that the browser is done sending data for this stream.
     pub fn end(&self, result: &str) -> Result<(), String> {
+        if self.frame.is_valid() == 0 {
+            return Err("frame destroyed".into());
+        }
         let envelope = Envelope {
             version: ENVELOPE_VERSION,
             subsystem: SUB_STREAM,
@@ -61,6 +67,9 @@ impl StreamResponder {
 
     /// Signal an error to the renderer for this stream.
     pub fn error(&self, msg: &str) -> Result<(), String> {
+        if self.frame.is_valid() == 0 {
+            return Err("frame destroyed".into());
+        }
         let envelope = Envelope {
             version: ENVELOPE_VERSION,
             subsystem: SUB_STREAM,
