@@ -1,6 +1,7 @@
 use cef::*;
 
 use crate::debug;
+use crate::ipc::browser_state::IpcError;
 use crate::ipc::envelope::*;
 use crate::ipc::renderer_state::registry;
 use crate::ipc::utils::create_array_buffer_from_bytes;
@@ -45,7 +46,7 @@ fn on_reject(envelope: &Envelope, payload: &[u8]) -> bool {
                 return false;
             }
 
-            let reject_msg = CefString::from(format!("{}: {}", error_code, error_msg).as_str());
+            let reject_msg = CefString::from(IpcError::new(error_msg.as_ref(), error_code).to_string().as_str());
             promise.reject_promise(Some(&reject_msg));
 
             context.exit();
