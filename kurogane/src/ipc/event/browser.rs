@@ -58,6 +58,7 @@ impl EventSubsystem {
         subs.entry(event_name.to_string())
             .or_default()
             .push(crate::ipc::event::EventSubscription {
+                id: envelope.correlation_id,
                 frame: frame.clone(),
                 browser_id,
                 persistent,
@@ -74,7 +75,7 @@ impl EventSubsystem {
 
     fn on_unsubscribe(
         &self,
-        _envelope: &Envelope,
+        envelope: &Envelope,
         payload: &[u8],
         ctx: IpcContext,
     ) -> bool {
@@ -87,14 +88,13 @@ impl EventSubsystem {
         };
 
         if let Some(browser_id) = ctx.browser_id {
-            let mut subs = self.subscriptions.lock().unwrap();
-            if let Some(entries) = subs.get_mut(event_name) {
-                entries.retain(|s| s.browser_id != browser_id);
-                if entries.is_empty() {
-                    subs.remove(event_name);
-                }
-            }
-            debug!("[Event Browser] unsubscribed '{}' browser={}", event_name, browser_id.as_u32());
+            self.remove_subscription(event_name, browser_id, envelope.correlation_id);
+            debug!(
+                "[Event Browser] unsubscribed '{}' browser={} id={}",
+                event_name,
+                browser_id.as_u32(),
+                envelope.correlation_id,
+            );
         }
         true
     }
