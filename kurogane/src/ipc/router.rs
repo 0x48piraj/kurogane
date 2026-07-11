@@ -64,13 +64,7 @@ impl IpcRouter {
                 self.event.handle_browser(frame, envelope, payload, ctx)
             }
             SUB_STREAM => {
-                self.stream.handle_browser(
-                    frame,
-                    envelope,
-                    payload,
-                    ctx,
-                    self.stream.pending.clone(),
-                )
+                self.stream.handle_browser(frame, envelope, payload, ctx)
             }
             _ => {
                 debug!(
@@ -90,14 +84,12 @@ impl IpcRouter {
     /// Cancel all pending async handlers for a given browser.
     pub fn cancel_all_for_browser(&self, browser_id: BrowserId) -> usize {
         let req_count = self.request_response.pending.cancel_all_for_browser(browser_id);
-        let stream_count = self.stream.pending.cancel_all_for_browser(browser_id);
         // Clean up event subscriptions and stream state
         self.event.clear_for_browser(browser_id);
         self.stream.clear_for_browser(browser_id);
-        let total = req_count + stream_count;
-        if total > 0 {
-            debug!("[Router] canceled {} pending handlers for browser", total);
+        if req_count > 0 {
+            debug!("[Router] canceled {} pending handlers for browser", req_count);
         }
-        total
+        req_count
     }
 }

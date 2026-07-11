@@ -125,7 +125,6 @@ pub struct StreamSubsystem {
     /// Stores the frame alongside each handler so responders can be
     /// reconstructed on every callback instead of stored by the handler.
     pub streams: Mutex<HashMap<u32, StreamEntry>>,
-    pub pending: crate::ipc::pending::PendingMap,
 }
 
 impl StreamSubsystem {
@@ -133,7 +132,6 @@ impl StreamSubsystem {
         Self {
             factories,
             streams: Mutex::new(HashMap::new()),
-            pending: crate::ipc::pending::PendingMap::new(),
         }
     }
 
