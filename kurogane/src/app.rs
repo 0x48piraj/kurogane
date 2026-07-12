@@ -518,6 +518,7 @@ impl App {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,5 +562,97 @@ mod tests {
         App::new("./dist")
             .binary_command("transfer", binary_noop)
             .command("transfer", json_noop);
+    }
+
+    #[test]
+    #[should_panic(expected = "registered twice")]
+    fn duplicate_async_command_panics() {
+        App::new("./dist")
+            .command("go", json_noop)
+            .async_command("go", |_: Value, r: IpcResponder, _: &AppHandle| {
+                r.resolve(Ok("ok".into()), 0);
+            });
+    }
+
+    #[test]
+    #[should_panic(expected = "registered twice")]
+    fn async_and_json_same_name_panics() {
+        App::new("./dist")
+            .async_command("task", |_: Value, r: IpcResponder, _: &AppHandle| {
+                r.resolve(Ok("ok".into()), 0);
+            })
+            .command("task", json_noop);
+    }
+
+    #[test]
+    #[should_panic(expected = "registered twice")]
+    fn async_and_binary_same_name_panics() {
+        App::new("./dist")
+            .async_command("upload", |_: Value, r: IpcResponder, _: &AppHandle| {
+                r.resolve(Ok("ok".into()), 0);
+            })
+            .binary_command("upload", binary_noop);
+    }
+
+    #[test]
+    #[should_panic(expected = "registered twice")]
+    fn stream_duplicate_panics() {
+        struct NoopStream;
+        impl crate::ipc::StreamHandler for NoopStream {
+            fn on_open(&mut self, _: &str, _: &crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
+            fn on_chunk(&mut self, _: &[u8], _: &crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
+            fn on_end(&mut self, _: &str, _: crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
+            fn on_error(&mut self, _: &str) {}
+        }
+        App::new("./dist")
+            .stream("data", || NoopStream)
+            .stream("data", || NoopStream);
+    }
+
+    #[test]
+    #[should_panic(expected = "registered twice")]
+    fn stream_and_command_same_name_panics() {
+        struct NoopStream;
+        impl crate::ipc::StreamHandler for NoopStream {
+            fn on_open(&mut self, _: &str, _: &crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
+            fn on_chunk(&mut self, _: &[u8], _: &crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
+            fn on_end(&mut self, _: &str, _: crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
+            fn on_error(&mut self, _: &str) {}
+        }
+        App::new("./dist")
+            .stream("data", || NoopStream)
+            .command("data", json_noop);
+    }
+
+    #[test]
+    #[should_panic(expected = "registered twice")]
+    fn command_and_stream_same_name_panics() {
+        struct NoopStream;
+        impl crate::ipc::StreamHandler for NoopStream {
+            fn on_open(&mut self, _: &str, _: &crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
+            fn on_chunk(&mut self, _: &[u8], _: &crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
+            fn on_end(&mut self, _: &str, _: crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
+            fn on_error(&mut self, _: &str) {}
+        }
+        App::new("./dist")
+            .command("data", json_noop)
+            .stream("data", || NoopStream);
+    }
+
+    #[test]
+    #[should_panic(expected = "registered twice")]
+    fn stream_and_async_same_name_panics() {
+        struct NoopStream;
+        impl crate::ipc::StreamHandler for NoopStream {
+            fn on_open(&mut self, _: &str, _: &crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
+            fn on_chunk(&mut self, _: &[u8], _: &crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
+            fn on_end(&mut self, _: &str, _: crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
+            fn on_error(&mut self, _: &str) {}
+        }
+        App::new("./dist")
+            .stream("task", || NoopStream)
+            .async_command("task", |_: Value, r: IpcResponder, _: &AppHandle| {
+                r.resolve(Ok("ok".into()), 0);
+            });
     }
 }
