@@ -781,11 +781,12 @@ wrap_v8_handler! {
                 }
             };
 
-            let event_name = {
+            let (event_name, was_valid) = {
                 let mut registry = event_registry().lock().unwrap();
                 let name = registry.get_event_name(id);
-                registry.unregister(id);
-                name
+                let removed = registry.unregister(id);
+
+                (name, removed)
             };
 
             if let Some(event_name) = event_name {
@@ -806,7 +807,7 @@ wrap_v8_handler! {
             }
 
             if let Some(ret) = retval {
-                *ret = v8_value_create_bool(1);
+                *ret = v8_value_create_bool(if was_valid { 1 } else { 0 });
             }
             1
         }
