@@ -187,12 +187,18 @@ impl PromiseRegistry {
     }
 
     pub fn register(&mut self, context: V8Context, promise: V8Value, subsystem: u8) -> IpcId {
-        let id = self.next_id;
-        self.next_id = self.next_id.checked_add(1).unwrap_or(1);
-
-        self.pending.insert(id, (context, promise, subsystem));
-
-        id
+        let start = self.next_id;
+        loop {
+            let id = self.next_id;
+            self.next_id = self.next_id.checked_add(1).unwrap_or(1);
+            if !self.pending.contains_key(&id) {
+                self.pending.insert(id, (context, promise, subsystem));
+                return id;
+            }
+            if self.next_id == start {
+                panic!("PromiseRegistry exhausted all {} ids", IpcId::MAX as i64 + 1);
+            }
+        }
     }
 
     pub fn take(&mut self, id: IpcId) -> Option<(V8Context, V8Value, u8)> {
