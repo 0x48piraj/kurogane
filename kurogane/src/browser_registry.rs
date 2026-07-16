@@ -10,6 +10,11 @@ impl BrowserId {
     pub fn as_u32(&self) -> u32 {
         self.0
     }
+
+    #[cfg(test)]
+    pub(crate) fn new(id: u32) -> Self {
+        Self(id)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
