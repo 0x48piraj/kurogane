@@ -9,6 +9,7 @@
 //! store an Option<StreamResponder> themselves.
 
 use cef::*;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::debug;
 use crate::ipc::browser_state::IpcContext;
@@ -131,16 +132,23 @@ impl StreamSubsystem {
             return false;
         };
 
-        // Reconstruct responder from the stored frame, the handler never
-        // needs to store one itself.
+        // Reconstruct responder from the stored frame, the handler never needs to store one itself
         let responder = StreamResponder::new(frame.clone(), stream_id);
-        match handler.on_chunk(payload, &responder) {
-            Ok(()) => {
+        let data_result = catch_unwind(AssertUnwindSafe(|| {
+            handler.on_chunk(payload, &responder)
+        }));
+
+        match data_result {
+            Ok(Ok(())) => {
                 self.streams.lock().unwrap().insert(stream_id, (browser_id, handler, frame));
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 debug!("[Stream Browser] on_chunk error: {}", e);
                 let _ = responder.error(&e);
+            }
+            Err(_) => {
+                debug!("[Stream Browser] on_chunk handler panicked");
+                let _ = responder.error("handler panicked");
             }
         }
 
@@ -155,8 +163,21 @@ impl StreamSubsystem {
         let entry = self.streams.lock().unwrap().remove(&stream_id);
         if let Some((_, mut handler, frame)) = entry {
             let responder = StreamResponder::new(frame, stream_id);
-            if let Err(e) = handler.on_end(&result_str, responder) {
-                debug!("[Stream Browser] on_end error: {}", e);
+            let responder_clone = responder.clone();
+            let end_result = catch_unwind(AssertUnwindSafe(|| {
+                handler.on_end(&result_str, responder)
+            }));
+
+            match end_result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    debug!("[Stream Browser] on_end error: {}", e);
+                    let _ = responder_clone.error(&e);
+                }
+                Err(_) => {
+                    debug!("[Stream Browser] on_end handler panicked");
+                    let _ = responder_clone.error("handler panicked");
+                }
             }
         } else {
             debug!("[Stream Browser] end for unknown stream {}", stream_id);
