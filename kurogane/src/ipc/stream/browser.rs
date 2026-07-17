@@ -88,24 +88,38 @@ impl StreamSubsystem {
         let responder = StreamResponder::new(frame.clone(), stream_id);
 
         let metadata_str = std::str::from_utf8(metadata_bytes).unwrap_or("");
-        if let Err(e) = handler.on_open(metadata_str, &responder) {
-            debug!("[Stream Browser] on_open error: {}", e);
-            let _ = responder.error(&e);
-            return false;
-        }
+        let open_result = catch_unwind(AssertUnwindSafe(|| {
+            handler.on_open(metadata_str, &responder)
+        }));
 
-        // Store Frame alongside handler so responders can be reconstructed
-        // for every subsequent callback without the handler storing one.
-        {
-            let mut streams = self.streams.lock().unwrap();
-            streams.insert(stream_id, (browser_id, handler, frame.clone()));
-        }
+        match open_result {
+            Ok(Ok(())) => {
+                // Retain the handler and frame for subsequent stream callbacks
+                {
+                    let mut streams = self.streams.lock().unwrap();
+                    streams.insert(stream_id, (browser_id, handler, frame.clone()));
+                }
 
-        debug!(
-            "[Stream Browser] open '{}' stream_id={}",
-            handler_name, stream_id,
-        );
-        true
+                // Complete the open handshake by acknowledging success
+                let _ = responder.end("");
+
+                debug!(
+                    "[Stream Browser] open '{}' stream_id={}",
+                    handler_name, stream_id,
+                );
+                true
+            }
+            Ok(Err(e)) => {
+                debug!("[Stream Browser] on_open error: {}", e);
+                let _ = responder.error(&e);
+                false
+            }
+            Err(_) => {
+                debug!("[Stream Browser] on_open handler panicked");
+                let _ = responder.error("handler panicked");
+                false
+            }
+        }
     }
 
     fn on_data(&self, envelope: &Envelope, payload: &[u8]) -> bool {

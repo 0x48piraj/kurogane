@@ -62,6 +62,19 @@ fn on_data(envelope: &Envelope, payload: &[u8]) -> bool {
 fn on_end(envelope: &Envelope, payload: &[u8]) -> bool {
     let stream_id = envelope.correlation_id as i32;
 
+    // Resolve the pending open() promise before treating END as a stream completion event
+    let entry = registry().lock().unwrap().take(stream_id);
+    if let Some((context, promise, _)) = entry {
+        if context.enter() == 0 {
+            return false;
+        }
+        let mut stream_v8 = v8_value_create_uint(stream_id as u32).unwrap();
+        promise.resolve_promise(Some(&mut stream_v8));
+        context.exit();
+        return true;
+    }
+
+    // No pending open() promise; treat this as a normal stream completion
     let entry = {
         let mut registry = stream_callback_registry().lock().unwrap();
         let cb = registry.take_end(stream_id);

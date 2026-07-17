@@ -888,17 +888,8 @@ wrap_v8_handler! {
                 frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
             }
 
-            // Resolve with the stream ID after sending STREAM_OPEN.
-            // This ensures the browser has registered the stream before any
-            // subsequent data, end or error events are dispatched.
-            if context.enter() == 0 {
-                registry().lock().unwrap().take(stream_id);
-                return 0;
-            }
-            let mut stream_v8 = v8_value_create_uint(stream_id as u32).unwrap();
-            promise.resolve_promise(Some(&mut stream_v8));
-            context.exit();
-            registry().lock().unwrap().take(stream_id);
+            // The promise represents completion of the open request, not message delivery
+            // It is resolved or rejected when the browser responds
 
             if let Some(ret) = retval {
                 *ret = Some(promise);
