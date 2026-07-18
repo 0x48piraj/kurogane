@@ -7,65 +7,63 @@
   };
 
   outputs =
-    {
-      self,
-      nixpkgs,
-      crane,
-    }:
+    { self, nixpkgs, ... }@inputs:
     let
       cefVersion = "150.0.10";
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
-      craneLib = (crane.mkLib pkgs);
+      craneLib = inputs.crane.mkLib pkgs;
 
-      runtimeDeps = with pkgs; [
-        openssl
-        dbus
-        at-spi2-core
-        glib
-        libGL
-        libxkbcommon
-        wayland
-        libX11
-        libXcomposite
-        libXcursor
-        libXdamage
-        libXext
-        libXfixes
-        libXi
-        libXrandr
-        libXrender
-        libXScrnSaver
-        libXtst
-        libxcb
-        gtk3
-        nss
-        nspr
-        pango
-        cairo
-        alsa-lib
-        at-spi2-atk
-        atk
-        cups
-        expat
-        fontconfig
-        gdk-pixbuf
-        libva
-        libgbm
-        libvdpau
-        systemd
-      ];
+      commonArgs = {
+        src = ./.; #TODO: should be src = craneLib.cleanCargoSource ./.; but doesn't include templates/
+        strictDeps = true;
 
-      buildDeps = with pkgs; [
-        rustc
-        cargo
-        rsync
-        pkg-config
-        cmake
-        ninja
-        gcc
-        cef
-      ];
+        buildInputs = with pkgs; [
+          openssl
+          dbus
+          at-spi2-core
+          glib
+          libGL
+          libxkbcommon
+          wayland
+          libX11
+          libXcomposite
+          libXcursor
+          libXdamage
+          libXext
+          libXfixes
+          libXi
+          libXrandr
+          libXrender
+          libXScrnSaver
+          libXtst
+          libxcb
+          gtk3
+          nss
+          nspr
+          pango
+          cairo
+          alsa-lib
+          at-spi2-atk
+          atk
+          cups
+          expat
+          fontconfig
+          gdk-pixbuf
+          libva
+          libgbm
+          libvdpau
+          systemd
+        ];
+
+        nativeBuildInputs = with pkgs; [
+          rustc
+          cargo
+          pkg-config
+          cmake
+          ninja
+        ];
+      };
 
       cefIntermediate = pkgs.cef-binary.override {
         version = "150.0.10";
@@ -92,60 +90,44 @@
         '';
       });
 
+      cargoArtifacts = craneLib.vendorCargoDeps (commonArgs // { pname = "kuroganeDeps"; });
 
-      kurogane = craneLib.buildPackage {
-        src = ./.;
-        cargoArtifacts = craneLib.vendorCargoDeps { src = ./.; };
+      kurogane = craneLib.buildPackage (
+        commonArgs
+        // {
+          inherit cargoArtifacts;
 
-        pname = "kurogane";
-        version = "0.4.0";
+          pname = "kurogane";
+          version = "0.0.4";
 
-        cargoExtraArgs = "-p kurogane-cli";
+          cargoExtraArgs = "-p kurogane-cli";
 
-        buildInputs = runtimeDeps;
-        nativeBuildInputs = buildDeps ++ [
-          pkgs.autoPatchelfHook
-          pkgs.makeWrapper
-        ];
+          nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
 
-        postInstall = ''
-          wrapProgram $out/bin/kurogane \
-            --set KUROGANE_CEF_VERSION ${cefVersion} \
-            --set CEF_PATH ${cef} \
-            --prefix PATH : ${
-              pkgs.lib.makeBinPath (
-                buildDeps
-                ++ [
-                  pkgs.rustc
-                  pkgs.cargo
-                  pkgs.cmake
-                  pkgs.ninja
-                  pkgs.pkg-config
-                ]
-              )
-            } \
-            --prefix LD_LIBRARY_PATH : ${
-              pkgs.lib.makeLibraryPath (runtimeDeps ++ [ pkgs.stdenv.cc.cc ])
-            }:${cef} \
-            --prefix PKG_CONFIG_PATH : ${pkgs.lib.makeSearchPath "lib/pkgconfig" runtimeDeps}
-        '';
-      };
+          # TODO: Avoid envvars
+          postInstall = ''
+            wrapProgram $out/bin/kurogane \
+              --set KUROGANE_CEF_VERSION ${cefVersion} \
+              --set CEF_PATH ${cef} \
+              --prefix PATH : ${pkgs.lib.makeBinPath commonArgs.nativeBuildInputs} \
+              --prefix LD_LIBRARY_PATH : ${
+                pkgs.lib.makeLibraryPath (commonArgs.buildInputs ++ [ pkgs.stdenv.cc.cc ])
+              }:${cef} \
+              --prefix PKG_CONFIG_PATH : ${pkgs.lib.makeSearchPath "lib/pkgconfig" commonArgs.buildInputs}
+          '';
+        }
+      );
     in
     {
+      packages.${system}.default = kurogane;
 
       apps.${system}.default = {
         type = "app";
         program = "${kurogane}/bin/kurogane";
       };
 
-      devShells.${system}.default = pkgs.mkShell {
-        buildInputs =
-          runtimeDeps
-          ++ buildDeps
-          ++ [
-            pkgs.autoPatchelfHook
-            kurogane
-          ];
+      devShells.${system}.default = craneLib.devShell {
+        packages = [ kurogane ];
       };
     };
 }
