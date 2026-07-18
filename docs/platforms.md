@@ -23,6 +23,15 @@ sudo chown root:root ~/.local/share/cef/{INSTALLED_CEF_VERSION}/chrome-sandbox
 sudo chmod 4755 ~/.local/share/cef/{INSTALLED_CEF_VERSION}/chrome-sandbox
 ```
 
+> [!NOTE]
+>  On Linux, GPU diagnostics typically require `mesa-utils` (for `glxinfo`) or equivalent OpenGL utilities:
+>
+> ```bash
+> sudo apt install mesa-utils
+> ```
+>
+> This is only needed if you want detailed GPU introspection via the `doctor` command.
+
 ## Windows
 
 You must build the project inside a **Visual Studio developer environment** so `CMake` can find required build tools (`Ninja` / `MSVC`).
@@ -50,33 +59,51 @@ Do not expect successful execution on macOS at this time.
 
 ## NixOS
 
-Kurogane provides a Nix flake for a reproducible development environment:
+Kurogane provides a Nix flake so contributors can obtain a reproducible environment while the project itself remains tool-native and does not require Nix for normal development.
+
+### Development
+
+Enter the development environment with:
 
 ```bash
 nix develop github:0x48piraj/kurogane
 ```
 
-This shell includes all required build tools, native dependencies and runtime libraries needed to work on the project.
+The shell includes the Rust toolchain, CEF, native build dependencies and runtime libraries required to build and work on the project.
 
-### Why not pure Nix?
+> [!NOTE]
+> **Known Nix limitation:** `nix develop` currently fails if the project is
+> located in a directory whose path contains spaces (for example
+> `/home/user/My Projects/kurogane`). This is a known upstream Nix issue:
+> https://github.com/NixOS/nix/issues/12413.
+>
+> If you encounter linker errors such as:
+>
+> ```text
+> ld: cannot find .../outputs/out/lib: No such file or directory
+> ```
+>
+> Move the project to a path without spaces. If renaming the original directory isn't practical, a space-free symlink may also work depending on how the shell is entered.
 
-This project uses a hybrid approach where the development workflow remains based on standard Rust tooling and scripts.
+### Running
 
-The reason for this is intentional simplicity:
-
-* Rust tooling (`cargo`) already provides fast, incremental builds
-* Development is simpler without wrestling with Nix derivations
-* Contributors don't need Nix knowledge to get started
-* The workflow stays consistent outside of Nix environments
-
-As the project matures, more parts may be optionally expressed in Nix (such as packaging or CI builds) but the core development workflow will hopefully remain tool-native for simplicity and speed.
-
-## Notes
-
-On Linux, GPU diagnostics typically require `mesa-utils` (for `glxinfo`) or equivalent OpenGL utilities:
+You can also run the packaged application directly without installing it:
 
 ```bash
-sudo apt install mesa-utils
+nix run github:0x48piraj/kurogane
 ```
 
-This is only needed if you want detailed GPU introspection via the `doctor` command.
+The packaged application automatically configures the required CEF runtime environment.
+
+### Why Cargo?
+
+While the project ships a Nix flake, day-to-day development intentionally remains centered around standard Rust tooling.
+
+This keeps the workflow simple while still allowing Nix to provide a reproducible environment:
+
+* Rust tooling (`cargo`) continues to handle fast incremental builds
+* Contributors don't need Nix knowledge to get started
+* The same development workflow works both inside and outside Nix
+* Nix handles toolchain provisioning, native dependencies and runtime setup
+
+The flake also serves as the basis for reproducible packaging and distribution without requiring the project itself to become Nix-native.

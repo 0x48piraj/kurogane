@@ -19,7 +19,7 @@ Kurogane manages the CEF runtime download and linking automatically via `cargo` 
 
 ### On Nix / NixOS
 
-We provide a flake that drops you into a fully configured development shell with all required native system libraries, `glibc` paths and build tools:
+We provide a flake that drops you into a configured development shell with all required native system libraries, paths and build tools:
 
 ```bash
 nix develop github:0x48piraj/kurogane
