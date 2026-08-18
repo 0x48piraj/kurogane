@@ -477,6 +477,15 @@ wrap_v8_handler! {
             let promise_for_retval = promise.clone();
             let id = register_promise(context.clone(), promise.clone(), SUB_RPC);
 
+            // Expose the id on the promise for JS-side cancellation
+            let id_key = CefString::from("__kurogane_id");
+            let mut id_value = v8_value_create_int(id).unwrap();
+            promise_for_retval.set_value_bykey(
+                Some(&id_key),
+                Some(&mut id_value),
+                V8Propertyattribute::default(),
+            );
+
             debug!("[IPC Renderer] JS invoke: '{}' (id={}, binary={})", cmd, id, is_binary);
 
             if is_binary {

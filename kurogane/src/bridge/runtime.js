@@ -30,41 +30,59 @@
      * response is returned as an ArrayBuffer. For JSON payloads, the value is
      * serialized before sending and the response is deserialized.
      *
+     * The returned promise has a .cancel() method that sends a cancellation
+     * request to the handler and rejects the promise with code 0.
+     *
      * @param {string} command
      * @param {ArrayBuffer | ArrayBufferView | *} payload
-     * @returns {Promise<ArrayBuffer | *>}
+     * @returns {Promise<ArrayBuffer | *> & { cancel: () => boolean }}
      */
-    async function invoke(command, payload) {
+    function invoke(command, payload) {
+        let p;
+
         if (payload instanceof ArrayBuffer) {
-            return window.core.invoke(command, payload).catch(function(e) { throw toError(e); });
-        }
-        if (ArrayBuffer.isView(payload)) {
+            p = window.core.invoke(command, payload);
+        } else if (ArrayBuffer.isView(payload)) {
             const buffer = payload.buffer.slice(
                 payload.byteOffset,
                 payload.byteOffset + payload.byteLength,
             );
-            return window.core.invoke(command, buffer).catch(function(e) { throw toError(e); });
-        }
-        const json = payload !== undefined ? JSON.stringify(payload) : '';
-        let result;
-
-        try {
-            result = await window.core.invoke(command, json);
-        } catch (e) {
-            throw toError(e);
+            p = window.core.invoke(command, buffer);
+        } else {
+            const json = payload !== undefined ? JSON.stringify(payload) : '';
+            p = window.core.invoke(command, json);
         }
 
-        try {
-            return JSON.parse(result);
-        } catch (e) {
-            throw new Error("Invalid JSON response: " + result);
+        const kuroganeId = p.__kurogane_id;
+
+        let chain;
+
+        if (payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
+            chain = p.catch(function(e) { throw toError(e); });
+        } else {
+            chain = p.then(function(result) {
+                try {
+                    return JSON.parse(result);
+                } catch (e) {
+                    throw new Error("Invalid JSON response: " + result);
+                }
+            }, function(e) { throw toError(e); });
         }
+
+        chain.cancel = function() {
+            return !!window.core.cancel(kuroganeId);
+        };
+
+        return chain;
     }
 
     /**
-     * Cancel a pending IPC request by its promise id.
+     * Cancel a pending IPC request by its native promise id.
      *
-     * @param {number} id - The promise id returned by invoke
+     * Prefer promise.cancel() on the return value of invoke().
+     * This function is the underlying implementation exposed for edge cases.
+     *
+     * @param {number} id - The native promise id
      * @returns {boolean} true if the promise was found and canceled
      */
     function cancel(id) {
