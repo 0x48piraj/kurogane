@@ -35,6 +35,6 @@ pub use app::App;
 pub use shutdown::ShutdownSignal;
 
 // Re-export IPC types for public use
-pub use crate::ipc::IpcResult;
+pub use crate::ipc::{IpcResult, IpcError, Responder};
 pub use app::{PumpRequest, PumpScheduler, ClientAppBrowserDelegate, ClientAppRendererDelegate};
 pub use browser_info_map::{BrowserInfoMap, BrowserInfoMapVisitor, BrowserInfoMapVisitorResult};
