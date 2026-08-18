@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::debug;
 use crate::ipc::browser_state::IpcError;
 
 type Callback<T> = Box<dyn FnOnce(Result<T, IpcError>) + Send>;
