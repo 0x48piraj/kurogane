@@ -337,6 +337,16 @@ impl AppHandle {
         self.services().router.event.broadcast(event, data);
     }
 
+    /// Broadcast a JSON-serializable event to all renderers subscribed to event.
+    ///
+    /// The value is serialized to JSON and sent as a string payload.
+    /// This is the preferred way to emit structured events.
+    pub fn broadcast_json<T: serde::Serialize>(&self, event: &str, value: &T) {
+        if let Ok(json) = serde_json::to_string(value) {
+            self.broadcast(event, json.as_bytes());
+        }
+    }
+
     /// Number of currently live browser instances.
     pub fn browser_count(&self) -> usize {
         self.services().browser_registry.lock().unwrap().count()
@@ -714,6 +724,11 @@ impl AppInstance {
     /// Broadcast an event to all renderer processes.
     pub fn broadcast(&self, event: &str, data: &[u8]) {
         self.handle.broadcast(event, data);
+    }
+
+    /// Broadcast a JSON-serializable event to all renderer processes.
+    pub fn broadcast_json<T: serde::Serialize>(&self, event: &str, value: &T) {
+        self.handle.broadcast_json(event, value);
     }
 
     /// Creates a new top-level window with an embedded browser.
