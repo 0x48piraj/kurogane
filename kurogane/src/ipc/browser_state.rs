@@ -8,21 +8,63 @@ use crate::browser_registry::BrowserId;
 pub type IpcResult = Result<String, String>;
 
 /// A structured error with a numeric code and human-readable message.
-#[derive(Debug, Clone)]
+///
+/// Displays as "{code}: {message}", used as the serialized error format.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IpcError {
     pub message: String,
     pub code: i32,
 }
 
 impl IpcError {
+    /// Code used for handler-reported errors (default)
+    pub const CODE_HANDLER: i32 = 0;
+    /// Code used when a handler panics
+    pub const CODE_PANIC: i32 = -1;
+    /// Code used for buffer/serialization failures
+    pub const CODE_BUFFER: i32 = -2;
+    /// Code used when a responder is dropped without resolving
+    pub const CODE_DROPPED: i32 = -3;
+
     pub fn new(message: impl Into<String>, code: i32) -> Self {
-        Self { message: message.into(), code }
+        Self {
+            message: message.into(),
+            code,
+        }
+    }
+
+    pub fn code(&self) -> i32 {
+        self.code
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
     }
 }
 
 impl std::fmt::Display for IpcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for IpcError {}
+
+impl From<String> for IpcError {
+    fn from(message: String) -> Self {
+        Self::new(message, Self::CODE_HANDLER)
+    }
+}
+
+impl From<&str> for IpcError {
+    fn from(message: &str) -> Self {
+        Self::new(message.to_string(), Self::CODE_HANDLER)
+    }
+}
+
+impl From<serde_json::Error> for IpcError {
+    fn from(e: serde_json::Error) -> Self {
+        Self::new(e.to_string(), Self::CODE_BUFFER)
     }
 }
 
