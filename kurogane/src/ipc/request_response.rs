@@ -5,13 +5,13 @@ use std::collections::HashMap;
 use cef::*;
 
 use crate::debug;
-use crate::ipc::browser_state::IpcContext;
+use crate::ipc::browser_state::{IpcContext, IpcError};
 use crate::ipc::envelope::*;
 use crate::ipc::pending::{PendingEntry, PendingMap};
 use crate::ipc::transport::message::build_message;
 use crate::ipc::responder::Responder;
 
-pub type SyncHandler = Box<dyn Fn(&[u8], IpcContext) -> Result<Vec<u8>, String> + Send + Sync>;
+pub type SyncHandler = Box<dyn Fn(&[u8], IpcContext) -> Result<Vec<u8>, IpcError> + Send + Sync>;
 pub type AsyncHandler = Box<dyn Fn(&[u8], BinaryResponder, IpcContext) + Send + Sync>;
 pub type BinaryResponder = Responder<Vec<u8>>;
 
@@ -94,22 +94,17 @@ impl RequestResponseSubsystem {
                 );
             }
 
-            let responder = BinaryResponder::new(Box::new({
-                let aborted = aborted.clone();
+            let responder = BinaryResponder::with_abort(Box::new({
                 let frame = frame.clone();
                 let pending = pending_clone.clone();
                 let payload_kind = envelope.payload_kind;
-                move |result, error_code| {
+                move |result| {
                     if let Some(bid) = browser_id {
                         pending.remove(bid, id);
                     }
-                    if !aborted.load(std::sync::atomic::Ordering::SeqCst) {
-                        send_response(&frame, payload_kind, correlation_id, result, error_code);
-                    } else {
-                        debug!("[RequestResponse Browser] dropping response for canceled id={}", id);
-                    }
+                    send_response(&frame, payload_kind, correlation_id, result);
                 }
-            }));
+            }), aborted);
 
             self.dispatch_async(cmd, data, responder, ctx);
         } else {
@@ -117,13 +112,12 @@ impl RequestResponseSubsystem {
                 self.dispatch(cmd, data, ctx)
             }));
 
-            let (response, code) = match result {
-                Ok(Ok(payload)) => (Ok(payload), 0),
-                Ok(Err(msg)) => (Err(msg), 0),
-                Err(_) => (Err("handler panicked".to_string()), -1),
+            let response = match result {
+                Ok(res) => res,
+                Err(_) => Err(IpcError::new("handler panicked", IpcError::CODE_PANIC)),
             };
 
-            send_response(frame, envelope.payload_kind, correlation_id, response, code);
+            send_response(frame, envelope.payload_kind, correlation_id, response);
         }
 
         true
@@ -137,10 +131,10 @@ impl RequestResponseSubsystem {
         true
     }
 
-    fn dispatch(&self, command: &str, data: &[u8], ctx: IpcContext) -> Result<Vec<u8>, String> {
+    fn dispatch(&self, command: &str, data: &[u8], ctx: IpcContext) -> Result<Vec<u8>, IpcError> {
         match self.sync_handlers.get(command) {
             Some(h) => h(data, ctx),
-            None => Err(format!("unknown command '{command}'")),
+            None => Err(IpcError::new(format!("unknown command '{command}'"), IpcError::CODE_HANDLER)),
         }
     }
 
@@ -151,21 +145,20 @@ impl RequestResponseSubsystem {
     }
 }
 
-fn send_response(frame: &Frame, payload_kind: u8, correlation_id: u32, result: Result<Vec<u8>, String>, error_code: i32) {
+fn send_response(frame: &Frame, payload_kind: u8, correlation_id: u32, result: Result<Vec<u8>, IpcError>) {
     if frame.is_valid() == 0 {
         debug!("[RequestResponse Browser] frame destroyed, dropping id={}", correlation_id);
         return;
     }
 
-    let (opcode_ok, opcode_err) = (RPC_RESOLVE, RPC_REJECT);
-
     let (opcode, data) = match result {
-        Ok(bytes) => (opcode_ok, bytes),
+        Ok(bytes) => (RPC_RESOLVE, bytes),
         Err(err) => {
-            let mut payload = Vec::with_capacity(4 + err.len());
-            payload.extend_from_slice(&error_code.to_le_bytes());
-            payload.extend_from_slice(err.as_bytes());
-            (opcode_err, payload)
+            let msg = err.message();
+            let mut payload = Vec::with_capacity(4 + msg.len());
+            payload.extend_from_slice(&err.code().to_le_bytes());
+            payload.extend_from_slice(msg.as_bytes());
+            (RPC_REJECT, payload)
         }
     };
 
