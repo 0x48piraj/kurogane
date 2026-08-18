@@ -102,7 +102,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
 
-    type CallRecord = (Result<i32, IpcError>,);
+    type CallRecord = Result<i32, IpcError>;
     type RecordingResults = Arc<Mutex<Vec<CallRecord>>>;
     type BinaryResults = Arc<Mutex<Vec<Result<Vec<u8>, IpcError>>>>;
 
@@ -114,7 +114,7 @@ mod tests {
         let res = results.clone();
         let responder = Responder::new(Box::new(move |result| {
             cc.fetch_add(1, Ordering::SeqCst);
-            res.lock().unwrap().push((result,));
+            res.lock().unwrap().push(result);
         }));
         (responder, call_count, results)
     }
@@ -127,7 +127,7 @@ mod tests {
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
         let r = results.lock().unwrap();
         assert_eq!(r.len(), 1);
-        assert_eq!(r[0].0, Ok(42));
+        assert_eq!(r[0], Ok(42));
     }
 
     // Errors and error codes are forwarded unchanged to the callback
@@ -137,7 +137,7 @@ mod tests {
         responder.resolve(Err(IpcError::new("something failed", -42)));
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
         let r = results.lock().unwrap();
-        assert_eq!(r[0].0.as_ref().unwrap_err().code(), -42);
+        assert_eq!(r[0].as_ref().unwrap_err().code(), -42);
     }
 
     // Once resolved, subsequent resolve calls are ignored
@@ -148,7 +148,7 @@ mod tests {
         responder.resolve(Ok(2)); // no-op
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
         let r = results.lock().unwrap();
-        assert_eq!(r[0].0, Ok(1));
+        assert_eq!(r[0], Ok(1));
     }
 
     // The first resolution wins regardless of success or failure
@@ -167,11 +167,12 @@ mod tests {
         drop(responder);
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
         let r = results.lock().unwrap();
-        let err = r[0].0.as_ref().unwrap_err();
+        let err = r[0].as_ref().unwrap_err();
         assert!(err.message().contains("dropped"));
         assert_eq!(err.code(), IpcError::CODE_DROPPED);
     }
 
+    // Dropping a resolved responder does not invoke the callback again
     #[test]
     fn drop_after_resolve_does_not_call_again() {
         let (responder, call_count, _) = recording_responder();
@@ -187,12 +188,12 @@ mod tests {
         let res = results.clone();
         {
             let _responder: Responder<i32> = Responder::new(Box::new(move |result| {
-                res.lock().unwrap().push((result,));
+                res.lock().unwrap().push(result);
             }));
             // _responder dropped here
         }
         let r = results.lock().unwrap();
-        assert!(r[0].0.as_ref().unwrap_err().message().contains("handler dropped responder without resolving"));
+        assert!(r[0].as_ref().unwrap_err().message().contains("handler dropped responder without resolving"));
     }
 
     // Concurrent resolution invokes the callback at most once
@@ -219,7 +220,7 @@ mod tests {
         let r = results.lock().unwrap();
         assert_eq!(r.len(), 1);
         // Result should be one of the Ok(i) values, not corrupted
-        assert!(r[0].0.is_ok());
+        assert!(r[0].is_ok());
     }
 
     // Racing resolve against drop still invokes the callback exactly once
@@ -261,7 +262,7 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(true));
         let responder = Responder::with_abort(Box::new(move |result| {
             cc.fetch_add(1, Ordering::SeqCst);
-            res.lock().unwrap().push((result,));
+            res.lock().unwrap().push(result);
         }), flag);
         assert!(responder.is_cancelled());
         responder.resolve(Ok(99));
@@ -316,5 +317,76 @@ mod tests {
 
         let r = results.lock().unwrap();
         assert_eq!(r[0].as_ref().unwrap_err().code(), -10);
+    }
+
+    // Mapping preserves the cancellation state of the original responder
+    #[test]
+    fn map_preserves_cancellation() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let cc = call_count.clone();
+
+        let flag = Arc::new(AtomicBool::new(false));
+
+        let responder: Responder<i32> = Responder::with_abort(
+            Box::new(move |_| {
+                cc.fetch_add(1, Ordering::SeqCst);
+            }),
+            flag.clone(),
+        );
+
+        let responder: Responder<String> =
+            responder.map(|v: String| v.parse::<i32>().map_err(|e| IpcError::new(e.to_string(), -1)));
+
+        flag.store(true, Ordering::SeqCst);
+
+        assert!(responder.is_cancelled());
+        responder.resolve(Ok("42".to_string()));
+        assert_eq!(call_count.load(Ordering::SeqCst), 0);
+    }
+
+    // A mapped responder observes cancellation changes to the shared flag
+    #[test]
+    fn map_observes_external_cancellation() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let inner: Responder<i32> = Responder::with_abort(Box::new(|_| {}), flag.clone());
+
+        let mapped: Responder<String> = inner.map(|v: String| {
+            v.parse::<i32>().map_err(|e| IpcError::new(e.to_string(), -1))
+        });
+
+        assert!(!mapped.is_cancelled());
+        flag.store(true, Ordering::SeqCst);
+        assert!(mapped.is_cancelled());
+    }
+
+    // A cancelled mapped responder skips transformation and callback delivery
+    #[test]
+    fn map_cancelled_responder_skips_transform() {
+        let transform_calls = Arc::new(AtomicUsize::new(0));
+        let callback_calls = Arc::new(AtomicUsize::new(0));
+
+        let transforms = transform_calls.clone();
+        let callbacks = callback_calls.clone();
+
+        let flag = Arc::new(AtomicBool::new(false));
+
+        let inner: Responder<Vec<u8>> = Responder::with_abort(
+            Box::new(move |_| {
+                callbacks.fetch_add(1, Ordering::SeqCst);
+            }),
+            flag.clone(),
+        );
+
+        let mapped: Responder<i32> = inner.map(move |value| {
+            transforms.fetch_add(1, Ordering::SeqCst);
+            Ok(serde_json::to_vec(&value).unwrap())
+        });
+
+        flag.store(true, Ordering::SeqCst);
+
+        mapped.resolve(Ok(42));
+
+        assert_eq!(transform_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(callback_calls.load(Ordering::SeqCst), 0);
     }
 }
