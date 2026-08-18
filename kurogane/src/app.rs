@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use cef::*;
 use crate::app::resolver::ResolvedFrontend;
-use crate::ipc::{AppCell, IpcRouter, RequestResponseSubsystem, EventSubsystem, StreamSubsystem, StreamFactory, IpcResponder, BinaryResponder, SyncHandler, AsyncHandler, IpcContext};
+use crate::ipc::{AppCell, IpcRouter, RequestResponseSubsystem, EventSubsystem, StreamSubsystem, StreamFactory, Responder, BinaryResponder, SyncHandler, AsyncHandler, IpcContext, IpcError};
 use crate::runtime::{RuntimeBootstrap, AppHandle, AppInstance};
 use crate::error::RuntimeError;
 use crate::spec::{RuntimeSpec, RuntimeMode};
@@ -243,59 +243,60 @@ impl App {
 
     /// Registers a synchronous JSON command handler.
     ///
-    /// The closure receives the deserialized payload and a reference to the
+    /// The closure receives the deserialized request and a reference to the
     /// shared runtime handle. Use the handle to broadcast events, spawn
     /// background work, or query runtime state.
     ///
     /// Ignore it with _ when not needed.
     ///
     /// Panics if a handler with the same name has already been registered.
-    pub fn command<F>(mut self, name: impl Into<String>, f: F) -> Self
+    pub fn command<Req, Res, F>(mut self, name: impl Into<String>, f: F) -> Self
     where
-        F: Fn(Value, &AppHandle) -> Result<Value, String> + Send + Sync + 'static,
+        Req: serde::de::DeserializeOwned + Send + 'static,
+        Res: serde::Serialize + Send + 'static,
+        F: Fn(Req, &AppHandle) -> Result<Res, IpcError> + Send + Sync + 'static,
     {
         let name = name.into();
         self.guard_unique_name(&name);
         let cell = self.cell.clone();
         self.sync_handlers.insert(name, Box::new(move |data: &[u8], _ctx: IpcContext| {
-            let s = std::str::from_utf8(data).map_err(|e| e.to_string())?;
-            let input = if s.is_empty() { Value::Null } else { serde_json::from_str(s).map_err(|e| format!("invalid JSON payload: {e}"))? };
-            let output = f(input, cell.get())?;
-            serde_json::to_string(&output).map_err(|e| format!("JSON serialization error: {e}")).map(|s| s.into_bytes())
+            let req: Req = if data.is_empty() {
+                serde_json::from_value(Value::Null)
+            } else {
+                serde_json::from_slice(data)
+            }.map_err(IpcError::from)?;
+            let res = f(req, cell.get())?;
+            serde_json::to_vec(&res).map_err(IpcError::from)
         }));
         self
     }
 
     /// Registers an asynchronous JSON command handler.
     ///
-    /// The closure receives the deserialized payload, an IpcResponder to
+    /// The closure receives the deserialized request, a typed responder to
     /// send the response later and the shared runtime handle.
     ///
     /// Panics if a handler with the same name has already been registered.
-    pub fn async_command<F>(mut self, name: impl Into<String>, f: F) -> Self
+    pub fn async_command<Req, Res, F>(mut self, name: impl Into<String>, f: F) -> Self
     where
-        F: Fn(Value, IpcResponder, &AppHandle) + Send + Sync + 'static,
+        Req: serde::de::DeserializeOwned + Send + 'static,
+        Res: serde::Serialize + Send + 'static,
+        F: Fn(Req, Responder<Res>, &AppHandle) + Send + Sync + 'static,
     {
         let name = name.into();
         self.guard_unique_name(&name);
         let cell = self.cell.clone();
         self.async_handlers.insert(name, Box::new(move |data: &[u8], responder: BinaryResponder, _ctx: IpcContext| {
-            let s = std::str::from_utf8(data).unwrap_or("");
-            let value: Value = if s.is_empty() {
-                Value::Null
+            let req: Req = match if data.is_empty() {
+                serde_json::from_value(Value::Null)
             } else {
-                match serde_json::from_str(s) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        responder.resolve(Err(format!("invalid JSON: {e}")), 0);
-                        return;
-                    }
-                }
+                serde_json::from_slice(data)
+            } {
+                Ok(r) => r,
+                Err(e) => { responder.resolve(Err(IpcError::from(e))); return; }
             };
-            let r = IpcResponder::new(Box::new(move |result, code| {
-                responder.resolve(result.map(|s| s.into_bytes()), code);
-            }));
-            f(value, r, cell.get())
+            let responder = responder.map(|res: Res| serde_json::to_vec(&res).map_err(IpcError::from));
+            f(req, responder, cell.get())
         }));
         self
     }
@@ -307,7 +308,7 @@ impl App {
     /// Panics if a handler with the same name has already been registered.
     pub fn binary_command<F>(mut self, name: impl Into<String>, f: F) -> Self
     where
-        F: Fn(&[u8], &AppHandle) -> Result<Vec<u8>, String> + Send + Sync + 'static,
+        F: Fn(&[u8], &AppHandle) -> Result<Vec<u8>, IpcError> + Send + Sync + 'static,
     {
         let name = name.into();
         self.guard_unique_name(&name);
@@ -524,11 +525,11 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
-    fn json_noop(_: Value, _: &AppHandle) -> Result<Value, String> {
+    fn json_noop(_: Value, _: &AppHandle) -> Result<Value, IpcError> {
         Ok(Value::Null)
     }
 
-    fn binary_noop(_: &[u8], _: &AppHandle) -> Result<Vec<u8>, String> {
+    fn binary_noop(_: &[u8], _: &AppHandle) -> Result<Vec<u8>, IpcError> {
         Ok(vec![])
     }
 
@@ -569,8 +570,8 @@ mod tests {
     fn duplicate_async_command_panics() {
         App::new("./dist")
             .command("go", json_noop)
-            .async_command("go", |_: Value, r: IpcResponder, _: &AppHandle| {
-                r.resolve(Ok("ok".into()), 0);
+            .async_command("go", |_: Value, r: Responder<Value>, _: &AppHandle| {
+                r.resolve(Ok(Value::Null));
             });
     }
 
@@ -578,8 +579,8 @@ mod tests {
     #[should_panic(expected = "registered twice")]
     fn async_and_json_same_name_panics() {
         App::new("./dist")
-            .async_command("task", |_: Value, r: IpcResponder, _: &AppHandle| {
-                r.resolve(Ok("ok".into()), 0);
+            .async_command("task", |_: Value, r: Responder<Value>, _: &AppHandle| {
+                r.resolve(Ok(Value::Null));
             })
             .command("task", json_noop);
     }
@@ -588,8 +589,8 @@ mod tests {
     #[should_panic(expected = "registered twice")]
     fn async_and_binary_same_name_panics() {
         App::new("./dist")
-            .async_command("upload", |_: Value, r: IpcResponder, _: &AppHandle| {
-                r.resolve(Ok("ok".into()), 0);
+            .async_command("upload", |_: Value, r: Responder<Value>, _: &AppHandle| {
+                r.resolve(Ok(Value::Null));
             })
             .binary_command("upload", binary_noop);
     }
@@ -651,8 +652,8 @@ mod tests {
         }
         App::new("./dist")
             .stream("task", || NoopStream)
-            .async_command("task", |_: Value, r: IpcResponder, _: &AppHandle| {
-                r.resolve(Ok("ok".into()), 0);
+            .async_command("task", |_: Value, r: Responder<Value>, _: &AppHandle| {
+                r.resolve(Ok(Value::Null));
             });
     }
 }
