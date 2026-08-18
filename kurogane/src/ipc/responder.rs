@@ -241,4 +241,72 @@ mod tests {
 
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
+
+    // Cancellation prevents a resolved value from reaching the callback
+    #[test]
+    fn cancelled_responder_drops_result() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let results: Arc<Mutex<Vec<CallRecord>>> = Arc::new(Mutex::new(Vec::new()));
+        let cc = call_count.clone();
+        let res = results.clone();
+
+        let flag = Arc::new(AtomicBool::new(true));
+        let responder = Responder::with_abort(Box::new(move |result| {
+            cc.fetch_add(1, Ordering::SeqCst);
+            res.lock().unwrap().push((result,));
+        }), flag);
+        assert!(responder.is_cancelled());
+        responder.resolve(Ok(99));
+        assert_eq!(call_count.load(Ordering::SeqCst), 0);
+        assert!(results.lock().unwrap().is_empty());
+    }
+
+    // Responder and pending RPC share the same cancellation state
+    #[test]
+    fn with_abort_shares_cancellation_flag() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let responder: Responder<i32> = Responder::with_abort(Box::new(|_| {}), flag.clone());
+        assert!(!responder.is_cancelled());
+        flag.store(true, Ordering::SeqCst);
+        assert!(responder.is_cancelled());
+    }
+
+    // Mapping transforms a typed responder into a different response type
+    #[test]
+    fn map_transforms_value_type() {
+        let results: BinaryResults = Arc::new(Mutex::new(Vec::new()));
+        let res = results.clone();
+
+        let responder: Responder<Vec<u8>> = Responder::new(Box::new(move |result| {
+            res.lock().unwrap().push(result);
+        }));
+
+        let responder: Responder<i32> =
+            responder.map(|v: i32| Ok(serde_json::to_vec(&v).unwrap()));
+
+        responder.resolve(Ok(42));
+
+        let r = results.lock().unwrap();
+        assert_eq!(r[0].as_ref().unwrap(), b"42");
+    }
+
+    // Mapping propagates errors produced by the transformation
+    #[test]
+    fn map_propagates_error() {
+        let results: BinaryResults = Arc::new(Mutex::new(Vec::new()));
+        let res = results.clone();
+
+        let responder: Responder<Vec<u8>> = Responder::new(Box::new(move |result| {
+            res.lock().unwrap().push(result);
+        }));
+
+        let responder: Responder<i32> = responder.map(|_v: i32| {
+            Err(IpcError::new("mapping failed", -10))
+        });
+
+        responder.resolve(Ok(42));
+
+        let r = results.lock().unwrap();
+        assert_eq!(r[0].as_ref().unwrap_err().code(), -10);
+    }
 }
