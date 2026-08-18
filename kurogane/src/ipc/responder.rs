@@ -54,6 +54,9 @@ impl<T: 'static> Responder<T> {
     /// The returned responder chains through `f` before calling the original
     /// callback. Useful for wrapping a typed `Responder<Res>` into a
     /// `Responder<Vec<u8>>` at the serialisation boundary.
+    ///
+    /// The mapped responder shares the cancellation flag with the source.
+    /// Cancelling the source or the mapped responder cancels both.
     pub fn map<U, F>(self, f: F) -> Responder<U>
     where
         U: 'static,
@@ -65,16 +68,20 @@ impl<T: 'static> Responder<T> {
             .unwrap()
             .take()
             .expect("responder already resolved");
+        let cancelled = self.cancelled.clone();
         let f = Mutex::new(Some(f));
-        Responder::new(Box::new(move |result: Result<U, IpcError>| {
-            let mapped = result.and_then(|v| {
-                f.lock()
-                    .unwrap()
-                    .take()
-                    .expect("responder map called twice")(v)
-            });
-            inner(mapped);
-        }))
+        Responder {
+            callback: Mutex::new(Some(Box::new(move |result: Result<U, IpcError>| {
+                let mapped = result.and_then(|v| {
+                    f.lock()
+                        .unwrap()
+                        .take()
+                        .expect("responder map called twice")(v)
+                });
+                inner(mapped);
+            }))),
+            cancelled,
+        }
     }
 }
 
