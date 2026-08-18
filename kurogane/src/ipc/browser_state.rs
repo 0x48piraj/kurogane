@@ -131,4 +131,41 @@ mod tests {
         assert!(debug.contains("debug test"));
         assert!(debug.contains("5"));
     }
+
+    #[test]
+    fn ipc_error_code_constants() {
+        assert_eq!(IpcError::CODE_HANDLER, 0);
+        assert_eq!(IpcError::CODE_PANIC, -1);
+        assert_eq!(IpcError::CODE_BUFFER, -2);
+        assert_eq!(IpcError::CODE_DROPPED, -3);
+    }
+
+    #[test]
+    fn ipc_error_from_string() {
+        let err: IpcError = "boom".to_string().into();
+        assert_eq!(err.code(), IpcError::CODE_HANDLER);
+        assert_eq!(err.message(), "boom");
+    }
+
+    #[test]
+    fn ipc_error_from_str() {
+        let err: IpcError = "boom".into();
+        assert_eq!(err.code(), IpcError::CODE_HANDLER);
+        assert_eq!(err.message(), "boom");
+    }
+
+    #[test]
+    fn ipc_error_from_serde_json() {
+        let inner = serde_json::from_str::<i32>("nope").unwrap_err();
+        let err: IpcError = inner.into();
+        assert_eq!(err.code(), IpcError::CODE_BUFFER);
+        assert!(!err.message().is_empty());
+    }
+
+    #[test]
+    fn ipc_error_is_std_error() {
+        let err = IpcError::new("boom", -7);
+        let source = std::error::Error::source(&err);
+        assert!(source.is_none());
+    }
 }
