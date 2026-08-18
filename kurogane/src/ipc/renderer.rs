@@ -10,7 +10,7 @@ use crate::debug;
 use crate::ipc::envelope::*;
 use crate::ipc::transport::message::{build_message, build_message_parts, extract_message};
 use crate::ipc::router;
-use crate::ipc::renderer_state::{register_promise, cancel_promise, clear_context_promises, clear_context_events, clear_context_streams, event_registry, stream_callback_registry, registry};
+use crate::ipc::renderer_state::{register_promise, cancel_promise, clear_context_promises, clear_context_events, clear_context_streams, renderer_state};
 use crate::bridge;
 
 //
@@ -497,7 +497,7 @@ wrap_v8_handler! {
                     if let Some(exc) = exception {
                         *exc = CefString::from("ArrayBuffer has null data");
                     }
-                    registry().lock().unwrap().take(id);
+                    renderer_state().lock().unwrap().promises.take(id);
                     return 0;
                 }
 
@@ -518,14 +518,14 @@ wrap_v8_handler! {
                         build_failed = true;
                         if let Some(ctx) = v8_context_get_current_context() {
                             if ctx.enter() == 0 {
-                                registry().lock().unwrap().take(id);
+                                renderer_state().lock().unwrap().promises.take(id);
                                 return;
                             }
                             let reject_msg = CefString::from("-1: Failed to build IPC message");
                             promise.reject_promise(Some(&reject_msg));
                             ctx.exit();
                         }
-                        registry().lock().unwrap().take(id);
+                        renderer_state().lock().unwrap().promises.take(id);
                     }
                 });
 
@@ -554,13 +554,13 @@ wrap_v8_handler! {
                     frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
                 } else {
                     if context.enter() == 0 {
-                        registry().lock().unwrap().take(id);
+                        renderer_state().lock().unwrap().promises.take(id);
                         return 0;
                     }
                     let reject_msg = CefString::from("-1: Failed to build IPC message");
                     promise.reject_promise(Some(&reject_msg));
                     context.exit();
-                    registry().lock().unwrap().take(id);
+                    renderer_state().lock().unwrap().promises.take(id);
                     if let Some(ret) = retval { *ret = Some(promise_for_retval); }
                     return 1;
                 }
@@ -714,7 +714,7 @@ wrap_v8_handler! {
                 return 0;
             };
 
-            let id = event_registry().lock().unwrap().register(
+            let id = renderer_state().lock().unwrap().events.register(
                 &event_name,
                 context.clone(),
                 callback.clone(),
@@ -791,9 +791,9 @@ wrap_v8_handler! {
             };
 
             let (event_name, was_valid) = {
-                let mut registry = event_registry().lock().unwrap();
-                let name = registry.get_event_name(id);
-                let removed = registry.unregister(id);
+                let mut state = renderer_state().lock().unwrap();
+                let name = state.events.get_event_name(id);
+                let removed = state.events.unregister(id);
 
                 (name, removed)
             };
@@ -1124,7 +1124,7 @@ wrap_v8_handler! {
                 }
             };
 
-            stream_callback_registry().lock().unwrap().register_data(
+            renderer_state().lock().unwrap().streams.register_data(
                 stream_id,
                 context.clone(),
                 callback.clone(),
@@ -1196,7 +1196,7 @@ wrap_v8_handler! {
                 }
             };
 
-            stream_callback_registry().lock().unwrap().register_end(
+            renderer_state().lock().unwrap().streams.register_end(
                 stream_id,
                 context.clone(),
                 callback.clone(),
@@ -1268,7 +1268,7 @@ wrap_v8_handler! {
                 }
             };
 
-            stream_callback_registry().lock().unwrap().register_error(
+            renderer_state().lock().unwrap().streams.register_error(
                 stream_id,
                 context.clone(),
                 callback.clone(),

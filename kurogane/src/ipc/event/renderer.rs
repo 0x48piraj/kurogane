@@ -7,7 +7,7 @@ use cef::*;
 
 use crate::debug;
 use crate::ipc::envelope::*;
-use crate::ipc::renderer_state::event_registry;
+use crate::ipc::renderer_state::renderer_state;
 
 /// Handle an event message arriving from the browser (renderer-side dispatch).
 pub fn handle_event_renderer(_frame: &mut Frame, envelope: &Envelope, payload: &[u8]) -> bool {
@@ -34,8 +34,8 @@ fn on_emit(payload: &[u8]) -> bool {
     // Collect callbacks under lock, then release lock before JS invocation
     // to prevent reentrant deadlock if a callback calls core.off() or core.on().
     let to_call = {
-        let mut registry = event_registry().lock().unwrap();
-        registry.collect_callbacks(event_name)
+        let mut state = renderer_state().lock().unwrap();
+        state.events.collect_callbacks(event_name)
     };
     let count = to_call.len();
     for (context, callback) in to_call {

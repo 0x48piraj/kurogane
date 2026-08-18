@@ -7,7 +7,7 @@ use cef::*;
 
 use crate::debug;
 use crate::ipc::envelope::*;
-use crate::ipc::renderer_state::{registry, stream_callback_registry};
+use crate::ipc::renderer_state::renderer_state;
 use crate::ipc::browser_state::IpcError;
 use crate::ipc::utils::create_array_buffer_from_bytes;
 
@@ -28,8 +28,7 @@ fn on_data(envelope: &Envelope, payload: &[u8]) -> bool {
     let stream_id = envelope.correlation_id as i32;
 
     let entry = {
-        let registry = stream_callback_registry().lock().unwrap();
-        registry.collect_data(stream_id)
+        renderer_state().lock().unwrap().streams.collect_data(stream_id)
     };
 
     match entry {
@@ -63,7 +62,7 @@ fn on_end(envelope: &Envelope, payload: &[u8]) -> bool {
     let stream_id = envelope.correlation_id as i32;
 
     // Resolve the pending open() promise before treating END as a stream completion event
-    let entry = registry().lock().unwrap().take(stream_id);
+    let entry = renderer_state().lock().unwrap().promises.take(stream_id);
     if let Some((context, promise, _)) = entry {
         if context.enter() == 0 {
             return false;
@@ -76,9 +75,9 @@ fn on_end(envelope: &Envelope, payload: &[u8]) -> bool {
 
     // No pending open() promise; treat this as a normal stream completion
     let entry = {
-        let mut registry = stream_callback_registry().lock().unwrap();
-        let cb = registry.take_end(stream_id);
-        registry.clear_stream(stream_id);
+        let mut state = renderer_state().lock().unwrap();
+        let cb = state.streams.take_end(stream_id);
+        state.streams.clear_stream(stream_id);
         cb
     };
 
@@ -110,7 +109,7 @@ fn on_error(envelope: &Envelope, payload: &[u8]) -> bool {
     let err_str = String::from_utf8_lossy(payload);
 
     // Check if there's a pending open() promise for this id -> open failed
-    let entry = registry().lock().unwrap().take(stream_id);
+    let entry = renderer_state().lock().unwrap().promises.take(stream_id);
     if let Some((context, promise, _)) = entry {
         if context.enter() == 0 {
             return false;
@@ -123,9 +122,9 @@ fn on_error(envelope: &Envelope, payload: &[u8]) -> bool {
 
     // Otherwise it's a mid-stream error -> existing onError callback path
     let entry = {
-        let mut registry = stream_callback_registry().lock().unwrap();
-        let cb = registry.take_error(stream_id);
-        registry.clear_stream(stream_id);
+        let mut state = renderer_state().lock().unwrap();
+        let cb = state.streams.take_error(stream_id);
+        state.streams.clear_stream(stream_id);
         cb
     };
 

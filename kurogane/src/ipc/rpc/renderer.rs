@@ -3,7 +3,7 @@ use cef::*;
 use crate::debug;
 use crate::ipc::browser_state::IpcError;
 use crate::ipc::envelope::*;
-use crate::ipc::renderer_state::registry;
+use crate::ipc::renderer_state::renderer_state;
 use crate::ipc::utils::create_array_buffer_from_bytes;
 
 /// Handle an RPC response arriving from the browser (renderer-side dispatch).
@@ -31,7 +31,7 @@ fn on_resolve(envelope: &Envelope, payload: &[u8]) -> bool {
 }
 
 fn resolve_binary(id: i32, payload: &[u8]) {
-    let entry = { registry().lock().unwrap().take(id) };
+    let entry = { renderer_state().lock().unwrap().promises.take(id) };
     let Some((context, promise, _)) = entry else {
         eprintln!(
             "[IPC WARNING] binary response for unknown promise id={} (likely page reload)",
@@ -68,7 +68,7 @@ fn on_reject(envelope: &Envelope, payload: &[u8]) -> bool {
 /// Look up a registered promise by id and resolve or reject it via V8.
 pub fn resolve_cef_string(id: i32, success: bool, payload: &CefString, error_code: i32) {
     let entry = {
-        registry().lock().unwrap().take(id)
+        renderer_state().lock().unwrap().promises.take(id)
     };
 
     match entry {

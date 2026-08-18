@@ -1,12 +1,43 @@
 //! Renderer process IPC state
 //!
-//! Manages promise registry and frame tracking.
+//! Manages promise registry, event callbacks and stream callbacks
+//! as a single consolidated state behind one global.
 
 use cef::*;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-/// Tracks V8 callbacks registered via core.on().
+/// Identifier for an IPC request or subscription.
+pub type IpcId = i32;
+
+/// Renderer-side IPC state.
+///
+/// Tracks pending promises, event subscriptions and stream callbacks.
+/// Accessed via [`renderer_state()`].
+pub struct RendererState {
+    pub promises: PromiseRegistry,
+    pub events: EventCallbackRegistry,
+    pub streams: StreamCallbackRegistry,
+}
+
+impl Default for RendererState {
+    fn default() -> Self {
+        Self {
+            promises: PromiseRegistry::new(),
+            events: EventCallbackRegistry::new(),
+            streams: StreamCallbackRegistry::new(),
+        }
+    }
+}
+
+static RENDERER_STATE: OnceLock<Mutex<RendererState>> = OnceLock::new();
+
+/// Returns the global renderer state.
+pub fn renderer_state() -> &'static Mutex<RendererState> {
+    RENDERER_STATE.get_or_init(Default::default)
+}
+
+/// Registry of V8 callbacks registered via `core.on()`.
 pub struct EventCallbackRegistry {
     next_id: i64,
     // Callbacks registered per event name
@@ -27,7 +58,7 @@ impl EventCallbackRegistry {
         Self::default()
     }
 
-    /// Register a callback for an event. Returns subscription id.
+    /// Register a callback for an event and return its subscription id.
     pub fn register(&mut self, event: &str, ctx: V8Context, callback: V8Value) -> i64 {
         let id = self.next_id;
         self.next_id = self.next_id.checked_add(1).unwrap_or(1);
@@ -60,8 +91,9 @@ impl EventCallbackRegistry {
         false
     }
 
-    /// Collect callbacks for an event without invoking them.
-    /// Lock must be released before calling into JS to avoid reentrant deadlock.
+    /// Collect the callbacks registered for an event without invoking them.
+    /// The registry lock must be released before invoking the callbacks in JS
+    /// to avoid reentrant deadlocks.
     pub fn collect_callbacks(&mut self, event: &str) -> Vec<(V8Context, V8Value)> {
         match self.callbacks.get(event) {
             Some(entries) => entries.iter().map(|(_, ctx, cb)| {
@@ -82,17 +114,8 @@ impl EventCallbackRegistry {
     }
 }
 
-static EVENT_REGISTRY: OnceLock<Mutex<EventCallbackRegistry>> = OnceLock::new();
-
-pub fn event_registry() -> &'static Mutex<EventCallbackRegistry> {
-    EVENT_REGISTRY.get_or_init(Default::default)
-}
-
-pub fn clear_context_events(ctx: &V8Context) {
-    event_registry().lock().unwrap().clear_context(ctx);
-}
-
-/// Stream callback registry: Tracks data/end/error callbacks registered via core.onStreamData/End/Error.
+/// Stream callback registry.
+/// Tracks data/end/error callbacks registered via core.onStreamData/End/Error.
 #[derive(Default)]
 pub struct StreamCallbackRegistry {
     data_callbacks: HashMap<i32, (V8Context, V8Value)>,
@@ -117,17 +140,17 @@ impl StreamCallbackRegistry {
         self.error_callbacks.insert(stream_id, (ctx, callback));
     }
 
-    /// Clone the data callback for invocation (persistent; does not remove).
+    /// Return the data callback for a stream without removing it.
     pub fn collect_data(&self, stream_id: i32) -> Option<(V8Context, V8Value)> {
         self.data_callbacks.get(&stream_id).map(|(ctx, cb)| (ctx.clone(), cb.clone()))
     }
 
-    /// Remove and return the end callback (one-shot).
+    /// Remove and return the end callback for a stream.
     pub fn take_end(&mut self, stream_id: i32) -> Option<(V8Context, V8Value)> {
         self.end_callbacks.remove(&stream_id)
     }
 
-    /// Remove and return the error callback (one-shot).
+    /// Remove and return the error callback for a stream.
     pub fn take_error(&mut self, stream_id: i32) -> Option<(V8Context, V8Value)> {
         self.error_callbacks.remove(&stream_id)
     }
@@ -154,19 +177,7 @@ impl StreamCallbackRegistry {
     }
 }
 
-static STREAM_CALLBACK_REGISTRY: OnceLock<Mutex<StreamCallbackRegistry>> = OnceLock::new();
-
-pub fn stream_callback_registry() -> &'static Mutex<StreamCallbackRegistry> {
-    STREAM_CALLBACK_REGISTRY.get_or_init(Default::default)
-}
-
-pub fn clear_context_streams(ctx: &V8Context) {
-    stream_callback_registry().lock().unwrap().clear_context(ctx);
-}
-
-pub type IpcId = i32;
-
-/// Promise registry: Tracks pending promises awaiting responses from the browser process
+/// Registry of promises awaiting responses from the browser process.
 pub struct PromiseRegistry {
     next_id: IpcId,
     pending: HashMap<IpcId, (V8Context, V8Value, u8)>,
@@ -186,6 +197,7 @@ impl PromiseRegistry {
         Self::default()
     }
 
+    /// Register a promise and return its IPC id.
     pub fn register(&mut self, context: V8Context, promise: V8Value, subsystem: u8) -> IpcId {
         let start = self.next_id;
         loop {
@@ -201,10 +213,12 @@ impl PromiseRegistry {
         }
     }
 
+    /// Remove and return the promise associated with an IPC id.
     pub fn take(&mut self, id: IpcId) -> Option<(V8Context, V8Value, u8)> {
         self.pending.remove(&id)
     }
 
+    /// Remove all promises associated with a V8 context.
     pub fn clear_context(&mut self, ctx: &V8Context) {
         let mut target = ctx.clone();
         self.pending.retain(|_, (stored_ctx, _, _)| {
@@ -213,26 +227,23 @@ impl PromiseRegistry {
     }
 }
 
-// GLOBALS
-
-static PROMISE_REGISTRY: OnceLock<Mutex<PromiseRegistry>> = OnceLock::new();
-
-// ACCESSORS
-
-pub fn registry() -> &'static Mutex<PromiseRegistry> {
-    PROMISE_REGISTRY.get_or_init(Default::default)
-}
-
-// HELPERS
-
+// Convenience helpers
 pub fn register_promise(ctx: V8Context, promise: V8Value, subsystem: u8) -> IpcId {
-    registry().lock().unwrap().register(ctx, promise, subsystem)
+    renderer_state().lock().unwrap().promises.register(ctx, promise, subsystem)
 }
 
 pub fn cancel_promise(id: IpcId) -> Option<(V8Context, V8Value, u8)> {
-    registry().lock().unwrap().take(id)
+    renderer_state().lock().unwrap().promises.take(id)
 }
 
 pub fn clear_context_promises(ctx: &V8Context) {
-    registry().lock().unwrap().clear_context(ctx);
+    renderer_state().lock().unwrap().promises.clear_context(ctx);
+}
+
+pub fn clear_context_events(ctx: &V8Context) {
+    renderer_state().lock().unwrap().events.clear_context(ctx);
+}
+
+pub fn clear_context_streams(ctx: &V8Context) {
+    renderer_state().lock().unwrap().streams.clear_context(ctx);
 }
