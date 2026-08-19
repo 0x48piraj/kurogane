@@ -23,7 +23,7 @@ pub mod bridge;
 pub mod logger;
 mod browser_info_map;
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 mod platform;
 
 pub use runtime::{AppInstance, AppHandle, BrowserBounds, BrowserHandle, WindowOptions, WindowState};

@@ -40,7 +40,10 @@ fn resolve_binary(id: i32, payload: &[u8]) {
         return;
     };
     if context.enter() == 0 {
-        eprintln!("[IPC] failed to enter V8 context for binary promise id={}", id);
+        eprintln!(
+            "[IPC] failed to enter V8 context for binary promise id={}",
+            id
+        );
         return;
     }
     if let Some(mut buf) = create_array_buffer_from_bytes(payload) {
@@ -67,9 +70,7 @@ fn on_reject(envelope: &Envelope, payload: &[u8]) -> bool {
 
 /// Look up a registered promise by id and resolve or reject it via V8.
 pub fn resolve_cef_string(id: i32, success: bool, payload: &CefString, error_code: i32) {
-    let entry = {
-        renderer_state().lock().unwrap().promises.take(id)
-    };
+    let entry = { renderer_state().lock().unwrap().promises.take(id) };
 
     match entry {
         None => {
@@ -88,7 +89,11 @@ pub fn resolve_cef_string(id: i32, success: bool, payload: &CefString, error_cod
                 let mut v = v8_value_create_string(Some(payload)).unwrap();
                 promise.resolve_promise(Some(&mut v));
             } else {
-                let reject_cef = CefString::from(IpcError::new(&payload.to_string(), error_code).to_string().as_str());
+                let reject_cef = CefString::from(
+                    IpcError::new(&payload.to_string(), error_code)
+                        .to_string()
+                        .as_str(),
+                );
                 promise.reject_promise(Some(&reject_cef));
             }
 

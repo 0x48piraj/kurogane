@@ -13,7 +13,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::debug;
 use crate::ipc::browser_state::IpcContext;
-use crate::ipc::envelope::{Envelope, STREAM_OPEN, STREAM_DATA, STREAM_END, STREAM_ERROR, STREAM_CANCEL, decode_cmd_payload};
+use crate::ipc::envelope::{
+    Envelope, STREAM_OPEN, STREAM_DATA, STREAM_END, STREAM_ERROR, STREAM_CANCEL, decode_cmd_payload,
+};
 use crate::ipc::stream::{StreamResponder, StreamSubsystem};
 
 impl StreamSubsystem {
@@ -76,7 +78,10 @@ impl StreamSubsystem {
         let factory = match self.factories.get(handler_name) {
             Some(f) => f,
             None => {
-                debug!("[Stream Browser] no factory '{}' for stream open", handler_name);
+                debug!(
+                    "[Stream Browser] no factory '{}' for stream open",
+                    handler_name
+                );
                 let responder = StreamResponder::new(frame.clone(), stream_id);
                 let _ = responder.error(&format!("no handler registered for '{handler_name}'"));
                 return false;
@@ -134,13 +139,14 @@ impl StreamSubsystem {
 
         // Reconstruct responder from the stored frame, the handler never needs to store one itself
         let responder = StreamResponder::new(frame.clone(), stream_id);
-        let data_result = catch_unwind(AssertUnwindSafe(|| {
-            handler.on_chunk(payload, &responder)
-        }));
+        let data_result = catch_unwind(AssertUnwindSafe(|| handler.on_chunk(payload, &responder)));
 
         match data_result {
             Ok(Ok(())) => {
-                self.streams.lock().unwrap().insert(stream_id, (browser_id, handler, frame));
+                self.streams
+                    .lock()
+                    .unwrap()
+                    .insert(stream_id, (browser_id, handler, frame));
             }
             Ok(Err(e)) => {
                 debug!("[Stream Browser] on_chunk error: {}", e);
@@ -164,9 +170,8 @@ impl StreamSubsystem {
         if let Some((_, mut handler, frame)) = entry {
             let responder = StreamResponder::new(frame, stream_id);
             let responder_clone = responder.clone();
-            let end_result = catch_unwind(AssertUnwindSafe(|| {
-                handler.on_end(&result_str, responder)
-            }));
+            let end_result =
+                catch_unwind(AssertUnwindSafe(|| handler.on_end(&result_str, responder)));
 
             match end_result {
                 Ok(Ok(())) => {}
@@ -200,7 +205,10 @@ impl StreamSubsystem {
             return false;
         }
 
-        debug!("[Stream Browser] error stream_id={}: {}", stream_id, err_msg);
+        debug!(
+            "[Stream Browser] error stream_id={}: {}",
+            stream_id, err_msg
+        );
         true
     }
 }

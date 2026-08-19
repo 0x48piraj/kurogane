@@ -168,17 +168,14 @@ mod env {
             "WAYLAND_DISPLAY",
             "XDG_SESSION_TYPE",
             "XDG_CURRENT_DESKTOP",
-
             // GPU / GL overrides
             "__GLX_VENDOR_LIBRARY_NAME",
             "LIBGL_ALWAYS_SOFTWARE",
             "MESA_LOADER_DRIVER_OVERRIDE",
-
             // Wayland / toolkit
             "NIXOS_OZONE_WL",
             "QT_QPA_PLATFORM",
             "SDL_VIDEODRIVER",
-
             // runtime / linking
             "CEF_PATH",
             "LD_LIBRARY_PATH",

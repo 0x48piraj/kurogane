@@ -89,7 +89,10 @@ impl BrowserRegistry {
             },
             request_context,
         };
-        debug!("[BrowserRegistry] registered browser {} (type={:?})", id.0, browser_type);
+        debug!(
+            "[BrowserRegistry] registered browser {} (type={:?})",
+            id.0, browser_type
+        );
         self.lookup.insert(cef_id, id);
         self.browsers.insert(id, state);
         id

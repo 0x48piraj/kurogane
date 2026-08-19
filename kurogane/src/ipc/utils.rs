@@ -7,9 +7,7 @@ use cef::*;
 pub fn create_array_buffer_from_bytes(payload: &[u8]) -> Option<V8Value> {
     if payload.is_empty() {
         // Does not require a release callback
-        return v8_value_create_array_buffer_with_copy(
-            std::ptr::null_mut(), 0
-        );
+        return v8_value_create_array_buffer_with_copy(std::ptr::null_mut(), 0);
     }
 
     let mut store = v8_backing_store_create(payload.len())?;
@@ -19,11 +17,7 @@ pub fn create_array_buffer_from_bytes(payload: &[u8]) -> Option<V8Value> {
     }
 
     unsafe {
-        std::ptr::copy_nonoverlapping(
-            payload.as_ptr(),
-            store.data() as *mut u8,
-            payload.len(),
-        );
+        std::ptr::copy_nonoverlapping(payload.as_ptr(), store.data() as *mut u8, payload.len());
     }
 
     v8_value_create_array_buffer_from_backing_store(Some(&mut store))

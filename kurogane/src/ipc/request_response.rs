@@ -55,7 +55,10 @@ impl RequestResponseSubsystem {
             0 => self.on_invoke(frame, envelope, payload, ctx, pending_clone),
             3 => self.on_cancel(envelope, payload, ctx),
             _ => {
-                debug!("[RequestResponse Browser] unknown opcode {}", envelope.opcode);
+                debug!(
+                    "[RequestResponse Browser] unknown opcode {}",
+                    envelope.opcode
+                );
                 false
             }
         }
@@ -94,23 +97,24 @@ impl RequestResponseSubsystem {
                 );
             }
 
-            let responder = BinaryResponder::with_abort(Box::new({
-                let frame = frame.clone();
-                let pending = pending_clone.clone();
-                let payload_kind = envelope.payload_kind;
-                move |result| {
-                    if let Some(bid) = browser_id {
-                        pending.remove(bid, id);
+            let responder = BinaryResponder::with_abort(
+                Box::new({
+                    let frame = frame.clone();
+                    let pending = pending_clone.clone();
+                    let payload_kind = envelope.payload_kind;
+                    move |result| {
+                        if let Some(bid) = browser_id {
+                            pending.remove(bid, id);
+                        }
+                        send_response(&frame, payload_kind, correlation_id, result);
                     }
-                    send_response(&frame, payload_kind, correlation_id, result);
-                }
-            }), aborted);
+                }),
+                aborted,
+            );
 
             self.dispatch_async(cmd, data, responder, ctx);
         } else {
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                self.dispatch(cmd, data, ctx)
-            }));
+            let result = catch_unwind(AssertUnwindSafe(|| self.dispatch(cmd, data, ctx)));
 
             let response = match result {
                 Ok(res) => res,
@@ -134,20 +138,37 @@ impl RequestResponseSubsystem {
     fn dispatch(&self, command: &str, data: &[u8], ctx: IpcContext) -> Result<Vec<u8>, IpcError> {
         match self.sync_handlers.get(command) {
             Some(h) => h(data, ctx),
-            None => Err(IpcError::new(format!("unknown command '{command}'"), IpcError::CODE_HANDLER)),
+            None => Err(IpcError::new(
+                format!("unknown command '{command}'"),
+                IpcError::CODE_HANDLER,
+            )),
         }
     }
 
-    fn dispatch_async(&self, command: &str, data: &[u8], responder: BinaryResponder, ctx: IpcContext) {
+    fn dispatch_async(
+        &self,
+        command: &str,
+        data: &[u8],
+        responder: BinaryResponder,
+        ctx: IpcContext,
+    ) {
         if let Some(handler) = self.async_handlers.get(command) {
             handler(data, responder, ctx);
         }
     }
 }
 
-fn send_response(frame: &Frame, payload_kind: u8, correlation_id: u32, result: Result<Vec<u8>, IpcError>) {
+fn send_response(
+    frame: &Frame,
+    payload_kind: u8,
+    correlation_id: u32,
+    result: Result<Vec<u8>, IpcError>,
+) {
     if frame.is_valid() == 0 {
-        debug!("[RequestResponse Browser] frame destroyed, dropping id={}", correlation_id);
+        debug!(
+            "[RequestResponse Browser] frame destroyed, dropping id={}",
+            correlation_id
+        );
         return;
     }
 

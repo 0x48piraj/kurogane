@@ -45,12 +45,7 @@ impl WindowRegistry {
         id
     }
 
-    pub fn insert(
-        &mut self,
-        id: WindowId,
-        window: Window,
-        browser_id: Option<BrowserId>,
-    ) {
+    pub fn insert(&mut self, id: WindowId, window: Window, browser_id: Option<BrowserId>) {
         let state = WindowState {
             window,
             browser_id,
@@ -119,7 +114,9 @@ impl WindowRegistry {
     /// Used to connect the main browser with the main window after on_after_created.
     /// Returns the WindowId that was linked.
     pub fn link_browser_to_unassigned_window(&mut self, browser_id: BrowserId) -> Option<WindowId> {
-        let wid = self.windows.iter()
+        let wid = self
+            .windows
+            .iter()
             .find(|(_, s)| s.browser_id.is_none())
             .map(|(id, _)| *id)?;
         self.windows.get_mut(&wid).unwrap().browser_id = Some(browser_id);

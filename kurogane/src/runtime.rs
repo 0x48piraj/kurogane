@@ -35,8 +35,7 @@ fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeEr
 
     // Isolate the CEF cache per executable
     // Reusing a profile across runs can trigger session restore leading to multiple on_context_initialized invocations
-    let exe = std::env::current_exe()
-        .expect("failed to get current exe path");
+    let exe = std::env::current_exe().expect("failed to get current exe path");
 
     let raw_name = profile_id.unwrap_or_else(|| "kurogane-app".to_string());
 
@@ -45,15 +44,13 @@ fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeEr
 
     std::fs::create_dir_all(&cache_dir).ok();
 
-    let detected = detect_cef_root()
-        .map_err(|_| RuntimeError::CefNotInstalled)?;
+    let detected = detect_cef_root().map_err(|_| RuntimeError::CefNotInstalled)?;
 
     validate_cef_root(&detected.root)
-        .map_err(|e| {
-            RuntimeError::InvalidCefInstallation(e.to_string())
-        })?;
+        .map_err(|e| RuntimeError::InvalidCefInstallation(e.to_string()))?;
 
-    let cef_root = detected.root
+    let cef_root = detected
+        .root
         .canonicalize()
         .map_err(|_| RuntimeError::CefNotInstalled)?;
 
@@ -69,7 +66,11 @@ fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeEr
     })
 }
 
-fn build_settings(layout: &RuntimeLayout, persist_session_cookies: bool, external_message_pump: bool) -> Settings {
+fn build_settings(
+    layout: &RuntimeLayout,
+    persist_session_cookies: bool,
+    external_message_pump: bool,
+) -> Settings {
     // Use a persistent profile instead of CEF's default incognito mode
     // This enables cookies, storage APIs and service workers
 
@@ -106,7 +107,9 @@ fn build_settings(layout: &RuntimeLayout, persist_session_cookies: bool, externa
             ..Default::default()
         };
 
-        let framework = layout.cef_root.join("Chromium Embedded Framework.framework");
+        let framework = layout
+            .cef_root
+            .join("Chromium Embedded Framework.framework");
         s.framework_dir_path = CefString::from(framework.to_string_lossy().as_ref());
 
         s
@@ -117,11 +120,7 @@ fn execute_subprocesses(args: &Args, app: &mut App) {
     debug!("Dispatching CEF process selection");
 
     // CEF internally determines process role here
-    let exit_code = execute_process(
-        Some(args.as_main_args()),
-        Some(app),
-        std::ptr::null_mut(),
-    );
+    let exit_code = execute_process(Some(args.as_main_args()), Some(app), std::ptr::null_mut());
 
     // This was a subprocess and should exit now
     if exit_code >= 0 {
@@ -292,7 +291,9 @@ pub struct AppHandle {
 
 impl Clone for AppHandle {
     fn clone(&self) -> Self {
-        Self { inner: self.inner.clone() }
+        Self {
+            inner: self.inner.clone(),
+        }
     }
 }
 
@@ -385,40 +386,63 @@ impl AppHandle {
 
     /// Look up the window that hosts a given browser.
     pub fn find_window_by_browser(&self, browser_id: BrowserId) -> Option<WindowId> {
-        self.services().window_registry.lock().unwrap()
+        self.services()
+            .window_registry
+            .lock()
+            .unwrap()
             .window_id_for_browser(browser_id)
     }
 
     /// Metadata for all live browsers.
     pub fn browsers(&self) -> Vec<(BrowserId, BrowserMetadata)> {
         let reg = self.services().browser_registry.lock().unwrap();
-        reg.iter().map(|(id, s)| (*id, s.metadata.clone())).collect()
+        reg.iter()
+            .map(|(id, s)| (*id, s.metadata.clone()))
+            .collect()
     }
 
     /// Metadata for all open windows.
     pub fn windows(&self) -> Vec<(WindowId, WindowMetadata)> {
         let reg = self.services().window_registry.lock().unwrap();
-        reg.iter().map(|(id, s)| (*id, s.metadata.clone())).collect()
+        reg.iter()
+            .map(|(id, s)| (*id, s.metadata.clone()))
+            .collect()
     }
 
     /// Parent of a given browser.
     pub fn browser_parent(&self, id: BrowserId) -> Option<BrowserId> {
-        self.services().browser_registry.lock().unwrap().browser_parent(id)
+        self.services()
+            .browser_registry
+            .lock()
+            .unwrap()
+            .browser_parent(id)
     }
 
     /// Opener of a given browser.
     pub fn browser_opener(&self, id: BrowserId) -> Option<BrowserId> {
-        self.services().browser_registry.lock().unwrap().browser_opener(id)
+        self.services()
+            .browser_registry
+            .lock()
+            .unwrap()
+            .browser_opener(id)
     }
 
     /// All children of the given parent browser.
     pub fn children_of(&self, id: BrowserId) -> Vec<BrowserId> {
-        self.services().browser_registry.lock().unwrap().children_of(id)
+        self.services()
+            .browser_registry
+            .lock()
+            .unwrap()
+            .children_of(id)
     }
 
     /// Browser hosted in the given window.
     pub fn browser_for_window(&self, id: WindowId) -> Option<BrowserId> {
-        self.services().window_registry.lock().unwrap().browser_for_window(id)
+        self.services()
+            .window_registry
+            .lock()
+            .unwrap()
+            .browser_for_window(id)
     }
 
     /// Creates a BrowserHandle for a registered browser, if it exists.
@@ -785,7 +809,11 @@ impl AppInstance {
     /// or until the timeout expires.
     ///
     /// Pumps the message loop internally while waiting.
-    pub fn wait_for_browser(&self, window_id: WindowId, timeout: std::time::Duration) -> Option<BrowserHandle> {
+    pub fn wait_for_browser(
+        &self,
+        window_id: WindowId,
+        timeout: std::time::Duration,
+    ) -> Option<BrowserHandle> {
         let start = std::time::Instant::now();
         loop {
             if let Some(browser_id) = self.handle.browser_for_window(window_id) {
@@ -809,7 +837,12 @@ impl AppInstance {
 
         debug!("Message loop exited");
 
-        if self.handle.inner.cef_shutdown_called.swap(true, Ordering::SeqCst) {
+        if self
+            .handle
+            .inner
+            .cef_shutdown_called
+            .swap(true, Ordering::SeqCst)
+        {
             debug!("CEF shutdown already performed");
             return Ok(());
         }
@@ -826,13 +859,22 @@ impl AppInstance {
     /// Sets the shutdown signal and calls cef::shutdown() on the UI thread.
     /// Safe to call multiple times. Subsequent calls are no-ops.
     pub fn shutdown(&self) {
-        if self.handle.inner.cef_shutdown_called.swap(true, Ordering::SeqCst) {
+        if self
+            .handle
+            .inner
+            .cef_shutdown_called
+            .swap(true, Ordering::SeqCst)
+        {
             return;
         }
 
         debug!("Shutting down Kurogane runtime");
         shutdown();
-        self.handle.inner.services.shutdown_signal.request_shutdown();
+        self.handle
+            .inner
+            .services
+            .shutdown_signal
+            .request_shutdown();
         debug!("Kurogane runtime shutdown complete");
     }
 
@@ -884,7 +926,8 @@ impl AppInstance {
         let info = WindowInfo {
             runtime_style: RuntimeStyle::ALLOY,
             ..WindowInfo::default()
-        }.set_as_child(
+        }
+        .set_as_child(
             native_to_cef_window(parent),
             &Rect {
                 x: bounds.x,
@@ -916,7 +959,11 @@ impl AppInstance {
                 .expect("browser should have been registered by on_after_created")
         };
 
-        Some(BrowserHandle { id, browser_registry: self.handle.inner.services.browser_registry.clone(), ui_thread_id: self.handle.inner.ui_thread_id })
+        Some(BrowserHandle {
+            id,
+            browser_registry: self.handle.inner.services.browser_registry.clone(),
+            ui_thread_id: self.handle.inner.ui_thread_id,
+        })
     }
 
     /// Number of live browser instances.
@@ -1036,7 +1083,8 @@ fn initialize_cef(
         Some(&settings),
         Some(&mut app),
         std::ptr::null_mut(),
-    ) != 1 {
+    ) != 1
+    {
         return Err(RuntimeError::CefInitializeFailed);
     }
 
@@ -1046,7 +1094,10 @@ fn initialize_cef(
     // In embedded mode the host application manages its own lifecycle
     if !embedded_mode {
         debug!("Installing shutdown handler");
-        install_ctrlc_handler(services.browser_registry.clone(), services.window_registry.clone());
+        install_ctrlc_handler(
+            services.browser_registry.clone(),
+            services.window_registry.clone(),
+        );
     }
 
     Ok(RuntimeState {

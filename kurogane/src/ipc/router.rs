@@ -28,7 +28,9 @@ pub fn route_renderer(frame: &mut Frame, envelope: &Envelope, payload: &[u8]) ->
     match envelope.subsystem {
         SUB_RPC => crate::ipc::rpc::renderer::handle_rpc_renderer(frame, envelope, payload),
         SUB_EVENT => crate::ipc::event::renderer::handle_event_renderer(frame, envelope, payload),
-        SUB_STREAM => crate::ipc::stream::renderer::handle_stream_renderer(frame, envelope, payload),
+        SUB_STREAM => {
+            crate::ipc::stream::renderer::handle_stream_renderer(frame, envelope, payload)
+        }
         _ => {
             debug!("[Router Renderer] unknown subsystem {}", envelope.subsystem);
             false
@@ -37,8 +39,16 @@ pub fn route_renderer(frame: &mut Frame, envelope: &Envelope, payload: &[u8]) ->
 }
 
 impl IpcRouter {
-    pub fn new(request_response: RequestResponseSubsystem, event: EventSubsystem, stream: StreamSubsystem) -> Self {
-        Self { request_response, event, stream }
+    pub fn new(
+        request_response: RequestResponseSubsystem,
+        event: EventSubsystem,
+        stream: StreamSubsystem,
+    ) -> Self {
+        Self {
+            request_response,
+            event,
+            stream,
+        }
     }
 
     /// Route a message received from the renderer (browser-side dispatch).
@@ -50,26 +60,17 @@ impl IpcRouter {
         ctx: IpcContext,
     ) -> bool {
         match envelope.subsystem {
-            SUB_RPC => {
-                self.request_response.handle_browser(
-                    frame,
-                    envelope,
-                    payload,
-                    ctx,
-                    self.request_response.pending.clone(),
-                )
-            }
-            SUB_EVENT => {
-                self.event.handle_browser(frame, envelope, payload, ctx)
-            }
-            SUB_STREAM => {
-                self.stream.handle_browser(frame, envelope, payload, ctx)
-            }
+            SUB_RPC => self.request_response.handle_browser(
+                frame,
+                envelope,
+                payload,
+                ctx,
+                self.request_response.pending.clone(),
+            ),
+            SUB_EVENT => self.event.handle_browser(frame, envelope, payload, ctx),
+            SUB_STREAM => self.stream.handle_browser(frame, envelope, payload, ctx),
             _ => {
-                debug!(
-                    "[Router Browser] unknown subsystem {}",
-                    envelope.subsystem
-                );
+                debug!("[Router Browser] unknown subsystem {}", envelope.subsystem);
                 false
             }
         }
@@ -85,18 +86,28 @@ impl IpcRouter {
         let events = self.event.clear_for_frame();
         let streams = self.stream.clear_for_frame();
         if events + streams > 0 {
-            crate::debug!("[Router] cleaned up {} event subs, {} streams for invalid frames", events, streams);
+            crate::debug!(
+                "[Router] cleaned up {} event subs, {} streams for invalid frames",
+                events,
+                streams
+            );
         }
     }
 
     /// Cancel all pending async handlers for a given browser.
     pub fn cancel_all_for_browser(&self, browser_id: BrowserId) -> usize {
-        let req_count = self.request_response.pending.cancel_all_for_browser(browser_id);
+        let req_count = self
+            .request_response
+            .pending
+            .cancel_all_for_browser(browser_id);
         // Clean up event subscriptions and stream state
         self.event.clear_for_browser(browser_id);
         self.stream.clear_for_browser(browser_id);
         if req_count > 0 {
-            debug!("[Router] canceled {} pending handlers for browser", req_count);
+            debug!(
+                "[Router] canceled {} pending handlers for browser",
+                req_count
+            );
         }
         req_count
     }

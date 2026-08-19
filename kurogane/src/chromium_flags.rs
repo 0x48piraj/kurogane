@@ -32,12 +32,9 @@ impl ChromiumFlags {
     }
 
     /// Insert a switch with a value.
-    pub(crate) fn set_with_value(
-        &mut self,
-        name: impl Into<String>,
-        value: impl Into<String>,
-    ) {
-        self.switches.insert(name.into(), SwitchValue::Value(value.into()));
+    pub(crate) fn set_with_value(&mut self, name: impl Into<String>, value: impl Into<String>) {
+        self.switches
+            .insert(name.into(), SwitchValue::Value(value.into()));
     }
 
     /// Apply user-supplied Chromium flags.
@@ -77,10 +74,7 @@ impl ChromiumFlags {
 }
 
 impl std::fmt::Display for ChromiumFlags {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (name, value) in &self.switches {
             match value {
                 SwitchValue::Present => {
@@ -96,7 +90,6 @@ impl std::fmt::Display for ChromiumFlags {
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -136,16 +129,11 @@ mod tests {
 
         flags.set("disable-gpu");
 
-        flags.set_with_value(
-            "disable-gpu",
-            "ignored",
-        );
+        flags.set_with_value("disable-gpu", "ignored");
 
         assert_eq!(
             flags.switches.get("disable-gpu"),
-            Some(&SwitchValue::Value(
-                "ignored".into()
-            ))
+            Some(&SwitchValue::Value("ignored".into()))
         );
     }
 
@@ -156,10 +144,7 @@ mod tests {
         flags.set_with_value("foo", "bar");
         flags.set("foo");
 
-        assert_eq!(
-            flags.switches.get("foo"),
-            Some(&SwitchValue::Present)
-        );
+        assert_eq!(flags.switches.get("foo"), Some(&SwitchValue::Present));
     }
 }
 

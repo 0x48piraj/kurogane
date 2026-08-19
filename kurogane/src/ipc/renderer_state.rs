@@ -96,9 +96,10 @@ impl EventCallbackRegistry {
     /// to avoid reentrant deadlocks.
     pub fn collect_callbacks(&mut self, event: &str) -> Vec<(V8Context, V8Value)> {
         match self.callbacks.get(event) {
-            Some(entries) => entries.iter().map(|(_, ctx, cb)| {
-                (ctx.clone(), cb.clone())
-            }).collect(),
+            Some(entries) => entries
+                .iter()
+                .map(|(_, ctx, cb)| (ctx.clone(), cb.clone()))
+                .collect(),
             None => Vec::new(),
         }
     }
@@ -106,9 +107,7 @@ impl EventCallbackRegistry {
     pub fn clear_context(&mut self, ctx: &V8Context) {
         let mut target = ctx.clone();
         self.callbacks.retain(|_, callbacks| {
-            callbacks.retain(|(_, stored_ctx, _)| {
-                stored_ctx.is_same(Some(&mut target)) == 0
-            });
+            callbacks.retain(|(_, stored_ctx, _)| stored_ctx.is_same(Some(&mut target)) == 0);
             !callbacks.is_empty()
         });
     }
@@ -142,7 +141,9 @@ impl StreamCallbackRegistry {
 
     /// Return the data callback for a stream without removing it.
     pub fn collect_data(&self, stream_id: i32) -> Option<(V8Context, V8Value)> {
-        self.data_callbacks.get(&stream_id).map(|(ctx, cb)| (ctx.clone(), cb.clone()))
+        self.data_callbacks
+            .get(&stream_id)
+            .map(|(ctx, cb)| (ctx.clone(), cb.clone()))
     }
 
     /// Remove and return the end callback for a stream.
@@ -165,15 +166,12 @@ impl StreamCallbackRegistry {
     /// Remove all callbacks for a given V8 context.
     pub fn clear_context(&mut self, ctx: &V8Context) {
         let mut target = ctx.clone();
-        self.data_callbacks.retain(|_, (stored_ctx, _)| {
-            stored_ctx.is_same(Some(&mut target)) == 0
-        });
-        self.end_callbacks.retain(|_, (stored_ctx, _)| {
-            stored_ctx.is_same(Some(&mut target)) == 0
-        });
-        self.error_callbacks.retain(|_, (stored_ctx, _)| {
-            stored_ctx.is_same(Some(&mut target)) == 0
-        });
+        self.data_callbacks
+            .retain(|_, (stored_ctx, _)| stored_ctx.is_same(Some(&mut target)) == 0);
+        self.end_callbacks
+            .retain(|_, (stored_ctx, _)| stored_ctx.is_same(Some(&mut target)) == 0);
+        self.error_callbacks
+            .retain(|_, (stored_ctx, _)| stored_ctx.is_same(Some(&mut target)) == 0);
     }
 }
 
@@ -208,7 +206,10 @@ impl PromiseRegistry {
                 return id;
             }
             if self.next_id == start {
-                panic!("PromiseRegistry exhausted all {} ids", IpcId::MAX as i64 + 1);
+                panic!(
+                    "PromiseRegistry exhausted all {} ids",
+                    IpcId::MAX as i64 + 1
+                );
             }
         }
     }
@@ -221,15 +222,18 @@ impl PromiseRegistry {
     /// Remove all promises associated with a V8 context.
     pub fn clear_context(&mut self, ctx: &V8Context) {
         let mut target = ctx.clone();
-        self.pending.retain(|_, (stored_ctx, _, _)| {
-            stored_ctx.is_same(Some(&mut target)) == 0
-        });
+        self.pending
+            .retain(|_, (stored_ctx, _, _)| stored_ctx.is_same(Some(&mut target)) == 0);
     }
 }
 
 // Convenience helpers
 pub fn register_promise(ctx: V8Context, promise: V8Value, subsystem: u8) -> IpcId {
-    renderer_state().lock().unwrap().promises.register(ctx, promise, subsystem)
+    renderer_state()
+        .lock()
+        .unwrap()
+        .promises
+        .register(ctx, promise, subsystem)
 }
 
 pub fn cancel_promise(id: IpcId) -> Option<(V8Context, V8Value, u8)> {

@@ -10,7 +10,10 @@ use serde_json::Value;
 use std::collections::HashMap;
 use cef::*;
 use crate::app::resolver::ResolvedFrontend;
-use crate::ipc::{AppCell, IpcRouter, RequestResponseSubsystem, EventSubsystem, StreamSubsystem, StreamFactory, Responder, BinaryResponder, SyncHandler, AsyncHandler, IpcContext, IpcError};
+use crate::ipc::{
+    AppCell, IpcRouter, RequestResponseSubsystem, EventSubsystem, StreamSubsystem, StreamFactory,
+    Responder, BinaryResponder, SyncHandler, AsyncHandler, IpcContext, IpcError,
+};
 use crate::runtime::{RuntimeBootstrap, AppHandle, AppInstance};
 use crate::error::RuntimeError;
 use crate::spec::{RuntimeSpec, RuntimeMode};
@@ -90,7 +93,8 @@ pub trait ClientAppRendererDelegate: Send + Sync {
         &self,
         _browser: Option<&Browser>,
         _extra_info: Option<&DictionaryValue>,
-    ) {}
+    ) {
+    }
 
     /// Invoked before a renderer-side browser instance is destroyed.
     fn on_browser_destroyed(&self, _browser: Option<&Browser>) {}
@@ -103,7 +107,8 @@ pub trait ClientAppRendererDelegate: Send + Sync {
         _browser: Option<&Browser>,
         _frame: Option<&Frame>,
         _context: Option<&V8Context>,
-    ) {}
+    ) {
+    }
 
     /// Invoked when a JavaScript execution context is released.
     fn on_context_released(
@@ -111,7 +116,8 @@ pub trait ClientAppRendererDelegate: Send + Sync {
         _browser: Option<&Browser>,
         _frame: Option<&Frame>,
         _context: Option<&V8Context>,
-    ) {}
+    ) {
+    }
 
     /// Invoked when an uncaught JavaScript exception occurs.
     fn on_uncaught_exception(
@@ -121,7 +127,8 @@ pub trait ClientAppRendererDelegate: Send + Sync {
         _context: Option<&V8Context>,
         _exception: Option<&V8Exception>,
         _stack_trace: Option<&V8StackTrace>,
-    ) {}
+    ) {
+    }
 
     /// Invoked when the focused DOM node changes.
     fn on_focused_node_changed(
@@ -129,7 +136,8 @@ pub trait ClientAppRendererDelegate: Send + Sync {
         _browser: Option<&Browser>,
         _frame: Option<&Frame>,
         _node: Option<&Domnode>,
-    ) {}
+    ) {
+    }
 
     /// Invoked when a process message is received from another CEF process.
     ///
@@ -221,7 +229,10 @@ impl App {
     }
 
     /// Register a render process lifecycle delegate.
-    pub fn renderer_delegate<D: ClientAppRendererDelegate + 'static>(mut self, delegate: D) -> Self {
+    pub fn renderer_delegate<D: ClientAppRendererDelegate + 'static>(
+        mut self,
+        delegate: D,
+    ) -> Self {
         self.renderer_delegates.push(Arc::new(delegate));
         self
     }
@@ -259,15 +270,19 @@ impl App {
         let name = name.into();
         self.guard_unique_name(&name);
         let cell = self.cell.clone();
-        self.sync_handlers.insert(name, Box::new(move |data: &[u8], _ctx: IpcContext| {
-            let req: Req = if data.is_empty() {
-                serde_json::from_value(Value::Null)
-            } else {
-                serde_json::from_slice(data)
-            }.map_err(IpcError::from)?;
-            let res = f(req, cell.get())?;
-            serde_json::to_vec(&res).map_err(IpcError::from)
-        }));
+        self.sync_handlers.insert(
+            name,
+            Box::new(move |data: &[u8], _ctx: IpcContext| {
+                let req: Req = if data.is_empty() {
+                    serde_json::from_value(Value::Null)
+                } else {
+                    serde_json::from_slice(data)
+                }
+                .map_err(IpcError::from)?;
+                let res = f(req, cell.get())?;
+                serde_json::to_vec(&res).map_err(IpcError::from)
+            }),
+        );
         self
     }
 
@@ -286,18 +301,27 @@ impl App {
         let name = name.into();
         self.guard_unique_name(&name);
         let cell = self.cell.clone();
-        self.async_handlers.insert(name, Box::new(move |data: &[u8], responder: BinaryResponder, _ctx: IpcContext| {
-            let req: Req = match if data.is_empty() {
-                serde_json::from_value(Value::Null)
-            } else {
-                serde_json::from_slice(data)
-            } {
-                Ok(r) => r,
-                Err(e) => { responder.resolve(Err(IpcError::from(e))); return; }
-            };
-            let responder = responder.map(|res: Res| serde_json::to_vec(&res).map_err(IpcError::from));
-            f(req, responder, cell.get())
-        }));
+        self.async_handlers.insert(
+            name,
+            Box::new(
+                move |data: &[u8], responder: BinaryResponder, _ctx: IpcContext| {
+                    let req: Req = match if data.is_empty() {
+                        serde_json::from_value(Value::Null)
+                    } else {
+                        serde_json::from_slice(data)
+                    } {
+                        Ok(r) => r,
+                        Err(e) => {
+                            responder.resolve(Err(IpcError::from(e)));
+                            return;
+                        }
+                    };
+                    let responder =
+                        responder.map(|res: Res| serde_json::to_vec(&res).map_err(IpcError::from));
+                    f(req, responder, cell.get())
+                },
+            ),
+        );
         self
     }
 
@@ -313,9 +337,10 @@ impl App {
         let name = name.into();
         self.guard_unique_name(&name);
         let cell = self.cell.clone();
-        self.sync_handlers.insert(name, Box::new(move |data: &[u8], _ctx: IpcContext| {
-            f(data, cell.get())
-        }));
+        self.sync_handlers.insert(
+            name,
+            Box::new(move |data: &[u8], _ctx: IpcContext| f(data, cell.get())),
+        );
         self
     }
 
@@ -332,9 +357,14 @@ impl App {
         let name = name.into();
         self.guard_unique_name(&name);
         let cell = self.cell.clone();
-        self.async_handlers.insert(name, Box::new(move |data: &[u8], responder: BinaryResponder, _ctx: IpcContext| {
-            f(data.to_vec(), responder, cell.get())
-        }));
+        self.async_handlers.insert(
+            name,
+            Box::new(
+                move |data: &[u8], responder: BinaryResponder, _ctx: IpcContext| {
+                    f(data.to_vec(), responder, cell.get())
+                },
+            ),
+        );
         self
     }
 
@@ -352,7 +382,8 @@ impl App {
     {
         let name = name.into();
         self.guard_unique_name(&name);
-        self.stream_handlers.insert(name, Box::new(move || Box::new(factory())));
+        self.stream_handlers
+            .insert(name, Box::new(move || Box::new(factory())));
         self
     }
 
@@ -371,9 +402,10 @@ impl App {
         let name = name.into();
         self.guard_unique_name(&name);
         let cell = self.cell.clone();
-        self.stream_handlers.insert(name, Box::new(move || {
-            Box::new(factory(cell.get())) as Box<dyn crate::ipc::StreamHandler>
-        }));
+        self.stream_handlers.insert(
+            name,
+            Box::new(move || Box::new(factory(cell.get())) as Box<dyn crate::ipc::StreamHandler>),
+        );
         self
     }
 
@@ -434,7 +466,10 @@ impl App {
         let stream = StreamSubsystem::new(stream_handlers);
         let router = Arc::new(IpcRouter::new(rpc, event, stream));
 
-        let ResolvedFrontend { asset_root, start_url } = resolver::resolve(&source)?;
+        let ResolvedFrontend {
+            asset_root,
+            start_url,
+        } = resolver::resolve(&source)?;
 
         let spec = RuntimeSpec {
             mode: RuntimeMode::Views,
@@ -479,7 +514,10 @@ impl App {
         let stream = StreamSubsystem::new(stream_handlers);
         let router = Arc::new(IpcRouter::new(rpc, event, stream));
 
-        let ResolvedFrontend { asset_root, start_url } = resolver::resolve(&source)?;
+        let ResolvedFrontend {
+            asset_root,
+            start_url,
+        } = resolver::resolve(&source)?;
 
         let spec = RuntimeSpec {
             mode: RuntimeMode::Embedded,
@@ -518,7 +556,6 @@ impl App {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -568,11 +605,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "registered twice")]
     fn duplicate_async_command_panics() {
-        App::new("./dist")
-            .command("go", json_noop)
-            .async_command("go", |_: Value, r: Responder<Value>, _: &AppHandle| {
+        App::new("./dist").command("go", json_noop).async_command(
+            "go",
+            |_: Value, r: Responder<Value>, _: &AppHandle| {
                 r.resolve(Ok(Value::Null));
-            });
+            },
+        );
     }
 
     #[test]
@@ -600,9 +638,19 @@ mod tests {
     fn stream_duplicate_panics() {
         struct NoopStream;
         impl crate::ipc::StreamHandler for NoopStream {
-            fn on_open(&mut self, _: &str, _: &crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
-            fn on_chunk(&mut self, _: &[u8], _: &crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
-            fn on_end(&mut self, _: &str, _: crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
+            fn on_open(&mut self, _: &str, _: &crate::ipc::StreamResponder) -> Result<(), String> {
+                Ok(())
+            }
+            fn on_chunk(
+                &mut self,
+                _: &[u8],
+                _: &crate::ipc::StreamResponder,
+            ) -> Result<(), String> {
+                Ok(())
+            }
+            fn on_end(&mut self, _: &str, _: crate::ipc::StreamResponder) -> Result<(), String> {
+                Ok(())
+            }
             fn on_error(&mut self, _: &str) {}
         }
         App::new("./dist")
@@ -615,9 +663,19 @@ mod tests {
     fn stream_and_command_same_name_panics() {
         struct NoopStream;
         impl crate::ipc::StreamHandler for NoopStream {
-            fn on_open(&mut self, _: &str, _: &crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
-            fn on_chunk(&mut self, _: &[u8], _: &crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
-            fn on_end(&mut self, _: &str, _: crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
+            fn on_open(&mut self, _: &str, _: &crate::ipc::StreamResponder) -> Result<(), String> {
+                Ok(())
+            }
+            fn on_chunk(
+                &mut self,
+                _: &[u8],
+                _: &crate::ipc::StreamResponder,
+            ) -> Result<(), String> {
+                Ok(())
+            }
+            fn on_end(&mut self, _: &str, _: crate::ipc::StreamResponder) -> Result<(), String> {
+                Ok(())
+            }
             fn on_error(&mut self, _: &str) {}
         }
         App::new("./dist")
@@ -630,9 +688,19 @@ mod tests {
     fn command_and_stream_same_name_panics() {
         struct NoopStream;
         impl crate::ipc::StreamHandler for NoopStream {
-            fn on_open(&mut self, _: &str, _: &crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
-            fn on_chunk(&mut self, _: &[u8], _: &crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
-            fn on_end(&mut self, _: &str, _: crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
+            fn on_open(&mut self, _: &str, _: &crate::ipc::StreamResponder) -> Result<(), String> {
+                Ok(())
+            }
+            fn on_chunk(
+                &mut self,
+                _: &[u8],
+                _: &crate::ipc::StreamResponder,
+            ) -> Result<(), String> {
+                Ok(())
+            }
+            fn on_end(&mut self, _: &str, _: crate::ipc::StreamResponder) -> Result<(), String> {
+                Ok(())
+            }
             fn on_error(&mut self, _: &str) {}
         }
         App::new("./dist")
@@ -645,9 +713,19 @@ mod tests {
     fn stream_and_async_same_name_panics() {
         struct NoopStream;
         impl crate::ipc::StreamHandler for NoopStream {
-            fn on_open(&mut self, _: &str, _: &crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
-            fn on_chunk(&mut self, _: &[u8], _: &crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
-            fn on_end(&mut self, _: &str, _: crate::ipc::StreamResponder) -> Result<(), String> { Ok(()) }
+            fn on_open(&mut self, _: &str, _: &crate::ipc::StreamResponder) -> Result<(), String> {
+                Ok(())
+            }
+            fn on_chunk(
+                &mut self,
+                _: &[u8],
+                _: &crate::ipc::StreamResponder,
+            ) -> Result<(), String> {
+                Ok(())
+            }
+            fn on_end(&mut self, _: &str, _: crate::ipc::StreamResponder) -> Result<(), String> {
+                Ok(())
+            }
             fn on_error(&mut self, _: &str) {}
         }
         App::new("./dist")

@@ -15,16 +15,14 @@ use crate::platform::macos::application::SimpleApplication;
 /// This must be called before CEF initialization
 pub fn init_ns_app() {
     // Load CEF frameworks
-    let loader =
-        library_loader::LibraryLoader::new(&std::env::current_exe().unwrap(), false);
+    let loader = library_loader::LibraryLoader::new(&std::env::current_exe().unwrap(), false);
     assert!(loader.load());
 
     // Ensure the correct NSApplication subclass is installed
     let mtm = MainThreadMarker::new().unwrap();
 
     unsafe {
-        let _: Retained<AnyObject> =
-            msg_send![SimpleApplication::class(), sharedApplication];
+        let _: Retained<AnyObject> = msg_send![SimpleApplication::class(), sharedApplication];
     }
 
     assert!(NSApp(mtm).isKindOfClass(SimpleApplication::class()));
@@ -33,9 +31,7 @@ pub fn init_ns_app() {
 mod application {
     use std::cell::Cell;
 
-    use cef::application_mac::{
-        CefAppProtocol, CrAppControlProtocol, CrAppProtocol,
-    };
+    use cef::application_mac::{CefAppProtocol, CrAppControlProtocol, CrAppProtocol};
     use objc2::{DefinedClass, define_class, runtime::Bool};
     use objc2_app_kit::NSApplication;
 

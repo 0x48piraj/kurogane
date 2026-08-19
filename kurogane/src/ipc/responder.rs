@@ -96,7 +96,6 @@ impl<T> Drop for Responder<T> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,7 +192,12 @@ mod tests {
             // _responder dropped here
         }
         let r = results.lock().unwrap();
-        assert!(r[0].as_ref().unwrap_err().message().contains("handler dropped responder without resolving"));
+        assert!(
+            r[0].as_ref()
+                .unwrap_err()
+                .message()
+                .contains("handler dropped responder without resolving")
+        );
     }
 
     // Concurrent resolution invokes the callback at most once
@@ -260,10 +264,13 @@ mod tests {
         let res = results.clone();
 
         let flag = Arc::new(AtomicBool::new(true));
-        let responder = Responder::with_abort(Box::new(move |result| {
-            cc.fetch_add(1, Ordering::SeqCst);
-            res.lock().unwrap().push(result);
-        }), flag);
+        let responder = Responder::with_abort(
+            Box::new(move |result| {
+                cc.fetch_add(1, Ordering::SeqCst);
+                res.lock().unwrap().push(result);
+            }),
+            flag,
+        );
         assert!(responder.is_cancelled());
         responder.resolve(Ok(99));
         assert_eq!(call_count.load(Ordering::SeqCst), 0);
@@ -290,8 +297,7 @@ mod tests {
             res.lock().unwrap().push(result);
         }));
 
-        let responder: Responder<i32> =
-            responder.map(|v: i32| Ok(serde_json::to_vec(&v).unwrap()));
+        let responder: Responder<i32> = responder.map(|v: i32| Ok(serde_json::to_vec(&v).unwrap()));
 
         responder.resolve(Ok(42));
 
@@ -309,9 +315,8 @@ mod tests {
             res.lock().unwrap().push(result);
         }));
 
-        let responder: Responder<i32> = responder.map(|_v: i32| {
-            Err(IpcError::new("mapping failed", -10))
-        });
+        let responder: Responder<i32> =
+            responder.map(|_v: i32| Err(IpcError::new("mapping failed", -10)));
 
         responder.resolve(Ok(42));
 
@@ -334,8 +339,10 @@ mod tests {
             flag.clone(),
         );
 
-        let responder: Responder<String> =
-            responder.map(|v: String| v.parse::<i32>().map_err(|e| IpcError::new(e.to_string(), -1)));
+        let responder: Responder<String> = responder.map(|v: String| {
+            v.parse::<i32>()
+                .map_err(|e| IpcError::new(e.to_string(), -1))
+        });
 
         flag.store(true, Ordering::SeqCst);
 
@@ -351,7 +358,8 @@ mod tests {
         let inner: Responder<i32> = Responder::with_abort(Box::new(|_| {}), flag.clone());
 
         let mapped: Responder<String> = inner.map(|v: String| {
-            v.parse::<i32>().map_err(|e| IpcError::new(e.to_string(), -1))
+            v.parse::<i32>()
+                .map_err(|e| IpcError::new(e.to_string(), -1))
         });
 
         assert!(!mapped.is_cancelled());

@@ -120,7 +120,6 @@ pub fn decode_cmd_payload(payload: &[u8]) -> Option<(&str, &[u8])> {
     Some((cmd, &payload[2 + cmd_len..]))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,7 +260,11 @@ mod tests {
         assert_eq!(buf[1], SUB_STREAM, "subsystem at byte 1");
         assert_eq!(buf[2], STREAM_DATA, "opcode at byte 2");
         assert_eq!(buf[3], 0x42, "flags at byte 3");
-        assert_eq!(&buf[4..8], &7u32.to_le_bytes(), "correlation_id at bytes 4..8");
+        assert_eq!(
+            &buf[4..8],
+            &7u32.to_le_bytes(),
+            "correlation_id at bytes 4..8"
+        );
         assert_eq!(buf[8], PAYLOAD_BINARY, "payload_kind at byte 8");
     }
 
@@ -322,8 +325,7 @@ mod tests {
         let cmd = "hello";
         let data = b"world";
         let buf = encode_cmd_payload(cmd, data);
-        let (decoded_cmd, decoded_data) =
-            decode_cmd_payload(&buf).expect("decode must succeed");
+        let (decoded_cmd, decoded_data) = decode_cmd_payload(&buf).expect("decode must succeed");
         assert_eq!(decoded_cmd, cmd);
         assert_eq!(decoded_data, data);
     }
@@ -509,7 +511,10 @@ mod tests {
             };
             let buf = encode_envelope_bytes(&env);
             let (decoded, _) = parse_envelope(&buf).unwrap();
-            assert_eq!(decoded.flags, flags, "flag bit {bit} must survive roundtrip");
+            assert_eq!(
+                decoded.flags, flags,
+                "flag bit {bit} must survive roundtrip"
+            );
         }
     }
 

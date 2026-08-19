@@ -16,9 +16,6 @@ pub use backend::GpuMode;
 use crate::chromium_flags::ChromiumFlags;
 
 /// Apply Chromium command-line flags for the configured GPU mode
-pub(crate) fn apply_gpu_flags(
-    flags: &mut ChromiumFlags,
-    mode: GpuMode,
-) {
+pub(crate) fn apply_gpu_flags(flags: &mut ChromiumFlags, mode: GpuMode) {
     backend::apply_gpu_flags(flags, mode);
 }

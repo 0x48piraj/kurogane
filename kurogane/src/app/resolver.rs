@@ -26,14 +26,13 @@ const APP_URL: &str = "app://app/index.html";
 pub(crate) fn resolve(source: &Source) -> Result<ResolvedFrontend, RuntimeError> {
     match source {
         Source::Url(url) => {
-            Url::parse(url)
-                .map_err(|_| RuntimeError::InvalidFrontendUrl(url.clone()))?;
+            Url::parse(url).map_err(|_| RuntimeError::InvalidFrontendUrl(url.clone()))?;
 
             Ok(ResolvedFrontend {
                 asset_root: None,
                 start_url: url.clone(),
             })
-        },
+        }
 
         Source::Path(dir) => {
             let root = match CanonicalRoot::new(dir) {
@@ -56,9 +55,7 @@ pub(crate) fn resolve(source: &Source) -> Result<ResolvedFrontend, RuntimeError>
             };
 
             crate::scheme::validate_asset_root(&root)
-                .map_err(|_| {
-                    RuntimeError::AssetRootMissing(root.as_path().to_path_buf())
-                })?;
+                .map_err(|_| RuntimeError::AssetRootMissing(root.as_path().to_path_buf()))?;
 
             Ok(ResolvedFrontend {
                 asset_root: Some(root),
@@ -67,7 +64,6 @@ pub(crate) fn resolve(source: &Source) -> Result<ResolvedFrontend, RuntimeError>
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -231,11 +227,7 @@ mod tests {
         let outside = parent.path().join("outside.html");
         std::fs::write(&outside, b"secret").unwrap();
 
-        symlink(
-            &outside,
-            root.join("index.html"),
-        )
-        .unwrap();
+        symlink(&outside, root.join("index.html")).unwrap();
 
         let source = Source::Path(root);
 

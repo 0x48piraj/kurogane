@@ -42,12 +42,10 @@ fn on_emit(payload: &[u8]) -> bool {
         if context.enter() == 0 {
             continue;
         }
-        let payload_v8 = v8_value_create_string(Some(&CefString::from(payload_str.as_ref()))).unwrap();
+        let payload_v8 =
+            v8_value_create_string(Some(&CefString::from(payload_str.as_ref()))).unwrap();
         let args: [Option<V8Value>; 1] = [Some(payload_v8)];
-        callback.execute_function(
-            None,
-            Some(&args),
-        );
+        callback.execute_function(None, Some(&args));
         context.exit();
     }
 

@@ -23,7 +23,9 @@ pub struct BrowserInfoMap<K: Clone + Ord, V: Clone> {
 
 impl<K: Clone + Ord, V: Clone> Default for BrowserInfoMap<K, V> {
     fn default() -> Self {
-        Self { map: BTreeMap::new() }
+        Self {
+            map: BTreeMap::new(),
+        }
     }
 }
 
@@ -102,7 +104,11 @@ impl<K: Copy + Ord, V: Clone> BrowserInfoMap<K, V> {
         }
     }
 
-    pub fn find_browser_all(&mut self, browser_id: BrowserId, visitor: &dyn BrowserInfoMapVisitor<K, V>) {
+    pub fn find_browser_all(
+        &mut self,
+        browser_id: BrowserId,
+        visitor: &dyn BrowserInfoMapVisitor<K, V>,
+    ) {
         if self.map.is_empty() {
             return;
         }

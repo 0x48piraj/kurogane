@@ -80,7 +80,6 @@ fn apply_disabled(flags: &mut ChromiumFlags) {
     flags.set("disable-software-rasterizer");
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,13 +92,7 @@ mod tests {
             virtualization: false,
         };
 
-        assert_eq!(
-            resolve(
-                GpuMode::Auto,
-                &env,
-            ),
-            ResolvedGpuMode::Hardware,
-        );
+        assert_eq!(resolve(GpuMode::Auto, &env), ResolvedGpuMode::Hardware,);
     }
 
     #[test]
@@ -108,13 +101,7 @@ mod tests {
             virtualization: true,
         };
 
-        assert_eq!(
-            resolve(
-                GpuMode::Auto,
-                &env,
-            ),
-            ResolvedGpuMode::Software,
-        );
+        assert_eq!(resolve(GpuMode::Auto, &env), ResolvedGpuMode::Software,);
     }
 
     #[test]
@@ -123,13 +110,7 @@ mod tests {
             virtualization: true,
         };
 
-        assert_eq!(
-            resolve(
-                GpuMode::Hardware,
-                &env,
-            ),
-            ResolvedGpuMode::Hardware,
-        );
+        assert_eq!(resolve(GpuMode::Hardware, &env), ResolvedGpuMode::Hardware,);
     }
 
     #[test]
@@ -138,13 +119,7 @@ mod tests {
             virtualization: false,
         };
 
-        assert_eq!(
-            resolve(
-                GpuMode::Software,
-                &env,
-            ),
-            ResolvedGpuMode::Software,
-        );
+        assert_eq!(resolve(GpuMode::Software, &env), ResolvedGpuMode::Software,);
     }
 
     #[test]
@@ -153,12 +128,6 @@ mod tests {
             virtualization: false,
         };
 
-        assert_eq!(
-            resolve(
-                GpuMode::Disabled,
-                &env,
-            ),
-            ResolvedGpuMode::Disabled,
-        );
+        assert_eq!(resolve(GpuMode::Disabled, &env), ResolvedGpuMode::Disabled,);
     }
 }

@@ -32,8 +32,8 @@ impl ReceivedMessage {
             Self::Inline { envelope, payload } => (*envelope, payload.as_slice()),
             Self::Shm(b) => {
                 let data = b.data();
-                let (envelope, payload) = parse_envelope(data)
-                    .expect("SHM message should always have a valid envelope");
+                let (envelope, payload) =
+                    parse_envelope(data).expect("SHM message should always have a valid envelope");
                 (envelope, payload)
             }
         }
@@ -44,11 +44,7 @@ impl ReceivedMessage {
 ///
 /// Uses shared-memory transport for large messages and falls back to
 /// inline transport if shared memory is unavailable.
-pub fn build_message(
-    name: &str,
-    envelope: &Envelope,
-    payload: &[u8],
-) -> Option<ProcessMessage> {
+pub fn build_message(name: &str, envelope: &Envelope, payload: &[u8]) -> Option<ProcessMessage> {
     build_message_parts(name, envelope, &[payload])
 }
 
@@ -66,8 +62,7 @@ pub fn build_message_parts(
     if total_size < SHM_THRESHOLD {
         build_inline_parts(name, envelope, parts)
     } else {
-        build_shm_parts(name, envelope, parts)
-            .or_else(|| build_inline_parts(name, envelope, parts))
+        build_shm_parts(name, envelope, parts).or_else(|| build_inline_parts(name, envelope, parts))
     }
 }
 
@@ -76,11 +71,7 @@ pub fn build_message_parts(
 /// Envelope fields are stored as individual ListValue entries to avoid
 /// an extra flat-buffer serialization. CEF's native IPC transports
 /// the structured ListValue directly.
-fn build_inline_parts(
-    name: &str,
-    envelope: &Envelope,
-    parts: &[&[u8]],
-) -> Option<ProcessMessage> {
+fn build_inline_parts(name: &str, envelope: &Envelope, parts: &[&[u8]]) -> Option<ProcessMessage> {
     let msg = process_message_create(Some(&CefString::from(name)))?;
     let args = msg.argument_list()?;
 
@@ -109,17 +100,10 @@ fn build_inline_parts(
     Some(msg)
 }
 
-fn build_shm_parts(
-    name: &str,
-    envelope: &Envelope,
-    parts: &[&[u8]],
-) -> Option<ProcessMessage> {
+fn build_shm_parts(name: &str, envelope: &Envelope, parts: &[&[u8]]) -> Option<ProcessMessage> {
     let total_payload: usize = parts.iter().map(|p| p.len()).sum();
     let total_size = ENVELOPE_SIZE + total_payload;
-    let builder = shared_process_message_builder_create(
-        Some(&CefString::from(name)),
-        total_size,
-    )?;
+    let builder = shared_process_message_builder_create(Some(&CefString::from(name)), total_size)?;
     if builder.is_valid() == 0 {
         return None;
     }

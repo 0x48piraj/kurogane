@@ -54,13 +54,13 @@ impl EventSubsystem {
         };
 
         let mut subs = self.subscriptions.lock().unwrap();
-        subs.entry(event_name.to_string())
-            .or_default()
-            .push(crate::ipc::event::EventSubscription {
+        subs.entry(event_name.to_string()).or_default().push(
+            crate::ipc::event::EventSubscription {
                 id: envelope.correlation_id,
                 frame: frame.clone(),
                 browser_id,
-            });
+            },
+        );
 
         debug!(
             "[Event Browser] subscribed '{}' browser={}",
@@ -70,12 +70,7 @@ impl EventSubsystem {
         true
     }
 
-    fn on_unsubscribe(
-        &self,
-        envelope: &Envelope,
-        payload: &[u8],
-        ctx: IpcContext,
-    ) -> bool {
+    fn on_unsubscribe(&self, envelope: &Envelope, payload: &[u8], ctx: IpcContext) -> bool {
         let (event_name, _rest) = match decode_cmd_payload(payload) {
             Some(v) => v,
             None => {

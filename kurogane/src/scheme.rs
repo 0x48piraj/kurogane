@@ -246,8 +246,7 @@ wrap_resource_handler! {
 /// Defaults to "index.html" for empty paths.
 /// Query strings and fragments are intentionally ignored.
 pub fn extract_rel_path(raw_url: &str) -> Result<String, ResolveError> {
-    let parsed = Url::parse(raw_url)
-        .map_err(|_| ResolveError::InvalidUrl)?;
+    let parsed = Url::parse(raw_url).map_err(|_| ResolveError::InvalidUrl)?;
 
     // Impose scheme rule
     if parsed.scheme() != "app" {
@@ -273,22 +272,20 @@ pub fn extract_rel_path(raw_url: &str) -> Result<String, ResolveError> {
 /// Resolves a request path relative to root and returns a canonical path
 /// inside the allowed filesystem boundary.
 pub fn safe_join(root: &CanonicalRoot, request: &str) -> Result<PathBuf, ResolveError> {
-   if Path::new(request).is_absolute() {
+    if Path::new(request).is_absolute() {
         return Err(ResolveError::Forbidden(PathBuf::from(request)));
-   }
+    }
 
     let joined = root.as_path().join(request);
 
     // Canonicalize and distinguish 404 (file missing) from 403 (path escapes root)
-    let canonical = joined
-        .canonicalize()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                ResolveError::NotFound(joined)
-            } else {
-                ResolveError::Io(e)
-            }
-        })?;
+    let canonical = joined.canonicalize().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            ResolveError::NotFound(joined)
+        } else {
+            ResolveError::Io(e)
+        }
+    })?;
 
     if !canonical.starts_with(root.as_path()) {
         return Err(ResolveError::Forbidden(canonical));
@@ -310,11 +307,7 @@ pub fn resolve_asset(root: &CanonicalRoot, rel_path: &str) -> Result<ResolvedAss
 
     let mime = mime_from_path(&path);
 
-    Ok(ResolvedAsset {
-        path,
-        bytes,
-        mime,
-    })
+    Ok(ResolvedAsset { path, bytes, mime })
 }
 
 /// Validates the asset root by resolving its 'index.html' entrypoint.
@@ -335,7 +328,6 @@ fn mime_from_path(path: &Path) -> String {
             .to_owned(),
     }
 }
-
 
 #[cfg(test)]
 mod tests {

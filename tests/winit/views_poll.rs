@@ -26,7 +26,8 @@ impl ApplicationHandler for ViewsDriver {
         _: &ActiveEventLoop,
         _: winit::window::WindowId,
         _: winit::event::WindowEvent,
-    ) {}
+    ) {
+    }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Pump Chromium on every event loop iteration

@@ -41,7 +41,8 @@ impl StreamResponder {
         };
         let mut msg = build_message("kurogane_stream", &envelope, data)
             .ok_or_else(|| "failed to build STREAM_BROWSER_DATA message".to_string())?;
-        self.frame.send_process_message(ProcessId::RENDERER, Some(&mut msg));
+        self.frame
+            .send_process_message(ProcessId::RENDERER, Some(&mut msg));
         Ok(())
     }
 
@@ -61,7 +62,8 @@ impl StreamResponder {
         let payload = result.as_bytes();
         let mut msg = build_message("kurogane_stream", &envelope, payload)
             .ok_or_else(|| "failed to build STREAM_BROWSER_END message".to_string())?;
-        self.frame.send_process_message(ProcessId::RENDERER, Some(&mut msg));
+        self.frame
+            .send_process_message(ProcessId::RENDERER, Some(&mut msg));
         Ok(())
     }
 
@@ -81,7 +83,8 @@ impl StreamResponder {
         let payload = msg.as_bytes();
         let mut msg = build_message("kurogane_stream", &envelope, payload)
             .ok_or_else(|| "failed to build STREAM_BROWSER_ERROR message".to_string())?;
-        self.frame.send_process_message(ProcessId::RENDERER, Some(&mut msg));
+        self.frame
+            .send_process_message(ProcessId::RENDERER, Some(&mut msg));
         Ok(())
     }
 }

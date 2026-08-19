@@ -10,7 +10,10 @@ use crate::debug;
 use crate::ipc::envelope::*;
 use crate::ipc::transport::message::{build_message, build_message_parts, extract_message};
 use crate::ipc::router;
-use crate::ipc::renderer_state::{register_promise, cancel_promise, clear_context_promises, clear_context_events, clear_context_streams, renderer_state};
+use crate::ipc::renderer_state::{
+    register_promise, cancel_promise, clear_context_promises, clear_context_events,
+    clear_context_streams, renderer_state,
+};
 use crate::bridge;
 
 //
@@ -25,11 +28,7 @@ fn v8_to_string(v: &V8Value) -> String {
 
 // Memory pinning helper
 #[inline(always)]
-fn with_array_buffer<R>(
-    ptr: *const u8,
-    len: usize,
-    f: impl FnOnce(&[u8]) -> R,
-) -> R {
+fn with_array_buffer<R>(ptr: *const u8, len: usize, f: impl FnOnce(&[u8]) -> R) -> R {
     // SAFETY:
     //
     // ptr originates from V8 ArrayBuffer backing store.
@@ -49,9 +48,7 @@ fn with_array_buffer<R>(
     //
     // After this function returns, V8 may move or free ArrayBuffer memory.
     // Any use beyond this scope is undefined behavior.
-    let slice = unsafe {
-        std::slice::from_raw_parts(ptr, len)
-    };
+    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
 
     f(slice)
 }

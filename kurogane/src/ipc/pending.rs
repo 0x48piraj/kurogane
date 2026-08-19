@@ -5,9 +5,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::browser_info_map::{
-    BrowserInfoMap, BrowserInfoMapVisitor, BrowserInfoMapVisitorResult,
-};
+use crate::browser_info_map::{BrowserInfoMap, BrowserInfoMapVisitor, BrowserInfoMapVisitorResult};
 use crate::browser_registry::BrowserId;
 
 /// Pending async entry that can be cancelled via AtomicBool flag.
@@ -57,10 +55,8 @@ impl PendingMap {
                 _browser_id: BrowserId,
                 _key: i32,
                 value: &PendingEntry,
-            ) -> std::ops::ControlFlow<
-                BrowserInfoMapVisitorResult,
-                BrowserInfoMapVisitorResult,
-            > {
+            ) -> std::ops::ControlFlow<BrowserInfoMapVisitorResult, BrowserInfoMapVisitorResult>
+            {
                 value.aborted.store(true, Ordering::SeqCst);
                 self.count.fetch_add(1, Ordering::Relaxed);
                 std::ops::ControlFlow::Continue(BrowserInfoMapVisitorResult::RemoveEntry)
@@ -83,7 +79,6 @@ impl Default for PendingMap {
         Self::new()
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -123,8 +118,14 @@ mod tests {
     fn remove_wrong_browser_returns_none() {
         let map = PendingMap::new();
         map.insert(bid(1), 10, make_entry());
-        assert!(map.remove(bid(2), 10).is_none(), "wrong browser should not find entry");
-        assert!(map.remove(bid(1), 10).is_some(), "correct browser should find entry");
+        assert!(
+            map.remove(bid(2), 10).is_none(),
+            "wrong browser should not find entry"
+        );
+        assert!(
+            map.remove(bid(1), 10).is_some(),
+            "correct browser should find entry"
+        );
     }
 
     // A request can only be removed using its exact request ID
@@ -165,7 +166,10 @@ mod tests {
         map.insert(bid(1), 10, entry);
         let cancelled = map.cancel(bid(1), 10);
         assert!(cancelled, "cancel should return true for existing entry");
-        assert!(flag.load(Ordering::SeqCst), "aborted flag must be true after cancel");
+        assert!(
+            flag.load(Ordering::SeqCst),
+            "aborted flag must be true after cancel"
+        );
     }
 
     // Cancelling a request removes it from the pending map
@@ -174,7 +178,10 @@ mod tests {
         let map = PendingMap::new();
         map.insert(bid(1), 10, make_entry());
         map.cancel(bid(1), 10);
-        assert!(map.remove(bid(1), 10).is_none(), "entry should be gone after cancel");
+        assert!(
+            map.remove(bid(1), 10).is_none(),
+            "entry should be gone after cancel"
+        );
     }
 
     // Cancelling a missing request reports that nothing was cancelled
@@ -202,8 +209,14 @@ mod tests {
         let flag_other = entry_other.aborted.clone();
         map.insert(bid(2), 10, entry_other);
         map.cancel(bid(1), 10);
-        assert!(!flag_other.load(Ordering::SeqCst), "bid(2) entry must not be aborted");
-        assert!(map.remove(bid(2), 10).is_some(), "bid(2) entry should still exist");
+        assert!(
+            !flag_other.load(Ordering::SeqCst),
+            "bid(2) entry must not be aborted"
+        );
+        assert!(
+            map.remove(bid(2), 10).is_some(),
+            "bid(2) entry should still exist"
+        );
     }
 
     // Cancelling one request does not affect other request IDs for the same browser
@@ -260,8 +273,14 @@ mod tests {
         map.insert(bid(2), 1, entry_other);
 
         map.cancel_all_for_browser(bid(1));
-        assert!(!flag_other.load(Ordering::SeqCst), "bid(2) entry must not be aborted");
-        assert!(map.remove(bid(2), 1).is_some(), "bid(2) entry must still exist");
+        assert!(
+            !flag_other.load(Ordering::SeqCst),
+            "bid(2) entry must not be aborted"
+        );
+        assert!(
+            map.remove(bid(2), 1).is_some(),
+            "bid(2) entry must still exist"
+        );
     }
 
     // Cancelling a browser with no pending requests returns zero
@@ -296,7 +315,10 @@ mod tests {
         map.insert(bid(1), 10, make_entry());
         map.insert(bid(2), 10, make_entry());
         assert!(map.remove(bid(1), 10).is_some());
-        assert!(map.remove(bid(2), 10).is_some(), "bid(2) entry still exists");
+        assert!(
+            map.remove(bid(2), 10).is_some(),
+            "bid(2) entry still exists"
+        );
     }
 
     // Browser-wide cancellation only affects the targeted browser
@@ -318,7 +340,10 @@ mod tests {
         let map1 = PendingMap::new();
         let map2 = map1.clone();
         map1.insert(bid(1), 10, make_entry());
-        assert!(map2.remove(bid(1), 10).is_some(), "clone should see entries from original");
+        assert!(
+            map2.remove(bid(1), 10).is_some(),
+            "clone should see entries from original"
+        );
     }
 
     // Concurrent inserts remain consistent and all inserted entries remain removable
@@ -456,8 +481,10 @@ mod tests {
 
         // Map should be clean, all entries were cancelled
         for i in 0..100 {
-            assert!(map.remove(bid(1), i).is_none(),
-                "entry {i} should be removed after concurrent cancel");
+            assert!(
+                map.remove(bid(1), i).is_none(),
+                "entry {i} should be removed after concurrent cancel"
+            );
         }
     }
 
@@ -551,7 +578,8 @@ mod tests {
         assert_eq!(map.cancel_all_for_browser(bid(1)), 50);
 
         // Late responses from all 50 handlers
-        for responder in responders { // none should deliver
+        for responder in responders {
+            // none should deliver
             responder.resolve(Ok(()));
         }
 

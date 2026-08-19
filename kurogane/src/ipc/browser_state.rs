@@ -74,7 +74,6 @@ pub struct IpcContext {
     pub frame_id: Option<String>,
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,7 +93,10 @@ mod tests {
     #[test]
     fn ipc_error_display_negative_code() {
         let err = IpcError::new("handler dropped responder without resolving", -3);
-        assert_eq!(format!("{err}"), "-3: handler dropped responder without resolving");
+        assert_eq!(
+            format!("{err}"),
+            "-3: handler dropped responder without resolving"
+        );
     }
 
     #[test]

@@ -28,17 +28,27 @@ fn on_data(envelope: &Envelope, payload: &[u8]) -> bool {
     let stream_id = envelope.correlation_id as i32;
 
     let entry = {
-        renderer_state().lock().unwrap().streams.collect_data(stream_id)
+        renderer_state()
+            .lock()
+            .unwrap()
+            .streams
+            .collect_data(stream_id)
     };
 
     match entry {
         None => {
-            debug!("[Stream Renderer] no data callback for stream_id={}", stream_id);
+            debug!(
+                "[Stream Renderer] no data callback for stream_id={}",
+                stream_id
+            );
             true
         }
         Some((context, callback)) => {
             if context.enter() == 0 {
-                debug!("[Stream Renderer] failed to enter V8 context for stream_id={}", stream_id);
+                debug!(
+                    "[Stream Renderer] failed to enter V8 context for stream_id={}",
+                    stream_id
+                );
                 return true;
             }
 
@@ -48,7 +58,10 @@ fn on_data(envelope: &Envelope, payload: &[u8]) -> bool {
                     callback.execute_function(None, Some(&args));
                 }
                 None => {
-                    debug!("[Stream Renderer] failed to create ArrayBuffer for stream_id={}", stream_id);
+                    debug!(
+                        "[Stream Renderer] failed to create ArrayBuffer for stream_id={}",
+                        stream_id
+                    );
                 }
             }
 
@@ -83,17 +96,24 @@ fn on_end(envelope: &Envelope, payload: &[u8]) -> bool {
 
     match entry {
         None => {
-            debug!("[Stream Renderer] no end callback for stream_id={}", stream_id);
+            debug!(
+                "[Stream Renderer] no end callback for stream_id={}",
+                stream_id
+            );
             true
         }
         Some((context, callback)) => {
             if context.enter() == 0 {
-                debug!("[Stream Renderer] failed to enter V8 context for stream_id={}", stream_id);
+                debug!(
+                    "[Stream Renderer] failed to enter V8 context for stream_id={}",
+                    stream_id
+                );
                 return true;
             }
 
             let result_str = String::from_utf8_lossy(payload);
-            let payload_v8 = v8_value_create_string(Some(&CefString::from(result_str.as_ref()))).unwrap();
+            let payload_v8 =
+                v8_value_create_string(Some(&CefString::from(result_str.as_ref()))).unwrap();
             let args: [Option<V8Value>; 1] = [Some(payload_v8)];
             callback.execute_function(None, Some(&args));
 
@@ -130,16 +150,23 @@ fn on_error(envelope: &Envelope, payload: &[u8]) -> bool {
 
     match entry {
         None => {
-            debug!("[Stream Renderer] no error callback for stream_id={}", stream_id);
+            debug!(
+                "[Stream Renderer] no error callback for stream_id={}",
+                stream_id
+            );
             true
         }
         Some((context, callback)) => {
             if context.enter() == 0 {
-                debug!("[Stream Renderer] failed to enter V8 context for stream_id={}", stream_id);
+                debug!(
+                    "[Stream Renderer] failed to enter V8 context for stream_id={}",
+                    stream_id
+                );
                 return true;
             }
 
-            let payload_v8 = v8_value_create_string(Some(&CefString::from(err_str.as_ref()))).unwrap();
+            let payload_v8 =
+                v8_value_create_string(Some(&CefString::from(err_str.as_ref()))).unwrap();
             let args: [Option<V8Value>; 1] = [Some(payload_v8)];
             callback.execute_function(None, Some(&args));
 
