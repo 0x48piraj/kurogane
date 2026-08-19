@@ -89,6 +89,7 @@ impl Default for PendingMap {
 mod tests {
     use super::*;
     use crate::browser_registry::BrowserId;
+    use crate::ipc::responder::Responder;
 
     fn bid(id: u32) -> BrowserId {
         BrowserId::new(id)
@@ -100,7 +101,7 @@ mod tests {
         }
     }
 
-    // An inserted entry can be removed by the same browser and request id
+    // An inserted entry can be removed using its browser and request ID
     #[test]
     fn insert_and_remove_returns_entry() {
         let map = PendingMap::new();
@@ -117,7 +118,7 @@ mod tests {
         assert!(map.remove(bid(1), 10).is_none());
     }
 
-    // Entries are isolated by browser id
+    // Entries belonging to another browser are not accessible
     #[test]
     fn remove_wrong_browser_returns_none() {
         let map = PendingMap::new();
@@ -126,7 +127,7 @@ mod tests {
         assert!(map.remove(bid(1), 10).is_some(), "correct browser should find entry");
     }
 
-    // Request ids must match exactly
+    // A request can only be removed using its exact request ID
     #[test]
     fn remove_wrong_id_returns_none() {
         let map = PendingMap::new();
@@ -143,7 +144,7 @@ mod tests {
         assert!(map.remove(bid(1), 10).is_none());
     }
 
-    // Inserting the same request id replaces the previous entry
+    // Inserting an existing request ID replaces the previous entry
     #[test]
     fn insert_duplicate_id_overwrites() {
         let map = PendingMap::new();
@@ -152,12 +153,10 @@ mod tests {
         map.insert(bid(1), 10, e1);
         map.insert(bid(1), 10, e2);
         let removed = map.remove(bid(1), 10).unwrap();
-        // The removed entry should be e2 (the second insert)
-        // We can't compare directly; we verify the map doesn't have duplicates
         assert!(!removed.aborted.load(Ordering::SeqCst));
     }
 
-    // Cancelling a request marks it aborted
+    // Cancelling a request marks its shared cancellation flag
     #[test]
     fn cancel_sets_aborted_flag() {
         let map = PendingMap::new();
@@ -178,7 +177,7 @@ mod tests {
         assert!(map.remove(bid(1), 10).is_none(), "entry should be gone after cancel");
     }
 
-    // Cancelling a missing request returns false
+    // Cancelling a missing request reports that nothing was cancelled
     #[test]
     fn cancel_nonexistent_returns_false() {
         let map = PendingMap::new();
@@ -194,7 +193,7 @@ mod tests {
         assert!(!map.cancel(bid(1), 10));
     }
 
-    // Cancelling one browser's request does not affect another browser
+    // Cancelling a request does not affect requests belonging to another browser
     #[test]
     fn cancel_does_not_affect_other_browsers() {
         let map = PendingMap::new();
@@ -203,12 +202,11 @@ mod tests {
         let flag_other = entry_other.aborted.clone();
         map.insert(bid(2), 10, entry_other);
         map.cancel(bid(1), 10);
-        // bid(2) entry should still be removable (not cancelled)
         assert!(!flag_other.load(Ordering::SeqCst), "bid(2) entry must not be aborted");
         assert!(map.remove(bid(2), 10).is_some(), "bid(2) entry should still exist");
     }
 
-    // Cancelling one request does not affect other requests
+    // Cancelling one request does not affect other request IDs for the same browser
     #[test]
     fn cancel_does_not_affect_other_ids() {
         let map = PendingMap::new();
@@ -218,7 +216,7 @@ mod tests {
         assert!(map.remove(bid(1), 20).is_some(), "id 20 should still exist");
     }
 
-    // Cancelling a browser marks all of its requests aborted
+    // Cancelling a browser marks every pending request for that browser as aborted
     #[test]
     fn cancel_all_for_browser_sets_all_aborted() {
         let map = PendingMap::new();
@@ -252,7 +250,7 @@ mod tests {
         assert!(map.remove(bid(1), 3).is_none());
     }
 
-    // Cancelling one browser leaves other browsers unchanged
+    // Cancelling one browser does not affect pending requests for another browser
     #[test]
     fn cancel_all_for_browser_does_not_affect_others() {
         let map = PendingMap::new();
@@ -291,7 +289,7 @@ mod tests {
         assert_eq!(map.cancel_all_for_browser(bid(1)), 0);
     }
 
-    // Different browsers maintain independent request namespaces
+    // Requests with the same ID remain independent across browsers
     #[test]
     fn entries_for_different_browsers_are_isolated() {
         let map = PendingMap::new();
@@ -301,7 +299,7 @@ mod tests {
         assert!(map.remove(bid(2), 10).is_some(), "bid(2) entry still exists");
     }
 
-    // Browser-wide cancellation is scoped to a single browser
+    // Browser-wide cancellation only affects the targeted browser
     #[test]
     fn multiple_browsers_independent_cancel_all() {
         let map = PendingMap::new();
@@ -314,7 +312,7 @@ mod tests {
         assert!(map.remove(bid(2), 2).is_some());
     }
 
-    // Cloned maps share the same underlying pending state
+    // Cloned PendingMap handles share the same underlying pending state
     #[test]
     fn pending_map_clone_shares_state() {
         let map1 = PendingMap::new();
@@ -323,24 +321,24 @@ mod tests {
         assert!(map2.remove(bid(1), 10).is_some(), "clone should see entries from original");
     }
 
-    // Concurrent inserts and removes leave the map in a consistent state
+    // Concurrent inserts remain consistent and all inserted entries remain removable
     #[test]
     fn concurrent_insert_and_remove_is_safe() {
         use std::thread;
 
         let map = Arc::new(PendingMap::new());
-        let mut handles = vec![];
+        let mut handles = Vec::new();
 
         // Spawn inserters
         for i in 0..10 {
-            let m = map.clone();
+            let map = map.clone();
             handles.push(thread::spawn(move || {
-                m.insert(bid(1), i, make_entry());
+                map.insert(bid(1), i, make_entry());
             }));
         }
 
-        for h in handles {
-            h.join().unwrap();
+        for handle in handles {
+            handle.join().unwrap();
         }
 
         let mut found = 0;
@@ -352,36 +350,36 @@ mod tests {
         assert_eq!(found, 10, "all 10 inserted entries must be removable");
     }
 
-    // Concurrent insertion and cancellation complete without corrupting the map
+    // Concurrent insertion and cancellation remain safe
     #[test]
     fn concurrent_cancel_and_insert_is_safe() {
         use std::thread;
 
         let map = Arc::new(PendingMap::new());
-        let mut handles = vec![];
+        let mut handles = Vec::new();
 
         // Thread 1: insert ids 0..100
-        let m = map.clone();
+        let inserter = map.clone();
         handles.push(thread::spawn(move || {
             for i in 0..100 {
-                m.insert(bid(1), i, make_entry());
+                inserter.insert(bid(1), i, make_entry());
             }
         }));
 
         // Thread 2: cancel ids 0..100 (may or may not find them)
-        let m = map.clone();
+        let canceller = map.clone();
         handles.push(thread::spawn(move || {
             for i in 0..100 {
-                m.cancel(bid(1), i);
+                canceller.cancel(bid(1), i);
             }
         }));
 
-        for h in handles {
-            h.join().unwrap(); // should not panic
+        for handle in handles {
+            handle.join().unwrap(); // should not panic
         }
     }
 
-    // Browser-wide cancellation remains safe when performed concurrently
+    // Concurrent browser-wide cancellation remains safe
     #[test]
     fn concurrent_cancel_all_is_safe() {
         use std::thread;
@@ -395,16 +393,16 @@ mod tests {
             }
         }
 
-        let mut handles = vec![];
+        let mut handles = Vec::new();
         for browser in 0..5 {
-            let m = map.clone();
+            let map = map.clone();
             handles.push(thread::spawn(move || {
-                m.cancel_all_for_browser(bid(browser));
+                map.cancel_all_for_browser(bid(browser));
             }));
         }
 
-        for h in handles {
-            h.join().unwrap();
+        for handle in handles {
+            handle.join().unwrap();
         }
 
         for browser in 0..5 {
@@ -418,26 +416,7 @@ mod tests {
         }
     }
 
-    // Cancelled requests prevent stale responses from being delivered
-    #[test]
-    fn cancel_then_resolve_does_not_panic() {
-        // After cancel removes the entry from the map, the Responder
-        // (held by the handler thread) can still be dropped safely
-        // The abort flag is checked before sending a response
-        let map = PendingMap::new();
-        let entry = make_entry();
-        let flag = entry.aborted.clone();
-        map.insert(bid(1), 10, entry);
-
-        // Simulate cancel (what the browser-side handler does)
-        let cancelled = map.cancel(bid(1), 10);
-        assert!(cancelled);
-
-        // Simulate resolve after cancel; the abort flag should be set
-        assert!(flag.load(Ordering::SeqCst), "abort flag must be set after cancel, preventing stale response");
-    }
-
-    // Resolving a request before cancellation makes a later cancel a no-op
+    // Resolving a request before cancellation makes a later cancellation a no-op
     #[test]
     fn resolve_then_cancel_is_benign() {
         let map = PendingMap::new();
@@ -453,45 +432,26 @@ mod tests {
         assert!(!cancelled, "cancel after resolve should return false");
     }
 
-    // Cancelled requests are marked aborted so handlers skip responses
-    #[test]
-    fn cancel_flag_prevents_response() {
-        let map = PendingMap::new();
-        let entry = make_entry();
-        let flag = entry.aborted.clone();
-        map.insert(bid(1), 10, entry);
-
-        // Cancel sets the flag
-        map.cancel(bid(1), 10);
-
-        // Handler checks flag before responding
-        if flag.load(Ordering::SeqCst) {
-            // Handler sees abort and skips response
-        } else {
-            panic!("handler would send stale response, abort flag not set");
-        }
-    }
-
-    // Concurrent insert and cancel operations remain safe and leave no stale entries
+    // Concurrent insertion and cancellation remain safe for the same request IDs
     #[test]
     fn cancel_during_concurrent_insert_same_id() {
         // Cancel and insert on the same (browser_id, id) from
         // different threads must not deadlock or corrupt the map
         let map = PendingMap::new();
-        let mut handles = vec![];
+        let mut handles = Vec::new();
 
         for _ in 0..10 {
-            let m = map.clone();
+            let map = map.clone();
             handles.push(std::thread::spawn(move || {
                 for i in 0..100 {
-                    m.insert(bid(1), i, make_entry());
-                    m.cancel(bid(1), i);
+                    map.insert(bid(1), i, make_entry());
+                    map.cancel(bid(1), i);
                 }
             }));
         }
 
-        for h in handles {
-            h.join().unwrap();
+        for handle in handles {
+            handle.join().unwrap();
         }
 
         // Map should be clean, all entries were cancelled
@@ -501,7 +461,7 @@ mod tests {
         }
     }
 
-    // Request ID zero is handled as a valid pending request identifier
+    // Request ID zero is treated as a valid pending request identifier
     #[test]
     fn insert_id_zero_works() {
         let map = PendingMap::new();
@@ -516,26 +476,85 @@ mod tests {
     #[test]
     fn cancel_all_for_browser_during_insert() {
         let map = PendingMap::new();
-        let mut handles = vec![];
+        let mut handles = Vec::new();
 
         // Inserter thread
-        let m = map.clone();
+        let inserter = map.clone();
         handles.push(std::thread::spawn(move || {
             for i in 0..200 {
-                m.insert(bid(1), i, make_entry());
+                inserter.insert(bid(1), i, make_entry());
             }
         }));
 
         // Canceller thread
-        let m = map.clone();
+        let canceller = map.clone();
         handles.push(std::thread::spawn(move || {
             for _ in 0..50 {
-                m.cancel_all_for_browser(bid(1));
+                canceller.cancel_all_for_browser(bid(1));
             }
         }));
 
-        for h in handles {
-            h.join().unwrap();
+        for handle in handles {
+            handle.join().unwrap();
         }
+    }
+
+    // Cancellation through PendingMap prevents a late responder from delivering
+    #[test]
+    fn cancel_then_resolve_suppresses_callback() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_clone = calls.clone();
+
+        let map = PendingMap::new();
+        let entry = make_entry();
+        let responder = Responder::with_abort(
+            Box::new(move |_| {
+                calls_clone.fetch_add(1, Ordering::SeqCst);
+            }),
+            entry.aborted.clone(),
+        );
+
+        map.insert(bid(1), 10, entry);
+
+        // Cancel wins
+        assert!(map.cancel(bid(1), 10));
+
+        // Late resolve
+        responder.resolve(Ok(())); // callback must not fire
+
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    // Browser-wide cancellation prevents all pending responders from delivering late responses
+    #[test]
+    fn cancel_all_for_browser_suppresses_late_responses() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut responders = Vec::new();
+        let map = PendingMap::new();
+
+        for id in 0..50 {
+            let entry = make_entry();
+            let calls = calls.clone();
+
+            let responder = Responder::with_abort(
+                Box::new(move |_| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                }),
+                entry.aborted.clone(),
+            );
+
+            map.insert(bid(1), id, entry);
+            responders.push(responder);
+        }
+
+        // Browser teardown
+        assert_eq!(map.cancel_all_for_browser(bid(1)), 50);
+
+        // Late responses from all 50 handlers
+        for responder in responders { // none should deliver
+            responder.resolve(Ok(()));
+        }
+
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 }
