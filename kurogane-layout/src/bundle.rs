@@ -7,6 +7,8 @@ use anyhow::Result;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt;
 
+use crate::ResolvedDistribution;
+
 pub struct BundleLayout {
     root: PathBuf,
 }
@@ -152,6 +154,46 @@ exec "$ROOT/{runtime_target}" "$@"
         Ok(())
     }
 
+    /// Materializes a resolved distribution into this bundle layout.
+    ///
+    /// Copies the executable, CEF root, frontend and any extra resources
+    /// into the platform-specific directory structure.
+    pub fn materialize(&self, dist: &ResolvedDistribution) -> Result<()> {
+        self.prepare()?;
+
+        let exe_name = dist
+            .executable
+            .file_name()
+            .ok_or_else(|| anyhow::anyhow!("executable has no file name"))?;
+
+        fs::copy(&dist.executable, self.executable_path(exe_name))?;
+
+        #[cfg(target_os = "linux")]
+        self.write_launcher(exe_name)?;
+
+        self.install_cef(&dist.cef_root)?;
+
+        if let Some(frontend) = &dist.frontend {
+            self.install_frontend(frontend)?;
+        }
+
+        for resource in &dist.extra_resources {
+            let dest = self.root.join(
+                resource
+                    .file_name()
+                    .ok_or_else(|| anyhow::anyhow!("resource has no file name"))?,
+            );
+            if resource.is_dir() {
+                copy_dir(resource, &dest)?;
+            } else {
+                fs::copy(resource, &dest)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Verifies the bundle is complete by checking required files exist.
     pub fn verify(&self, exe_name: &OsStr) -> Result<()> {
         let exe = self.executable_path(exe_name);
 
