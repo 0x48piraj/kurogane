@@ -19,7 +19,7 @@ pub enum PackageError {
 pub fn package_directory(
     dist: &ResolvedDistribution,
     output_dir: &Path,
-) -> Result<Vec<PathBuf>, PackageError> {
+) -> Result<PathBuf, PackageError> {
     let layout = BundleLayout::new(output_dir);
     layout.materialize(dist)?;
 
@@ -29,5 +29,5 @@ pub fn package_directory(
         .ok_or_else(|| anyhow::anyhow!("executable has no file name"))?;
     layout.verify(exe_name)?;
 
-    Ok(vec![layout.root().to_path_buf()])
+    Ok(layout.root().to_path_buf())
 }
