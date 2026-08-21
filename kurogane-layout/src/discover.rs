@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use thiserror::Error;
 
-use crate::bundled_cef_root;
+use crate::cef::{CefProvenance, read_provenance};
+use crate::{bundled_cef_root, installed_cef_root};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiscoveryMode {
@@ -14,6 +15,8 @@ pub enum DiscoveryMode {
 pub struct DetectedCef {
     pub root: PathBuf,
     pub mode: DiscoveryMode,
+    /// Provenance when available.
+    pub provenance: Option<CefProvenance>,
 }
 
 #[derive(Debug, Error)]
@@ -26,8 +29,8 @@ pub enum DetectError {
 }
 
 /// Resolves the active CEF runtime using discovery precedence rules.
-pub fn detect_cef_root() -> Result<DetectedCef, DetectError> {
-    // Dev environment
+pub fn detect_cef_root_with_version(version: Option<&str>) -> Result<DetectedCef, DetectError> {
+    // Environment override
     if let Ok(path) = std::env::var("CEF_PATH") {
         let root = PathBuf::from(path);
 
@@ -35,6 +38,7 @@ pub fn detect_cef_root() -> Result<DetectedCef, DetectError> {
             return Ok(DetectedCef {
                 root,
                 mode: DiscoveryMode::EnvironmentOverride,
+                provenance: None,
             });
         }
     }
@@ -44,6 +48,16 @@ pub fn detect_cef_root() -> Result<DetectedCef, DetectError> {
         return Ok(DetectedCef {
             root,
             mode: DiscoveryMode::Bundled,
+            provenance: None,
+        });
+    }
+
+    // Managed installation
+    if let Some(root) = version.and_then(installed_cef_root) {
+        return Ok(DetectedCef {
+            provenance: read_provenance(&root).ok().flatten(),
+            root,
+            mode: DiscoveryMode::Installed,
         });
     }
 

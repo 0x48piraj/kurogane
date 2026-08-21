@@ -9,7 +9,7 @@ use crate::ShutdownSignal;
 use crate::browser_registry::{BrowserRegistry, BrowserId, BrowserMetadata};
 use crate::window_registry::{WindowRegistry, WindowId, WindowMetadata};
 use crate::window::{KuroganeWindowDelegate, KuroganeBrowserViewDelegate};
-use kurogane_layout::{detect_cef_root, validate_cef_root, profile_dir};
+use kurogane_layout::{detect_cef_root_with_version, validate_cef_runtime, profile_dir};
 use crate::ipc::IpcRouter;
 use crate::spec::RuntimeSpec;
 use crate::debug;
@@ -44,9 +44,9 @@ fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeEr
 
     std::fs::create_dir_all(&cache_dir).ok();
 
-    let detected = detect_cef_root().map_err(|_| RuntimeError::CefNotInstalled)?;
+    let detected = detect_cef_root_with_version(None).map_err(|_| RuntimeError::CefNotInstalled)?;
 
-    validate_cef_root(&detected.root)
+    validate_cef_runtime(&detected.root)
         .map_err(|e| RuntimeError::InvalidCefInstallation(e.to_string()))?;
 
     let cef_root = detected
