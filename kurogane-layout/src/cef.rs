@@ -432,3 +432,339 @@ pub(crate) fn write_runtime_fixture(dir: &Path) -> PathBuf {
     }
     dir.to_path_buf()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp() -> tempfile::TempDir {
+        tempfile::tempdir().expect("tempdir")
+    }
+
+    // Provenance parsing
+
+    #[test]
+    fn parses_official_archive_name() {
+        let name = "cef_binary_131.3.5+g6a8d2b7+chromium-131.0.6778.204_linux64_minimal.tar.bz2";
+        let (cef, chromium, platform) = parse_archive_name(name).unwrap();
+        assert_eq!(cef, "131.3.5+g6a8d2b7");
+        assert_eq!(chromium.as_deref(), Some("131.0.6778.204"));
+        assert_eq!(platform.as_deref(), Some("linux64"));
+    }
+
+    #[test]
+    fn rejects_non_archive_names() {
+        assert!(parse_archive_name("random.tar.bz2").is_none());
+        assert!(parse_archive_name("cef_binary_131.3.5_linux64_minimal.zip").is_none());
+    }
+
+    #[test]
+    fn version_match_accepts_full_and_prefix() {
+        let p = CefProvenance {
+            cef_version: "131.3.5+g6a8d2b7".into(),
+            chromium_version: None,
+            platform: Some("linux64".into()),
+            distribution: "minimal".into(),
+            artifact: "x.tar.bz2".into(),
+        };
+        assert!(p.matches_version("131.3.5"));
+        assert!(p.matches_version("131.3.5+g6a8d2b7"));
+        assert!(!p.matches_version("127.1.1"));
+        assert!(!p.matches_version("131.3"));
+    }
+
+    // Distribution validation
+
+    #[test]
+    fn raw_distribution_shape_is_valid() {
+        let dir = tmp();
+        fs::create_dir_all(dir.path().join("Release")).unwrap();
+        fs::create_dir_all(dir.path().join("Resources")).unwrap();
+        fs::write(dir.path().join("Release").join(libcef_name()), "").unwrap();
+
+        assert!(validate_distribution(dir.path()).is_ok());
+    }
+
+    #[test]
+    fn flat_distribution_shape_is_valid() {
+        let dir = tmp();
+        fs::write(dir.path().join(libcef_name()), "").unwrap();
+        assert!(validate_distribution(dir.path()).is_ok());
+    }
+
+    #[test]
+    fn unrecognized_directory_is_invalid_distribution() {
+        let dir = tmp();
+        fs::create_dir_all(dir.path().join("stuff")).unwrap();
+        let err = validate_distribution(dir.path()).unwrap_err();
+        assert!(matches!(err, CefError::InvalidDistribution { .. }));
+    }
+
+    // Materialization
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn raw_distribution_becomes_flat_runtime() {
+        let dir = tmp();
+        let dist = dir.path().join("dist");
+        fs::create_dir_all(dist.join("Release")).unwrap();
+        fs::create_dir_all(dist.join("Resources").join("locales")).unwrap();
+        fs::write(dist.join("Release").join("libcef.so"), "lib").unwrap();
+        fs::write(dist.join("Release").join("chrome-sandbox"), "sb").unwrap();
+        fs::write(dist.join("Resources").join("icudtl.dat"), "icu").unwrap();
+        fs::write(dist.join("Resources").join("v8_context_snapshot.bin"), "v8").unwrap();
+        fs::write(dist.join("Resources").join("locales").join("en-US.pak"), "pak").unwrap();
+
+        let dest = dir.path().join("runtime");
+        let out = materialize_cef_runtime(&dist, &dest).unwrap();
+
+        assert_eq!(out, dest);
+        assert!(dest.join("libcef.so").exists());
+        assert!(dest.join("chrome-sandbox").exists());
+        assert!(dest.join("icudtl.dat").exists());
+        assert!(dest.join("locales/en-US.pak").exists());
+        assert!(validate_cef_runtime(&dest).is_ok());
+    }
+
+    #[test]
+    fn flat_distribution_strips_development_material() {
+        let dir = tmp();
+        let dist = write_runtime_fixture(&dir.path().join("managed"));
+        fs::create_dir_all(dist.join("include").join("cef")).unwrap();
+        fs::write(dist.join("include").join("cef").join("cef_app.h"), "h").unwrap();
+        fs::create_dir_all(dist.join("cmake")).unwrap();
+        fs::create_dir_all(dist.join("libcef_dll")).unwrap();
+        fs::write(dist.join("CMakeLists.txt"), "cmake").unwrap();
+        fs::write(dist.join("CREDITS.html"), "credits").unwrap();
+
+        let dest = dir.path().join("runtime");
+        materialize_cef_runtime(&dist, &dest).unwrap();
+
+        assert!(dest.join(libcef_name()).exists());
+        assert!(!dest.join("include").exists());
+        assert!(!dest.join("cmake").exists());
+        assert!(!dest.join("libcef_dll").exists());
+        assert!(!dest.join("CMakeLists.txt").exists());
+        assert!(!dest.join("CREDITS.html").exists());
+    }
+
+    #[test]
+    fn flat_distribution_strips_download_cache_residue() {
+        let dir = tmp();
+        let dist = write_runtime_fixture(&dir.path().join("managed"));
+        fs::write(
+            dist.join("archive.json"),
+            r#"{"type":"minimal","name":"x.tar.bz2","sha1":"0"}"#,
+        )
+        .unwrap();
+        fs::write(
+            dist.join("cef_binary_150.0.10_linux64_minimal.tar.bz2"),
+            "100MB of archive",
+        )
+        .unwrap();
+
+        let dest = dir.path().join("runtime");
+        materialize_cef_runtime(&dist, &dest).unwrap();
+
+        assert!(!dest.join("archive.json").exists());
+        assert!(!dest.join("cef_binary_150.0.10_linux64_minimal.tar.bz2").exists());
+        assert!(dest.join(libcef_name()).exists(), "runtime files unaffected");
+    }
+
+    #[test]
+    fn materialization_is_cached_when_valid() {
+        let dir = tmp();
+        let dist = write_runtime_fixture(&dir.path().join("managed"));
+        let dest = dir.path().join("runtime");
+        materialize_cef_runtime(&dist, &dest).unwrap();
+
+        // Corrupt the source; cache must still be returned untouched
+        fs::remove_file(dist.join(libcef_name())).unwrap();
+        let marker = dest.join("cache-marker");
+        fs::write(&marker, "hit").unwrap();
+
+        materialize_cef_runtime(&dist, &dest).unwrap();
+        assert!(marker.exists(), "valid destination must be reused");
+    }
+
+    #[test]
+    fn invalid_cached_destination_is_rebuilt() {
+        let dir = tmp();
+        let dist = write_runtime_fixture(&dir.path().join("managed"));
+        let dest = dir.path().join("runtime");
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("garbage"), "").unwrap();
+
+        materialize_cef_runtime(&dist, &dest).unwrap();
+        assert!(dest.join(libcef_name()).exists());
+        assert!(!dest.join("garbage").exists());
+    }
+
+    // Runtime validation
+
+    #[test]
+    fn complete_runtime_passes_validation() {
+        let dir = tmp();
+        let runtime = write_runtime_fixture(&dir.path().join("rt"));
+        assert!(validate_cef_runtime(&runtime).is_ok());
+    }
+
+    #[test]
+    fn missing_required_files_are_reported_together() {
+        let dir = tmp();
+        let runtime = dir.path().join("rt");
+        fs::create_dir_all(&runtime).unwrap();
+
+        match validate_cef_runtime(&runtime) {
+            Err(CefError::InvalidRuntime { missing, .. }) => {
+                assert!(missing.contains(libcef_name()));
+                assert!(missing.contains("icudtl.dat"));
+                assert!(missing.contains("locales"));
+            }
+            other => panic!("expected InvalidRuntime, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn either_v8_snapshot_satisfies_requirement() {
+        let dir = tmp();
+        let runtime = dir.path().join("rt");
+        fs::create_dir_all(&runtime).unwrap();
+        fs::write(runtime.join(libcef_name()), "").unwrap();
+        fs::write(runtime.join("icudtl.dat"), "").unwrap();
+        fs::create_dir_all(runtime.join("locales")).unwrap();
+        if cfg!(target_os = "windows") {
+            fs::write(runtime.join("chrome_elf.dll"), "").unwrap();
+        } else {
+            fs::write(runtime.join("chrome-sandbox"), "").unwrap();
+        }
+
+        // Legacy snapshot name only
+        fs::write(runtime.join("snapshot_blob.bin"), "").unwrap();
+        assert!(validate_cef_runtime(&runtime).is_ok());
+
+        // Modern snapshot name only
+        fs::remove_file(runtime.join("snapshot_blob.bin")).unwrap();
+        fs::write(runtime.join("v8_context_snapshot.bin"), "").unwrap();
+        assert!(validate_cef_runtime(&runtime).is_ok());
+
+        // Neither
+        fs::remove_file(runtime.join("v8_context_snapshot.bin")).unwrap();
+        assert!(matches!(
+            validate_cef_runtime(&runtime),
+            Err(CefError::InvalidRuntime { .. })
+        ));
+    }
+
+    // Resolution policy
+
+    // Environment mutation must be serialized across tests
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn resolution_fails_without_managed_install_or_override() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let original = std::env::var("CEF_PATH").ok();
+        unsafe {
+            std::env::remove_var("CEF_PATH");
+        }
+
+        let err = resolve_cef_for_bundle("0.0.0-nonexistent").unwrap_err();
+        assert!(matches!(err, CefError::NotFound { .. }));
+
+        if let Some(v) = original {
+            unsafe {
+                std::env::set_var("CEF_PATH", v);
+            }
+        }
+    }
+
+    #[test]
+    fn unverifiable_override_is_rejected() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tmp();
+        let fake = dir.path().join("dev-cef");
+        write_runtime_fixture(&fake); // looks like CEF but has no archive.json
+
+        let original = std::env::var("CEF_PATH").ok();
+        unsafe {
+            std::env::set_var("CEF_PATH", &fake);
+        }
+
+        let err = resolve_cef_for_bundle("131.3.5").unwrap_err();
+        assert!(matches!(err, CefError::UnverifiableOverride(_)));
+
+        match original {
+            Some(v) => unsafe {
+                std::env::set_var("CEF_PATH", v);
+            },
+            None => unsafe {
+                std::env::remove_var("CEF_PATH");
+            },
+        }
+    }
+
+    #[test]
+    fn version_mismatched_override_is_rejected() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tmp();
+        let fake = write_runtime_fixture(&dir.path().join("dev-cef"));
+        fs::write(
+            fake.join("archive.json"),
+            r#"{"type":"minimal","name":"cef_binary_127.1.1+gabcdef+chromium-127.0.1.2_linux64_minimal.tar.bz2","sha1":"x"}"#,
+        )
+        .unwrap();
+
+        let original = std::env::var("CEF_PATH").ok();
+        unsafe {
+            std::env::set_var("CEF_PATH", &fake);
+        }
+
+        let err = resolve_cef_for_bundle("131.3.5").unwrap_err();
+        assert!(matches!(err, CefError::VersionMismatch { .. }));
+
+        match original {
+            Some(v) => unsafe {
+                std::env::set_var("CEF_PATH", v);
+            },
+            None => unsafe {
+                std::env::remove_var("CEF_PATH");
+            },
+        }
+    }
+
+    #[test]
+    fn verified_override_with_matching_provenance_is_accepted() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tmp();
+        let fake = write_runtime_fixture(&dir.path().join("dev-cef"));
+        let platform = current_platform_name().unwrap_or("linux64");
+        let archive_name = format!(
+            "cef_binary_131.3.5+g6a8d2b7+chromium-131.0.6778.204_{platform}_minimal.tar.bz2"
+        );
+        fs::write(
+            fake.join("archive.json"),
+            serde_json::json!({ "type": "minimal", "name": archive_name, "sha1": "x" }).to_string(),
+        )
+        .unwrap();
+
+        let original = std::env::var("CEF_PATH").ok();
+        unsafe {
+            std::env::set_var("CEF_PATH", &fake);
+        }
+
+        let resolved = resolve_cef_for_bundle("131.3.5").unwrap();
+        assert_eq!(resolved.source, CefSource::EnvironmentOverride);
+        let prov = resolved.provenance.expect("provenance present");
+        assert_eq!(prov.chromium_version.as_deref(), Some("131.0.6778.204"));
+
+        match original {
+            Some(v) => unsafe {
+                std::env::set_var("CEF_PATH", v);
+            },
+            None => unsafe {
+                std::env::remove_var("CEF_PATH");
+            },
+        }
+    }
+}
