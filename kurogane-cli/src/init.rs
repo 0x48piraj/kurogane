@@ -12,7 +12,6 @@ pub fn run(name: Option<String>, template: Option<String>) -> Result<()> {
     let name = match name {
         Some(n) => n,
         None => {
-            // Ask project name
             print!("Project name: ");
             io::stdout().flush()?;
 
@@ -47,12 +46,12 @@ pub fn run(name: Option<String>, template: Option<String>) -> Result<()> {
     fs::create_dir_all(root)?;
     extract_template(&template, root)?;
 
-    // .cargo/config.toml
     fs::create_dir_all(root.join(".cargo"))?;
 
+    // Keep the bundled CEF runtime discoverable without environment shims
     fs::write(
         root.join(".cargo/config.toml"),
-        r#"[target.x86_64-unknown-linux-gnu]
+        r#"[target.'cfg(all(unix, not(target_os = "macos")))']
 rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN/cef"]
 "#,
     )?;
