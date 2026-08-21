@@ -18,12 +18,10 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    let cef_version = env!("KUROGANE_CEF_VERSION").to_string();
-
     tui::step("Resolving version...");
     tui::field("chromium", &cef_version);
 
-    let parent = install_dir.parent().unwrap(); // ~/.local/share
+    let parent = install_dir.parent().unwrap();
     std::fs::create_dir_all(parent)?;
 
     let index = CefIndex::download()?;
@@ -46,7 +44,11 @@ pub fn run() -> Result<()> {
 
     std::fs::rename(&extracted, &install_dir)?;
 
-    let _ = std::fs::remove_file(&archive);
+    if let Err(err) = std::fs::remove_file(&archive) {
+        if err.kind() != std::io::ErrorKind::NotFound {
+            tui::warning(&format!("failed to remove downloaded archive: {err}"));
+        }
+    }
 
     println!();
 

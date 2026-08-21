@@ -520,7 +520,11 @@ impl BrowserHandle {
             reg.get(self.id).map(|s| s.browser.clone())
         };
         if let Some(b) = browser {
-            debug!("close browser cef_id={} is_loading={}", b.identifier(), b.is_loading());
+            debug!(
+                "close browser cef_id={} is_loading={}",
+                b.identifier(),
+                b.is_loading()
+            );
             if let Some(h) = b.host() {
                 h.close_browser(force as i32);
             }
@@ -533,7 +537,9 @@ impl BrowserHandle {
             let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
-        if let Some(b) = browser && let Some(h) = b.host() {
+        if let Some(b) = browser
+            && let Some(h) = b.host()
+        {
             h.was_resized();
         }
     }
@@ -544,7 +550,9 @@ impl BrowserHandle {
             let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
-        if let Some(b) = browser && let Some(h) = b.host() {
+        if let Some(b) = browser
+            && let Some(h) = b.host()
+        {
             h.notify_move_or_resize_started();
         }
     }
@@ -558,7 +566,9 @@ impl BrowserHandle {
             reg.get(self.id).map(|s| s.browser.clone())
         };
 
-        if let Some(b) = browser && let Some(frame) = b.main_frame() {
+        if let Some(b) = browser
+            && let Some(frame) = b.main_frame()
+        {
             let url = CefString::from(url);
             frame.load_url(Some(&url));
         }
@@ -667,15 +677,13 @@ impl BrowserHandle {
             reg.get(self.id).map(|s| s.browser.clone())
         };
 
-        if let Some(b) = browser && let Some(frame) = b.main_frame() {
+        if let Some(b) = browser
+            && let Some(frame) = b.main_frame()
+        {
             let code = CefString::from(code);
             let script_url = CefString::from(script_url);
 
-            frame.execute_java_script(
-                Some(&code),
-                Some(&script_url),
-                start_line,
-            );
+            frame.execute_java_script(Some(&code), Some(&script_url), start_line);
         }
     }
 
@@ -686,7 +694,9 @@ impl BrowserHandle {
             let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
-        if let Some(b) = browser && let Some(h) = b.host() {
+        if let Some(b) = browser
+            && let Some(h) = b.host()
+        {
             h.show_dev_tools(None, None, None, None);
         }
     }
@@ -698,7 +708,9 @@ impl BrowserHandle {
             let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
-        if let Some(b) = browser && let Some(h) = b.host() {
+        if let Some(b) = browser
+            && let Some(h) = b.host()
+        {
             h.close_dev_tools();
         }
     }
@@ -759,10 +771,8 @@ impl AppInstance {
     pub fn create_window(&self, options: WindowOptions) -> Result<WindowId, RuntimeError> {
         let is_closing = Arc::new(AtomicBool::new(false));
 
-        let mut client = KuroganeClient::new(
-            self.handle.inner.services.clone(),
-            is_closing.clone(),
-        );
+        let mut client =
+            KuroganeClient::new(self.handle.inner.services.clone(), is_closing.clone());
 
         let mut bv_delegate = KuroganeBrowserViewDelegate::new(
             self.handle.inner.services.browser_registry.clone(),
@@ -778,7 +788,8 @@ impl AppInstance {
             None,
             None,
             Some(&mut bv_delegate),
-        ).ok_or(RuntimeError::BrowserCreationFailed)?;
+        )
+        .ok_or(RuntimeError::BrowserCreationFailed)?;
 
         let window_id = {
             let mut reg = self.handle.inner.services.window_registry.lock().unwrap();
@@ -799,8 +810,7 @@ impl AppInstance {
             is_closing,
         );
 
-        window_create_top_level(Some(&mut delegate))
-            .ok_or(RuntimeError::WindowCreationFailed)?;
+        window_create_top_level(Some(&mut delegate)).ok_or(RuntimeError::WindowCreationFailed)?;
 
         Ok(window_id)
     }
