@@ -206,3 +206,288 @@ cd "$ROOT"
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AppMetadata, ResolvedDistribution};
+    use std::fs;
+
+    fn tmp() -> tempfile::TempDir {
+        tempfile::tempdir().expect("failed to create temp dir")
+    }
+
+    fn create_cef_fixture(dir: &Path) -> PathBuf {
+        crate::cef::write_runtime_fixture(&dir.join("cef"))
+    }
+
+    /// Platform-correct executable file name.
+    fn test_exe_name() -> &'static OsStr {
+        if cfg!(target_os = "windows") {
+            OsStr::new("myapp.exe")
+        } else {
+            OsStr::new("myapp")
+        }
+    }
+
+    fn valid_distribution(dir: &Path) -> ResolvedDistribution {
+        #[cfg(target_os = "windows")]
+        let exe_name = "myapp.exe";
+        #[cfg(not(target_os = "windows"))]
+        let exe_name = "myapp";
+
+        let exe = dir.join(exe_name);
+        fs::write(&exe, "binary").unwrap();
+
+        let frontend = dir.join("content");
+        fs::create_dir_all(&frontend).unwrap();
+        fs::write(frontend.join("index.html"), "<html></html>").unwrap();
+
+        let cef = create_cef_fixture(dir);
+
+        ResolvedDistribution {
+            metadata: AppMetadata {
+                name: "myapp".to_string(),
+                version: "1.0.0".to_string(),
+                exe_name: exe_name.to_string(),
+            },
+            executable: exe,
+            frontend: Some(frontend),
+            cef_runtime: cef,
+            extra_resources: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn materialize_copies_executable() {
+        let dir = tmp();
+        let dist = valid_distribution(dir.path());
+        let out = dir.path().join("out");
+        let layout = BundleLayout::new(&out);
+
+        layout.materialize(&dist).unwrap();
+
+        let exe = layout.executable_path(test_exe_name());
+        assert!(exe.exists(), "executable should exist after materialize");
+    }
+
+    #[test]
+    fn materialize_copies_cef() {
+        let dir = tmp();
+        let dist = valid_distribution(dir.path());
+        let out = dir.path().join("out");
+        let layout = BundleLayout::new(&out);
+
+        layout.materialize(&dist).unwrap();
+
+        let cef_dir = layout.cef_dir();
+        assert!(cef_dir.exists(), "CEF directory should exist");
+
+        #[cfg(target_os = "linux")]
+        assert!(
+            cef_dir.join("libcef.so").exists(),
+            "libcef.so should be present"
+        );
+        #[cfg(target_os = "windows")]
+        assert!(
+            cef_dir.join("libcef.dll").exists(),
+            "libcef.dll should be present"
+        );
+    }
+
+    #[test]
+    fn materialize_copies_frontend() {
+        let dir = tmp();
+        let dist = valid_distribution(dir.path());
+        let out = dir.path().join("out");
+        let layout = BundleLayout::new(&out);
+
+        layout.materialize(&dist).unwrap();
+
+        let index = layout.content_dir().join("index.html");
+        assert!(index.exists(), "index.html should be present");
+    }
+
+    #[test]
+    fn materialize_copies_extra_resources() {
+        let dir = tmp();
+        let mut dist = valid_distribution(dir.path());
+
+        let res_file = dir.path().join("data.txt");
+        fs::write(&res_file, "resource content").unwrap();
+        dist.extra_resources.push(res_file);
+
+        let res_dir = dir.path().join("assets");
+        fs::create_dir_all(res_dir.join("sub")).unwrap();
+        fs::write(res_dir.join("sub").join("file.txt"), "nested").unwrap();
+        dist.extra_resources.push(res_dir);
+
+        let out = dir.path().join("out");
+        let layout = BundleLayout::new(&out);
+        layout.materialize(&dist).unwrap();
+
+        assert!(
+            layout.root().join("data.txt").exists(),
+            "extra file should be in bundle root"
+        );
+        assert!(
+            layout.root().join("assets").exists(),
+            "extra directory should be in bundle root"
+        );
+        assert!(
+            layout
+                .root()
+                .join("assets")
+                .join("sub")
+                .join("file.txt")
+                .exists(),
+            "nested file should be preserved"
+        );
+    }
+
+    #[test]
+    fn materialize_no_frontend_does_not_fabricate_content_dir() {
+        let dir = tmp();
+        let mut dist = valid_distribution(dir.path());
+        dist.frontend = None;
+
+        let out = dir.path().join("out");
+        let layout = BundleLayout::new(&out);
+        layout.materialize(&dist).unwrap();
+
+        assert!(
+            !layout.content_dir().exists(),
+            "content directory should not be created when frontend is None"
+        );
+    }
+
+    #[test]
+    fn materialize_over_existing_output() {
+        let dir = tmp();
+        let dist = valid_distribution(dir.path());
+        let out = dir.path().join("out");
+
+        // First materialization
+        let layout = BundleLayout::new(&out);
+        layout.materialize(&dist).unwrap();
+        let exe = layout.executable_path(test_exe_name());
+        assert!(exe.exists());
+
+        // Second materialization over existing output
+        layout.materialize(&dist).unwrap();
+        assert!(exe.exists(), "executable should exist after re-materialize");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn materialize_creates_launcher_script() {
+        let dir = tmp();
+        let dist = valid_distribution(dir.path());
+        let out = dir.path().join("out");
+        let layout = BundleLayout::new(&out);
+
+        layout.materialize(&dist).unwrap();
+
+        let launcher = layout.launcher_path(test_exe_name());
+        assert!(launcher.exists(), "launcher script should exist on Linux");
+
+        let content = fs::read_to_string(&launcher).unwrap();
+        assert!(
+            content.starts_with("#!/usr/bin/env sh"),
+            "launcher should be a shell script"
+        );
+        assert!(
+            content.contains("runtime/myapp"),
+            "launcher should reference runtime/myapp"
+        );
+        assert!(
+            content.contains("cd \"$ROOT\""),
+            "launcher should anchor execution at the bundle root"
+        );
+        assert!(
+            !content.contains("runtime/cef"),
+            "launcher must not set LD_LIBRARY_PATH for CEF"
+        );
+    }
+
+    #[test]
+    fn verify_passes_with_valid_bundle() {
+        let dir = tmp();
+        let dist = valid_distribution(dir.path());
+        let out = dir.path().join("out");
+        let layout = BundleLayout::new(&out);
+
+        layout.materialize(&dist).unwrap();
+        assert!(layout.verify(test_exe_name()).is_ok());
+    }
+
+    #[test]
+    fn verify_requires_content_index_when_content_dir_exists() {
+        let dir = tmp();
+        let mut dist = valid_distribution(dir.path());
+        dist.frontend = None;
+
+        let out = dir.path().join("out");
+        let layout = BundleLayout::new(&out);
+        layout.materialize(&dist).unwrap();
+
+        assert!(
+            layout.verify(test_exe_name()).is_ok(),
+            "verify should pass when content/ does not exist"
+        );
+
+        fs::create_dir(layout.content_dir()).unwrap();
+        let result = layout.verify(test_exe_name());
+        assert!(
+            result.is_err(),
+            "verify should fail when content/ exists without index.html"
+        );
+    }
+
+    #[test]
+    fn verify_fails_without_executable() {
+        let dir = tmp();
+        let out = dir.path().join("out");
+        let layout = BundleLayout::new(&out);
+        fs::create_dir_all(layout.content_dir()).unwrap();
+        fs::write(layout.content_dir().join("index.html"), "").unwrap();
+
+        crate::cef::write_runtime_fixture(&layout.cef_dir());
+
+        let result = layout.verify(test_exe_name());
+        assert!(
+            result.is_err(),
+            "verify should fail when executable is missing"
+        );
+    }
+
+    #[test]
+    fn verify_fails_with_incomplete_cef_runtime() {
+        let dir = tmp();
+        let dist = valid_distribution(dir.path());
+        let out = dir.path().join("out");
+        let layout = BundleLayout::new(&out);
+        layout.materialize(&dist).unwrap();
+
+        // Mess shit up
+        fs::remove_file(layout.cef_dir().join("icudtl.dat")).unwrap();
+
+        assert!(
+            layout.verify(test_exe_name()).is_err(),
+            "verify should fail when the CEF runtime is incomplete"
+        );
+    }
+
+    #[test]
+    fn exe_name_matches_executable_filename() {
+        let dir = tmp();
+        let dist = valid_distribution(dir.path());
+
+        let actual_filename = dist.executable.file_name().unwrap().to_str().unwrap();
+
+        assert_eq!(
+            dist.metadata.exe_name, actual_filename,
+            "exe_name should match the actual executable filename"
+        );
+    }
+}
