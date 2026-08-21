@@ -1,3 +1,17 @@
+//! Application bundle layout and materialization.
+//!
+//! The bundle keeps the executable and CEF runtime together so the packaged
+//! application can locate its runtime without environment-specific shims.
+//!
+//! On Windows, CEF is placed beside the executable so the Windows loader can
+//! resolve its DLL dependencies normally. On Linux, CEF is placed under
+//! `runtime/cef`, matching the executable's `$ORIGIN/cef` RPATH and runtime
+//! discovery path.
+//!
+//! Linux bundles retain `chrome-sandbox` as part of the CEF runtime even though
+//! Kurogane currently disables CEF's sandbox. This keeps the bundle compatible
+//! with a future sandbox policy change without requiring a packaging change.
+
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,7 +21,7 @@ use anyhow::Result;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt;
 
-use crate::ResolvedDistribution;
+use crate::{ResolvedDistribution, layout::copy_dir};
 
 pub struct BundleLayout {
     root: PathBuf,
@@ -83,64 +97,41 @@ impl BundleLayout {
             anyhow::bail!("frontend directory missing");
         }
 
-        copy_dir(src, &self.content_dir())
-    }
-
-    /// Installs the Chromium Embedded Framework runtime
-    /// into the bundle.
-    ///
-    /// Platform layout differs intentionally:
-    ///
-    /// - Windows places CEF beside the executable because
-    ///   the Windows loader searches the executable directory
-    ///   for DLL dependencies automatically.
-    ///
-    /// - Linux places CEF inside runtime/cef/ and relies on
-    ///   RPATH ($ORIGIN/cef) plus a lightweight launcher script.
-    ///   This keeps the runtime self-contained while avoiding
-    ///   global configuration (no PATH hacks or env vars).
-    ///
-    /// Linux may require chrome-sandbox to have setuid permissions
-    /// for proper Chromium sandboxing support.
-    pub fn install_cef(&self, src: &Path) -> Result<()> {
-        copy_dir(src, &self.cef_dir())?;
-
-        #[cfg(target_os = "linux")]
-        {
-            // Sandbox permissions (required by CEF)
-            let sandbox = self.cef_dir().join("chrome-sandbox");
-            let _ = std::process::Command::new("chmod")
-                .arg("4755")
-                .arg(&sandbox)
-                .status();
-        }
-
+        copy_dir(src, &self.content_dir())?;
         Ok(())
     }
 
+    /// Installs a materialized CEF runtime into the bundle.
+    pub fn install_cef(&self, src: &Path) -> Result<()> {
+        copy_dir(src, &self.cef_dir())?;
+        Ok(())
+    }
+
+    /// Writes the Linux launcher script for the bundle.
     #[cfg(target_os = "linux")]
     pub fn write_launcher(&self, exe_name: &OsStr) -> Result<()> {
         let launcher = self.launcher_path(exe_name);
 
         let runtime_target = format!("runtime/{}", exe_name.to_string_lossy());
 
-        // Optional extra runtime libraries (for NixOS runtime closures)
+        // Optional library path override for non-standard runtime environments
         let extra_ld = std::env::var("KUROGANE_LD_LIBRARY_PATH").unwrap_or_default();
+
+        let extra_ld_block = if extra_ld.is_empty() {
+            String::new()
+        } else {
+            format!("export LD_LIBRARY_PATH=\"{extra_ld}:${{LD_LIBRARY_PATH:-}}\"\n")
+        };
 
         let script = format!(
             r#"#!/usr/bin/env sh
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+cd "$ROOT"
 
-if [ -n "{extra_ld}" ]; then
-    export LD_LIBRARY_PATH="{extra_ld}:$ROOT/runtime/cef${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"
-else
-    export LD_LIBRARY_PATH="$ROOT/runtime/cef${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"
-fi
-
-exec "$ROOT/{runtime_target}" "$@"
-"#,
+{extra_ld_block}exec "$ROOT/{runtime_target}" "$@"
+"#
         );
 
         fs::write(&launcher, script)?;
@@ -156,7 +147,7 @@ exec "$ROOT/{runtime_target}" "$@"
 
     /// Materializes a resolved distribution into this bundle layout.
     ///
-    /// Copies the executable, CEF root, frontend and any extra resources
+    /// Copies the executable, CEF runtime, frontend and any extra resources
     /// into the platform-specific directory structure.
     pub fn materialize(&self, dist: &ResolvedDistribution) -> Result<()> {
         self.prepare()?;
@@ -171,7 +162,7 @@ exec "$ROOT/{runtime_target}" "$@"
         #[cfg(target_os = "linux")]
         self.write_launcher(exe_name)?;
 
-        self.install_cef(&dist.cef_root)?;
+        self.install_cef(&dist.cef_runtime)?;
 
         if let Some(frontend) = &dist.frontend {
             self.install_frontend(frontend)?;
@@ -193,7 +184,7 @@ exec "$ROOT/{runtime_target}" "$@"
         Ok(())
     }
 
-    /// Verifies the bundle is complete by checking required files exist.
+    /// Verifies that the bundle contains a valid executable, content and CEF runtime.
     pub fn verify(&self, exe_name: &OsStr) -> Result<()> {
         let exe = self.executable_path(exe_name);
 
@@ -201,46 +192,17 @@ exec "$ROOT/{runtime_target}" "$@"
             anyhow::bail!("bundle executable missing");
         }
 
-        let index = self.content_dir().join("index.html");
+        if self.content_dir().exists() {
+            let index = self.content_dir().join("index.html");
 
-        if !index.exists() {
-            anyhow::bail!("content/index.html missing");
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            if !self.cef_dir().join("libcef.dll").exists() {
-                anyhow::bail!("libcef.dll missing");
+            if !index.exists() {
+                anyhow::bail!("content/index.html missing");
             }
         }
 
-        #[cfg(target_os = "linux")]
-        {
-            if !self.cef_dir().join("libcef.so").exists() {
-                anyhow::bail!("libcef.so missing");
-            }
-        }
+        crate::cef::validate_cef_runtime(&self.cef_dir())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         Ok(())
     }
-}
-
-fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
-    fs::create_dir_all(dst)?;
-
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-
-        let path = entry.path();
-
-        let dest = dst.join(entry.file_name());
-
-        if path.is_dir() {
-            copy_dir(&path, &dest)?;
-        } else {
-            fs::copy(&path, &dest)?;
-        }
-    }
-
-    Ok(())
 }
