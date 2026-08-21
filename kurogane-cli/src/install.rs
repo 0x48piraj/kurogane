@@ -46,7 +46,7 @@ pub fn run() -> Result<()> {
 
     if let Err(err) = std::fs::remove_file(&archive) {
         if err.kind() != std::io::ErrorKind::NotFound {
-            tui::warning(&format!("failed to remove downloaded archive: {err}"));
+            tui::warn(&format!("failed to remove downloaded archive: {err}"));
         }
     }
 
