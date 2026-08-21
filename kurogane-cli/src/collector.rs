@@ -1,10 +1,6 @@
 use serde::Serialize;
 use std::{collections::BTreeMap, process::Command};
 
-//
-// Public API
-//
-
 pub fn collect_all() -> DoctorReport {
     DoctorReport {
         system: system::collect(),
@@ -13,10 +9,6 @@ pub fn collect_all() -> DoctorReport {
         gpu: gpu::collect(),
     }
 }
-
-//
-// Data model
-//
 
 #[derive(Serialize)]
 pub struct DoctorReport {
@@ -59,10 +51,6 @@ pub struct GpuInfo {
     pub adapter_name: Option<String>,
     pub source: String,
 }
-
-//
-// System
-//
 
 mod system {
     use super::*;
@@ -196,19 +184,14 @@ mod env {
     }
 }
 
-//
-// CEF
-//
-
 mod cef {
     use super::*;
+    use kurogane_layout::install_root;
 
     pub fn collect() -> CefInfo {
         let version = env!("KUROGANE_CEF_VERSION").to_string();
 
-        let path = dirs::home_dir()
-            .map(|h| h.join(".local/share/cef").join(&version))
-            .unwrap_or_default();
+        let path = install_root().join(&version);
 
         CefInfo {
             version,
@@ -218,17 +201,13 @@ mod cef {
     }
 }
 
-//
-// GPU
-//
-
 mod gpu {
     use super::*;
 
     pub fn collect() -> GpuInfo {
         #[cfg(target_os = "linux")]
         {
-            return collect_linux();
+            collect_linux()
         }
 
         #[cfg(target_os = "windows")]

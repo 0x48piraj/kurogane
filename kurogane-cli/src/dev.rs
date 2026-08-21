@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::ffi::OsString;
 use std::process::Command;
-use kurogane_layout::{cef_install_dir, validate_cef_root};
+use kurogane_layout::{cef_install_dir, validate_cef_runtime};
 
 use crate::tui;
 
@@ -16,7 +16,7 @@ pub fn run(cargo_args: Vec<OsString>) -> Result<()> {
 
     tui::step("Checking Chromium engine");
 
-    match validate_cef_root(&cef) {
+    match validate_cef_runtime(&cef) {
         Ok(_) => {
             tui::success("Chromium engine ready");
             tui::field("path", tui::format_path(&cef));
