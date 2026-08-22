@@ -1,16 +1,47 @@
 use anyhow::{Result, bail};
-use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use cargo_metadata::{MetadataCommand, TargetKind};
-use kurogane_layout::{BundleLayout, validate_cef_root};
+use kurogane_layout::{
+    AppMetadata, ResolvedDistribution, materialize_cef_runtime, package_directory,
+    resolve_cef_for_bundle,
+};
 
+#[allow(unused_imports)]
+use crate::signing::SignConfig;
 use crate::tui;
 
-pub fn run(debug: bool) -> Result<()> {
+/// Output format for the application bundle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageFormat {
+    /// Plain directory bundle (default).
+    Directory,
+    /// Linux AppImage.
+    #[cfg(target_os = "linux")]
+    AppImage,
+    /// Windows NSIS installer.
+    #[cfg(target_os = "windows")]
+    Nsis,
+}
+
+impl PackageFormat {
+    pub fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "dir" | "directory" => Ok(PackageFormat::Directory),
+            #[cfg(target_os = "linux")]
+            "appimage" => Ok(PackageFormat::AppImage),
+            #[cfg(target_os = "windows")]
+            "nsis" => Ok(PackageFormat::Nsis),
+            _ => bail!("unsupported format: {s}"),
+        }
+    }
+}
+
+/// Build the application in the requested profile.
+#[allow(unused_variables)]
+pub fn run(debug: bool, format: PackageFormat, sign_config: Option<SignConfig>) -> Result<()> {
     tui::section("Kurogane Bundle");
 
-    // Ensure release build
     tui::step("Building release...");
 
     let mut cmd = Command::new("cargo");
@@ -29,74 +60,9 @@ pub fn run(debug: bool) -> Result<()> {
         bail!("Release build failed");
     }
 
-    // Find executable
-    tui::step("Locating executable...");
-    let exe = find_exe(debug)?;
-    tui::field("binary", tui::format_path(&exe));
+    // Resolve distribution contents
+    tui::step("Resolving distribution...");
 
-    // Prepare destination
-    let dist = PathBuf::from("dist");
-
-    let layout = BundleLayout::new(&dist);
-
-    tui::step("Preparing bundle...");
-    layout.prepare()?;
-
-    tui::step("Copying executable...");
-
-    let exe_name = exe.file_name().unwrap();
-
-    let runtime_bin = layout.executable_path(exe_name);
-
-    // Copy executable
-    fs::copy(&exe, &runtime_bin)?;
-
-    #[cfg(target_os = "linux")]
-    layout.write_launcher(exe_name)?;
-
-    tui::field("runtime", tui::format_path(&runtime_bin));
-
-    let content = PathBuf::from("content");
-
-    if content.exists() {
-        tui::step("Copying frontend...");
-
-        // Copy frontend
-        layout.install_frontend(&content)?;
-    } else {
-        tui::warn("No content/ directory found");
-    }
-
-    tui::step("Copying Chromium engine...");
-
-    let detected = kurogane_layout::detect_cef_root().map_err(|e| anyhow::anyhow!(e))?;
-
-    validate_cef_root(&detected.root)?;
-
-    // Copy CEF
-    layout.install_cef(&detected.root)?;
-
-    tui::step("Verifying bundle");
-
-    layout.verify(exe_name)?;
-
-    tui::success("Bundle verified");
-
-    tui::field("binary", tui::format_path(&layout.launcher_path(exe_name)));
-
-    tui::field(
-        "entry",
-        tui::format_path(&layout.content_dir().join("index.html")),
-    );
-
-    println!();
-    tui::success("Bundle ready");
-    tui::field("path", "./dist");
-
-    Ok(())
-}
-
-fn find_exe(debug: bool) -> Result<PathBuf> {
     let metadata = MetadataCommand::new().exec()?;
 
     let pkg = metadata
@@ -113,17 +79,105 @@ fn find_exe(debug: bool) -> Result<PathBuf> {
         .find(|t| t.kind.contains(&TargetKind::Bin))
         .ok_or_else(|| anyhow::anyhow!("No binary target found"))?;
 
-    let exe_name = &target.name;
-
-    let exe_path = if cfg!(target_os = "windows") {
-        target_dir.join(format!("{exe_name}.exe"))
+    let exe_name = if cfg!(target_os = "windows") {
+        format!("{}.exe", target.name)
     } else {
-        target_dir.join(exe_name)
+        target.name.clone()
     };
 
-    if exe_path.exists() {
-        Ok(exe_path.into_std_path_buf())
-    } else {
-        bail!("Executable not found: {:?}", exe_path)
+    let exe_path = target_dir.join(&exe_name);
+
+    if !exe_path.exists() {
+        bail!("Executable not found: {:?}", exe_path);
     }
+
+    tui::step("Resolving CEF runtime...");
+
+    let cef = resolve_cef_for_bundle(env!("KUROGANE_CEF_VERSION"))
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    match cef.source {
+        kurogane_layout::CefSource::ManagedCache => {
+            if let Some(p) = &cef.provenance {
+                tui::field("cef", format!("{} (managed)", p.cef_version));
+            }
+        }
+        kurogane_layout::CefSource::EnvironmentOverride => {
+            if let Some(p) = &cef.provenance {
+                tui::field("cef", format!("{} (CEF_PATH)", p.cef_version));
+            }
+        }
+    }
+
+    // Materialize the runnable runtime
+    let runtime_version = cef
+        .provenance
+        .as_ref()
+        .map(|p| p.cef_version.clone())
+        .unwrap_or_else(|| env!("KUROGANE_CEF_VERSION").to_string());
+
+    let runtime_dir = metadata
+        .target_directory
+        .join("kurogane")
+        .join("cef-runtime")
+        .join(&runtime_version);
+
+    let cef_runtime =
+        materialize_cef_runtime(&cef.root, runtime_dir.as_std_path()).map_err(|e| anyhow::anyhow!(e))?;
+
+    let frontend = {
+        let path = PathBuf::from("content");
+        if path.exists() {
+            Some(path)
+        } else {
+            tui::warn("No content/ directory found");
+            None
+        }
+    };
+
+    let dist = ResolvedDistribution {
+        metadata: AppMetadata {
+            name: pkg.name.to_string(),
+            version: pkg.version.to_string(),
+            exe_name,
+        },
+        executable: exe_path.into(),
+        frontend,
+        cef_runtime,
+        extra_resources: Vec::new(),
+    };
+
+    dist.validate()
+        .map_err(|e| anyhow::anyhow!("distribution validation failed: {e}"))?;
+
+    tui::field("binary", tui::format_path(&dist.executable));
+    tui::field("format", format!("{format:?}"));
+
+    // Package the distribution
+    tui::step("Packaging...");
+
+    let output_dir = PathBuf::from("dist");
+
+    match format {
+        PackageFormat::Directory => {
+            let output = package_directory(&dist, &output_dir)?;
+            tui::field("output", tui::format_path(&output));
+        }
+
+        #[cfg(target_os = "linux")]
+        PackageFormat::AppImage => {
+            crate::appimage::build(&dist, &output_dir)?;
+        }
+
+        #[cfg(target_os = "windows")]
+        PackageFormat::Nsis => {
+            crate::nsis::build(&dist, &output_dir)?;
+        }
+    }
+
+    println!();
+    tui::success("Bundle ready");
+    tui::field("path", "./dist");
+
+    Ok(())
 }
