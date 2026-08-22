@@ -63,3 +63,84 @@ pub fn detect_cef_root_with_version(version: Option<&str>) -> Result<DetectedCef
 
     Err(DetectError::NotFound)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+    use std::sync::Mutex;
+
+    fn tmp() -> tempfile::TempDir {
+        tempfile::tempdir().expect("failed to create temp dir")
+    }
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_cef_path<T>(path: Option<&Path>, f: impl FnOnce() -> T) -> T {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let original = std::env::var_os("CEF_PATH");
+
+        // SAFETY: CEF_PATH access is serialized by ENV_LOCK
+        unsafe {
+            match path {
+                Some(path) => std::env::set_var("CEF_PATH", path),
+                None => std::env::remove_var("CEF_PATH"),
+            }
+        }
+
+        let result = f();
+
+        // SAFETY: CEF_PATH access is serialized by ENV_LOCK
+        unsafe {
+            match original {
+                Some(value) => std::env::set_var("CEF_PATH", value),
+                None => std::env::remove_var("CEF_PATH"),
+            }
+        }
+
+        result
+    }
+
+    #[test]
+    fn env_override_takes_precedence() {
+        let dir = tmp();
+        let cef = dir.path().join("cef");
+        fs::create_dir(&cef).unwrap();
+
+        let detected = with_cef_path(Some(&cef), || {
+            detect_cef_root_with_version(None).unwrap()
+        });
+
+        assert_eq!(detected.mode, DiscoveryMode::EnvironmentOverride);
+        assert_eq!(detected.root, cef);
+    }
+
+    #[test]
+    fn env_override_with_invalid_path_is_skipped() {
+        let dir = tmp();
+        let nonexistent = dir.path().join("nonexistent");
+
+        let result = with_cef_path(Some(&nonexistent), || {
+            detect_cef_root_with_version(None)
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn version_none_skips_installed_check() {
+        let result = with_cef_path(None, || detect_cef_root_with_version(None));
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn nonexistent_version_returns_not_found() {
+        let result = with_cef_path(None, || {
+            detect_cef_root_with_version(Some("0.0.0-nonexistent-version"))
+        });
+
+        assert!(matches!(result, Err(DetectError::NotFound)));
+    }
+}
