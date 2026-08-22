@@ -1,5 +1,8 @@
 use anyhow::Result;
-use kurogane_layout::{detect_cef_root, install_root, installed_cef_root, validate_cef_root};
+use kurogane_layout::{
+    detect_cef_root_with_version, install_root, installed_cef_root, read_provenance,
+    validate_cef_runtime,
+};
 
 use crate::collector;
 use crate::tui;
@@ -70,11 +73,15 @@ pub fn run(json: bool) -> Result<()> {
 
     // Managed installed runtime
     match installed_cef_root(version) {
-        Some(root) => match validate_cef_root(&root) {
+        Some(root) => match validate_cef_runtime(&root) {
             Ok(_) => {
                 tui::success("Managed Chromium runtime");
                 tui::field("version", version);
                 tui::field("path", tui::format_path(&root));
+
+                if let Ok(Some(p)) = read_provenance(&root) {
+                    tui::field("artifact", p.artifact);
+                }
             }
 
             Err(e) => {
@@ -122,14 +129,20 @@ pub fn run(json: bool) -> Result<()> {
 
     tui::section("Runtime Resolution");
 
-    match detect_cef_root() {
-        Ok(detected) => match validate_cef_root(&detected.root) {
+    match detect_cef_root_with_version(Some(version)) {
+        Ok(detected) => match validate_cef_runtime(&detected.root) {
             Ok(_) => {
                 tui::success("Active runtime resolved");
 
                 tui::field("path", tui::format_path(&detected.root));
 
                 tui::field("mode", format!("{:?}", detected.mode));
+
+                if let Some(p) = &detected.provenance {
+                    tui::field("provenance", p.artifact.clone());
+                } else {
+                    tui::warn("Provenance unknown (no archive.json)");
+                }
             }
 
             Err(e) => {
