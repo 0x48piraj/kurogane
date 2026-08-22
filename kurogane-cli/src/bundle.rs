@@ -181,3 +181,32 @@ pub fn run(debug: bool, format: PackageFormat, sign_config: Option<SignConfig>) 
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_directory_aliases() {
+        assert!(matches!(
+            PackageFormat::from_str("dir"),
+            Ok(PackageFormat::Directory)
+        ));
+        assert!(matches!(
+            PackageFormat::from_str("directory"),
+            Ok(PackageFormat::Directory)
+        ));
+    }
+
+    #[test]
+    fn rejects_unsupported_format() {
+        let err = PackageFormat::from_str("msi").unwrap_err();
+
+        assert!(err.to_string().contains("unsupported format"));
+    }
+
+    #[test]
+    fn rejects_empty_format() {
+        assert!(PackageFormat::from_str("").is_err());
+    }
+}
