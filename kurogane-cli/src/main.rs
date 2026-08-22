@@ -12,6 +12,15 @@ mod doctor;
 mod list;
 mod info;
 
+#[cfg(target_os = "linux")]
+mod appimage;
+
+#[cfg(target_os = "windows")]
+mod nsis;
+
+#[allow(dead_code)]
+mod signing;
+
 mod collector;
 mod templates;
 mod tui;
@@ -43,6 +52,14 @@ enum Commands {
     Bundle {
         #[arg(long)]
         debug: bool,
+        #[arg(long, default_value = "dir")]
+        format: String,
+        #[arg(long)]
+        sign_certificate: Option<String>,
+        #[arg(long)]
+        sign_timestamp: Option<String>,
+        #[arg(long)]
+        sign_command: Option<String>,
     },
     Init {
         name: Option<String>,
@@ -75,7 +92,30 @@ fn main() -> anyhow::Result<()> {
         Commands::Install => install::run(),
         Commands::Dev { cargo_args } => dev::run(cargo_args),
         Commands::Build => build::run(),
-        Commands::Bundle { debug } => bundle::run(debug),
+        Commands::Bundle {
+            debug,
+            format,
+            sign_certificate,
+            sign_timestamp,
+            sign_command,
+        } => {
+            let format = bundle::PackageFormat::from_str(&format)?;
+            let sign_config = signing::SignConfig {
+                certificate: sign_certificate,
+                timestamp_url: sign_timestamp,
+                custom_command: sign_command,
+                ..Default::default()
+            };
+            bundle::run(
+                debug,
+                format,
+                if sign_config.is_configured() {
+                    Some(sign_config)
+                } else {
+                    None
+                },
+            )
+        }
         Commands::Init { name, template } => init::run(name, template),
         Commands::Clean { target } => clean::run(target),
         Commands::Showcase => showcase::run(),
