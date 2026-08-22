@@ -108,3 +108,262 @@ impl ResolvedDistribution {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+
+    fn tmp() -> tempfile::TempDir {
+        tempfile::tempdir().expect("failed to create temp dir")
+    }
+
+    fn valid_distribution(dir: &Path) -> ResolvedDistribution {
+        #[cfg(target_os = "windows")]
+        let exe_name = "myapp.exe";
+        #[cfg(not(target_os = "windows"))]
+        let exe_name = "myapp";
+
+        let exe = dir.join(exe_name);
+        fs::write(&exe, "binary").unwrap();
+
+        let frontend = dir.join("content");
+        fs::create_dir_all(&frontend).unwrap();
+        fs::write(frontend.join("index.html"), "<html></html>").unwrap();
+
+        let cef = crate::cef::write_runtime_fixture(&dir.join("cef"));
+
+        let resource = dir.join("extra.txt");
+        fs::write(&resource, "data").unwrap();
+
+        ResolvedDistribution {
+            metadata: AppMetadata {
+                name: "myapp".to_string(),
+                version: "1.0.0".to_string(),
+                exe_name: exe_name.to_string(),
+            },
+            executable: exe,
+            frontend: Some(frontend),
+            cef_runtime: cef,
+            extra_resources: vec![resource],
+        }
+    }
+
+    #[test]
+    fn valid_distribution_passes_validation() {
+        let dir = tmp();
+        let dist = valid_distribution(dir.path());
+        assert!(dist.validate().is_ok());
+    }
+
+    #[test]
+    fn missing_executable_is_rejected() {
+        let dir = tmp();
+        let dist = valid_distribution(dir.path());
+        fs::remove_file(&dist.executable).unwrap();
+
+        let err = dist.validate().unwrap_err();
+        assert!(
+            matches!(err, DistributionError::MissingExecutable(ref p) if p == &dist.executable),
+            "expected MissingExecutable, got: {err}"
+        );
+    }
+
+    #[test]
+    fn executable_is_directory_rejected() {
+        let dir = tmp();
+        let dist = valid_distribution(dir.path());
+        fs::remove_file(&dist.executable).unwrap();
+        fs::create_dir(&dist.executable).unwrap();
+
+        let err = dist.validate().unwrap_err();
+        assert!(
+            matches!(err, DistributionError::ExecutableNotFile(_)),
+            "expected ExecutableNotFile, got: {err}"
+        );
+    }
+
+    #[test]
+    fn missing_frontend_directory_is_rejected() {
+        let dir = tmp();
+        let mut dist = valid_distribution(dir.path());
+        dist.frontend = Some(dir.path().join("nonexistent"));
+
+        let err = dist.validate().unwrap_err();
+        assert!(
+            matches!(err, DistributionError::MissingFrontend(_)),
+            "expected MissingFrontend, got: {err}"
+        );
+    }
+
+    #[test]
+    fn frontend_not_a_directory_is_rejected() {
+        let dir = tmp();
+        let mut dist = valid_distribution(dir.path());
+        let file_path = dir.path().join("not_a_dir");
+        fs::write(&file_path, "content").unwrap();
+        dist.frontend = Some(file_path);
+
+        let err = dist.validate().unwrap_err();
+        assert!(
+            matches!(err, DistributionError::FrontendNotDir(_)),
+            "expected FrontendNotDir, got: {err}"
+        );
+    }
+
+    #[test]
+    fn missing_index_html_is_rejected() {
+        let dir = tmp();
+        let mut dist = valid_distribution(dir.path());
+        let empty_frontend = dir.path().join("empty_frontend");
+        fs::create_dir(&empty_frontend).unwrap();
+        dist.frontend = Some(empty_frontend);
+
+        let err = dist.validate().unwrap_err();
+        assert!(
+            matches!(err, DistributionError::MissingIndex(_)),
+            "expected MissingIndex, got: {err}"
+        );
+    }
+
+    #[test]
+    fn frontend_none_does_not_require_index() {
+        let dir = tmp();
+        let mut dist = valid_distribution(dir.path());
+        dist.frontend = None;
+
+        assert!(
+            dist.validate().is_ok(),
+            "frontend=None should pass validation"
+        );
+    }
+
+    #[test]
+    fn missing_cef_root_is_rejected() {
+        let dir = tmp();
+        let mut dist = valid_distribution(dir.path());
+        dist.cef_runtime = dir.path().join("nonexistent_cef");
+
+        let err = dist.validate().unwrap_err();
+        assert!(
+            matches!(err, DistributionError::MissingCefRoot(_)),
+            "expected MissingCefRoot, got: {err}"
+        );
+    }
+
+    #[test]
+    fn cef_root_not_a_directory_is_rejected() {
+        let dir = tmp();
+        let mut dist = valid_distribution(dir.path());
+        let file_path = dir.path().join("not_a_cef_dir");
+        fs::write(&file_path, "").unwrap();
+        dist.cef_runtime = file_path;
+
+        let err = dist.validate().unwrap_err();
+        assert!(
+            matches!(err, DistributionError::CefRootNotDir(_)),
+            "expected CefRootNotDir, got: {err}"
+        );
+    }
+
+    #[test]
+    fn incomplete_cef_runtime_is_rejected() {
+        let dir = tmp();
+        let mut dist = valid_distribution(dir.path());
+        let empty_cef = dir.path().join("empty_cef");
+        fs::create_dir(&empty_cef).unwrap();
+        dist.cef_runtime = empty_cef;
+
+        let err = dist.validate().unwrap_err();
+        assert!(
+            matches!(err, DistributionError::InvalidCefRuntime(_)),
+            "expected InvalidCefRuntime, got: {err}"
+        );
+    }
+
+    #[test]
+    fn missing_extra_resource_is_rejected() {
+        let dir = tmp();
+        let mut dist = valid_distribution(dir.path());
+        dist.extra_resources = vec![dir.path().join("nonexistent_resource")];
+
+        let err = dist.validate().unwrap_err();
+        assert!(
+            matches!(err, DistributionError::MissingResource(ref p) if p == &dist.extra_resources[0]),
+            "expected MissingResource, got: {err}"
+        );
+    }
+
+    #[test]
+    fn missing_resource_not_confused_with_cef_or_frontend_error() {
+        let dir = tmp();
+        let mut dist = valid_distribution(dir.path());
+        dist.extra_resources = vec![dir.path().join("missing_res")];
+
+        let err = dist.validate().unwrap_err();
+        assert!(!matches!(
+            err,
+            DistributionError::MissingCefRoot(_)
+                | DistributionError::InvalidCefRuntime(_)
+                | DistributionError::MissingFrontend(_)
+                | DistributionError::MissingIndex(_)
+        ));
+    }
+
+    #[test]
+    fn raw_distribution_root_is_not_a_valid_runtime() {
+        let dir = tmp();
+        let raw = dir.path().join("raw_dist");
+        fs::create_dir_all(raw.join("Release")).unwrap();
+        fs::create_dir_all(raw.join("Resources")).unwrap();
+
+        let dist = ResolvedDistribution {
+            metadata: AppMetadata {
+                name: "test".to_string(),
+                version: "0.1.0".to_string(),
+                exe_name: "test".to_string(),
+            },
+            executable: {
+                let e = dir.path().join("test");
+                fs::write(&e, "").unwrap();
+                e
+            },
+            frontend: None,
+            cef_runtime: raw,
+            extra_resources: Vec::new(),
+        };
+
+        assert!(
+            dist.validate().is_err(),
+            "raw distribution root must fail runtime validation"
+        );
+    }
+
+    #[test]
+    fn extra_resources_dirs_are_checked() {
+        let dir = tmp();
+        let mut dist = valid_distribution(dir.path());
+        let missing_dir = dir.path().join("missing_dir");
+        dist.extra_resources = vec![missing_dir];
+
+        let err = dist.validate().unwrap_err();
+        assert!(
+            matches!(err, DistributionError::MissingResource(_)),
+            "expected MissingResource for missing directory, got: {err}"
+        );
+    }
+
+    #[test]
+    fn exe_name_matches_executable_filename() {
+        let dir = tmp();
+        let dist = valid_distribution(dir.path());
+
+        let actual_filename = dist.executable.file_name().unwrap().to_str().unwrap();
+
+        assert_eq!(
+            dist.metadata.exe_name, actual_filename,
+            "exe_name should match the actual executable filename"
+        );
+    }
+}
