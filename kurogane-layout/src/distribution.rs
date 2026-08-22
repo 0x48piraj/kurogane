@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use thiserror::Error;
 
 /// Application identity and metadata for the distribution.
@@ -14,12 +14,13 @@ pub struct AppMetadata {
 /// Describes what must be distributed without prescribing how it is
 /// packaged or laid out on disk.
 /// Platform-specific layout is the responsibility of the materializer.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResolvedDistribution {
     pub metadata: AppMetadata,
     pub executable: PathBuf,
     pub frontend: Option<PathBuf>,
-    pub cef_root: PathBuf,
+    /// A runnable, materialized CEF runtime.
+    pub cef_runtime: PathBuf,
     pub extra_resources: Vec<PathBuf>,
 }
 
@@ -28,20 +29,29 @@ pub enum DistributionError {
     #[error("executable not found: {0}")]
     MissingExecutable(PathBuf),
 
+    #[error("executable path is not a file: {0}")]
+    ExecutableNotFile(PathBuf),
+
     #[error("frontend directory not found: {0}")]
     MissingFrontend(PathBuf),
+
+    #[error("frontend path is not a directory: {0}")]
+    FrontendNotDir(PathBuf),
 
     #[error("frontend missing index.html at {0}")]
     MissingIndex(PathBuf),
 
-    #[error("CEF root not found: {0}")]
+    #[error("CEF runtime not found: {0}")]
     MissingCefRoot(PathBuf),
+
+    #[error("CEF runtime is not a directory: {0}")]
+    CefRootNotDir(PathBuf),
 
     #[error("extra resource not found: {0}")]
     MissingResource(PathBuf),
 
-    #[error("required file missing from CEF: {0}")]
-    MissingCefFile(&'static str),
+    #[error("invalid CEF runtime: {0}")]
+    InvalidCefRuntime(#[from] crate::cef::CefError),
 }
 
 impl ResolvedDistribution {
@@ -53,9 +63,19 @@ impl ResolvedDistribution {
             ));
         }
 
+        if !self.executable.is_file() {
+            return Err(DistributionError::ExecutableNotFile(
+                self.executable.clone(),
+            ));
+        }
+
         if let Some(frontend) = &self.frontend {
             if !frontend.exists() {
                 return Err(DistributionError::MissingFrontend(frontend.clone()));
+            }
+
+            if !frontend.is_dir() {
+                return Err(DistributionError::FrontendNotDir(frontend.clone()));
             }
 
             let index = frontend.join("index.html");
@@ -64,8 +84,12 @@ impl ResolvedDistribution {
             }
         }
 
-        if !self.cef_root.exists() {
-            return Err(DistributionError::MissingCefRoot(self.cef_root.clone()));
+        if !self.cef_runtime.exists() {
+            return Err(DistributionError::MissingCefRoot(self.cef_runtime.clone()));
+        }
+
+        if !self.cef_runtime.is_dir() {
+            return Err(DistributionError::CefRootNotDir(self.cef_runtime.clone()));
         }
 
         self.validate_cef()?;
@@ -80,24 +104,7 @@ impl ResolvedDistribution {
     }
 
     fn validate_cef(&self) -> Result<(), DistributionError> {
-        #[cfg(target_os = "windows")]
-        {
-            require_file(&self.cef_root, "libcef.dll")?;
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            require_file(&self.cef_root, "libcef.so")?;
-        }
-
+        crate::cef::validate_cef_runtime(&self.cef_runtime)?;
         Ok(())
-    }
-}
-
-fn require_file(root: &Path, name: &'static str) -> Result<(), DistributionError> {
-    if root.join(name).exists() {
-        Ok(())
-    } else {
-        Err(DistributionError::MissingCefFile(name))
     }
 }
