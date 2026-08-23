@@ -568,7 +568,11 @@ mod tests {
         fs::write(dist.join("Release").join("chrome-sandbox"), "sb").unwrap();
         fs::write(dist.join("Resources").join("icudtl.dat"), "icu").unwrap();
         fs::write(dist.join("Resources").join("v8_context_snapshot.bin"), "v8").unwrap();
-        fs::write(dist.join("Resources").join("locales").join("en-US.pak"), "pak").unwrap();
+        fs::write(
+            dist.join("Resources").join("locales").join("en-US.pak"),
+            "pak",
+        )
+        .unwrap();
 
         let dest = dir.path().join("runtime");
         let out = materialize_cef_runtime(&dist, &dest).unwrap();
@@ -622,8 +626,15 @@ mod tests {
         materialize_cef_runtime(&dist, &dest).unwrap();
 
         assert!(!dest.join("archive.json").exists());
-        assert!(!dest.join("cef_binary_150.0.10_linux64_minimal.tar.bz2").exists());
-        assert!(dest.join(libcef_name()).exists(), "runtime files unaffected");
+        assert!(
+            !dest
+                .join("cef_binary_150.0.10_linux64_minimal.tar.bz2")
+                .exists()
+        );
+        assert!(
+            dest.join(libcef_name()).exists(),
+            "runtime files unaffected"
+        );
     }
 
     #[test]
@@ -712,56 +723,34 @@ mod tests {
     }
 
     // Resolution policy
-
-    // Environment mutation must be serialized across tests
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    //
+    // Tests inject both the override lookup and the managed-root lookup, so
+    // no test mutates process-global environment state.
 
     #[test]
     fn resolution_fails_without_managed_install_or_override() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let original = std::env::var("CEF_PATH").ok();
-        unsafe {
-            std::env::remove_var("CEF_PATH");
-        }
-
-        let err = resolve_cef_for_bundle("0.0.0-nonexistent").unwrap_err();
+        let err = resolve_cef("0.0.0-nonexistent", || None, |_| None).unwrap_err();
         assert!(matches!(err, CefError::NotFound { .. }));
-
-        if let Some(v) = original {
-            unsafe {
-                std::env::set_var("CEF_PATH", v);
-            }
-        }
     }
 
     #[test]
     fn unverifiable_override_is_rejected() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmp();
         let fake = dir.path().join("dev-cef");
         write_runtime_fixture(&fake); // looks like CEF but has no archive.json
 
-        let original = std::env::var("CEF_PATH").ok();
-        unsafe {
-            std::env::set_var("CEF_PATH", &fake);
-        }
+        let err = resolve_cef(
+            "131.3.5",
+            || Some(fake.to_string_lossy().into_owned()),
+            |_| panic!("managed lookup must not run when override is set"),
+        )
+        .unwrap_err();
 
-        let err = resolve_cef_for_bundle("131.3.5").unwrap_err();
         assert!(matches!(err, CefError::UnverifiableOverride(_)));
-
-        match original {
-            Some(v) => unsafe {
-                std::env::set_var("CEF_PATH", v);
-            },
-            None => unsafe {
-                std::env::remove_var("CEF_PATH");
-            },
-        }
     }
 
     #[test]
     fn version_mismatched_override_is_rejected() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmp();
         let fake = write_runtime_fixture(&dir.path().join("dev-cef"));
         fs::write(
@@ -770,27 +759,18 @@ mod tests {
         )
         .unwrap();
 
-        let original = std::env::var("CEF_PATH").ok();
-        unsafe {
-            std::env::set_var("CEF_PATH", &fake);
-        }
+        let err = resolve_cef(
+            "131.3.5",
+            || Some(fake.to_string_lossy().into_owned()),
+            |_| panic!("managed lookup must not run when override is set"),
+        )
+        .unwrap_err();
 
-        let err = resolve_cef_for_bundle("131.3.5").unwrap_err();
         assert!(matches!(err, CefError::VersionMismatch { .. }));
-
-        match original {
-            Some(v) => unsafe {
-                std::env::set_var("CEF_PATH", v);
-            },
-            None => unsafe {
-                std::env::remove_var("CEF_PATH");
-            },
-        }
     }
 
     #[test]
     fn verified_override_with_matching_provenance_is_accepted() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmp();
         let fake = write_runtime_fixture(&dir.path().join("dev-cef"));
         let platform = current_platform_name().unwrap_or("linux64");
@@ -803,24 +783,16 @@ mod tests {
         )
         .unwrap();
 
-        let original = std::env::var("CEF_PATH").ok();
-        unsafe {
-            std::env::set_var("CEF_PATH", &fake);
-        }
+        let resolved = resolve_cef(
+            "131.3.5",
+            || Some(fake.to_string_lossy().into_owned()),
+            |_| panic!("managed lookup must not run when override is set"),
+        )
+        .unwrap();
 
-        let resolved = resolve_cef_for_bundle("131.3.5").unwrap();
         assert_eq!(resolved.source, CefSource::EnvironmentOverride);
         let prov = resolved.provenance.expect("provenance present");
         assert_eq!(prov.chromium_version.as_deref(), Some("131.0.6778.204"));
-
-        match original {
-            Some(v) => unsafe {
-                std::env::set_var("CEF_PATH", v);
-            },
-            None => unsafe {
-                std::env::remove_var("CEF_PATH");
-            },
-        }
     }
 
     // Managed-install resolution (injected root; no environment mutation)
@@ -844,7 +816,7 @@ mod tests {
         let dir = tmp();
         let managed = managed_provenance_fixture(dir.path());
 
-        let resolved = resolve_cef("131.3.5", |_| Some(managed.clone())).unwrap();
+        let resolved = resolve_cef("131.3.5", || None, |_| Some(managed.clone())).unwrap();
 
         assert_eq!(resolved.source, CefSource::ManagedCache);
         assert_eq!(resolved.root, managed);
@@ -856,7 +828,7 @@ mod tests {
         let dir = tmp();
         let managed = write_runtime_fixture(&dir.path().join("managed"));
 
-        let err = resolve_cef("131.3.5", |_| Some(managed.clone())).unwrap_err();
+        let err = resolve_cef("131.3.5", || None, |_| Some(managed.clone())).unwrap_err();
 
         assert!(
             matches!(err, CefError::UnverifiableManaged(ref p) if p == &managed),
@@ -869,7 +841,7 @@ mod tests {
         let dir = tmp();
         let managed = managed_provenance_fixture(dir.path());
 
-        let err = resolve_cef("127.1.1", |_| Some(managed.clone())).unwrap_err();
+        let err = resolve_cef("127.1.1", || None, |_| Some(managed.clone())).unwrap_err();
 
         assert!(
             matches!(err, CefError::VersionMismatch { .. }),
@@ -895,7 +867,7 @@ mod tests {
         )
         .unwrap();
 
-        let err = resolve_cef("131.3.5", |_| Some(managed.clone())).unwrap_err();
+        let err = resolve_cef("131.3.5", || None, |_| Some(managed.clone())).unwrap_err();
 
         assert!(
             matches!(err, CefError::PlatformMismatch { .. }),
@@ -905,26 +877,16 @@ mod tests {
 
     #[test]
     fn override_takes_precedence_over_managed_install() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmp();
         let override_root = managed_provenance_fixture(&dir.path().join("ovr"));
         let managed_root = managed_provenance_fixture(&dir.path().join("mgr"));
 
-        let original = std::env::var("CEF_PATH").ok();
-        unsafe {
-            std::env::set_var("CEF_PATH", &override_root);
-        }
-
-        let resolved = resolve_cef("131.3.5", |_| Some(managed_root.clone())).unwrap();
-
-        match original {
-            Some(v) => unsafe {
-                std::env::set_var("CEF_PATH", v);
-            },
-            None => unsafe {
-                std::env::remove_var("CEF_PATH");
-            },
-        }
+        let resolved = resolve_cef(
+            "131.3.5",
+            || Some(override_root.to_string_lossy().into_owned()),
+            |_| Some(managed_root.clone()),
+        )
+        .unwrap();
 
         assert_eq!(resolved.source, CefSource::EnvironmentOverride);
         assert_eq!(resolved.root, override_root);
@@ -932,26 +894,16 @@ mod tests {
 
     #[test]
     fn missing_override_path_errors_even_with_managed_install() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tmp();
         let managed_root = managed_provenance_fixture(&dir.path().join("mgr"));
         let missing = dir.path().join("does-not-exist");
 
-        let original = std::env::var("CEF_PATH").ok();
-        unsafe {
-            std::env::set_var("CEF_PATH", &missing);
-        }
-
-        let err = resolve_cef("131.3.5", |_| Some(managed_root.clone())).unwrap_err();
-
-        match original {
-            Some(v) => unsafe {
-                std::env::set_var("CEF_PATH", v);
-            },
-            None => unsafe {
-                std::env::remove_var("CEF_PATH");
-            },
-        }
+        let err = resolve_cef(
+            "131.3.5",
+            || Some(missing.to_string_lossy().into_owned()),
+            |_| Some(managed_root.clone()),
+        )
+        .unwrap_err();
 
         assert!(
             matches!(err, CefError::OverrideMissing(ref p) if p == &missing),
