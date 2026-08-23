@@ -377,6 +377,93 @@ mod tests {
     }
 
     #[test]
+    fn desktop_defaults_match_historical_output() {
+        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], false);
+
+        assert_eq!(
+            content,
+            "[Desktop Entry]\nType=Application\nName=myapp\nVersion=1.0\nX-AppImage-Version=1.0.0\nExec=myapp\nIcon=myapp\nCategories=Utility;\nTerminal=false\n"
+        );
+    }
+
+    #[test]
+    fn desktop_categories_override_replaces_utility() {
+        let categories = vec!["Development".to_string(), "IDE".to_string()];
+        let content = generate_desktop("myapp", "myapp", "1.0.0", &categories, false);
+
+        assert!(content.contains("Categories=Development;IDE;"));
+        assert!(!content.contains("Utility"));
+    }
+
+    #[test]
+    fn desktop_terminal_flag_is_configurable() {
+        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], true);
+
+        assert!(content.contains("Terminal=true"));
+    }
+
+    #[test]
+    fn appdir_uses_configured_icon() {
+        let dir = tmp();
+        let mut dist = test_distribution(dir.path());
+        let icon_src = dir.path().join("brand.png");
+        fs::write(&icon_src, b"png-bytes").unwrap();
+        dist.metadata.icon = Some(icon_src);
+
+        let app_dir = dir.path().join("appdir");
+
+        build_appdir(&dist, &app_dir, &PackagingConfig::default()).unwrap();
+
+        let installed =
+            app_dir.join("usr/share/icons/hicolor/256x256/apps/myapp.png");
+        assert_eq!(
+            fs::read(&installed).unwrap(),
+            b"png-bytes",
+            "configured icon must replace the placeholder bytes"
+        );
+    }
+
+    #[test]
+    fn appdir_missing_configured_icon_is_rejected() {
+        let dir = tmp();
+        let mut dist = test_distribution(dir.path());
+        dist.metadata.icon = Some(dir.path().join("nonexistent.png"));
+
+        let app_dir = dir.path().join("appdir");
+
+        let err =
+            build_appdir(&dist, &app_dir, &PackagingConfig::default()).unwrap_err();
+        assert!(
+            err.to_string().contains("configured icon not found"),
+            "expected actionable icon error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn appdir_desktop_reflects_linux_config() {
+        let dir = tmp();
+        let dist = test_distribution(dir.path());
+
+        let config = PackagingConfig {
+            linux: kurogane_layout::LinuxPackagingConfig {
+                categories: Some(vec!["Development".into()]),
+                terminal: Some(true),
+            },
+            ..Default::default()
+        };
+        let app_dir = dir.path().join("appdir");
+
+        build_appdir(&dist, &app_dir, &config).unwrap();
+
+        let desktop = fs::read_to_string(
+            app_dir.join("usr/share/applications/myapp.desktop"),
+        )
+        .unwrap();
+        assert!(desktop.contains("Categories=Development;"));
+        assert!(desktop.contains("Terminal=true"));
+    }
+
+    #[test]
     fn appdir_contains_canonical_bundle() {
         let dir = tmp();
         let dist = test_distribution(dir.path());
