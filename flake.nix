@@ -119,7 +119,10 @@
       );
     in
     {
-      packages.${system}.default = kurogane;
+      packages.${system} = {
+        default = kurogane;
+        kurogane = kurogane;
+      };
 
       apps.${system}.default = {
         type = "app";
