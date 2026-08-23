@@ -91,6 +91,7 @@
       });
 
       cargoArtifacts = craneLib.vendorCargoDeps (commonArgs // { pname = "kuroganeDeps"; });
+      crateInfo = craneLib.crateNameFromCargoToml { cargoToml = ./Cargo.toml; };
 
       kurogane = craneLib.buildPackage (
         commonArgs
@@ -98,7 +99,7 @@
           inherit cargoArtifacts;
 
           pname = "kurogane";
-          version = "0.0.4";
+          version = crateInfo.version;
 
           cargoExtraArgs = "-p kurogane-cli";
 
