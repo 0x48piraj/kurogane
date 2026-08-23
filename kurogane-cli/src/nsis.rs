@@ -190,23 +190,34 @@ fn generate_installer_nsi(
 
 /// Resolves the installer architecture, preferring `ARCH` when provided.
 fn installer_arch() -> &'static str {
-    match std::env::var("ARCH") {
-        Ok(arch) if !arch.is_empty() => {
-            if arch.contains("64") || arch.contains("x86_64") || arch.contains("amd64") {
-                "x64"
-            } else {
-                "x86"
-            }
-        }
-        _ => {
-            if cfg!(target_arch = "x86_64") {
-                "x64"
-            } else if cfg!(target_arch = "aarch64") {
+    classify_arch(std::env::var("ARCH").ok().as_deref())
+}
+
+/// Classifies the installer architecture from an optional `ARCH` value.
+///
+/// Unset or empty values fall back to the compilation target.
+fn classify_arch(env_arch: Option<&str>) -> &'static str {
+    match env_arch.map(str::to_ascii_lowercase).as_deref() {
+        Some(arch) if !arch.is_empty() => {
+            if arch.contains("aarch64") || arch.contains("arm64") {
                 "arm64"
+            } else if arch.contains("64") || arch.contains("amd64") {
+                "x64"
             } else {
                 "x86"
             }
         }
+        _ => target_arch(),
+    }
+}
+
+fn target_arch() -> &'static str {
+    if cfg!(target_arch = "x86_64") {
+        "x64"
+    } else if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "x86"
     }
 }
 
