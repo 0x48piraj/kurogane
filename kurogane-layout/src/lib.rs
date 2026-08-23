@@ -13,7 +13,11 @@ pub use cef::{
     CefError, CefProvenance, CefSource, ResolvedCef,
 };
 pub use discover::{DetectError, DetectedCef, DiscoveryMode, detect_cef_root_with_version};
-pub use distribution::{AppMetadata, DistributionError, ResolvedDistribution};
+pub use config::{
+    anchor_path, AppConfig, BundleConfig, ConfigError, LinuxPackagingConfig, PackagingConfig,
+    ResourceConfig, SigningFileConfig, WindowsPackagingConfig, CONFIG_FILE_NAME,
+};
+pub use distribution::{AppMetadata, DistributionError, ResolvedDistribution, ResolvedResource};
 pub use layout::{bundled_cef_root, cef_install_dir, copy_dir, install_root, installed_cef_root};
 pub use package::{PackageError, package_directory};
 pub use profile::{cache_root, profile_dir};

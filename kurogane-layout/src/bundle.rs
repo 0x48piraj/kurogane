@@ -270,6 +270,7 @@ mod tests {
                 name: "myapp".to_string(),
                 version: "1.0.0".to_string(),
                 exe_name: exe_name.to_string(),
+                ..Default::default()
             },
             executable: exe,
             frontend: Some(frontend),
@@ -335,12 +336,18 @@ mod tests {
 
         let res_file = dir.path().join("data.txt");
         fs::write(&res_file, "resource content").unwrap();
-        dist.extra_resources.push(res_file);
+        dist.extra_resources.push(crate::ResolvedResource {
+            source: res_file.clone(),
+            destination: "data.txt".into(),
+        });
 
         let res_dir = dir.path().join("assets");
         fs::create_dir_all(res_dir.join("sub")).unwrap();
         fs::write(res_dir.join("sub").join("file.txt"), "nested").unwrap();
-        dist.extra_resources.push(res_dir);
+        dist.extra_resources.push(crate::ResolvedResource {
+            source: res_dir.clone(),
+            destination: "assets".into(),
+        });
 
         let out = dir.path().join("out");
         let layout = BundleLayout::new(&out);

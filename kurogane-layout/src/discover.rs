@@ -114,9 +114,7 @@ mod tests {
         let cef = dir.path().join("cef");
         fs::create_dir(&cef).unwrap();
 
-        let detected = with_cef_path(Some(&cef), || {
-            detect_cef_root_with_version(None).unwrap()
-        });
+        let detected = with_cef_path(Some(&cef), || detect_cef_root_with_version(None).unwrap());
 
         assert_eq!(detected.mode, DiscoveryMode::EnvironmentOverride);
         assert_eq!(detected.root, cef);
@@ -127,9 +125,7 @@ mod tests {
         let dir = tmp();
         let nonexistent = dir.path().join("nonexistent");
 
-        let result = with_cef_path(Some(&nonexistent), || {
-            detect_cef_root_with_version(None)
-        });
+        let result = with_cef_path(Some(&nonexistent), || detect_cef_root_with_version(None));
 
         assert!(result.is_err());
     }

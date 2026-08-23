@@ -75,6 +75,10 @@ pub fn run(debug: bool, format: PackageFormat, sign_config: Option<SignConfig>) 
         .root_package()
         .ok_or_else(|| anyhow::anyhow!("No root package"))?;
 
+    // Declarative packaging configuration; defaults when absent
+    let packaging_config = PackagingConfig::load(metadata.workspace_root.as_std_path())
+        .map_err(|e| anyhow::anyhow!(e))?;
+
     let profile = if debug { "debug" } else { "release" };
     let target_dir = metadata.target_directory.join(profile);
 
@@ -99,8 +103,8 @@ pub fn run(debug: bool, format: PackageFormat, sign_config: Option<SignConfig>) 
 
     tui::step("Resolving CEF runtime...");
 
-    let cef = resolve_cef_for_bundle(env!("KUROGANE_CEF_VERSION"))
-        .map_err(|e| anyhow::anyhow!(e))?;
+    let cef =
+        resolve_cef_for_bundle(env!("KUROGANE_CEF_VERSION")).map_err(|e| anyhow::anyhow!(e))?;
 
     match cef.source {
         kurogane_layout::CefSource::ManagedCache => {
@@ -128,11 +132,15 @@ pub fn run(debug: bool, format: PackageFormat, sign_config: Option<SignConfig>) 
         .join("cef-runtime")
         .join(&runtime_version);
 
-    let cef_runtime =
-        materialize_cef_runtime(&cef.root, runtime_dir.as_std_path()).map_err(|e| anyhow::anyhow!(e))?;
+    let cef_runtime = materialize_cef_runtime(&cef.root, runtime_dir.as_std_path())
+        .map_err(|e| anyhow::anyhow!(e))?;
 
     let frontend = {
-        let path = PathBuf::from("content");
+        let path = packaging_config
+            .app
+            .frontend
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("content"));
         if path.exists() {
             Some(path)
         } else {
@@ -141,16 +149,32 @@ pub fn run(debug: bool, format: PackageFormat, sign_config: Option<SignConfig>) 
         }
     };
 
+    let extra_resources = packaging_config
+        .bundle
+        .resources
+        .iter()
+        .map(|r| r.to_resolved())
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!(e))?;
+
     let dist = ResolvedDistribution {
         metadata: AppMetadata {
-            name: pkg.name.to_string(),
+            name: packaging_config
+                .app
+                .name
+                .clone()
+                .unwrap_or_else(|| pkg.name.to_string()),
             version: pkg.version.to_string(),
             exe_name,
+            publisher: packaging_config.app.publisher.clone(),
+            description: packaging_config.app.description.clone(),
+            copyright: packaging_config.app.copyright.clone(),
+            icon: packaging_config.app.icon.clone(),
         },
         executable: exe_path.into(),
         frontend,
         cef_runtime,
-        extra_resources: Vec::new(),
+        extra_resources,
     };
 
     dist.validate()

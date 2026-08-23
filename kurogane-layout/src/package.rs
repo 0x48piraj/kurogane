@@ -68,6 +68,7 @@ mod tests {
                 name: "myapp".to_string(),
                 version: "1.0.0".to_string(),
                 exe_name: "myapp".to_string(),
+                ..Default::default()
             },
             executable: exe,
             frontend: Some(frontend),
@@ -156,7 +157,10 @@ mod tests {
 
         let res = dir.path().join("extra.txt");
         fs::write(&res, "data").unwrap();
-        dist.extra_resources.push(res);
+        dist.extra_resources.push(crate::ResolvedResource {
+            source: res.clone(),
+            destination: "extra.txt".into(),
+        });
 
         let out = dir.path().join("dist");
         let bundle = package_directory(&dist, &out).unwrap();

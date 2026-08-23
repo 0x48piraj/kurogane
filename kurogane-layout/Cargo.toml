@@ -7,11 +7,11 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-anyhow = "1"
 dirs = "6"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = "2.0.18"
+toml = "0.8"
 
 [dev-dependencies]
 proptest = "1"

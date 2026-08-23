@@ -17,8 +17,7 @@ const DOWNLOAD_LIMIT: u64 = 20 * 1024 * 1024;
 
 const LINUXDEPLOY_VERSION: &str = "1-alpha-20251107-1";
 
-const LINUXDEPLOY_URL: &str =
-    "https://github.com/linuxdeploy/linuxdeploy/releases/download";
+const LINUXDEPLOY_URL: &str = "https://github.com/linuxdeploy/linuxdeploy/releases/download";
 
 fn tools_arch() -> Result<String> {
     match std::env::var("ARCH") {
@@ -67,7 +66,9 @@ fn prepare_linuxdeploy(arch: &str) -> Result<PathBuf> {
     let path = tools.join(format!("linuxdeploy-{arch}.AppImage"));
     if !path.exists() {
         tui::step(&format!("Downloading linuxdeploy-{arch}..."));
-        let data = download(&format!("{LINUXDEPLOY_URL}/{LINUXDEPLOY_VERSION}/linuxdeploy-{arch}.AppImage"))?;
+        let data = download(&format!(
+            "{LINUXDEPLOY_URL}/{LINUXDEPLOY_VERSION}/linuxdeploy-{arch}.AppImage"
+        ))?;
         write_and_make_executable(&path, &data)?;
         // Mask linuxdeploy's magic bytes
         patch_linuxdeploy(&path)?;
@@ -111,7 +112,19 @@ exec "$APPDIR/usr/lib/{name}/{exe_name}" "$@"
 }
 
 /// Generates the desktop entry consumed by AppImage tooling.
-fn generate_desktop(name: &str, exe_name: &str, version: &str) -> String {
+fn generate_desktop(
+    name: &str,
+    exe_name: &str,
+    version: &str,
+    categories: &[String],
+    terminal: bool,
+) -> String {
+    let categories = if categories.is_empty() {
+        "Utility".to_string()
+    } else {
+        categories.join(";")
+    };
+
     // `Version` is the spec version; the app version uses `X-AppImage-Version`
     format!(
         r#"[Desktop Entry]
@@ -121,14 +134,18 @@ Version=1.0
 X-AppImage-Version={version}
 Exec={exe_name}
 Icon={name}
-Categories=Utility;
-Terminal=false
+Categories={categories};
+Terminal={terminal}
 "#
     )
 }
 
 /// Builds the AppDir around the canonical Kurogane directory bundle.
-fn build_appdir(dist: &ResolvedDistribution, app_dir: &Path) -> Result<()> {
+fn build_appdir(
+    dist: &ResolvedDistribution,
+    app_dir: &Path,
+    config: &PackagingConfig,
+) -> Result<()> {
     let name = &dist.metadata.name;
     let exe_name = &dist.metadata.exe_name;
 
@@ -143,7 +160,15 @@ fn build_appdir(dist: &ResolvedDistribution, app_dir: &Path) -> Result<()> {
     fs::set_permissions(&apprun_path, fs::Permissions::from_mode(0o755))?;
 
     // Desktop entry
-    let desktop_content = generate_desktop(name, exe_name, &dist.metadata.version);
+    let categories = config.linux.categories.clone().unwrap_or_default();
+    let terminal = config.linux.terminal.unwrap_or(false);
+    let desktop_content = generate_desktop(
+        name,
+        exe_name,
+        &dist.metadata.version,
+        &categories,
+        terminal,
+    );
     let desktop_dir = app_dir.join("usr").join("share").join("applications");
     fs::create_dir_all(&desktop_dir)?;
     fs::write(
@@ -151,7 +176,7 @@ fn build_appdir(dist: &ResolvedDistribution, app_dir: &Path) -> Result<()> {
         &desktop_content,
     )?;
 
-    // Placeholder icon in the hicolor theme
+    // Icon in the hicolor theme
     let icon_dir = app_dir
         .join("usr")
         .join("share")
@@ -160,7 +185,17 @@ fn build_appdir(dist: &ResolvedDistribution, app_dir: &Path) -> Result<()> {
         .join("256x256")
         .join("apps");
     fs::create_dir_all(&icon_dir)?;
-    write_placeholder_icon(&icon_dir.join(format!("{name}.png")))?;
+    let icon_path = icon_dir.join(format!("{name}.png"));
+
+    match &dist.metadata.icon {
+        Some(icon) => {
+            if !icon.exists() {
+                bail!("configured icon not found: {}", icon.display());
+            }
+            fs::copy(icon, &icon_path)?;
+        }
+        None => write_placeholder_icon(&icon_path)?,
+    }
 
     Ok(())
 }
@@ -185,7 +220,11 @@ fn write_placeholder_icon(path: &Path) -> Result<()> {
 /// AppImage entrypoint, desktop entry and icon. linuxdeploy assembles the
 /// resulting image and deploys external system dependencies; the bundled
 /// CEF runtime remains owned by the Kurogane bundle.
-pub fn build(dist: &ResolvedDistribution, output_dir: &Path) -> Result<()> {
+pub fn build(
+    dist: &ResolvedDistribution,
+    output_dir: &Path,
+    config: &PackagingConfig,
+) -> Result<()> {
     let arch = tools_arch()?;
 
     // Clean output
@@ -196,13 +235,10 @@ pub fn build(dist: &ResolvedDistribution, output_dir: &Path) -> Result<()> {
 
     let appimage_name = format!("{}_{}_{arch}", dist.metadata.name, dist.metadata.version);
     let app_dir = output_dir.join(format!("{appimage_name}.AppDir"));
-    let bundle_dir = app_dir
-        .join("usr")
-        .join("lib")
-        .join(&dist.metadata.name);
+    let bundle_dir = app_dir.join("usr").join("lib").join(&dist.metadata.name);
 
     tui::step("Assembling AppDir...");
-    build_appdir(dist, &app_dir)?;
+    build_appdir(dist, &app_dir, config)?;
 
     let appimage_path = output_dir.join(format!("{appimage_name}.AppImage"));
 
@@ -272,6 +308,7 @@ mod tests {
                 name: "myapp".to_string(),
                 version: "1.0.0".to_string(),
                 exe_name: "myapp".to_string(),
+                ..Default::default()
             },
             executable: exe,
             frontend: Some(frontend),
@@ -304,19 +341,19 @@ mod tests {
 
     #[test]
     fn desktop_targets_executable() {
-        let content = generate_desktop("custom-name", "custom-bin", "2.0.0");
+        let content = generate_desktop("custom-name", "custom-bin", "2.0.0", &[], false);
         assert!(content.contains("Exec=custom-bin"));
     }
 
     #[test]
     fn desktop_uses_application_name() {
-        let content = generate_desktop("custom-name", "custom-bin", "2.0.0");
+        let content = generate_desktop("custom-name", "custom-bin", "2.0.0", &[], false);
         assert!(content.contains("Name=custom-name"));
     }
 
     #[test]
     fn desktop_contains_application_version() {
-        let content = generate_desktop("myapp", "myapp", "1.0.0");
+        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], false);
         assert!(content.contains("X-AppImage-Version=1.0.0"));
         // Spec version, not app version; appimagetool validates this key
         assert!(content.contains("Version=1.0\n"));
@@ -324,7 +361,7 @@ mod tests {
 
     #[test]
     fn desktop_entry_is_valid_format() {
-        let content = generate_desktop("myapp", "myapp", "1.0.0");
+        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], false);
         assert!(content.starts_with("[Desktop Entry]"));
         assert!(content.contains("Type=Application"));
         assert!(content.contains("Terminal=false"));
@@ -336,7 +373,7 @@ mod tests {
         let dist = test_distribution(dir.path());
         let app_dir = dir.path().join("appdir");
 
-        build_appdir(&dist, &app_dir).unwrap();
+        build_appdir(&dist, &app_dir, &PackagingConfig::default()).unwrap();
 
         let bundle = app_dir.join("usr/lib/myapp");
 
@@ -352,7 +389,7 @@ mod tests {
         let dist = test_distribution(dir.path());
         let app_dir = dir.path().join("appdir");
 
-        build_appdir(&dist, &app_dir).unwrap();
+        build_appdir(&dist, &app_dir, &PackagingConfig::default()).unwrap();
 
         assert!(app_dir.join("AppRun").exists());
         assert!(app_dir.join("usr/share/applications/myapp.desktop").exists());
@@ -383,7 +420,7 @@ mod tests {
         };
 
         assert!(
-            build_appdir(&sabotaged, &app_dir).is_err(),
+            build_appdir(&sabotaged, &app_dir, &PackagingConfig::default()).is_err(),
             "incomplete CEF runtime must be rejected before imaging"
         );
     }
@@ -395,7 +432,7 @@ mod tests {
         dist.frontend = None;
         let app_dir = dir.path().join("appdir");
 
-        build_appdir(&dist, &app_dir).unwrap();
+        build_appdir(&dist, &app_dir, &PackagingConfig::default()).unwrap();
 
         assert!(!app_dir.join("usr/lib/myapp/content").exists());
         assert!(app_dir.join("AppRun").exists());
@@ -408,10 +445,13 @@ mod tests {
         let mut dist = test_distribution(dir.path());
         let res = dir.path().join("extra.txt");
         fs::write(&res, "resource data").unwrap();
-        dist.extra_resources.push(res);
+        dist.extra_resources.push(kurogane_layout::ResolvedResource {
+            source: res.clone(),
+            destination: "extra.txt".into(),
+        });
 
         let app_dir = dir.path().join("appdir");
-        build_appdir(&dist, &app_dir).unwrap();
+        build_appdir(&dist, &app_dir, &PackagingConfig::default()).unwrap();
 
         let dest = app_dir.join("usr/lib/myapp/extra.txt");
         assert!(dest.exists(), "extra resource should be in bundle root");

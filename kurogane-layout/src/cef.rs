@@ -76,16 +76,23 @@ pub fn read_provenance(root: &Path) -> Result<Option<CefProvenance>, CefError> {
     }
 
     let file = fs::File::open(&path)?;
-    let archive: ArchiveJson = serde_json::from_reader(file)
-        .map_err(|e| CefError::InvalidDistribution { root: root.to_path_buf(), reason: format!("unreadable archive.json: {e}") })?;
+    let archive: ArchiveJson =
+        serde_json::from_reader(file).map_err(|e| CefError::InvalidDistribution {
+            root: root.to_path_buf(),
+            reason: format!("unreadable archive.json: {e}"),
+        })?;
 
-    Ok(parse_archive_name(&archive.name).map(|(cef_version, chromium_version, platform)| CefProvenance {
-        cef_version,
-        chromium_version,
-        platform,
-        distribution: archive.file_type,
-        artifact: archive.name,
-    }))
+    Ok(
+        parse_archive_name(&archive.name).map(|(cef_version, chromium_version, platform)| {
+            CefProvenance {
+                cef_version,
+                chromium_version,
+                platform,
+                distribution: archive.file_type,
+                artifact: archive.name,
+            }
+        }),
+    )
 }
 
 /// Parses a CEF archive filename.
@@ -226,7 +233,11 @@ fn resolve_provenanced_root(
 
 /// Resolves the CEF distribution for release packaging.
 pub fn resolve_cef_for_bundle(version: &str) -> Result<ResolvedCef, CefError> {
-    resolve_cef(version, crate::layout::installed_cef_root)
+    resolve_cef(
+        version,
+        || std::env::var("CEF_PATH").ok(),
+        crate::layout::installed_cef_root,
+    )
 }
 
 /// Resolves the CEF distribution for release packaging.
@@ -237,11 +248,12 @@ pub fn resolve_cef_for_bundle(version: &str) -> Result<ResolvedCef, CefError> {
 /// back to the managed installation.
 fn resolve_cef(
     version: &str,
+    override_path: impl Fn() -> Option<String>,
     installed_root: impl Fn(&str) -> Option<PathBuf>,
 ) -> Result<ResolvedCef, CefError> {
     // Environment override takes precedence; a set-but-broken override is an
     // error rather than a silent fallback to the managed installation
-    if let Ok(path) = std::env::var("CEF_PATH") {
+    if let Some(path) = override_path() {
         let root = PathBuf::from(path);
         if !root.exists() {
             return Err(CefError::OverrideMissing(root));
@@ -291,7 +303,10 @@ fn verify_provenanced_version_and_platform(
     if !provenance.matches_current_platform() {
         return Err(CefError::PlatformMismatch {
             expected: current_platform_name().unwrap_or("unknown").to_string(),
-            found: provenance.platform.clone().unwrap_or_else(|| "unknown".into()),
+            found: provenance
+                .platform
+                .clone()
+                .unwrap_or_else(|| "unknown".into()),
             path: root.to_path_buf(),
         });
     }
@@ -338,10 +353,7 @@ pub fn validate_distribution(root: &Path) -> Result<(), CefError> {
     } else {
         Err(CefError::InvalidDistribution {
             root: root.to_path_buf(),
-            reason: format!(
-                "neither Release/+Resources/ nor {} found",
-                libcef_name()
-            ),
+            reason: format!("neither Release/+Resources/ nor {} found", libcef_name()),
         })
     }
 }
@@ -375,8 +387,7 @@ pub fn materialize_cef_runtime(
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
 
-            if DEV_ARTIFACTS.iter().any(|d| d == &name_str)
-                || is_download_cache_artifact(&name_str)
+            if DEV_ARTIFACTS.iter().any(|d| d == &name_str) || is_download_cache_artifact(&name_str)
             {
                 continue;
             }
@@ -392,10 +403,7 @@ pub fn materialize_cef_runtime(
     } else {
         return Err(CefError::InvalidDistribution {
             root: distribution_root.to_path_buf(),
-            reason: format!(
-                "neither Release/+Resources/ nor {} found",
-                libcef_name()
-            ),
+            reason: format!("neither Release/+Resources/ nor {} found", libcef_name()),
         });
     }
 

@@ -4,30 +4,42 @@
 //! required to distribute an application and validates that all declared
 //! inputs are usable.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-/// Application identity and metadata for the distribution.
-#[derive(Debug, Clone)]
+/// Application identity and distribution metadata.
+#[derive(Debug, Clone, Default)]
 pub struct AppMetadata {
     pub name: String,
     pub version: String,
     pub exe_name: String,
+    pub publisher: Option<String>,
+    pub description: Option<String>,
+    pub copyright: Option<String>,
+    pub icon: Option<PathBuf>,
+}
+
+/// Resolved resource source and bundle destination.
+#[derive(Debug, Clone)]
+pub struct ResolvedResource {
+    pub source: PathBuf,
+    pub destination: PathBuf,
 }
 
 /// The resolved contents of an application distribution.
 ///
 /// Describes what must be distributed without prescribing how it is
 /// packaged or laid out on disk.
+///
 /// Platform-specific layout is the responsibility of the materializer.
 #[derive(Debug, Clone)]
 pub struct ResolvedDistribution {
     pub metadata: AppMetadata,
     pub executable: PathBuf,
     pub frontend: Option<PathBuf>,
-    /// A runnable, materialized CEF runtime.
+    /// Materialized CEF runtime.
     pub cef_runtime: PathBuf,
-    pub extra_resources: Vec<PathBuf>,
+    pub extra_resources: Vec<ResolvedResource>,
 }
 
 #[derive(Debug, Error)]
@@ -56,12 +68,15 @@ pub enum DistributionError {
     #[error("extra resource not found: {0}")]
     MissingResource(PathBuf),
 
+    #[error("resource destination must be a relative path without '..' components: {0}")]
+    InvalidResourceDestination(PathBuf),
+
     #[error("invalid CEF runtime: {0}")]
     InvalidCefRuntime(#[from] crate::cef::CefError),
 }
 
 impl ResolvedDistribution {
-    /// Validates that all declared contents actually exist on disk.
+    /// Validates the resolved distribution.
     pub fn validate(&self) -> Result<(), DistributionError> {
         if !self.executable.exists() {
             return Err(DistributionError::MissingExecutable(
@@ -101,9 +116,11 @@ impl ResolvedDistribution {
         self.validate_cef()?;
 
         for resource in &self.extra_resources {
-            if !resource.exists() {
-                return Err(DistributionError::MissingResource(resource.clone()));
+            if !resource.source.exists() {
+                return Err(DistributionError::MissingResource(resource.source.clone()));
             }
+
+            validate_resource_destination(&resource.destination)?;
         }
 
         Ok(())
@@ -113,6 +130,24 @@ impl ResolvedDistribution {
         crate::cef::validate_cef_runtime(&self.cef_runtime)?;
         Ok(())
     }
+}
+
+/// Validates a resource destination within the bundle.
+///
+/// Fail-fast guard against authoring mistakes, not a security boundary.
+fn validate_resource_destination(destination: &Path) -> Result<(), DistributionError> {
+    let escapes = destination.has_root()
+        || destination
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir));
+
+    if escapes {
+        return Err(DistributionError::InvalidResourceDestination(
+            destination.to_path_buf(),
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -148,11 +183,18 @@ mod tests {
                 name: "myapp".to_string(),
                 version: "1.0.0".to_string(),
                 exe_name: exe_name.to_string(),
+                ..Default::default()
             },
             executable: exe,
             frontend: Some(frontend),
             cef_runtime: cef,
-            extra_resources: vec![resource],
+            extra_resources: vec![ResolvedResource {
+                source: resource.clone(),
+                destination: resource
+                    .file_name()
+                    .map(Into::into)
+                    .unwrap_or_else(|| "extra.txt".into()),
+            }],
         }
     }
 
@@ -292,11 +334,15 @@ mod tests {
     fn missing_extra_resource_is_rejected() {
         let dir = tmp();
         let mut dist = valid_distribution(dir.path());
-        dist.extra_resources = vec![dir.path().join("nonexistent_resource")];
+        let missing = dir.path().join("nonexistent_resource");
+        dist.extra_resources = vec![ResolvedResource {
+            source: missing.clone(),
+            destination: "nonexistent_resource".into(),
+        }];
 
         let err = dist.validate().unwrap_err();
         assert!(
-            matches!(err, DistributionError::MissingResource(ref p) if p == &dist.extra_resources[0]),
+            matches!(err, DistributionError::MissingResource(ref p) if p == &missing),
             "expected MissingResource, got: {err}"
         );
     }
@@ -305,7 +351,10 @@ mod tests {
     fn missing_resource_not_confused_with_cef_or_frontend_error() {
         let dir = tmp();
         let mut dist = valid_distribution(dir.path());
-        dist.extra_resources = vec![dir.path().join("missing_res")];
+        dist.extra_resources = vec![ResolvedResource {
+            source: dir.path().join("missing_res"),
+            destination: "missing_res".into(),
+        }];
 
         let err = dist.validate().unwrap_err();
         assert!(!matches!(
@@ -329,6 +378,7 @@ mod tests {
                 name: "test".to_string(),
                 version: "0.1.0".to_string(),
                 exe_name: "test".to_string(),
+                ..Default::default()
             },
             executable: {
                 let e = dir.path().join("test");
@@ -351,7 +401,10 @@ mod tests {
         let dir = tmp();
         let mut dist = valid_distribution(dir.path());
         let missing_dir = dir.path().join("missing_dir");
-        dist.extra_resources = vec![missing_dir];
+        dist.extra_resources = vec![ResolvedResource {
+            source: missing_dir,
+            destination: "missing_dir".into(),
+        }];
 
         let err = dist.validate().unwrap_err();
         assert!(
