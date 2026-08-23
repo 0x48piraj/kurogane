@@ -1,16 +1,19 @@
+mod cef;
 mod discover;
 mod layout;
 mod platform;
 mod profile;
-mod validate;
 mod package;
 mod distribution;
 mod bundle;
 
 pub use bundle::BundleLayout;
-pub use discover::{DetectError, DetectedCef, DiscoveryMode, detect_cef_root};
+pub use cef::{
+    materialize_cef_runtime, read_provenance, resolve_cef_for_bundle, validate_cef_runtime,
+    CefError, CefProvenance, CefSource, ResolvedCef,
+};
+pub use discover::{DetectError, DetectedCef, DiscoveryMode, detect_cef_root_with_version};
 pub use distribution::{AppMetadata, DistributionError, ResolvedDistribution};
-pub use layout::{bundled_cef_root, cef_install_dir, install_root, installed_cef_root};
+pub use layout::{bundled_cef_root, cef_install_dir, copy_dir, install_root, installed_cef_root};
 pub use package::{PackageError, package_directory};
 pub use profile::{cache_root, profile_dir};
-pub use validate::{CefValidationError, validate_cef_root};
