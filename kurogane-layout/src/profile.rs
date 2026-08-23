@@ -13,22 +13,25 @@ pub fn cache_root() -> PathBuf {
 }
 
 pub fn profile_dir(app_id: &str, exe: &Path) -> PathBuf {
-    // Isolate the CEF cache per executable.
-    // Reusing a profile across runs can trigger session restore leading to multiple on_context_initialized invocations.
+    // Isolate the CEF cache per executable
+    // Reusing a profile across runs can trigger session restore
+    // leading to multiple on_context_initialized invocations
     let exe = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
 
     let hash = fnv1a_64(&exe);
 
     let app_id = sanitize_name(app_id);
 
+    /// Formats the identity hash for use in the profile directory name
     cache_root()
         .join("profiles")
-        .join(format!("{app_id}-{hash}"))
+        .join(format!("{app_id}-{hash:016x}"))
 }
 
-/// Computes a deterministic FNV-1a 64-bit hash of a filesystem path.
+/// Computes a deterministic FNV-1a 64-bit digest of a filesystem path.
 /// Intended for identity stability, not cryptographic use.
-pub fn fnv1a_64(path: &Path) -> String {
+/// Callers choose how to render the digest.
+pub fn fnv1a_64(path: &Path) -> u64 {
     let mut hash: u64 = 14695981039346656037;
 
     for byte in path.to_string_lossy().as_bytes() {
@@ -36,7 +39,7 @@ pub fn fnv1a_64(path: &Path) -> String {
         hash = hash.wrapping_mul(1099511628211);
     }
 
-    format!("{:016x}", hash)
+    hash
 }
 
 /// Sanitizes a user-provided name into a filesystem-safe identifier.
