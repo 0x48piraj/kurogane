@@ -1,4 +1,4 @@
-//! Application bundle layout and materialization.
+//! Canonical application bundle materialization.
 //!
 //! The bundle keeps the executable and CEF runtime together so the packaged
 //! application can locate its runtime without environment-specific shims.

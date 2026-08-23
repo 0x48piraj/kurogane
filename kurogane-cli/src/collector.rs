@@ -1,3 +1,8 @@
+//! Diagnostic data collection.
+//!
+//! This module gathers system, environment, CEF and GPU information into a
+//! serializable report suitable for both human-readable and JSON output.
+
 use serde::Serialize;
 use std::{collections::BTreeMap, process::Command};
 
@@ -52,6 +57,7 @@ pub struct GpuInfo {
     pub source: String,
 }
 
+/// System and desktop-session information.
 mod system {
     use super::*;
 
@@ -147,6 +153,7 @@ mod system {
 }
 
 mod env {
+    //! Runtime environment variables relevant to Kurogane and CEF.
     use super::*;
 
     pub fn collect() -> EnvInfo {
@@ -185,6 +192,7 @@ mod env {
 }
 
 mod cef {
+    //! Managed CEF installation information.
     use super::*;
     use kurogane_layout::install_root;
 
@@ -202,6 +210,7 @@ mod cef {
 }
 
 mod gpu {
+    //! Best-effort GPU and graphics-stack diagnostics.
     use super::*;
 
     pub fn collect() -> GpuInfo {

@@ -1,3 +1,5 @@
+//! Represents an application bundle as a materialized directory.
+
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 

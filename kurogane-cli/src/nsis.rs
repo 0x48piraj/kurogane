@@ -1,12 +1,12 @@
+//! Packages the canonical Kurogane bundle as an NSIS installer.
+
 use anyhow::{Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use kurogane_layout::{ResolvedDistribution, package_directory};
-
 use crate::tui;
-
 
 /// NSIS template that installs the canonical directory bundle as an opaque payload.
 const INSTALLER_NSI: &str = r#"Unicode true

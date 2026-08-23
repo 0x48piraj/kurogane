@@ -1,3 +1,9 @@
+//! Development-mode application launcher.
+//!
+//! This module ensures a valid CEF runtime is available and launches the
+//! application with the environment required for local runtime discovery
+//! and dynamic linking.
+
 use anyhow::Result;
 use std::ffi::OsString;
 use std::process::Command;

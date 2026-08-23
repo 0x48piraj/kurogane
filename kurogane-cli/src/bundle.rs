@@ -1,3 +1,9 @@
+//! Application build and packaging orchestration.
+//!
+//! This module resolves application inputs, materializes the canonical
+//! distribution, selects the requested package format and coordinates
+//! optional signing.
+
 use anyhow::{Result, bail};
 use std::path::PathBuf;
 use std::process::Command;

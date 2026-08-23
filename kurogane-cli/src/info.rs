@@ -1,3 +1,8 @@
+//! Basic Kurogane and environment information.
+//!
+//! This module displays the current Kurogane version, platform,
+//! runtime environment and project directory.
+
 use anyhow::Result;
 
 use crate::tui;

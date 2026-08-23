@@ -1,3 +1,8 @@
+//! Kurogane command-line entry point.
+//!
+//! This module defines the CLI surface and dispatches subcommands
+//! to the corresponding command implementations.
+
 use clap::{Parser, Subcommand};
 use std::ffi::OsString;
 

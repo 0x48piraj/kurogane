@@ -1,3 +1,9 @@
+//! Runtime CEF discovery.
+//!
+//! This module resolves the CEF runtime used by a running application,
+//! following the configured precedence between environment overrides,
+//! bundled runtimes and managed installations.
+
 use std::path::PathBuf;
 use thiserror::Error;
 

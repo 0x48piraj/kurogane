@@ -1,3 +1,8 @@
+//! Embedded project templates.
+//!
+//! Project templates are compiled into the Kurogane binary and can be
+//! extracted into newly created application projects.
+
 use anyhow::Result;
 use std::{fs, path::Path};
 use include_dir::{Dir, DirEntry, include_dir};

@@ -1,3 +1,9 @@
+//! Per-application runtime profile and cache paths.
+//!
+//! Profile directories are derived from the application identity and
+//! executable path so that separate applications or installations do
+//! not accidentally share runtime state.
+
 use std::path::{Path, PathBuf};
 
 use crate::platform;

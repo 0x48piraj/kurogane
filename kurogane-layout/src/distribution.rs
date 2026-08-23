@@ -1,3 +1,9 @@
+//! Resolved application distribution model.
+//!
+//! This module defines the platform-independent description of the files
+//! required to distribute an application and validates that all declared
+//! inputs are usable.
+
 use std::path::PathBuf;
 use thiserror::Error;
 

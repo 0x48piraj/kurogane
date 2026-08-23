@@ -1,4 +1,4 @@
-//! Lightweight helpers for styled CLI output.
+//! Styled command-line output helpers.
 //!
 //! Provides consistent prefixes and coloring for common message types
 //! like success, error, warnings and structured sections.

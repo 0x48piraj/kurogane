@@ -1,3 +1,8 @@
+//! Plain application build command.
+//!
+//! This module invokes Cargo to produce the application's release
+//! binary without performing distribution packaging.
+
 use anyhow::Result;
 use std::process::Command;
 

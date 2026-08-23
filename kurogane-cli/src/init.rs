@@ -1,3 +1,8 @@
+//! Project creation and template initialization.
+//!
+//! This module creates a new Kurogane application directory and
+//! extracts the selected embedded project template.
+
 use anyhow::{Result, bail};
 use std::fs;
 use std::io::{self, Write};

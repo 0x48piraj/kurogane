@@ -1,3 +1,8 @@
+//! Managed CEF installation.
+//!
+//! This module downloads the configured CEF distribution, records its
+//! provenance and installs it into Kurogane's managed runtime cache.
+
 use anyhow::Result;
 use download_cef::{CefIndex, DEFAULT_TARGET};
 use kurogane_layout::install_root;

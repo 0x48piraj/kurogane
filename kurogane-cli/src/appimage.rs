@@ -1,3 +1,8 @@
+//! Linux AppImage generation.
+//!
+//! This module constructs an AppDir around the canonical Kurogane
+//! bundle and uses linuxdeploy to produce the AppImage artifact.
+
 use anyhow::{Result, bail};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

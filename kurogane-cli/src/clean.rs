@@ -1,3 +1,8 @@
+//! Project and runtime cache cleanup.
+//!
+//! This module removes generated build artifacts and, when explicitly
+//! requested, system-wide Kurogane runtime and profile data.
+
 use anyhow::Result;
 use std::fs;
 use kurogane_layout::cache_root;

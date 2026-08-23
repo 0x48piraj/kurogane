@@ -1,8 +1,8 @@
-//! CEF distribution and runtime handling.
+//! CEF distribution resolution, provenance, validation and runtime materialization.
 //!
-//! This module owns CEF resolution, validation and runtime preparation.
-//! Package formats consume the resulting runtime and do not define CEF
-//! packaging policy.
+//! This module knows how to recognize CEF distributions, validate their
+//! platform and version metadata and produce the runnable CEF runtime used
+//! by packaged applications.
 
 use std::fs;
 use std::path::{Path, PathBuf};

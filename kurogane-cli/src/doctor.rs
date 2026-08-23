@@ -1,3 +1,9 @@
+//! Environment and installation diagnostics.
+//!
+//! This module validates the local CEF installation, runtime discovery,
+//! build toolchain and project structure and presents the resulting health
+//! report to the user.
+
 use anyhow::Result;
 use kurogane_layout::{
     detect_cef_root_with_version, install_root, installed_cef_root, read_provenance,
