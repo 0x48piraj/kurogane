@@ -250,7 +250,6 @@ fn resolve_cef(
         let provenance =
             resolve_provenanced_root(root.clone(), version, CefError::UnverifiableOverride)?;
 
-        validate_distribution(&root)?;
         return Ok(ResolvedCef {
             root,
             source: CefSource::EnvironmentOverride,
@@ -814,5 +813,141 @@ mod tests {
                 std::env::remove_var("CEF_PATH");
             },
         }
+    }
+
+    // Managed-install resolution (injected root; no environment mutation)
+
+    fn managed_provenance_fixture(dir: &Path) -> PathBuf {
+        let managed = write_runtime_fixture(&dir.join("managed"));
+        let platform = current_platform_name().unwrap_or("linux64");
+        let archive_name = format!(
+            "cef_binary_131.3.5+g6a8d2b7+chromium-131.0.6778.204_{platform}_minimal.tar.bz2"
+        );
+        fs::write(
+            managed.join("archive.json"),
+            serde_json::json!({ "type": "minimal", "name": archive_name, "sha1": "x" }).to_string(),
+        )
+        .unwrap();
+        managed
+    }
+
+    #[test]
+    fn valid_managed_install_is_accepted_with_provenance() {
+        let dir = tmp();
+        let managed = managed_provenance_fixture(dir.path());
+
+        let resolved = resolve_cef("131.3.5", |_| Some(managed.clone())).unwrap();
+
+        assert_eq!(resolved.source, CefSource::ManagedCache);
+        assert_eq!(resolved.root, managed);
+        assert!(resolved.provenance.is_some());
+    }
+
+    #[test]
+    fn managed_install_without_provenance_is_rejected() {
+        let dir = tmp();
+        let managed = write_runtime_fixture(&dir.path().join("managed"));
+
+        let err = resolve_cef("131.3.5", |_| Some(managed.clone())).unwrap_err();
+
+        assert!(
+            matches!(err, CefError::UnverifiableManaged(ref p) if p == &managed),
+            "expected UnverifiableManaged, got: {err}"
+        );
+    }
+
+    #[test]
+    fn version_mismatched_managed_install_is_rejected() {
+        let dir = tmp();
+        let managed = managed_provenance_fixture(dir.path());
+
+        let err = resolve_cef("127.1.1", |_| Some(managed.clone())).unwrap_err();
+
+        assert!(
+            matches!(err, CefError::VersionMismatch { .. }),
+            "expected VersionMismatch, got: {err}"
+        );
+    }
+
+    #[test]
+    fn platform_mismatched_managed_install_is_rejected() {
+        let dir = tmp();
+        let managed = write_runtime_fixture(&dir.path().join("managed"));
+        let wrong_platform = if current_platform_name() == Some("linux64") {
+            "windowsarm64"
+        } else {
+            "linux64"
+        };
+        let archive_name = format!(
+            "cef_binary_131.3.5+g6a8d2b7+chromium-131.0.6778.204_{wrong_platform}_minimal.tar.bz2"
+        );
+        fs::write(
+            managed.join("archive.json"),
+            serde_json::json!({ "type": "minimal", "name": archive_name, "sha1": "x" }).to_string(),
+        )
+        .unwrap();
+
+        let err = resolve_cef("131.3.5", |_| Some(managed.clone())).unwrap_err();
+
+        assert!(
+            matches!(err, CefError::PlatformMismatch { .. }),
+            "expected PlatformMismatch, got: {err}"
+        );
+    }
+
+    #[test]
+    fn override_takes_precedence_over_managed_install() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tmp();
+        let override_root = managed_provenance_fixture(&dir.path().join("ovr"));
+        let managed_root = managed_provenance_fixture(&dir.path().join("mgr"));
+
+        let original = std::env::var("CEF_PATH").ok();
+        unsafe {
+            std::env::set_var("CEF_PATH", &override_root);
+        }
+
+        let resolved = resolve_cef("131.3.5", |_| Some(managed_root.clone())).unwrap();
+
+        match original {
+            Some(v) => unsafe {
+                std::env::set_var("CEF_PATH", v);
+            },
+            None => unsafe {
+                std::env::remove_var("CEF_PATH");
+            },
+        }
+
+        assert_eq!(resolved.source, CefSource::EnvironmentOverride);
+        assert_eq!(resolved.root, override_root);
+    }
+
+    #[test]
+    fn missing_override_path_errors_even_with_managed_install() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tmp();
+        let managed_root = managed_provenance_fixture(&dir.path().join("mgr"));
+        let missing = dir.path().join("does-not-exist");
+
+        let original = std::env::var("CEF_PATH").ok();
+        unsafe {
+            std::env::set_var("CEF_PATH", &missing);
+        }
+
+        let err = resolve_cef("131.3.5", |_| Some(managed_root.clone())).unwrap_err();
+
+        match original {
+            Some(v) => unsafe {
+                std::env::set_var("CEF_PATH", v);
+            },
+            None => unsafe {
+                std::env::remove_var("CEF_PATH");
+            },
+        }
+
+        assert!(
+            matches!(err, CefError::OverrideMissing(ref p) if p == &missing),
+            "expected OverrideMissing, got: {err}"
+        );
     }
 }
