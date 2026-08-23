@@ -23,9 +23,6 @@ mod appimage;
 #[cfg(target_os = "windows")]
 mod nsis;
 
-#[allow(dead_code)]
-mod signing;
-
 mod collector;
 mod templates;
 mod tui;
@@ -59,12 +56,9 @@ enum Commands {
         debug: bool,
         #[arg(long, default_value = "dir")]
         format: String,
+        /// Sign bundle binaries
         #[arg(long)]
-        sign_certificate: Option<String>,
-        #[arg(long)]
-        sign_timestamp: Option<String>,
-        #[arg(long)]
-        sign_command: Option<String>,
+        sign: bool,
     },
     Init {
         name: Option<String>,
@@ -100,26 +94,10 @@ fn main() -> anyhow::Result<()> {
         Commands::Bundle {
             debug,
             format,
-            sign_certificate,
-            sign_timestamp,
-            sign_command,
+            sign,
         } => {
             let format = bundle::PackageFormat::from_str(&format)?;
-            let sign_config = signing::SignConfig {
-                certificate: sign_certificate,
-                timestamp_url: sign_timestamp,
-                custom_command: sign_command,
-                ..Default::default()
-            };
-            bundle::run(
-                debug,
-                format,
-                if sign_config.is_configured() {
-                    Some(sign_config)
-                } else {
-                    None
-                },
-            )
+            bundle::run(debug, format, sign)
         }
         Commands::Init { name, template } => init::run(name, template),
         Commands::Clean { target } => clean::run(target),

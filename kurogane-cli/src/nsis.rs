@@ -5,7 +5,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use kurogane_layout::{ResolvedDistribution, package_directory};
+use kurogane_layout::{
+    PackagingConfig, ResolvedDistribution, SignConfig, package_directory, sign_artifact, sign_tree,
+    verify_signature,
+};
+
 use crate::tui;
 
 /// NSIS template that installs the canonical directory bundle as an opaque payload.
@@ -22,6 +26,7 @@ SetCompressor /SOLID lzma
 !define VERSION "{{version}}"
 !define MAINBINARYNAME "{{main_binary_name}}"
 !define COPYRIGHT "{{copyright}}"
+!define FILEDESCRIPTION "{{file_description}}"
 !define OUTFILE "{{out_file}}"
 !define ARCH "{{arch}}"
 !define BUNDLEDIR "{{bundle_dir}}"
@@ -38,7 +43,7 @@ InstallDir "${PLACEHOLDER_INSTALL_DIR}"
 
 VIProductVersion "${VERSION}.0"
 VIAddVersionKey "ProductName" "${PRODUCTNAME}"
-VIAddVersionKey "FileDescription" "${PRODUCTNAME}"
+VIAddVersionKey "FileDescription" "${FILEDESCRIPTION}"
 VIAddVersionKey "LegalCopyright" "${COPYRIGHT}"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
@@ -66,14 +71,7 @@ Section "Install"
     ; Canonical bundle, installed wholesale
     File /r "${BUNDLEDIR}\*.*"
 
-    ; Start Menu shortcut
-    CreateDirectory "$SMPROGRAMS\${PRODUCTNAME}"
-    CreateShortCut "$SMPROGRAMS\${PRODUCTNAME}\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}"
-    CreateShortCut "$SMPROGRAMS\${PRODUCTNAME}\Uninstall ${PRODUCTNAME}.lnk" "$INSTDIR\uninstall.exe"
-
-    ; Desktop shortcut
-    CreateShortCut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}"
-
+{{start_menu_shortcut}}{{desktop_shortcut}}
     ; Uninstaller
     WriteUninstaller "$INSTDIR\uninstall.exe"
 
@@ -147,9 +145,24 @@ fn find_makensis() -> Result<PathBuf> {
     bail!("NSIS not found. Install NSIS or set NSIS_PATH environment variable.");
 }
 
+/// Start Menu shortcut block, emitted when `windows.start-menu-shortcut` is on.
+const START_MENU_SHORTCUT_BLOCK: &str = r#"    ; Start Menu shortcut
+    CreateDirectory "$SMPROGRAMS\${PRODUCTNAME}"
+    CreateShortCut "$SMPROGRAMS\${PRODUCTNAME}\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}"
+    CreateShortCut "$SMPROGRAMS\${PRODUCTNAME}\Uninstall ${PRODUCTNAME}.lnk" "$INSTDIR\uninstall.exe"
+
+"#;
+
+/// Desktop shortcut block, emitted when `windows.desktop-shortcut` is on.
+const DESKTOP_SHORTCUT_BLOCK: &str = r#"    ; Desktop shortcut
+    CreateShortCut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}"
+
+"#;
+
 /// Generates the NSIS script for a staged canonical bundle.
 fn generate_installer_nsi(
     dist: &ResolvedDistribution,
+    config: &PackagingConfig,
     bundle_dir: &Path,
     output_dir: &Path,
 ) -> Result<PathBuf> {
@@ -159,11 +172,13 @@ fn generate_installer_nsi(
 
     let bundle_source = bundle_dir
         .strip_prefix(output_dir)
-        .map_err(|_| anyhow::anyhow!(
-            "bundle directory {} is not inside NSIS output directory {}",
-            bundle_dir.display(),
-            output_dir.display()
-        ))?
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "bundle directory {} is not inside NSIS output directory {}",
+                bundle_dir.display(),
+                output_dir.display()
+            )
+        })?
         .to_string_lossy()
         .replace('/', "\\");
     let arch = installer_arch();
@@ -171,17 +186,46 @@ fn generate_installer_nsi(
 
     let estimated_size = dir_size(bundle_dir)? / 1024;
 
+    let copyright = dist
+        .metadata
+        .copyright
+        .clone()
+        .unwrap_or_else(|| format!("{name} {version}"));
+    let manufacturer = dist
+        .metadata
+        .publisher
+        .clone()
+        .unwrap_or_else(|| name.clone());
+    let file_description = dist
+        .metadata
+        .description
+        .clone()
+        .unwrap_or_else(|| name.clone());
+    let start_menu_shortcut = if config.windows.start_menu_shortcut {
+        START_MENU_SHORTCUT_BLOCK
+    } else {
+        ""
+    };
+    let desktop_shortcut = if config.windows.desktop_shortcut {
+        DESKTOP_SHORTCUT_BLOCK
+    } else {
+        ""
+    };
+
     let nsi_content = INSTALLER_NSI
         .replace("{{product_name}}", name)
         .replace("{{version}}", version)
         .replace("{{main_binary_name}}", exe_name)
-        .replace("{{copyright}}", &format!("{} {}", name, version))
+        .replace("{{copyright}}", &copyright)
+        .replace("{{file_description}}", &file_description)
         .replace("{{out_file}}", &out_file)
         .replace("{{arch}}", arch)
         .replace("{{bundle_dir}}", &bundle_source)
         .replace("{{install_mode}}", "currentUser")
-        .replace("{{manufacturer}}", name)
-        .replace("{{estimated_size}}", &estimated_size.to_string());
+        .replace("{{manufacturer}}", &manufacturer)
+        .replace("{{estimated_size}}", &estimated_size.to_string())
+        .replace("{{start_menu_shortcut}}", start_menu_shortcut)
+        .replace("{{desktop_shortcut}}", desktop_shortcut);
 
     let nsi_path = output_dir.join("installer.nsi");
     fs::write(&nsi_path, &nsi_content)?;
@@ -238,10 +282,12 @@ fn dir_size(path: &Path) -> Result<u64> {
 }
 
 /// Builds a Windows NSIS installer from the canonical directory bundle.
-///
-/// The bundle is staged unchanged, wrapped in an NSIS installer and then
-/// compiled with `makensis`.
-pub fn build(dist: &ResolvedDistribution, output_dir: &Path) -> Result<()> {
+pub fn build(
+    dist: &ResolvedDistribution,
+    output_dir: &Path,
+    config: &PackagingConfig,
+    sign: Option<&SignConfig>,
+) -> Result<()> {
     let makensis = find_makensis()?;
 
     if output_dir.exists() {
@@ -256,14 +302,20 @@ pub fn build(dist: &ResolvedDistribution, output_dir: &Path) -> Result<()> {
 
     tui::step("Staging bundle...");
 
-    // Materialize the canonical bundle
+    // Stage the bundle for installer assembly
     let bundle_dir = output_dir.join("bundle");
     package_directory(dist, &bundle_dir)?;
+
+    // Sign staged binaries using configured signing policy
+    if let Some(sign_config) = sign {
+        let signed = sign_tree(&bundle_dir, sign_config).map_err(|e| anyhow::anyhow!(e))?;
+        tui::field("signed", format!("{signed} file(s)"));
+    }
 
     tui::step("Generating installer script...");
 
     // Generate .nsi
-    let nsi_path = generate_installer_nsi(dist, &bundle_dir, output_dir)?;
+    let nsi_path = generate_installer_nsi(dist, config, &bundle_dir, output_dir)?;
 
     tui::step("Compiling installer...");
 
@@ -286,6 +338,17 @@ pub fn build(dist: &ResolvedDistribution, output_dir: &Path) -> Result<()> {
 
     // Cleanup staging
     fs::remove_dir_all(&bundle_dir)?;
+
+    // Sign and verify the resulting artifact
+    if let Some(sign_config) = sign {
+        if !installer_path.exists() {
+            bail!("installer {} was not produced", installer_path.display());
+        }
+
+        sign_artifact(&installer_path, sign_config).map_err(|e| anyhow::anyhow!(e))?;
+        verify_signature(&installer_path, sign_config).map_err(|e| anyhow::anyhow!(e))?;
+        tui::field("signature", "verified");
+    }
 
     Ok(())
 }
@@ -331,6 +394,7 @@ mod tests {
                 name: "myapp".to_string(),
                 version: "1.0.0".to_string(),
                 exe_name: exe_name.to_string(),
+                ..Default::default()
             },
             executable: exe,
             frontend: Some(frontend),
@@ -344,7 +408,18 @@ mod tests {
         let bundle = dir.join("bundle");
         fs::create_dir_all(&bundle).unwrap();
 
-        let nsi = generate_installer_nsi(&dist, &bundle, dir).unwrap();
+        let nsi = generate_installer_nsi(&dist, &PackagingConfig::default(), &bundle, dir).unwrap();
+        fs::read_to_string(nsi).unwrap()
+    }
+
+    /// Generates an NSIS script from the supplied packaging configuration.
+    fn generated_nsi_with(dir: &Path, config: &PackagingConfig) -> String {
+        let mut dist = test_distribution(dir);
+        config.app.apply_to(&mut dist.metadata);
+        let bundle = dir.join("bundle");
+        fs::create_dir_all(&bundle).unwrap();
+
+        let nsi = generate_installer_nsi(&dist, config, &bundle, dir).unwrap();
         fs::read_to_string(nsi).unwrap()
     }
 

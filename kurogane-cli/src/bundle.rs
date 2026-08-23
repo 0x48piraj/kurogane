@@ -9,12 +9,10 @@ use std::path::PathBuf;
 use std::process::Command;
 use cargo_metadata::{MetadataCommand, TargetKind};
 use kurogane_layout::{
-    AppMetadata, ResolvedDistribution, materialize_cef_runtime, package_directory,
-    resolve_cef_for_bundle,
+    AppMetadata, PackagingConfig, ResolvedDistribution, SignConfig, materialize_cef_runtime,
+    package_directory, resolve_cef_for_bundle, sign_tree,
 };
 
-#[allow(unused_imports)]
-use crate::signing::SignConfig;
 use crate::tui;
 
 /// Output format for the application bundle.
@@ -43,9 +41,29 @@ impl PackageFormat {
     }
 }
 
+/// Resolves the signing policy for a packaging operation.
+fn resolve_sign_config(
+    sign_requested: bool,
+    config: &PackagingConfig,
+) -> Result<Option<SignConfig>> {
+    if !sign_requested {
+        return Ok(None);
+    }
+
+    SignConfig::from_file_config(&config.signing)
+        .map(Some)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "--sign requested but no usable [signing] configuration found in {} \
+                 (set `certificate` or `custom-command`)",
+                kurogane_layout::CONFIG_FILE_NAME
+            )
+        })
+}
+
 /// Build the application in the requested profile.
 #[allow(unused_variables)]
-pub fn run(debug: bool, format: PackageFormat, sign_config: Option<SignConfig>) -> Result<()> {
+pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     tui::section("Kurogane Bundle");
 
     tui::step("Building release...");
@@ -187,21 +205,29 @@ pub fn run(debug: bool, format: PackageFormat, sign_config: Option<SignConfig>) 
     tui::step("Packaging...");
 
     let output_dir = PathBuf::from("dist");
+    let sign_config = resolve_sign_config(sign, &packaging_config)?;
 
     match format {
         PackageFormat::Directory => {
+            // The canonical bundle is the artifact; sign it in place
             let output = package_directory(&dist, &output_dir)?;
+
+            if let Some(config) = &sign_config {
+                let signed = sign_tree(&output, config).map_err(|e| anyhow::anyhow!(e))?;
+                tui::field("signed", format!("{signed} file(s)"));
+            }
+
             tui::field("output", tui::format_path(&output));
         }
 
         #[cfg(target_os = "linux")]
         PackageFormat::AppImage => {
-            crate::appimage::build(&dist, &output_dir)?;
+            crate::appimage::build(&dist, &output_dir, &packaging_config, sign_config.as_ref())?;
         }
 
         #[cfg(target_os = "windows")]
         PackageFormat::Nsis => {
-            crate::nsis::build(&dist, &output_dir)?;
+            crate::nsis::build(&dist, &output_dir, &packaging_config, sign_config.as_ref())?;
         }
     }
 
