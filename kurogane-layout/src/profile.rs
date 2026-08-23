@@ -22,7 +22,7 @@ pub fn profile_dir(app_id: &str, exe: &Path) -> PathBuf {
 
     let app_id = sanitize_name(app_id);
 
-    /// Formats the identity hash for use in the profile directory name
+    // Formats the identity hash for use in the profile directory name
     cache_root()
         .join("profiles")
         .join(format!("{app_id}-{hash:016x}"))
@@ -106,7 +106,6 @@ mod property_tests {
     proptest! {
         #[test]
         fn sanitize_name_never_panics(s in ".*") {
-            // never panics on any input
             let _ = sanitize_name(&s);
         }
 
@@ -134,6 +133,25 @@ mod property_tests {
         let b = profile_dir("my-app", exe);
 
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn fnv1a_64_matches_reference_digest() {
+        // Reference FNV-1a 64-bit value for this exact path string
+        assert_eq!(
+            fnv1a_64(Path::new("/some/path/app.exe")),
+            14_687_075_936_177_481_486u64
+        );
+    }
+
+    #[test]
+    fn profile_dir_renders_hex_digest_without_padding_loss() {
+        let exe = Path::new("/some/path/app.exe");
+        let dir = profile_dir("my-app", exe);
+
+        let name = dir.file_name().unwrap().to_str().unwrap();
+
+        assert_eq!(name, format!("my-app-{:016x}", fnv1a_64(exe)));
     }
 
     #[test]
