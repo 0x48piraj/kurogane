@@ -458,3 +458,289 @@ pub fn verify_signature(path: &Path, config: &SignConfig) -> Result<(), SigningE
 
     Err(SigningError::NoSigningTool)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp() -> tempfile::TempDir {
+        tempfile::tempdir().expect("failed to create temp dir")
+    }
+
+    fn os(input: &[&str]) -> Vec<OsString> {
+        input.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn default_config_is_not_configured() {
+        assert!(!SignConfig::default().is_configured());
+    }
+
+    #[test]
+    fn certificate_config_enables_signing() {
+        let config = SignConfig {
+            certificate: Some("thumbprint".to_string()),
+            ..Default::default()
+        };
+        assert!(config.is_configured());
+    }
+
+    #[test]
+    fn custom_command_config_enables_signing() {
+        let config = SignConfig {
+            custom_command: Some("my-sign-tool".to_string()),
+            ..Default::default()
+        };
+        assert!(config.is_configured());
+    }
+
+    #[test]
+    fn timestamp_only_does_not_enable_signing() {
+        let config = SignConfig {
+            timestamp_url: Some("http://timestamp".to_string()),
+            ..Default::default()
+        };
+        assert!(!config.is_configured());
+    }
+
+    #[test]
+    fn should_sign_exe() {
+        assert!(should_sign(Path::new("/some/path/app.exe")));
+    }
+
+    #[test]
+    fn should_sign_dll() {
+        assert!(should_sign(Path::new("/some/path/lib.dll")));
+    }
+
+    #[test]
+    fn should_not_sign_other_files() {
+        assert!(!should_sign(Path::new("/some/readme.txt")));
+        assert!(!should_sign(Path::new("/some/app.AppImage")));
+        assert!(!should_sign(Path::new("/some/binary")));
+    }
+
+    #[test]
+    fn sign_returns_ok_when_not_configured() {
+        let dir = tmp();
+        let path = dir.path().join("app.exe");
+        assert!(sign_file(&path, &SignConfig::default()).is_ok());
+    }
+
+    #[test]
+    fn sign_custom_command_expands_target_path() {
+        let dir = tmp();
+        let target = dir.path().join("app.exe");
+        fs::write(&target, "").unwrap();
+
+        let config = SignConfig {
+            custom_command: Some("echo".to_string()),
+            custom_args: vec!["%1".to_string(), "--flag".to_string()],
+            ..Default::default()
+        };
+
+        assert!(sign_file(&target, &config).is_ok());
+    }
+
+    #[test]
+    fn sign_custom_command_failure_is_propagated() {
+        let dir = tmp();
+        let target = dir.path().join("app.exe");
+        fs::write(&target, "").unwrap();
+
+        let config = SignConfig {
+            custom_command: Some("false".to_string()),
+            ..Default::default()
+        };
+
+        let err = sign_file(&target, &config).unwrap_err();
+        assert!(matches!(err, SigningError::CustomCommandFailed { .. }));
+    }
+
+    #[test]
+    fn expand_custom_args_replaces_placeholder() {
+        let expanded = expand_custom_args(
+            &["%1".into(), "--flag".into(), "/literal %1".into()],
+            Path::new("/bin/app.exe"),
+        );
+
+        assert_eq!(expanded, os(&["/bin/app.exe", "--flag", "/literal %1"]));
+    }
+
+    #[test]
+    fn signtool_args_default_to_sha256_without_timestamp() {
+        let config = SignConfig {
+            certificate: Some("abc123".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            signtool_sign_args(&config),
+            os(&["sign", "/fd", "sha256", "/sha1", "abc123"])
+        );
+    }
+
+    #[test]
+    fn signtool_args_pair_rfc3161_directives() {
+        let config = SignConfig {
+            certificate: Some("abc123".to_string()),
+            timestamp_url: Some("http://ts.example".to_string()),
+            digest_algorithm: "sha1".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            signtool_sign_args(&config),
+            os(&[
+                "sign",
+                "/fd",
+                "sha1",
+                "/sha1",
+                "abc123",
+                "/tr",
+                "http://ts.example",
+                "/td",
+                "sha1",
+            ])
+        );
+    }
+
+    #[test]
+    fn osslsigncode_uses_in_out_form() {
+        let config = SignConfig {
+            certificate: Some("/certs/cert.pfx".to_string()),
+            timestamp_url: Some("http://ts.example".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            osslsigncode_sign_args(
+                &config,
+                Path::new("/dist/app.exe"),
+                Path::new("/dist/app.exe.kurogane-sign-tmp"),
+            ),
+            os(&[
+                "sign",
+                "-pkcs12",
+                "/certs/cert.pfx",
+                "-ts",
+                "http://ts.example",
+                "-h",
+                "sha256",
+                "-in",
+                "/dist/app.exe",
+                "-out",
+                "/dist/app.exe.kurogane-sign-tmp",
+            ])
+        );
+    }
+
+    #[test]
+    fn osslsigncode_selects_certs_flag_for_pem_chains() {
+        let config = SignConfig {
+            certificate: Some("/certs/chain.pem".to_string()),
+            ..Default::default()
+        };
+
+        let args = osslsigncode_sign_args(&config, Path::new("/a.exe"), Path::new("/b.tmp"));
+
+        assert!(
+            args.windows(2).any(|w| w[0] == "-certs"),
+            "PEM chain must use -certs"
+        );
+        assert!(
+            !args.contains(&OsString::from("-pkcs12")),
+            "PEM chain must not use -pkcs12"
+        );
+    }
+
+    #[test]
+    fn osslsigncode_p12_extension_also_uses_pkcs12() {
+        assert_eq!(
+            osslsigncode_cert_args("/certs/store.P12"),
+            os(&["-pkcs12", "/certs/store.P12"])
+        );
+    }
+
+    #[test]
+    fn verify_args_are_conservative() {
+        assert_eq!(
+            signtool_verify_args(Path::new("/app.exe")),
+            os(&["verify", "/pa", "/all", "/app.exe"])
+        );
+        assert_eq!(
+            osslsigncode_verify_args(Path::new("/app.exe")),
+            os(&["verify", "-in", "/app.exe"])
+        );
+    }
+
+    #[test]
+    fn from_file_config_maps_certificate_and_digest() {
+        let file = SigningFileConfig {
+            certificate: Some("/certs/codesign.pfx".into()),
+            timestamp_url: Some("http://ts.example".into()),
+            digest_algorithm: Some("sha512".into()),
+            custom_command: None,
+        };
+
+        let config = SignConfig::from_file_config(&file).unwrap();
+
+        assert_eq!(config.certificate.as_deref(), Some("/certs/codesign.pfx"));
+        assert_eq!(config.timestamp_url.as_deref(), Some("http://ts.example"));
+        assert_eq!(config.digest_algorithm, "sha512");
+        assert!(config.is_configured());
+    }
+
+    #[test]
+    fn from_file_config_splits_whitespace_command() {
+        let file = SigningFileConfig {
+            custom_command: Some("signtool sign /fd sha256 extra.bin".into()),
+            ..Default::default()
+        };
+
+        let config = SignConfig::from_file_config(&file).unwrap();
+
+        assert_eq!(config.custom_command.as_deref(), Some("signtool"));
+        assert_eq!(
+            config.custom_args,
+            vec![
+                "sign".to_string(),
+                "/fd".to_string(),
+                "sha256".to_string(),
+                "extra.bin".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn from_file_config_defaults_digest_and_none_when_unconfigured() {
+        assert!(SignConfig::from_file_config(&SigningFileConfig::default()).is_none());
+
+        let file = SigningFileConfig {
+            certificate: Some("/c.pfx".into()),
+            ..Default::default()
+        };
+        let config = SignConfig::from_file_config(&file).unwrap();
+        assert_eq!(config.digest_algorithm, "sha256");
+    }
+
+    #[test]
+    fn sign_tree_counts_only_pe_files() {
+        let dir = tmp();
+        fs::write(dir.path().join("app.exe"), "").unwrap();
+        fs::write(dir.path().join("notes.txt"), "").unwrap();
+        let nested = dir.path().join("runtime");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("lib.dll"), "").unwrap();
+
+        let count = sign_tree(dir.path(), &SignConfig::default()).unwrap();
+        assert_eq!(count, 0, "unconfigured signing signs nothing");
+
+        let config = SignConfig {
+            custom_command: Some("true".to_string()),
+            ..Default::default()
+        };
+        let count = sign_tree(dir.path(), &config).unwrap();
+        assert_eq!(count, 2, "only app.exe and runtime/lib.dll are signed");
+    }
+}
