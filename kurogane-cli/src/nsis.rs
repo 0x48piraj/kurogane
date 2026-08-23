@@ -453,6 +453,33 @@ mod tests {
     }
 
     #[test]
+    fn arm64_env_values_are_not_classified_as_x64() {
+        assert_eq!(classify_arch(Some("aarch64")), "arm64");
+        assert_eq!(classify_arch(Some("arm64")), "arm64");
+        assert_eq!(classify_arch(Some("ARM64")), "arm64");
+    }
+
+    #[test]
+    fn x86_64_env_values_are_classified_as_x64() {
+        assert_eq!(classify_arch(Some("x86_64")), "x64");
+        assert_eq!(classify_arch(Some("amd64")), "x64");
+        assert_eq!(classify_arch(Some("AMD64")), "x64");
+        assert_eq!(classify_arch(Some("x64")), "x64");
+    }
+
+    #[test]
+    fn unknown_32_bit_env_value_is_classified_as_x86() {
+        assert_eq!(classify_arch(Some("x86")), "x86");
+        assert_eq!(classify_arch(Some("i686")), "x86");
+    }
+
+    #[test]
+    fn unset_or_empty_arch_falls_back_to_target() {
+        assert_eq!(classify_arch(None), target_arch());
+        assert_eq!(classify_arch(Some("")), target_arch());
+    }
+
+    #[test]
     fn generate_nsi_installs_bundle_wholesale() {
         let dir = tmp();
         let content = generated_nsi(dir.path());
@@ -468,7 +495,13 @@ mod tests {
         let dir = tmp();
         let content = generated_nsi(dir.path());
 
-        for legacy in ["CEFDIR", "CONTENTDIR", "RESOURCESDIR", "HASCONTENT", "HASRESOURCES"] {
+        for legacy in [
+            "CEFDIR",
+            "CONTENTDIR",
+            "RESOURCESDIR",
+            "HASCONTENT",
+            "HASRESOURCES",
+        ] {
             assert!(
                 !content.contains(legacy),
                 "template must not carry legacy define {legacy}"
@@ -503,5 +536,104 @@ mod tests {
             r#"!define MAINBINARYNAME "{}""#,
             dist.metadata.exe_name
         )));
+    }
+
+    #[test]
+    fn generate_nsi_defaults_match_historical_metadata() {
+        let dir = tmp();
+        let content = generated_nsi(dir.path());
+
+        assert!(
+            content.contains(r#"!define COPYRIGHT "myapp 1.0.0""#),
+            "copyright must default to '<name> <version>'"
+        );
+        assert!(
+            content.contains(r#"!define MANUFACTURER "myapp""#),
+            "manufacturer must default to the product name"
+        );
+        assert!(
+            content.contains(r#"!define FILEDESCRIPTION "myapp""#),
+            "file description must default to the product name"
+        );
+    }
+
+    #[test]
+    fn generate_nsi_defaults_include_both_shortcuts() {
+        let dir = tmp();
+        let content = generated_nsi(dir.path());
+
+        assert!(content.contains("; Start Menu shortcut"));
+        assert!(content.contains(r#"CreateShortCut "$SMPROGRAMS\${PRODUCTNAME}\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}""#));
+        assert!(content.contains(
+            r#"CreateShortCut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}""#
+        ));
+    }
+
+    #[test]
+    fn generate_nsi_identity_overrides_flow_through_metadata() {
+        let dir = tmp();
+
+        let config = PackagingConfig {
+            app: kurogane_layout::AppConfig {
+                publisher: Some("Example Corp".into()),
+                description: Some("A demo application".into()),
+                copyright: Some("(c) 2026 Example Corp".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let content = generated_nsi_with(dir.path(), &config);
+
+        assert!(content.contains(r#"!define MANUFACTURER "Example Corp""#));
+        assert!(content.contains(r#"Publisher" "${MANUFACTURER}"#));
+        assert!(content.contains(r#"!define FILEDESCRIPTION "A demo application""#));
+        assert!(content.contains(r#"!define COPYRIGHT "(c) 2026 Example Corp""#));
+        assert!(
+            !content.contains("myapp 1.0.0"),
+            "default copyright fallback must not appear when overridden"
+        );
+    }
+
+    #[test]
+    fn generate_nsi_shortcut_toggles_remove_blocks() {
+        let dir = tmp();
+
+        let config = PackagingConfig {
+            windows: kurogane_layout::WindowsPackagingConfig {
+                start_menu_shortcut: false,
+                desktop_shortcut: false,
+            },
+            ..Default::default()
+        };
+        let content = generated_nsi_with(dir.path(), &config);
+
+        assert!(
+            !content.contains("CreateShortCut"),
+            "no shortcut creation may remain when both toggles are off"
+        );
+        assert!(
+            !content.contains("; Start Menu shortcut") && !content.contains("; Desktop shortcut"),
+            "shortcut comment banners must be removed with their blocks"
+        );
+
+        // Uninstall section still cleans up any pre-existing shortcuts harmlessly
+        assert!(content.contains(r#"Delete "$DESKTOP\${PRODUCTNAME}.lnk""#));
+    }
+
+    #[test]
+    fn generate_nsi_start_menu_only_shortcut() {
+        let dir = tmp();
+
+        let config = PackagingConfig {
+            windows: kurogane_layout::WindowsPackagingConfig {
+                start_menu_shortcut: true,
+                desktop_shortcut: false,
+            },
+            ..Default::default()
+        };
+        let content = generated_nsi_with(dir.path(), &config);
+
+        assert!(content.contains("$SMPROGRAMS"));
+        assert!(!content.contains(r#"CreateShortCut "$DESKTOP"#));
     }
 }
