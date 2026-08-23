@@ -14,8 +14,14 @@
       pkgs = nixpkgs.legacyPackages.${system};
       craneLib = inputs.crane.mkLib pkgs;
 
+      includeTemplates = path: _type: builtins.match ".*\/kurogane-cli\/templates.*" (toString path) != null;
       commonArgs = {
-        src = ./.; #TODO: should be src = craneLib.cleanCargoSource ./.; but doesn't include templates/
+        src = pkgs.lib.cleanSourceWith {
+          src = ./.;
+          filter = path: type: (includeTemplates path type) || (craneLib.filterCargoSources path type);
+          name = "source";
+        };
+
         strictDeps = true;
 
         buildInputs = with pkgs; [
