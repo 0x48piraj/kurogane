@@ -7,7 +7,7 @@ mod package;
 mod distribution;
 mod bundle;
 
-pub use bundle::BundleLayout;
+pub use bundle::{BundleError, BundleLayout};
 pub use cef::{
     materialize_cef_runtime, read_provenance, resolve_cef_for_bundle, validate_cef_runtime,
     CefError, CefProvenance, CefSource, ResolvedCef,

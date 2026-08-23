@@ -16,12 +16,34 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use thiserror::Error;
 
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt;
 
 use crate::{ResolvedDistribution, layout::copy_dir};
+
+/// Errors raised while materializing or verifying a canonical bundle.
+#[derive(Debug, Error)]
+pub enum BundleError {
+    #[error("frontend directory missing: {0}")]
+    MissingFrontend(PathBuf),
+
+    #[error("executable path has no file name: {0}")]
+    InvalidExecutablePath(PathBuf),
+
+    #[error("bundle executable missing at {0}")]
+    MissingExecutable(PathBuf),
+
+    #[error("content/index.html missing at {0}")]
+    MissingContentIndex(PathBuf),
+
+    #[error(transparent)]
+    Cef(#[from] crate::cef::CefError),
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
 
 pub struct BundleLayout {
     root: PathBuf,
@@ -36,7 +58,7 @@ impl BundleLayout {
         &self.root
     }
 
-    pub fn prepare(&self) -> Result<()> {
+    pub fn prepare(&self) -> Result<(), BundleError> {
         // Cleaning build directory
         if self.root.exists() {
             fs::remove_dir_all(&self.root)?;
@@ -92,9 +114,9 @@ impl BundleLayout {
         self.root.join(exe_name)
     }
 
-    pub fn install_frontend(&self, src: &Path) -> Result<()> {
+    pub fn install_frontend(&self, src: &Path) -> Result<(), BundleError> {
         if !src.exists() {
-            anyhow::bail!("frontend directory missing");
+            return Err(BundleError::MissingFrontend(src.to_path_buf()));
         }
 
         copy_dir(src, &self.content_dir())?;
@@ -102,14 +124,14 @@ impl BundleLayout {
     }
 
     /// Installs a materialized CEF runtime into the bundle.
-    pub fn install_cef(&self, src: &Path) -> Result<()> {
+    pub fn install_cef(&self, src: &Path) -> Result<(), BundleError> {
         copy_dir(src, &self.cef_dir())?;
         Ok(())
     }
 
     /// Writes the Linux launcher script for the bundle.
     #[cfg(target_os = "linux")]
-    pub fn write_launcher(&self, exe_name: &OsStr) -> Result<()> {
+    pub fn write_launcher(&self, exe_name: &OsStr) -> Result<(), BundleError> {
         let launcher = self.launcher_path(exe_name);
 
         let runtime_target = format!("runtime/{}", exe_name.to_string_lossy());
@@ -149,13 +171,13 @@ cd "$ROOT"
     ///
     /// Copies the executable, CEF runtime, frontend and any extra resources
     /// into the platform-specific directory structure.
-    pub fn materialize(&self, dist: &ResolvedDistribution) -> Result<()> {
+    pub fn materialize(&self, dist: &ResolvedDistribution) -> Result<(), BundleError> {
         self.prepare()?;
 
         let exe_name = dist
             .executable
             .file_name()
-            .ok_or_else(|| anyhow::anyhow!("executable has no file name"))?;
+            .ok_or_else(|| BundleError::InvalidExecutablePath(dist.executable.clone()))?;
 
         fs::copy(&dist.executable, self.executable_path(exe_name))?;
 
@@ -169,15 +191,14 @@ cd "$ROOT"
         }
 
         for resource in &dist.extra_resources {
-            let dest = self.root.join(
-                resource
-                    .file_name()
-                    .ok_or_else(|| anyhow::anyhow!("resource has no file name"))?,
-            );
-            if resource.is_dir() {
-                copy_dir(resource, &dest)?;
+            let dest = self.root.join(&resource.destination);
+            if resource.source.is_dir() {
+                copy_dir(&resource.source, &dest)?;
             } else {
-                fs::copy(resource, &dest)?;
+                if let Some(parent) = dest.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(&resource.source, &dest)?;
             }
         }
 
@@ -185,23 +206,22 @@ cd "$ROOT"
     }
 
     /// Verifies that the bundle contains a valid executable, content and CEF runtime.
-    pub fn verify(&self, exe_name: &OsStr) -> Result<()> {
+    pub fn verify(&self, exe_name: &OsStr) -> Result<(), BundleError> {
         let exe = self.executable_path(exe_name);
 
         if !exe.exists() {
-            anyhow::bail!("bundle executable missing");
+            return Err(BundleError::MissingExecutable(exe));
         }
 
         if self.content_dir().exists() {
             let index = self.content_dir().join("index.html");
 
             if !index.exists() {
-                anyhow::bail!("content/index.html missing");
+                return Err(BundleError::MissingContentIndex(index));
             }
         }
 
-        crate::cef::validate_cef_runtime(&self.cef_dir())
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        crate::cef::validate_cef_runtime(&self.cef_dir())?;
 
         Ok(())
     }

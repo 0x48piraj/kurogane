@@ -8,7 +8,7 @@ use crate::{BundleLayout, ResolvedDistribution};
 #[derive(Debug, Error)]
 pub enum PackageError {
     #[error(transparent)]
-    Layout(#[from] anyhow::Error),
+    Layout(#[from] crate::BundleError),
 
     #[error(transparent)]
     Distribution(#[from] crate::DistributionError),
@@ -28,7 +28,7 @@ pub fn package_directory(
     let exe_name = dist
         .executable
         .file_name()
-        .ok_or_else(|| anyhow::anyhow!("executable has no file name"))?;
+        .ok_or_else(|| crate::BundleError::InvalidExecutablePath(dist.executable.clone()))?;
     layout.verify(exe_name)?;
 
     Ok(layout.root().to_path_buf())
