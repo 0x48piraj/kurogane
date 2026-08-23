@@ -71,30 +71,7 @@
         ];
       };
 
-      cefIntermediate = pkgs.cef-binary.override {
-        version = "150.0.10";
-        gitRevision = "8042e43";
-        chromiumVersion = "150.0.7871.101";
-        srcHashes = {
-          aarch64-linux = "";
-          x86_64-linux = "sha256-bB1Ike84huPM9l0JKI2DBOP343JKR8kyk+K9Y+dlKOQ=";
-        };
-      };
-
-      cef = cefIntermediate.overrideAttrs (old: {
-        postInstall = (old.postInstall or "") + ''
-          cat > "$out/archive.json" <<EOF
-          {
-            "type": "minimal",
-            "name": "cef_binary_${cefVersion}",
-            "sha1": "0000000000000000000000000000000000000000"
-          }
-          EOF
-
-          ln -sf $out/Release/* $out/
-          ln -sf $out/Resources/* $out/
-        '';
-      });
+      cef = pkgs.callPackage ./nix/cef.nix { inherit pkgs; };
 
       cargoArtifacts = craneLib.vendorCargoDeps (commonArgs // { pname = "kuroganeDeps"; });
       crateInfo = craneLib.crateNameFromCargoToml { cargoToml = ./Cargo.toml; };
