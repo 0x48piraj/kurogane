@@ -414,6 +414,67 @@ mod tests {
     }
 
     #[test]
+    fn absolute_resource_destination_is_rejected() {
+        let dir = tmp();
+        let mut dist = valid_distribution(dir.path());
+        dist.extra_resources = vec![ResolvedResource {
+            source: dir.path().join("extra.txt"),
+            destination: "/etc/passwd".into(),
+        }];
+
+        let err = dist.validate().unwrap_err();
+        assert!(
+            matches!(err, DistributionError::InvalidResourceDestination(_)),
+            "expected InvalidResourceDestination for absolute path, got: {err}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn drive_letter_destination_is_rejected_on_windows() {
+        let dir = tmp();
+        let mut dist = valid_distribution(dir.path());
+        dist.extra_resources = vec![ResolvedResource {
+            source: dir.path().join("extra.txt"),
+            destination: r"C:\Windows\evil.dll".into(),
+        }];
+
+        let err = dist.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            DistributionError::InvalidResourceDestination(_)
+        ));
+    }
+
+    #[test]
+    fn parent_dir_resource_destination_is_rejected() {
+        let dir = tmp();
+        let mut dist = valid_distribution(dir.path());
+        dist.extra_resources = vec![ResolvedResource {
+            source: dir.path().join("extra.txt"),
+            destination: "../escape.txt".into(),
+        }];
+
+        let err = dist.validate().unwrap_err();
+        assert!(
+            matches!(err, DistributionError::InvalidResourceDestination(ref p) if p == &PathBuf::from("../escape.txt")),
+            "expected InvalidResourceDestination for '..' path, got: {err}"
+        );
+    }
+
+    #[test]
+    fn nested_relative_resource_destination_is_accepted() {
+        let dir = tmp();
+        let mut dist = valid_distribution(dir.path());
+        dist.extra_resources = vec![ResolvedResource {
+            source: dir.path().join("extra.txt"),
+            destination: "share/data/extra.txt".into(),
+        }];
+
+        dist.validate().unwrap();
+    }
+
+    #[test]
     fn exe_name_matches_executable_filename() {
         let dir = tmp();
         let dist = valid_distribution(dir.path());
