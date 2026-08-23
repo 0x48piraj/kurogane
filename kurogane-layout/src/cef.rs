@@ -175,6 +175,12 @@ pub enum CefError {
     )]
     UnverifiableOverride(PathBuf),
 
+    #[error(
+        "managed CEF installation at {0} has no archive.json provenance; refusing to package an \
+         unverifiable CEF tree. Re-run `kurogane install`."
+    )]
+    UnverifiableManaged(PathBuf),
+
     #[error("CEF version mismatch at {path}: expected {expected}, found {found}")]
     VersionMismatch {
         expected: String,
@@ -199,44 +205,50 @@ pub enum CefError {
     Io(#[from] std::io::Error),
 }
 
-/// Resolves the CEF distribution to use for release packaging.
-pub fn resolve_cef_for_bundle(version: &str) -> Result<ResolvedCef, CefError> {
-    if let Some(root) = crate::layout::installed_cef_root(version) {
-        validate_distribution(&root)?;
-        let provenance = read_provenance(&root)?;
-        return Ok(ResolvedCef {
-            root,
-            source: CefSource::ManagedCache,
-            provenance,
-        });
-    }
+/// Resolves and validates a CEF distribution root.
+///
+/// The selected distribution must provide verifiable provenance, match the
+/// requested CEF version and current target platform and have a recognized
+/// CEF distribution layout.
+fn resolve_provenanced_root(
+    root: PathBuf,
+    version: &str,
+    unverifiable: fn(PathBuf) -> CefError,
+) -> Result<CefProvenance, CefError> {
+    let provenance = read_provenance(&root)?.ok_or_else(|| unverifiable(root.clone()))?;
 
+    verify_provenanced_version_and_platform(&provenance, &root, version)?;
+
+    validate_distribution(&root)?;
+
+    Ok(provenance)
+}
+
+/// Resolves the CEF distribution for release packaging.
+pub fn resolve_cef_for_bundle(version: &str) -> Result<ResolvedCef, CefError> {
+    resolve_cef(version, crate::layout::installed_cef_root)
+}
+
+/// Resolves the CEF distribution for release packaging.
+///
+/// An explicit `CEF_PATH` is preferred over the managed installation. Both
+/// sources are validated for provenance, version, platform and distribution
+/// layout. An invalid `CEF_PATH` causes resolution to fail rather than falling
+/// back to the managed installation.
+fn resolve_cef(
+    version: &str,
+    installed_root: impl Fn(&str) -> Option<PathBuf>,
+) -> Result<ResolvedCef, CefError> {
+    // Environment override takes precedence; a set-but-broken override is an
+    // error rather than a silent fallback to the managed installation
     if let Ok(path) = std::env::var("CEF_PATH") {
         let root = PathBuf::from(path);
         if !root.exists() {
             return Err(CefError::OverrideMissing(root));
         }
 
-        let provenance = read_provenance(&root)?
-            .ok_or_else(|| CefError::UnverifiableOverride(root.clone()))?;
-
-        if !provenance.matches_version(version) {
-            return Err(CefError::VersionMismatch {
-                expected: version.to_string(),
-                found: provenance.cef_version.clone(),
-                path: root.clone(),
-            });
-        }
-
-        if !provenance.matches_current_platform() {
-            return Err(CefError::PlatformMismatch {
-                expected: current_platform_name()
-                    .unwrap_or("unknown")
-                    .to_string(),
-                found: provenance.platform.clone().unwrap_or_else(|| "unknown".into()),
-                path: root.clone(),
-            });
-        }
+        let provenance =
+            resolve_provenanced_root(root.clone(), version, CefError::UnverifiableOverride)?;
 
         validate_distribution(&root)?;
         return Ok(ResolvedCef {
@@ -246,10 +258,46 @@ pub fn resolve_cef_for_bundle(version: &str) -> Result<ResolvedCef, CefError> {
         });
     }
 
+    if let Some(root) = installed_root(version) {
+        let provenance =
+            resolve_provenanced_root(root.clone(), version, CefError::UnverifiableManaged)?;
+
+        return Ok(ResolvedCef {
+            root,
+            source: CefSource::ManagedCache,
+            provenance: Some(provenance),
+        });
+    }
+
     Err(CefError::NotFound {
         expected: version.to_string(),
         path: crate::layout::cef_install_dir(version),
     })
+}
+
+/// Checks provenance version and platform against expectations.
+fn verify_provenanced_version_and_platform(
+    provenance: &CefProvenance,
+    root: &Path,
+    version: &str,
+) -> Result<(), CefError> {
+    if !provenance.matches_version(version) {
+        return Err(CefError::VersionMismatch {
+            expected: version.to_string(),
+            found: provenance.cef_version.clone(),
+            path: root.to_path_buf(),
+        });
+    }
+
+    if !provenance.matches_current_platform() {
+        return Err(CefError::PlatformMismatch {
+            expected: current_platform_name().unwrap_or("unknown").to_string(),
+            found: provenance.platform.clone().unwrap_or_else(|| "unknown".into()),
+            path: root.to_path_buf(),
+        });
+    }
+
+    Ok(())
 }
 
 /// Development-only artifacts.
