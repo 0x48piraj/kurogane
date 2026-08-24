@@ -31,5 +31,5 @@ pkgs.symlinkJoin {
 
   postBuild = ''
     ln -s "$out"/Release/* "$out"/Resources/* "$out"
-'';
+  '';
 }
