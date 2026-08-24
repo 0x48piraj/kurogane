@@ -16,7 +16,7 @@
 
       cefVersion = "150.0.10";
     in
-    inputs.flake-utils.lib.eachSystem supportedSystems ( system:
+    inputs.flake-utils.lib.eachSystem supportedSystems (system:
       let
 
       pkgs = import nixpkgs { inherit system; };
@@ -79,7 +79,7 @@
         ];
       };
 
-      cef = pkgs.callPackage ./nix/cef.nix { inherit pkgs cefVersion; };
+      cef = pkgs.callPackage ./nix/cef.nix { inherit cefVersion; };
 
       cargoArtifacts = craneLib.vendorCargoDeps (commonArgs // { pname = "kuroganeDeps"; });
       crateInfo = craneLib.crateNameFromCargoToml { cargoToml = ./Cargo.toml; };
