@@ -3,15 +3,23 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    flake-utils.url = "github:numtide/flake-utils";
     crane.url = "github:ipetkov/crane";
   };
 
   outputs =
     { self, nixpkgs, ... }@inputs:
     let
+      supportedSystems = [
+        "x86_64-linux"
+      ];
+
       cefVersion = "150.0.10";
-      system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
+    in
+    inputs.flake-utils.lib.eachSystem supportedSystems ( system:
+      let
+
+      pkgs = import nixpkgs { inherit system; };
       craneLib = inputs.crane.mkLib pkgs;
 
       includeTemplates = path: _type: builtins.match ".*\/kurogane-cli\/templates.*" (toString path) != null;
@@ -71,7 +79,7 @@
         ];
       };
 
-      cef = pkgs.callPackage ./nix/cef.nix { inherit pkgs; };
+      cef = pkgs.callPackage ./nix/cef.nix { inherit pkgs cefVersion; };
 
       cargoArtifacts = craneLib.vendorCargoDeps (commonArgs // { pname = "kuroganeDeps"; });
       crateInfo = craneLib.crateNameFromCargoToml { cargoToml = ./Cargo.toml; };
@@ -103,18 +111,19 @@
       );
     in
     {
-      packages.${system} = {
+      packages = {
         default = kurogane;
         kurogane = kurogane;
       };
 
-      apps.${system}.default = {
+      apps.default = {
         type = "app";
         program = "${kurogane}/bin/kurogane";
       };
 
-      devShells.${system}.default = craneLib.devShell {
+      devShells.default = craneLib.devShell {
         packages = [ kurogane ];
       };
-    };
+    }
+  );
 }

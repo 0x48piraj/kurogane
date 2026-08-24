@@ -1,8 +1,6 @@
-{ pkgs }:
+{ pkgs, cefVersion }:
 
 let
-  cefVersion = "150.0.10";
-
   cefIntermediate = pkgs.cef-binary.override {
     version = cefVersion;
     gitRevision = "8042e43";
