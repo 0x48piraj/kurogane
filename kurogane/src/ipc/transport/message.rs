@@ -127,10 +127,11 @@ fn build_shm_parts(name: &str, envelope: &Envelope, parts: &[&[u8]]) -> Option<P
 /// Returns either shared-memory-backed or inline storage from CEF ListValue fields.
 pub fn extract_message(message: &ProcessMessage) -> Option<ReceivedMessage> {
     // SHM path: zero-copy from shared memory
-    if let Some(region) = message.shared_memory_region() {
-        if region.is_valid() != 0 && region.size() >= ENVELOPE_SIZE {
-            return Some(ReceivedMessage::Shm(Arc::new(ShmBinary::new(region, 0))));
-        }
+    if let Some(region) = message.shared_memory_region()
+        && region.is_valid() != 0
+        && region.size() >= ENVELOPE_SIZE
+    {
+        return Some(ReceivedMessage::Shm(Arc::new(ShmBinary::new(region, 0))));
     }
 
     // Inline path: read from ListValue fields

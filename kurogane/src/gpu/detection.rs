@@ -25,7 +25,7 @@ fn detect_virtual_gpu() -> bool {
                 return true;
             }
         }
-        return false;
+        false
     }
 
     #[cfg(not(target_os = "linux"))]

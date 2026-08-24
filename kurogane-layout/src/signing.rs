@@ -216,10 +216,10 @@ fn run_custom(path: &Path, config: &SignConfig) -> Result<(), SigningError> {
 
 #[cfg(target_os = "windows")]
 fn find_signtool(override_path: Option<&Path>) -> Option<PathBuf> {
-    if let Some(path) = override_path {
-        if path.exists() {
-            return Some(path.to_path_buf());
-        }
+    if let Some(path) = override_path
+        && path.exists()
+    {
+        return Some(path.to_path_buf());
     }
 
     // Check KUROGANE_SIGNTOOL_PATH env var

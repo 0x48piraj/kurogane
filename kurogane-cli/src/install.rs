@@ -49,10 +49,10 @@ pub fn run() -> Result<()> {
 
     std::fs::rename(&extracted, &install_dir)?;
 
-    if let Err(err) = std::fs::remove_file(&archive) {
-        if err.kind() != std::io::ErrorKind::NotFound {
-            tui::warn(&format!("failed to remove downloaded archive: {err}"));
-        }
+    if let Err(err) = std::fs::remove_file(&archive)
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        tui::warn(&format!("failed to remove downloaded archive: {err}"));
     }
 
     println!();

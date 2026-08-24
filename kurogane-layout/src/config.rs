@@ -17,7 +17,7 @@ pub enum ConfigError {
     Io(PathBuf, #[source] std::io::Error),
 
     #[error("failed to parse {}", .0.display())]
-    Parse(PathBuf, #[source] toml::de::Error),
+    Parse(PathBuf, #[source] Box<toml::de::Error>),
 
     #[error("resource source has no file name: {}", .0.display())]
     InvalidResourceSource(PathBuf),
@@ -44,7 +44,7 @@ impl PackagingConfig {
         }
 
         let raw = fs::read_to_string(&path).map_err(|e| ConfigError::Io(path.clone(), e))?;
-        toml::from_str(&raw).map_err(|e| ConfigError::Parse(path.clone(), e))
+        toml::from_str(&raw).map_err(|e| ConfigError::Parse(path.clone(), Box::new(e)))
     }
 }
 
