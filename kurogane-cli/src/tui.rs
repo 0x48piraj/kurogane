@@ -19,7 +19,8 @@ pub fn error(msg: &str) {
 
 /// Prints a warning message.
 pub fn warn(msg: &str) {
-    println!("{} {}", "[!]".yellow().bold(), msg);
+    eprintln!("{} {}", "[!]".yellow().bold(), msg);
+}
 
 /// Prints a blank line for spacing.
 pub fn blank() {
