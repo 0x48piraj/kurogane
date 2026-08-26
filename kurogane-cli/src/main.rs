@@ -24,7 +24,8 @@ mod appimage;
 mod nsis;
 
 mod collector;
-mod templates;
+mod cache;
+mod template;
 mod tui;
 
 #[derive(Parser)]
