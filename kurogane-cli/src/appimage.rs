@@ -9,9 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use kurogane_layout::{
-    PackagingConfig, ResolvedDistribution, SignConfig, package_directory, sign_tree,
-};
+use kurogane_layout::{PackagingConfig, ResolvedDistribution, SignConfig, package_directory, sign_tree};
 
 use crate::tui;
 
@@ -162,7 +160,7 @@ fn build_appdir(
     fs::set_permissions(&apprun_path, fs::Permissions::from_mode(0o755))?;
 
     // Desktop entry
-    let categories = config.linux.categories.clone().unwrap_or_default();
+    let categories = config.linux.categories.as_deref().unwrap_or_default();
     let terminal = config.linux.terminal.unwrap_or(false);
     let desktop_content = generate_desktop(
         name,

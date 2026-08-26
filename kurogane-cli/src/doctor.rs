@@ -115,7 +115,7 @@ pub fn run(json: bool) -> Result<()> {
 
     if let Ok(entries) = std::fs::read_dir(&root) {
         let versions: Vec<_> = entries
-            .filter_map(|e| e.ok())
+            .flatten()
             .filter(|e| e.path().is_dir())
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
@@ -142,7 +142,7 @@ pub fn run(json: bool) -> Result<()> {
 
                 tui::field("path", tui::format_path(&detected.root));
 
-                tui::field("mode", format!("{:?}", detected.mode));
+                tui::field("mode", detected.mode.to_string());
 
                 if let Some(p) = &detected.provenance {
                     tui::field("provenance", p.artifact.clone());
