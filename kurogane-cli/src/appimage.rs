@@ -267,7 +267,11 @@ pub fn build(
 
     let status = cmd.status()?;
     if !status.success() {
-        bail!("linuxdeploy failed");
+        let code = status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".into());
+        bail!("linuxdeploy failed (exit code: {code})");
     }
 
     // Remove intermediate AppDir

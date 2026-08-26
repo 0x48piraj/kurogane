@@ -77,7 +77,11 @@ pub fn run(cargo_args: Vec<OsString>) -> Result<()> {
     let status = cmd.status()?;
 
     if !status.success() {
-        anyhow::bail!("Application failed");
+        let code = status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".into());
+        anyhow::bail!("Application failed (exit code: {code})");
     }
 
     tui::blank();

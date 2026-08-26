@@ -19,7 +19,11 @@ pub fn run() -> Result<()> {
         .status()?;
 
     if !status.success() {
-        anyhow::bail!("Build failed");
+        let code = status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".into());
+        anyhow::bail!("Build failed (exit code: {code})");
     }
 
     tui::blank();

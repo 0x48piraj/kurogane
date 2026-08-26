@@ -27,7 +27,11 @@ pub fn run() -> Result<()> {
     let status = Command::new(exe).arg("dev").current_dir(root).status()?;
 
     if !status.success() {
-        bail!("Showcase failed");
+        let code = status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".into());
+        bail!("Showcase failed (exit code: {code})");
     }
 
     Ok(())

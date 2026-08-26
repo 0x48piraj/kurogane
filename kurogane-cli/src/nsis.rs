@@ -328,7 +328,11 @@ pub fn build(
         .status()?;
 
     if !status.success() {
-        bail!("makensis failed");
+        let code = status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".into());
+        bail!("makensis failed (exit code: {code})");
     }
 
     let installer_path = output_dir.join(&installer_name);
