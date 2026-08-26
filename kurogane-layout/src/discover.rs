@@ -17,6 +17,16 @@ pub enum DiscoveryMode {
     Installed,
 }
 
+impl std::fmt::Display for DiscoveryMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EnvironmentOverride => write!(f, "Environment override"),
+            Self::Bundled => write!(f, "Bundled"),
+            Self::Installed => write!(f, "Installed"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct DetectedCef {
     pub root: PathBuf,
