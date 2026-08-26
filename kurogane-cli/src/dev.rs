@@ -47,20 +47,27 @@ pub fn run(cargo_args: Vec<OsString>) -> Result<()> {
 
     cmd.env("CEF_PATH", &cef);
 
-    //
     // OS-specific runtime linking
-    //
+
     #[cfg(target_os = "linux")]
     {
-        let mut ld = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
-        ld = format!("{}:{}", cef.display(), ld);
+        let ld = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
+        let ld = if ld.is_empty() {
+            cef.display().to_string()
+        } else {
+            format!("{}:{}", cef.display(), ld)
+        };
         cmd.env("LD_LIBRARY_PATH", ld);
     }
 
     #[cfg(target_os = "windows")]
     {
-        let mut path = std::env::var("PATH").unwrap_or_default();
-        path = format!("{};{}", cef.display(), path);
+        let path = std::env::var("PATH").unwrap_or_default();
+        let path = if path.is_empty() {
+            cef.display().to_string()
+        } else {
+            format!("{};{}", cef.display(), path)
+        };
         cmd.env("PATH", path);
     }
 
