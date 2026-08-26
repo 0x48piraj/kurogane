@@ -13,11 +13,12 @@ path = "src/main.rs"
 [dependencies]
 kurogane-layout.workspace = true
 anyhow = "1"
+cargo-generate = "0.23.14"
+git2 = "0.21"
 cargo_metadata = "0.23.1"
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
 download-cef = "2.3"
-include_dir = "0.7.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
