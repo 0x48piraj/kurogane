@@ -26,7 +26,9 @@ pub fn run() -> Result<()> {
     tui::step("Resolving version...");
     tui::field("chromium", &cef_version);
 
-    let parent = install_dir.parent().unwrap();
+    let parent = install_dir
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("install path has no parent: {}", install_dir.display()))?;
     std::fs::create_dir_all(parent)?;
 
     let index = CefIndex::download()?;
