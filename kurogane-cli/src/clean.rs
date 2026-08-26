@@ -19,13 +19,22 @@ pub fn run(target: Option<String>) -> Result<()> {
         tui::warn("This will remove ALL Kurogane data.");
         tui::warn("Including installed Chromium runtimes.");
 
-        print!("\nContinue? [y/N]: ");
-        std::io::Write::flush(&mut std::io::stdout())?;
+        let confirmed = loop {
+            print!("\nContinue? [y/N]: ");
+            std::io::Write::flush(&mut std::io::stdout())?;
 
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
 
-        let confirmed = matches!(input.trim().to_lowercase().as_str(), "y" | "yes");
+            match input.trim() {
+                "y" | "Y" | "yes" | "Yes" | "YES" => break true,
+                "n" | "N" | "no" | "No" | "NO" | "" => break false,
+                _ => {
+                    tui::warn("Please enter y or n");
+                    continue;
+                }
+            }
+        };
 
         tui::blank();
 
