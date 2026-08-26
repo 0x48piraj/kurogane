@@ -65,6 +65,11 @@ fn resolve_sign_config(
 pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     tui::section("Kurogane Bundle");
 
+    // Declarative packaging configuration; defaults when absent
+    let metadata = MetadataCommand::new().exec()?;
+
+    let packaging_config = PackagingConfig::load(metadata.workspace_root.as_std_path())?;
+
     tui::step("Building release...");
 
     let mut cmd = Command::new("cargo");
@@ -86,15 +91,9 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     // Resolve distribution contents
     tui::step("Resolving distribution...");
 
-    let metadata = MetadataCommand::new().exec()?;
-
     let pkg = metadata
         .root_package()
         .ok_or_else(|| anyhow::anyhow!("No root package"))?;
-
-    // Declarative packaging configuration; defaults when absent
-    let packaging_config = PackagingConfig::load(metadata.workspace_root.as_std_path())
-        .map_err(|e| anyhow::anyhow!(e))?;
 
     let profile = if debug { "debug" } else { "release" };
     let target_dir = metadata.target_directory.join(profile);
@@ -120,8 +119,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
     tui::step("Resolving CEF runtime...");
 
-    let cef =
-        resolve_cef_for_bundle(env!("KUROGANE_CEF_VERSION")).map_err(|e| anyhow::anyhow!(e))?;
+    let cef = resolve_cef_for_bundle(env!("KUROGANE_CEF_VERSION"))?;
 
     match cef.source {
         kurogane_layout::CefSource::ManagedCache => {
@@ -149,8 +147,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
         .join("cef-runtime")
         .join(&runtime_version);
 
-    let cef_runtime = materialize_cef_runtime(&cef.root, runtime_dir.as_std_path())
-        .map_err(|e| anyhow::anyhow!(e))?;
+    let cef_runtime = materialize_cef_runtime(&cef.root, runtime_dir.as_std_path())?;
 
     let frontend = {
         let path = packaging_config
@@ -171,8 +168,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
         .resources
         .iter()
         .map(|r| r.to_resolved())
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| anyhow::anyhow!(e))?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let dist = ResolvedDistribution {
         metadata: AppMetadata {
@@ -212,7 +208,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
             let output = package_directory(&dist, &output_dir)?;
 
             if let Some(config) = &sign_config {
-                let signed = sign_tree(&output, config).map_err(|e| anyhow::anyhow!(e))?;
+                let signed = sign_tree(&output, config)?;
                 tui::field("signed", format!("{signed} file(s)"));
             }
 

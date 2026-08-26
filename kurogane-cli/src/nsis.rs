@@ -308,7 +308,7 @@ pub fn build(
 
     // Sign staged binaries using configured signing policy
     if let Some(sign_config) = sign {
-        let signed = sign_tree(&bundle_dir, sign_config).map_err(|e| anyhow::anyhow!(e))?;
+        let signed = sign_tree(&bundle_dir, sign_config)?;
         tui::field("signed", format!("{signed} file(s)"));
     }
 
@@ -345,8 +345,8 @@ pub fn build(
             bail!("installer {} was not produced", installer_path.display());
         }
 
-        sign_artifact(&installer_path, sign_config).map_err(|e| anyhow::anyhow!(e))?;
-        verify_signature(&installer_path, sign_config).map_err(|e| anyhow::anyhow!(e))?;
+        sign_artifact(&installer_path, sign_config)?;
+        verify_signature(&installer_path, sign_config)?;
         tui::field("signature", "verified");
     }
 

@@ -245,7 +245,7 @@ pub fn build(
 
     // Sign staged binaries before imaging
     if let Some(sign_config) = sign {
-        let signed = sign_tree(&bundle_dir, sign_config).map_err(|e| anyhow::anyhow!(e))?;
+        let signed = sign_tree(&bundle_dir, sign_config)?;
         tui::field("signed", format!("{signed} file(s)"));
     }
 
@@ -414,8 +414,7 @@ mod tests {
 
         build_appdir(&dist, &app_dir, &PackagingConfig::default()).unwrap();
 
-        let installed =
-            app_dir.join("usr/share/icons/hicolor/256x256/apps/myapp.png");
+        let installed = app_dir.join("usr/share/icons/hicolor/256x256/apps/myapp.png");
         assert_eq!(
             fs::read(&installed).unwrap(),
             b"png-bytes",
@@ -431,8 +430,7 @@ mod tests {
 
         let app_dir = dir.path().join("appdir");
 
-        let err =
-            build_appdir(&dist, &app_dir, &PackagingConfig::default()).unwrap_err();
+        let err = build_appdir(&dist, &app_dir, &PackagingConfig::default()).unwrap_err();
         assert!(
             err.to_string().contains("configured icon not found"),
             "expected actionable icon error, got: {err}"
@@ -455,10 +453,8 @@ mod tests {
 
         build_appdir(&dist, &app_dir, &config).unwrap();
 
-        let desktop = fs::read_to_string(
-            app_dir.join("usr/share/applications/myapp.desktop"),
-        )
-        .unwrap();
+        let desktop =
+            fs::read_to_string(app_dir.join("usr/share/applications/myapp.desktop")).unwrap();
         assert!(desktop.contains("Categories=Development;"));
         assert!(desktop.contains("Terminal=true"));
     }
@@ -488,7 +484,11 @@ mod tests {
         build_appdir(&dist, &app_dir, &PackagingConfig::default()).unwrap();
 
         assert!(app_dir.join("AppRun").exists());
-        assert!(app_dir.join("usr/share/applications/myapp.desktop").exists());
+        assert!(
+            app_dir
+                .join("usr/share/applications/myapp.desktop")
+                .exists()
+        );
         assert!(
             app_dir
                 .join("usr/share/icons/hicolor/256x256/apps/myapp.png")
@@ -541,10 +541,11 @@ mod tests {
         let mut dist = test_distribution(dir.path());
         let res = dir.path().join("extra.txt");
         fs::write(&res, "resource data").unwrap();
-        dist.extra_resources.push(kurogane_layout::ResolvedResource {
-            source: res.clone(),
-            destination: "extra.txt".into(),
-        });
+        dist.extra_resources
+            .push(kurogane_layout::ResolvedResource {
+                source: res.clone(),
+                destination: "extra.txt".into(),
+            });
 
         let app_dir = dir.path().join("appdir");
         build_appdir(&dist, &app_dir, &PackagingConfig::default()).unwrap();
