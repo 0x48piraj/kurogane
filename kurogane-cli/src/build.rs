@@ -22,7 +22,7 @@ pub fn run() -> Result<()> {
         anyhow::bail!("Build failed");
     }
 
-    println!();
+    tui::blank();
     tui::success("Build complete");
 
     Ok(())

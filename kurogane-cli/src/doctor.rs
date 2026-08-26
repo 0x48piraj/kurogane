@@ -121,7 +121,7 @@ pub fn run(json: bool) -> Result<()> {
             .collect();
 
         if !versions.is_empty() {
-            println!();
+            tui::blank();
 
             tui::info("Installed versions");
 
@@ -131,7 +131,7 @@ pub fn run(json: bool) -> Result<()> {
         }
     }
 
-    println!();
+    tui::blank();
 
     tui::section("Runtime Resolution");
 
@@ -169,7 +169,7 @@ pub fn run(json: bool) -> Result<()> {
         }
     }
 
-    println!();
+    tui::blank();
 
     // Check CEF_PATH env
     match std::env::var("CEF_PATH") {
@@ -216,7 +216,7 @@ pub fn run(json: bool) -> Result<()> {
             tui::error("Build toolchain not found");
         }
 
-        println!();
+        tui::blank();
 
         tui::info("Missing components");
 
@@ -253,7 +253,7 @@ pub fn run(json: bool) -> Result<()> {
         _ => tui::success("System status: Operational"),
     }
 
-    println!();
+    tui::blank();
 
     Ok(())
 }

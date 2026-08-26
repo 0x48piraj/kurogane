@@ -20,6 +20,10 @@ pub fn error(msg: &str) {
 /// Prints a warning message.
 pub fn warn(msg: &str) {
     println!("{} {}", "[!]".yellow().bold(), msg);
+
+/// Prints a blank line for spacing.
+pub fn blank() {
+    println!();
 }
 
 /// Prints an informational message

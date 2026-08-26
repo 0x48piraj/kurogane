@@ -21,7 +21,7 @@ pub fn run(target: Option<String>) -> Result<()> {
 /// Default: show everything
 fn list_all() -> Result<()> {
     list_version()?;
-    println!();
+    tui::blank();
     list_profiles()
 }
 

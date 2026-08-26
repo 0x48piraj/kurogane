@@ -27,7 +27,7 @@ pub fn run(target: Option<String>) -> Result<()> {
 
         let confirmed = matches!(input.trim().to_lowercase().as_str(), "y" | "yes");
 
-        println!();
+        tui::blank();
 
         if !confirmed {
             tui::info("Aborted");
@@ -52,7 +52,7 @@ pub fn run(target: Option<String>) -> Result<()> {
         }
     }
 
-    println!();
+    tui::blank();
 
     tui::step("Cleaning build artifacts");
 
@@ -71,7 +71,7 @@ pub fn run(target: Option<String>) -> Result<()> {
         tui::field("dist", "clean");
     }
 
-    println!();
+    tui::blank();
 
     // Cache
     let base = cache_root();
@@ -112,7 +112,7 @@ pub fn run(target: Option<String>) -> Result<()> {
         tui::field("showcase", "clean");
     }
 
-    println!();
+    tui::blank();
 
     if nuclear {
         tui::success("System-wide cleanup complete");

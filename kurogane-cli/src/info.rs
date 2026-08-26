@@ -18,7 +18,7 @@ pub fn run() -> Result<()> {
     tui::field("os", std::env::consts::OS);
     tui::field("arch", std::env::consts::ARCH);
 
-    println!();
+    tui::blank();
 
     tui::info("Environment");
 
@@ -28,7 +28,7 @@ pub fn run() -> Result<()> {
         Err(_) => tui::field("CEF_PATH", "not set"),
     }
 
-    println!();
+    tui::blank();
 
     tui::info("Project");
 
@@ -38,7 +38,7 @@ pub fn run() -> Result<()> {
         Err(_) => tui::field("directory", "(unknown)"),
     }
 
-    println!();
+    tui::blank();
 
     Ok(())
 }

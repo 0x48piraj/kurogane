@@ -231,7 +231,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
         }
     }
 
-    println!();
+    tui::blank();
     tui::success("Bundle ready");
     tui::field("path", "./dist");
 

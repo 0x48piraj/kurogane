@@ -71,7 +71,7 @@ pub fn run(cargo_args: Vec<OsString>) -> Result<()> {
         cmd.env("DYLD_FALLBACK_LIBRARY_PATH", dyld);
     }
 
-    println!();
+    tui::blank();
     tui::step("Launching application");
 
     let status = cmd.status()?;
@@ -80,7 +80,7 @@ pub fn run(cargo_args: Vec<OsString>) -> Result<()> {
         anyhow::bail!("Application failed");
     }
 
-    println!();
+    tui::blank();
     tui::success("Application exited");
 
     Ok(())

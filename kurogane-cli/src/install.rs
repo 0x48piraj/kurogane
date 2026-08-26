@@ -55,7 +55,7 @@ pub fn run() -> Result<()> {
         tui::warn(&format!("failed to remove downloaded archive: {err}"));
     }
 
-    println!();
+    tui::blank();
 
     tui::success("Chromium engine installed");
     tui::field("path", tui::format_path(&install_dir));
