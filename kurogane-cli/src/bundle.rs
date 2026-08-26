@@ -62,7 +62,6 @@ fn resolve_sign_config(
 }
 
 /// Build the application in the requested profile.
-#[allow(unused_variables)]
 pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     tui::section("Kurogane Bundle");
 
