@@ -100,6 +100,8 @@ mod tests {
         let exe = bundle.join("runtime").join("myapp");
         #[cfg(target_os = "windows")]
         let exe = bundle.join("myapp.exe");
+        #[cfg(target_os = "macos")]
+        let exe = bundle.join("myapp");
 
         assert!(exe.exists(), "bundled executable should exist");
     }
@@ -116,8 +118,12 @@ mod tests {
         let libcef = bundle.join("runtime").join("cef").join("libcef.so");
         #[cfg(target_os = "windows")]
         let libcef = bundle.join("libcef.dll");
+        #[cfg(target_os = "macos")]
+        let libcef = bundle
+            .join("Chromium Embedded Framework.framework")
+            .join("Chromium Embedded Framework");
 
-        assert!(libcef.exists(), "libcef should be in the bundle");
+        assert!(libcef.exists(), "CEF binary should be in the bundle");
     }
 
     #[test]

@@ -162,6 +162,10 @@ mod test_helpers {
         if cfg!(target_os = "windows") {
             std::fs::write(cef.join("libcef.dll"), "cef").unwrap();
             std::fs::write(cef.join("chrome_elf.dll"), "elf").unwrap();
+        } else if cfg!(target_os = "macos") {
+            let fw = cef.join("Chromium Embedded Framework.framework");
+            std::fs::create_dir_all(&fw).unwrap();
+            std::fs::write(fw.join("Chromium Embedded Framework"), "cef").unwrap();
         } else {
             std::fs::write(cef.join("libcef.so"), "cef").unwrap();
             std::fs::write(cef.join("chrome-sandbox"), "sandbox").unwrap();
