@@ -15,6 +15,11 @@ pub enum RuntimeError {
     CefNotInstalled,
     InvalidCefInstallation(String),
 
+    CacheUnavailable {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
     BrowserCreationFailed,
     WindowCreationFailed,
 }
@@ -101,6 +106,19 @@ impl Display for RuntimeError {
                 reason
             ),
 
+            RuntimeError::CacheUnavailable { path, source } => write!(
+                f,
+                concat!(
+                    "Unable to create cache directory:\n\n",
+                    "  {}\n\n",
+                    "OS error:\n",
+                    "  {}\n\n",
+                    "Check filesystem permissions or free up disk space."
+                ),
+                path.display(),
+                source,
+            ),
+
             RuntimeError::BrowserCreationFailed => write!(
                 f,
                 concat!(
@@ -123,7 +141,8 @@ impl Display for RuntimeError {
 impl std::error::Error for RuntimeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            RuntimeError::AssetRootUnavailable { source, .. } => Some(source),
+            RuntimeError::AssetRootUnavailable { source, .. }
+            | RuntimeError::CacheUnavailable { source, .. } => Some(source),
             _ => None,
         }
     }

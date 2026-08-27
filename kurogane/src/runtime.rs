@@ -42,7 +42,10 @@ fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeEr
     let cache_dir = profile_dir(&raw_name, &exe);
     debug!("Cache dir: {}", cache_dir.display());
 
-    std::fs::create_dir_all(&cache_dir).ok();
+    std::fs::create_dir_all(&cache_dir).map_err(|e| RuntimeError::CacheUnavailable {
+        path: cache_dir.clone(),
+        source: e,
+    })?;
 
     let detected = detect_cef_root_with_version(None).map_err(|_| RuntimeError::CefNotInstalled)?;
 
