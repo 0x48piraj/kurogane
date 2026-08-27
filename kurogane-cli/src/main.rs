@@ -28,6 +28,7 @@ mod nsis;
 mod collector;
 mod cache;
 mod template;
+mod starters;
 mod tui;
 
 #[derive(Parser)]
