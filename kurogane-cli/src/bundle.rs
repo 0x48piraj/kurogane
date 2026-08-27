@@ -187,11 +187,14 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
             .app
             .frontend
             .clone()
-            .unwrap_or_else(|| PathBuf::from("content"));
+            .unwrap_or_else(|| PathBuf::from("frontend/dist"));
         if path.exists() {
             Some(path)
         } else {
-            tui::warn("No content/ directory found");
+            tui::warn(&format!(
+                "Frontend directory '{}' does not exist",
+                path.display()
+            ));
             None
         }
     };
