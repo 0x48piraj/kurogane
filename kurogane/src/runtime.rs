@@ -76,7 +76,9 @@ fn build_settings(
 
     let exe_str = layout.exe.to_string_lossy();
     let cef_root_str = layout.cef_root.to_string_lossy();
-    let no_sandbox: i32 = if cfg!(target_os = "linux") { 1 } else { 0 };
+
+    // Sandbox is disabled on all platforms
+    let no_sandbox: i32 = 1;
 
     #[cfg(not(target_os = "macos"))]
     {

@@ -57,7 +57,7 @@ mod tests {
         let exe = dir.join(exe_name);
         fs::write(&exe, "binary").unwrap();
 
-        let frontend = dir.join("frontend/dist");
+        let frontend = dir.join("frontend");
         fs::create_dir_all(&frontend).unwrap();
         fs::write(frontend.join("index.html"), "<html></html>").unwrap();
 

@@ -16,6 +16,8 @@ pub fn run(cargo_args: Vec<OsString>) -> Result<()> {
 
     let version = env!("KUROGANE_CEF_VERSION");
 
+    // CEF_PATH overrides the managed install for development convenience
+    // Provenance is not checked; dev mode only needs a valid runtime
     let cef = std::env::var_os("CEF_PATH")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| cef_install_dir(version));
