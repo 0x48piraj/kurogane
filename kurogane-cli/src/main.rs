@@ -106,8 +106,6 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
-    validate_platform();
-
     let cli = Cli::parse();
 
     match cli.command {
@@ -137,18 +135,6 @@ fn main() -> anyhow::Result<()> {
         Commands::Doctor { json } => doctor::run(json),
         Commands::List { target } => list::run(target),
         Commands::Info => info::run(),
-    }
-}
-
-/// macOS is currently unsupported due to missing platform-specific runtime support.
-/// Fail fast to avoid undefined behavior.
-#[cold]
-fn validate_platform() {
-    #[cfg(target_os = "macos")]
-    {
-        tui::error("macOS is not supported");
-        tui::info("Support is planned but not implemented yet");
-        std::process::exit(1);
     }
 }
 
