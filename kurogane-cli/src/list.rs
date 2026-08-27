@@ -14,7 +14,7 @@ pub fn run(target: Option<String>) -> Result<()> {
         Some("profiles") => list_profiles(),
         Some("version") => list_version(),
         None => list_all(),
-        _ => bail!("Unknown list target"),
+        _ => bail!("Unknown list target. Valid targets: profiles, version"),
     }
 }
 
