@@ -1,4 +1,4 @@
-//! Lightweight helpers for styled CLI output.
+//! Styled command-line output helpers.
 //!
 //! Provides consistent prefixes and coloring for common message types
 //! like success, error, warnings and structured sections.
@@ -19,7 +19,12 @@ pub fn error(msg: &str) {
 
 /// Prints a warning message.
 pub fn warn(msg: &str) {
-    println!("{} {}", "[!]".yellow().bold(), msg);
+    eprintln!("{} {}", "[!]".yellow().bold(), msg);
+}
+
+/// Prints a blank line for spacing.
+pub fn blank() {
+    println!();
 }
 
 /// Prints an informational message

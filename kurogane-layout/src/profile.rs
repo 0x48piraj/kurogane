@@ -1,3 +1,9 @@
+//! Per-application runtime profile and cache paths.
+//!
+//! Profile directories are derived from the application identity and
+//! executable path so that separate applications or installations do
+//! not accidentally share runtime state.
+
 use std::path::{Path, PathBuf};
 
 use crate::platform;
@@ -7,22 +13,25 @@ pub fn cache_root() -> PathBuf {
 }
 
 pub fn profile_dir(app_id: &str, exe: &Path) -> PathBuf {
-    // Isolate the CEF cache per executable.
-    // Reusing a profile across runs can trigger session restore leading to multiple on_context_initialized invocations.
+    // Isolate the CEF cache per executable
+    // Reusing a profile across runs can trigger session restore
+    // leading to multiple on_context_initialized invocations
     let exe = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
 
     let hash = fnv1a_64(&exe);
 
     let app_id = sanitize_name(app_id);
 
+    // Formats the identity hash for use in the profile directory name
     cache_root()
         .join("profiles")
-        .join(format!("{app_id}-{hash}"))
+        .join(format!("{app_id}-{hash:016x}"))
 }
 
-/// Computes a deterministic FNV-1a 64-bit hash of a filesystem path.
+/// Computes a deterministic FNV-1a 64-bit digest of a filesystem path.
 /// Intended for identity stability, not cryptographic use.
-pub fn fnv1a_64(path: &Path) -> String {
+/// Callers choose how to render the digest.
+pub fn fnv1a_64(path: &Path) -> u64 {
     let mut hash: u64 = 14695981039346656037;
 
     for byte in path.to_string_lossy().as_bytes() {
@@ -30,7 +39,7 @@ pub fn fnv1a_64(path: &Path) -> String {
         hash = hash.wrapping_mul(1099511628211);
     }
 
-    format!("{:016x}", hash)
+    hash
 }
 
 /// Sanitizes a user-provided name into a filesystem-safe identifier.
@@ -97,7 +106,6 @@ mod property_tests {
     proptest! {
         #[test]
         fn sanitize_name_never_panics(s in ".*") {
-            // never panics on any input
             let _ = sanitize_name(&s);
         }
 
@@ -125,6 +133,25 @@ mod property_tests {
         let b = profile_dir("my-app", exe);
 
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn fnv1a_64_matches_reference_digest() {
+        // Reference FNV-1a 64-bit value for this exact path string
+        assert_eq!(
+            fnv1a_64(Path::new("/some/path/app.exe")),
+            14_687_075_936_177_481_486u64
+        );
+    }
+
+    #[test]
+    fn profile_dir_renders_hex_digest_without_padding_loss() {
+        let exe = Path::new("/some/path/app.exe");
+        let dir = profile_dir("my-app", exe);
+
+        let name = dir.file_name().unwrap().to_str().unwrap();
+
+        assert_eq!(name, format!("my-app-{:016x}", fnv1a_64(exe)));
     }
 
     #[test]

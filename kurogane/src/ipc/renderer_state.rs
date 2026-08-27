@@ -4,6 +4,7 @@
 //! as a single consolidated state behind one global.
 
 use cef::*;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
@@ -81,7 +82,7 @@ impl EventCallbackRegistry {
 
     /// Unregister a callback by subscription id.
     pub fn unregister(&mut self, id: i64) -> bool {
-        for (_, callbacks) in self.callbacks.iter_mut() {
+        for callbacks in self.callbacks.values_mut() {
             let before = callbacks.len();
             callbacks.retain(|(sid, _, _)| *sid != id);
             if callbacks.len() != before {
@@ -201,8 +202,8 @@ impl PromiseRegistry {
         loop {
             let id = self.next_id;
             self.next_id = self.next_id.checked_add(1).unwrap_or(1);
-            if !self.pending.contains_key(&id) {
-                self.pending.insert(id, (context, promise, subsystem));
+            if let Entry::Vacant(slot) = self.pending.entry(id) {
+                slot.insert((context, promise, subsystem));
                 return id;
             }
             if self.next_id == start {

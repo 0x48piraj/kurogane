@@ -1,3 +1,8 @@
+//! Listing of installed runtimes and cached profiles.
+//!
+//! This module provides human-readable summaries of Kurogane-managed
+//! CEF versions and application runtime profiles.
+
 use anyhow::{Result, bail};
 use std::fs;
 use kurogane_layout::cache_root;
@@ -9,14 +14,14 @@ pub fn run(target: Option<String>) -> Result<()> {
         Some("profiles") => list_profiles(),
         Some("version") => list_version(),
         None => list_all(),
-        _ => bail!("Unknown list target"),
+        _ => bail!("Unknown list target. Valid targets: profiles, version"),
     }
 }
 
 /// Default: show everything
 fn list_all() -> Result<()> {
     list_version()?;
-    println!();
+    tui::blank();
     list_profiles()
 }
 

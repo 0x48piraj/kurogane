@@ -1,3 +1,8 @@
+//! Managed CEF installation.
+//!
+//! This module downloads the configured CEF distribution, records its
+//! provenance and installs it into Kurogane's managed runtime cache.
+
 use anyhow::Result;
 use download_cef::{CefIndex, DEFAULT_TARGET};
 use kurogane_layout::install_root;
@@ -18,12 +23,12 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    let cef_version = env!("KUROGANE_CEF_VERSION").to_string();
-
     tui::step("Resolving version...");
     tui::field("chromium", &cef_version);
 
-    let parent = install_dir.parent().unwrap(); // ~/.local/share
+    let parent = install_dir
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("install path has no parent: {}", install_dir.display()))?;
     std::fs::create_dir_all(parent)?;
 
     let index = CefIndex::download()?;
@@ -46,9 +51,13 @@ pub fn run() -> Result<()> {
 
     std::fs::rename(&extracted, &install_dir)?;
 
-    let _ = std::fs::remove_file(&archive);
+    if let Err(err) = std::fs::remove_file(&archive)
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        tui::warn(&format!("failed to remove downloaded archive: {err}"));
+    }
 
-    println!();
+    tui::blank();
 
     tui::success("Chromium engine installed");
     tui::field("path", tui::format_path(&install_dir));

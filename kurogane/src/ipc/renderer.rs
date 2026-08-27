@@ -624,12 +624,11 @@ wrap_v8_handler! {
                     payload_kind: PAYLOAD_EMPTY,
                 };
 
-                if let Some(context) = v8_context_get_current_context() {
-                    if let Some(frame) = context.frame() {
-                        if let Some(mut msg) = build_message("kurogane_rpc", &envelope, &[]) {
-                            frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
-                        }
-                    }
+                if let Some(context) = v8_context_get_current_context()
+                    && let Some(frame) = context.frame()
+                    && let Some(mut msg) = build_message("kurogane_rpc", &envelope, &[])
+                {
+                    frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
                 }
 
                 if ctx.enter() == 0 {
@@ -795,20 +794,20 @@ wrap_v8_handler! {
                 (name, removed)
             };
 
-            if let Some(event_name) = event_name {
-                if let Some(frame) = context.frame() {
-                    let payload = encode_cmd_payload(&event_name, &[]);
-                    let envelope = Envelope {
-                        version: ENVELOPE_VERSION,
-                        subsystem: SUB_EVENT,
-                        opcode: EVENT_UNSUBSCRIBE,
-                        flags: 0,
-                        correlation_id: id as u32,
-                        payload_kind: PAYLOAD_EMPTY,
-                    };
-                    if let Some(mut msg) = build_message("kurogane_event", &envelope, &payload) {
-                        frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
-                    }
+            if let Some(event_name) = event_name
+                && let Some(frame) = context.frame()
+            {
+                let payload = encode_cmd_payload(&event_name, &[]);
+                let envelope = Envelope {
+                    version: ENVELOPE_VERSION,
+                    subsystem: SUB_EVENT,
+                    opcode: EVENT_UNSUBSCRIBE,
+                    flags: 0,
+                    correlation_id: id as u32,
+                    payload_kind: PAYLOAD_EMPTY,
+                };
+                if let Some(mut msg) = build_message("kurogane_event", &envelope, &payload) {
+                    frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
                 }
             }
 

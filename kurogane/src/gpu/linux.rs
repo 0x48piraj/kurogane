@@ -42,17 +42,17 @@ fn detect_display_server() -> DisplayServer {
 
 fn detect_gpu_vendor() -> GpuVendor {
     // Primary: PCI device list (vendor ID 10de = NVIDIA)
-    if let Ok(s) = std::fs::read_to_string("/proc/bus/pci/devices") {
-        if s.contains("10de") {
-            return GpuVendor::Nvidia;
-        }
+    if let Ok(s) = std::fs::read_to_string("/proc/bus/pci/devices")
+        && s.contains("10de")
+    {
+        return GpuVendor::Nvidia;
     }
 
     // Fallback: check whether the nvidia kernel module is loaded
-    if let Ok(s) = std::fs::read_to_string("/proc/modules") {
-        if s.lines().any(|l| l.starts_with("nvidia ")) {
-            return GpuVendor::Nvidia;
-        }
+    if let Ok(s) = std::fs::read_to_string("/proc/modules")
+        && s.lines().any(|l| l.starts_with("nvidia "))
+    {
+        return GpuVendor::Nvidia;
     }
 
     GpuVendor::Other

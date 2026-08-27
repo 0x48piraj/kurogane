@@ -9,7 +9,7 @@ use crate::ShutdownSignal;
 use crate::browser_registry::{BrowserRegistry, BrowserId, BrowserMetadata};
 use crate::window_registry::{WindowRegistry, WindowId, WindowMetadata};
 use crate::window::{KuroganeWindowDelegate, KuroganeBrowserViewDelegate};
-use kurogane_layout::{detect_cef_root, validate_cef_root, profile_dir};
+use kurogane_layout::{detect_cef_root_with_version, validate_cef_runtime, profile_dir};
 use crate::ipc::IpcRouter;
 use crate::spec::RuntimeSpec;
 use crate::debug;
@@ -42,11 +42,14 @@ fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeEr
     let cache_dir = profile_dir(&raw_name, &exe);
     debug!("Cache dir: {}", cache_dir.display());
 
-    std::fs::create_dir_all(&cache_dir).ok();
+    std::fs::create_dir_all(&cache_dir).map_err(|e| RuntimeError::CacheUnavailable {
+        path: cache_dir.clone(),
+        source: e,
+    })?;
 
-    let detected = detect_cef_root().map_err(|_| RuntimeError::CefNotInstalled)?;
+    let detected = detect_cef_root_with_version(None).map_err(|_| RuntimeError::CefNotInstalled)?;
 
-    validate_cef_root(&detected.root)
+    validate_cef_runtime(&detected.root)
         .map_err(|e| RuntimeError::InvalidCefInstallation(e.to_string()))?;
 
     let cef_root = detected
@@ -76,7 +79,9 @@ fn build_settings(
 
     let exe_str = layout.exe.to_string_lossy();
     let cef_root_str = layout.cef_root.to_string_lossy();
-    let no_sandbox: i32 = if cfg!(target_os = "linux") { 1 } else { 0 };
+
+    // Sandbox is disabled on all platforms
+    let no_sandbox: i32 = 1;
 
     #[cfg(not(target_os = "macos"))]
     {
@@ -520,7 +525,11 @@ impl BrowserHandle {
             reg.get(self.id).map(|s| s.browser.clone())
         };
         if let Some(b) = browser {
-            debug!("close browser cef_id={} is_loading={}", b.identifier(), b.is_loading());
+            debug!(
+                "close browser cef_id={} is_loading={}",
+                b.identifier(),
+                b.is_loading()
+            );
             if let Some(h) = b.host() {
                 h.close_browser(force as i32);
             }
@@ -533,7 +542,9 @@ impl BrowserHandle {
             let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
-        if let Some(b) = browser && let Some(h) = b.host() {
+        if let Some(b) = browser
+            && let Some(h) = b.host()
+        {
             h.was_resized();
         }
     }
@@ -544,7 +555,9 @@ impl BrowserHandle {
             let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
-        if let Some(b) = browser && let Some(h) = b.host() {
+        if let Some(b) = browser
+            && let Some(h) = b.host()
+        {
             h.notify_move_or_resize_started();
         }
     }
@@ -558,7 +571,9 @@ impl BrowserHandle {
             reg.get(self.id).map(|s| s.browser.clone())
         };
 
-        if let Some(b) = browser && let Some(frame) = b.main_frame() {
+        if let Some(b) = browser
+            && let Some(frame) = b.main_frame()
+        {
             let url = CefString::from(url);
             frame.load_url(Some(&url));
         }
@@ -667,15 +682,13 @@ impl BrowserHandle {
             reg.get(self.id).map(|s| s.browser.clone())
         };
 
-        if let Some(b) = browser && let Some(frame) = b.main_frame() {
+        if let Some(b) = browser
+            && let Some(frame) = b.main_frame()
+        {
             let code = CefString::from(code);
             let script_url = CefString::from(script_url);
 
-            frame.execute_java_script(
-                Some(&code),
-                Some(&script_url),
-                start_line,
-            );
+            frame.execute_java_script(Some(&code), Some(&script_url), start_line);
         }
     }
 
@@ -686,7 +699,9 @@ impl BrowserHandle {
             let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
-        if let Some(b) = browser && let Some(h) = b.host() {
+        if let Some(b) = browser
+            && let Some(h) = b.host()
+        {
             h.show_dev_tools(None, None, None, None);
         }
     }
@@ -698,7 +713,9 @@ impl BrowserHandle {
             let reg = self.browser_registry.lock().unwrap();
             reg.get(self.id).map(|s| s.browser.clone())
         };
-        if let Some(b) = browser && let Some(h) = b.host() {
+        if let Some(b) = browser
+            && let Some(h) = b.host()
+        {
             h.close_dev_tools();
         }
     }
@@ -759,10 +776,8 @@ impl AppInstance {
     pub fn create_window(&self, options: WindowOptions) -> Result<WindowId, RuntimeError> {
         let is_closing = Arc::new(AtomicBool::new(false));
 
-        let mut client = KuroganeClient::new(
-            self.handle.inner.services.clone(),
-            is_closing.clone(),
-        );
+        let mut client =
+            KuroganeClient::new(self.handle.inner.services.clone(), is_closing.clone());
 
         let mut bv_delegate = KuroganeBrowserViewDelegate::new(
             self.handle.inner.services.browser_registry.clone(),
@@ -778,7 +793,8 @@ impl AppInstance {
             None,
             None,
             Some(&mut bv_delegate),
-        ).ok_or(RuntimeError::BrowserCreationFailed)?;
+        )
+        .ok_or(RuntimeError::BrowserCreationFailed)?;
 
         let window_id = {
             let mut reg = self.handle.inner.services.window_registry.lock().unwrap();
@@ -799,8 +815,7 @@ impl AppInstance {
             is_closing,
         );
 
-        window_create_top_level(Some(&mut delegate))
-            .ok_or(RuntimeError::WindowCreationFailed)?;
+        window_create_top_level(Some(&mut delegate)).ok_or(RuntimeError::WindowCreationFailed)?;
 
         Ok(window_id)
     }

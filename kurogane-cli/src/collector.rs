@@ -1,9 +1,10 @@
+//! Diagnostic data collection.
+//!
+//! This module gathers system, environment, CEF and GPU information into a
+//! serializable report suitable for both human-readable and JSON output.
+
 use serde::Serialize;
 use std::{collections::BTreeMap, process::Command};
-
-//
-// Public API
-//
 
 pub fn collect_all() -> DoctorReport {
     DoctorReport {
@@ -13,10 +14,6 @@ pub fn collect_all() -> DoctorReport {
         gpu: gpu::collect(),
     }
 }
-
-//
-// Data model
-//
 
 #[derive(Serialize)]
 pub struct DoctorReport {
@@ -48,7 +45,8 @@ pub struct EnvInfo {
 pub struct CefInfo {
     pub version: String,
     pub path: String,
-    pub exists: bool,
+    pub valid: bool,
+    pub source: String,
 }
 
 #[derive(Serialize)]
@@ -60,10 +58,7 @@ pub struct GpuInfo {
     pub source: String,
 }
 
-//
-// System
-//
-
+/// System and desktop-session information.
 mod system {
     use super::*;
 
@@ -159,6 +154,7 @@ mod system {
 }
 
 mod env {
+    //! Runtime environment variables relevant to Kurogane and CEF.
     use super::*;
 
     pub fn collect() -> EnvInfo {
@@ -196,39 +192,43 @@ mod env {
     }
 }
 
-//
-// CEF
-//
-
 mod cef {
+    //! Managed CEF installation information.
     use super::*;
+    use kurogane_layout::{detect_cef_root_with_version, validate_cef_runtime};
 
     pub fn collect() -> CefInfo {
         let version = env!("KUROGANE_CEF_VERSION").to_string();
 
-        let path = dirs::home_dir()
-            .map(|h| h.join(".local/share/cef").join(&version))
-            .unwrap_or_default();
+        match detect_cef_root_with_version(Some(&version)) {
+            Ok(detected) => {
+                let valid = validate_cef_runtime(&detected.root).is_ok();
 
-        CefInfo {
-            version,
-            path: path.display().to_string(),
-            exists: path.exists(),
+                CefInfo {
+                    version,
+                    path: detected.root.display().to_string(),
+                    valid,
+                    source: detected.mode.to_string(),
+                }
+            }
+            Err(_) => CefInfo {
+                version,
+                path: String::new(),
+                valid: false,
+                source: "not found".into(),
+            },
         }
     }
 }
 
-//
-// GPU
-//
-
 mod gpu {
+    //! Best-effort GPU and graphics-stack diagnostics.
     use super::*;
 
     pub fn collect() -> GpuInfo {
         #[cfg(target_os = "linux")]
         {
-            return collect_linux();
+            collect_linux()
         }
 
         #[cfg(target_os = "windows")]

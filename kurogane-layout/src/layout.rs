@@ -1,3 +1,10 @@
+//! Filesystem layout and low-level bundle utilities.
+//!
+//! This module owns paths for managed CEF installations, bundled CEF
+//! discovery and recursive directory copying.
+//!
+//! It does not define package formats or application metadata.
+
 use std::path::{Path, PathBuf};
 
 use crate::platform;
@@ -15,6 +22,24 @@ pub fn installed_cef_root(version: &str) -> Option<PathBuf> {
     let root = cef_install_dir(version);
 
     root.exists().then_some(root)
+}
+
+pub fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let dest = dst.join(entry.file_name());
+
+        if path.is_dir() {
+            copy_dir(&path, &dest)?;
+        } else {
+            std::fs::copy(&path, &dest)?;
+        }
+    }
+
+    Ok(())
 }
 
 pub fn bundled_cef_root() -> Result<Option<PathBuf>, std::io::Error> {

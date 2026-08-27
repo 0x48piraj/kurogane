@@ -1,5 +1,15 @@
+//! Environment and installation diagnostics.
+//!
+//! This module validates the local CEF installation, runtime discovery,
+//! build toolchain and project structure and presents the resulting health
+//! report to the user.
+
 use anyhow::Result;
-use kurogane_layout::{detect_cef_root, install_root, installed_cef_root, validate_cef_root};
+use cargo_metadata::MetadataCommand;
+use kurogane_layout::{
+    detect_cef_root_with_version, install_root, installed_cef_root, read_provenance,
+    validate_cef_runtime,
+};
 
 use crate::collector;
 use crate::tui;
@@ -70,11 +80,15 @@ pub fn run(json: bool) -> Result<()> {
 
     // Managed installed runtime
     match installed_cef_root(version) {
-        Some(root) => match validate_cef_root(&root) {
+        Some(root) => match validate_cef_runtime(&root) {
             Ok(_) => {
                 tui::success("Managed Chromium runtime");
                 tui::field("version", version);
                 tui::field("path", tui::format_path(&root));
+
+                if let Ok(Some(p)) = read_provenance(&root) {
+                    tui::field("artifact", p.artifact);
+                }
             }
 
             Err(e) => {
@@ -102,13 +116,13 @@ pub fn run(json: bool) -> Result<()> {
 
     if let Ok(entries) = std::fs::read_dir(&root) {
         let versions: Vec<_> = entries
-            .filter_map(|e| e.ok())
+            .flatten()
             .filter(|e| e.path().is_dir())
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
 
         if !versions.is_empty() {
-            println!();
+            tui::blank();
 
             tui::info("Installed versions");
 
@@ -118,18 +132,24 @@ pub fn run(json: bool) -> Result<()> {
         }
     }
 
-    println!();
+    tui::blank();
 
     tui::section("Runtime Resolution");
 
-    match detect_cef_root() {
-        Ok(detected) => match validate_cef_root(&detected.root) {
+    match detect_cef_root_with_version(Some(version)) {
+        Ok(detected) => match validate_cef_runtime(&detected.root) {
             Ok(_) => {
                 tui::success("Active runtime resolved");
 
                 tui::field("path", tui::format_path(&detected.root));
 
-                tui::field("mode", format!("{:?}", detected.mode));
+                tui::field("mode", detected.mode.to_string());
+
+                if let Some(p) = &detected.provenance {
+                    tui::field("provenance", p.artifact.clone());
+                } else {
+                    tui::warn("Provenance unknown (no archive.json)");
+                }
             }
 
             Err(e) => {
@@ -150,7 +170,7 @@ pub fn run(json: bool) -> Result<()> {
         }
     }
 
-    println!();
+    tui::blank();
 
     // Check CEF_PATH env
     match std::env::var("CEF_PATH") {
@@ -197,7 +217,7 @@ pub fn run(json: bool) -> Result<()> {
             tui::error("Build toolchain not found");
         }
 
-        println!();
+        tui::blank();
 
         tui::info("Missing components");
 
@@ -209,21 +229,39 @@ pub fn run(json: bool) -> Result<()> {
 
     tui::section("Project");
 
-    // Check Cargo.toml
-    if std::path::Path::new("Cargo.toml").exists() {
-        tui::success("Cargo project detected");
-    } else {
-        tui::error("Not inside a Rust project");
+    // Resolve workspace root
+    let workspace_root = MetadataCommand::new().exec().ok().map(|m| {
+        let root = m.workspace_root.into_std_path_buf();
+        tui::success("Cargo workspace detected");
+        tui::field("root", tui::format_path(&root));
+        root
+    });
+
+    if workspace_root.is_none() {
+        tui::error("Not inside a Cargo workspace");
         fail += 1;
     }
 
-    // Check project structure
-    if std::path::Path::new("content").exists() {
-        tui::success("Using default frontend directory");
+    // Check configured frontend from the resolved workspace root
+    let packaging_config = workspace_root
+        .as_ref()
+        .and_then(|root| kurogane_layout::PackagingConfig::load(root).ok());
+
+    if let Some(ref config) = packaging_config {
+        if let Some(frontend) = &config.app.frontend {
+            if frontend.exists() {
+                tui::success("Frontend directory");
+                tui::field("path", frontend.display());
+            } else {
+                tui::warn("Configured frontend directory not found");
+                tui::field("path", frontend.display());
+                warn += 1;
+            }
+        } else {
+            tui::info("No frontend directory configured in kurogane.toml");
+        }
     } else {
-        tui::warn("Default content directory not found");
-        tui::field("default", "./content");
-        warn += 1;
+        tui::info("No kurogane.toml found");
     }
 
     tui::section("Summary");
@@ -234,7 +272,7 @@ pub fn run(json: bool) -> Result<()> {
         _ => tui::success("System status: Operational"),
     }
 
-    println!();
+    tui::blank();
 
     Ok(())
 }
