@@ -242,13 +242,26 @@ pub fn run(json: bool) -> Result<()> {
         fail += 1;
     }
 
-    // Check project structure
-    if std::path::Path::new("frontend/dist").exists() {
-        tui::success("Using default frontend directory");
+    // Check configured frontend from the resolved workspace root
+    let packaging_config = workspace_root
+        .as_ref()
+        .and_then(|root| kurogane_layout::PackagingConfig::load(root).ok());
+
+    if let Some(ref config) = packaging_config {
+        if let Some(frontend) = &config.app.frontend {
+            if frontend.exists() {
+                tui::success("Frontend directory");
+                tui::field("path", frontend.display());
+            } else {
+                tui::warn("Configured frontend directory not found");
+                tui::field("path", frontend.display());
+                warn += 1;
+            }
+        } else {
+            tui::info("No frontend directory configured in kurogane.toml");
+        }
     } else {
-        tui::warn("Default frontend/dist/ directory not found");
-        tui::field("default", "./frontend/dist");
-        warn += 1;
+        tui::info("No kurogane.toml found");
     }
 
     tui::section("Summary");
