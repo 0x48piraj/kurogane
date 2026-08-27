@@ -66,6 +66,7 @@ pub fn anchor_path(project_root: &Path, path: &Path) -> PathBuf {
 pub struct AppConfig {
     pub name: Option<String>,
     pub frontend: Option<PathBuf>,
+    pub frontend_build: Option<String>,
     pub publisher: Option<String>,
     pub description: Option<String>,
     pub copyright: Option<String>,

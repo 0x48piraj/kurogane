@@ -15,6 +15,36 @@ use kurogane_layout::{
 
 use crate::tui;
 
+/// Run the frontend build command if configured.
+fn build_frontend(
+    workspace_root: &std::path::Path,
+    config: &kurogane_layout::AppConfig,
+) -> Result<()> {
+    let Some(command) = &config.frontend_build else {
+        return Ok(());
+    };
+
+    let package_json = workspace_root.join("package.json");
+    if !package_json.exists() {
+        return Ok(());
+    }
+
+    let parts: Vec<&str> = command.split_whitespace().collect();
+    let (program, args) = parts
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("empty frontend-build command"))?;
+
+    tui::step("Building frontend...");
+
+    let status = Command::new(*program).args(args).status()?;
+
+    if !status.success() {
+        bail!("Frontend build failed: {command}");
+    }
+
+    Ok(())
+}
+
 /// Output format for the application bundle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackageFormat {
@@ -69,6 +99,9 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     let metadata = MetadataCommand::new().exec()?;
 
     let packaging_config = PackagingConfig::load(metadata.workspace_root.as_std_path())?;
+
+    // Build frontend before cargo build
+    build_frontend(metadata.workspace_root.as_std_path(), &packaging_config.app)?;
 
     tui::step("Building release...");
 
