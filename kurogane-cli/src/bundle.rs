@@ -182,19 +182,20 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
     let cef_runtime = materialize_cef_runtime(&cef.root, runtime_dir.as_std_path())?;
 
-    let frontend = {
-        let path = packaging_config
-            .app
-            .frontend
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("frontend/dist"));
-        if path.exists() {
-            Some(path)
-        } else {
-            tui::warn(&format!(
-                "Frontend directory '{}' does not exist",
-                path.display()
-            ));
+    let frontend = match &packaging_config.app.frontend {
+        Some(path) => {
+            if path.exists() {
+                Some(path.clone())
+            } else {
+                tui::warn(&format!(
+                    "Configured frontend directory '{}' does not exist",
+                    path.display()
+                ));
+                None
+            }
+        }
+        None => {
+            tui::info("No frontend directory configured in kurogane.toml");
             None
         }
     };
