@@ -5,6 +5,7 @@
 //! report to the user.
 
 use anyhow::Result;
+use cargo_metadata::MetadataCommand;
 use kurogane_layout::{
     detect_cef_root_with_version, install_root, installed_cef_root, read_provenance,
     validate_cef_runtime,
@@ -228,11 +229,16 @@ pub fn run(json: bool) -> Result<()> {
 
     tui::section("Project");
 
-    // Check Cargo.toml
-    if std::path::Path::new("Cargo.toml").exists() {
-        tui::success("Cargo project detected");
-    } else {
-        tui::error("Not inside a Rust project");
+    // Resolve workspace root
+    let workspace_root = MetadataCommand::new().exec().ok().map(|m| {
+        let root = m.workspace_root.into_std_path_buf();
+        tui::success("Cargo workspace detected");
+        tui::field("root", tui::format_path(&root));
+        root
+    });
+
+    if workspace_root.is_none() {
+        tui::error("Not inside a Cargo workspace");
         fail += 1;
     }
 
