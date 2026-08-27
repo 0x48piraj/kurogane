@@ -440,8 +440,32 @@ fn merge_copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// V8 snapshot file names across CEF versions.
 const V8_SNAPSHOTS: &[&str] = &["v8_context_snapshot.bin", "snapshot_blob.bin"];
 
+/// The platform for which a CEF runtime layout is validated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Platform {
+    Windows,
+    Linux,
+    MacOs,
+}
+
+/// Returns the current platform.
+fn current_platform() -> Platform {
+    if cfg!(target_os = "windows") {
+        Platform::Windows
+    } else if cfg!(target_os = "macos") {
+        Platform::MacOs
+    } else {
+        Platform::Linux
+    }
+}
+
 /// Validates the required files in a CEF runtime.
 pub fn validate_cef_runtime(runtime: &Path) -> Result<(), CefError> {
+    validate_cef_runtime_for(runtime, current_platform())
+}
+
+/// Validates a CEF runtime against a platform's expected layout.
+fn validate_cef_runtime_for(runtime: &Path, platform: Platform) -> Result<(), CefError> {
     let mut missing: Vec<&'static str> = Vec::new();
 
     let require = |missing: &mut Vec<&'static str>, name: &'static str| {
@@ -450,19 +474,63 @@ pub fn validate_cef_runtime(runtime: &Path) -> Result<(), CefError> {
         }
     };
 
-    if cfg!(target_os = "windows") {
-        require(&mut missing, "libcef.dll");
-        require(&mut missing, "chrome_elf.dll");
-    } else {
-        require(&mut missing, "libcef.so");
-        require(&mut missing, "chrome-sandbox");
-    }
+    match platform {
+        Platform::Windows => {
+            require(&mut missing, "libcef.dll");
+            require(&mut missing, "chrome_elf.dll");
+            require(&mut missing, "icudtl.dat");
+            require(&mut missing, "locales");
 
-    require(&mut missing, "icudtl.dat");
-    require(&mut missing, "locales");
+            if !V8_SNAPSHOTS.iter().any(|s| runtime.join(s).exists()) {
+                missing.push("v8_context_snapshot.bin");
+            }
+        }
+        Platform::MacOs => {
+            require(
+                &mut missing,
+                "Chromium Embedded Framework.framework/Chromium Embedded Framework",
+            );
 
-    if !V8_SNAPSHOTS.iter().any(|s| runtime.join(s).exists()) {
-        missing.push("v8_context_snapshot.bin");
+            // Resources, locales and V8 snapshots ship inside the framework on
+            // macOS rather than at the runtime root
+            let resources = runtime.join("Chromium Embedded Framework.framework/Resources");
+
+            if !resources.join("icudtl.dat").exists() {
+                missing.push("Chromium Embedded Framework.framework/Resources/icudtl.dat");
+            }
+
+            let has_locale = fs::read_dir(&resources).is_ok_and(|entries| {
+                entries.filter_map(Result::ok).any(|entry| {
+                    entry.path().is_dir() && entry.file_name().to_string_lossy().ends_with(".lproj")
+                })
+            });
+
+            if !has_locale {
+                missing.push("Chromium Embedded Framework.framework/Resources/*.lproj");
+            }
+
+            let has_snapshot = fs::read_dir(&resources).is_ok_and(|entries| {
+                entries.filter_map(Result::ok).any(|entry| {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    name == "snapshot_blob.bin" || name.starts_with("v8_context_snapshot.")
+                })
+            });
+
+            if !has_snapshot {
+                missing.push("Chromium Embedded Framework.framework/Resources/v8 snapshot");
+            }
+        }
+        Platform::Linux => {
+            require(&mut missing, "libcef.so");
+            require(&mut missing, "chrome-sandbox");
+            require(&mut missing, "icudtl.dat");
+            require(&mut missing, "locales");
+
+            if !V8_SNAPSHOTS.iter().any(|s| runtime.join(s).exists()) {
+                missing.push("v8_context_snapshot.bin");
+            }
+        }
     }
 
     if missing.is_empty() {
@@ -712,6 +780,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn either_v8_snapshot_satisfies_requirement() {
         let dir = tmp();
         let runtime = dir.path().join("rt");
@@ -740,6 +809,41 @@ mod tests {
             validate_cef_runtime(&runtime),
             Err(CefError::InvalidRuntime { .. })
         ));
+    }
+
+    #[test]
+    fn macos_framework_layout_passes_validation() {
+        let dir = tmp();
+        let runtime = dir.path().join("rt");
+        let fw = runtime.join("Chromium Embedded Framework.framework");
+        let resources = fw.join("Resources");
+        fs::create_dir_all(resources.join("en.lproj")).unwrap();
+        fs::write(resources.join("en.lproj").join("locale.pak"), "pak").unwrap();
+        fs::write(fw.join("Chromium Embedded Framework"), "cef").unwrap();
+        fs::write(resources.join("icudtl.dat"), "icu").unwrap();
+
+        // Architecture-suffixed snapshot name satisfies the requirement
+        fs::write(resources.join("v8_context_snapshot.arm64.bin"), "v8").unwrap();
+        assert!(validate_cef_runtime_for(&runtime, Platform::MacOs).is_ok());
+
+        // Missing snapshot is reported
+        fs::remove_file(resources.join("v8_context_snapshot.arm64.bin")).unwrap();
+        match validate_cef_runtime_for(&runtime, Platform::MacOs) {
+            Err(CefError::InvalidRuntime { missing, .. }) => {
+                assert!(missing.contains("v8 snapshot"));
+            }
+            other => panic!("expected InvalidRuntime, got {other:?}"),
+        }
+
+        // Missing locale bundle is reported
+        fs::write(resources.join("v8_context_snapshot.arm64.bin"), "v8").unwrap();
+        fs::remove_dir_all(resources.join("en.lproj")).unwrap();
+        match validate_cef_runtime_for(&runtime, Platform::MacOs) {
+            Err(CefError::InvalidRuntime { missing, .. }) => {
+                assert!(missing.contains("*.lproj"));
+            }
+            other => panic!("expected InvalidRuntime, got {other:?}"),
+        }
     }
 
     // Resolution policy
