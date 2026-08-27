@@ -74,7 +74,10 @@ pub fn run() -> Result<()> {
                     tui::field("icon", icon.display());
                 }
                 if !config.bundle.resources.is_empty() {
-                    tui::field("resources", format!("{} declared", config.bundle.resources.len()));
+                    tui::field(
+                        "resources",
+                        format!("{} declared", config.bundle.resources.len()),
+                    );
                 }
             }
             Err(err) => {
@@ -83,7 +86,9 @@ pub fn run() -> Result<()> {
         }
     } else {
         tui::field("config", "not found");
-        tui::info("Run `kurogane new` to create a project or `kurogane init` to add Kurogane to an existing project");
+        tui::info(
+            "Run `kurogane new` to create a project or `kurogane init` to add Kurogane to an existing project",
+        );
     }
 
     tui::blank();
