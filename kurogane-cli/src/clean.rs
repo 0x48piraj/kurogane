@@ -92,8 +92,22 @@ pub fn run(target: Option<String>) -> Result<()> {
 
     let profiles = base.join("profiles");
     let showcase = base.join("showcase");
+    let templates = crate::cache::templates_root().ok();
 
     tui::step("Clearing runtime cache");
+
+    // Templates
+    if let Some(templates) = templates.filter(|p| p.exists()) {
+        match fs::remove_dir_all(&templates) {
+            Ok(_) => tui::field("templates", "removed"),
+            Err(e) => {
+                tui::warn(&format!("Failed to remove template cache: {}", e));
+                tui::field("templates", "failed");
+            }
+        }
+    } else {
+        tui::field("templates", "clean");
+    }
 
     // Profiles
     if profiles.exists() {
