@@ -1,24 +1,28 @@
 use anyhow::{Result, bail};
-use std::fs;
 use std::process::Command;
 
-use crate::templates::extract_template;
+use crate::template;
 use crate::tui;
+
+/// The showcase template repository.
+const SHOWCASE_TEMPLATE_REPO: &str = "https://github.com/kurogane-rs/showcase";
 
 pub fn run() -> Result<()> {
     tui::section("Kurogane Showcase");
 
-    let root = dirs::cache_dir()
+    let cache_root = dirs::cache_dir()
         .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?
-        .join("kurogane")
-        .join("showcase");
+        .join("kurogane");
+    let root = cache_root.join("showcase");
 
     tui::step("Preparing showcase environment");
     tui::field("path", root.to_string_lossy());
 
-    // Extract showcase template from embedded assets
-    fs::create_dir_all(&root)?;
-    extract_template("showcase", &root)?;
+    // Regenerate the showcase project from the cached template
+    let acquired = crate::cache::acquire(SHOWCASE_TEMPLATE_REPO)?;
+    tui::field("commit", &acquired.commit);
+    template::confirm_hooks(&acquired.path, false)?;
+    template::generate_project(&acquired.path, "showcase", &cache_root, true, &[])?;
 
     tui::step("Launching showcase...");
 
