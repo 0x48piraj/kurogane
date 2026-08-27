@@ -328,9 +328,11 @@ fn is_download_cache_artifact(name: &str) -> bool {
     name == "archive.json" || name.ends_with(".tar.bz2")
 }
 
-fn libcef_name() -> &'static str {
+fn cef_binary_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "libcef.dll"
+    } else if cfg!(target_os = "macos") {
+        "Chromium Embedded Framework.framework/Chromium Embedded Framework"
     } else {
         "libcef.so"
     }
@@ -346,14 +348,17 @@ pub fn validate_distribution(root: &Path) -> Result<(), CefError> {
     }
 
     let raw_shape = root.join("Release").is_dir() && root.join("Resources").is_dir();
-    let flat_shape = root.join(libcef_name()).exists();
+    let flat_shape = root.join(cef_binary_name()).exists();
 
     if raw_shape || flat_shape {
         Ok(())
     } else {
         Err(CefError::InvalidDistribution {
             root: root.to_path_buf(),
-            reason: format!("neither Release/+Resources/ nor {} found", libcef_name()),
+            reason: format!(
+                "neither Release/+Resources/ nor {} found",
+                cef_binary_name()
+            ),
         })
     }
 }
@@ -378,7 +383,7 @@ pub fn materialize_cef_runtime(
         // Raw official distribution
         copy_dir(&release, destination)?;
         merge_copy_dir(&resources, destination)?;
-    } else if distribution_root.join(libcef_name()).exists() {
+    } else if distribution_root.join(cef_binary_name()).exists() {
         // Already-flattened distribution
         fs::create_dir_all(destination)?;
 
@@ -403,7 +408,10 @@ pub fn materialize_cef_runtime(
     } else {
         return Err(CefError::InvalidDistribution {
             root: distribution_root.to_path_buf(),
-            reason: format!("neither Release/+Resources/ nor {} found", libcef_name()),
+            reason: format!(
+                "neither Release/+Resources/ nor {} found",
+                cef_binary_name()
+            ),
         });
     }
 
@@ -470,20 +478,27 @@ pub fn validate_cef_runtime(runtime: &Path) -> Result<(), CefError> {
 #[cfg(test)]
 pub(crate) fn write_runtime_fixture(dir: &Path) -> PathBuf {
     fs::create_dir_all(dir).expect("create fixture dir");
-    let libcef = if cfg!(target_os = "windows") {
-        dir.join("libcef.dll")
-    } else {
-        dir.join("libcef.so")
-    };
-    fs::write(libcef, "cef").unwrap();
-    fs::write(dir.join("icudtl.dat"), "icu").unwrap();
-    fs::write(dir.join("v8_context_snapshot.bin"), "v8").unwrap();
-    fs::create_dir_all(dir.join("locales")).unwrap();
-    fs::write(dir.join("locales").join("en-US.pak"), "pak").unwrap();
+
     if cfg!(target_os = "windows") {
+        fs::write(dir.join("libcef.dll"), "cef").unwrap();
         fs::write(dir.join("chrome_elf.dll"), "elf").unwrap();
+    } else if cfg!(target_os = "macos") {
+        let fw = dir.join("Chromium Embedded Framework.framework");
+        fs::create_dir_all(&fw).unwrap();
+        fs::write(fw.join("Chromium Embedded Framework"), "cef").unwrap();
+
+        let resources = fw.join("Resources");
+        fs::create_dir_all(resources.join("en.lproj")).unwrap();
+        fs::write(resources.join("en.lproj").join("locale.pak"), "pak").unwrap();
+        fs::write(resources.join("icudtl.dat"), "icu").unwrap();
+        fs::write(resources.join("v8_context_snapshot.arm64.bin"), "v8").unwrap();
     } else {
+        fs::write(dir.join("libcef.so"), "cef").unwrap();
         fs::write(dir.join("chrome-sandbox"), "sandbox").unwrap();
+        fs::write(dir.join("icudtl.dat"), "icu").unwrap();
+        fs::write(dir.join("v8_context_snapshot.bin"), "v8").unwrap();
+        fs::create_dir_all(dir.join("locales")).unwrap();
+        fs::write(dir.join("locales").join("en-US.pak"), "pak").unwrap();
     }
     dir.to_path_buf()
 }
@@ -535,7 +550,7 @@ mod tests {
         let dir = tmp();
         fs::create_dir_all(dir.path().join("Release")).unwrap();
         fs::create_dir_all(dir.path().join("Resources")).unwrap();
-        fs::write(dir.path().join("Release").join(libcef_name()), "").unwrap();
+        fs::write(dir.path().join("Release").join(cef_binary_name()), "").unwrap();
 
         assert!(validate_distribution(dir.path()).is_ok());
     }
@@ -543,7 +558,7 @@ mod tests {
     #[test]
     fn flat_distribution_shape_is_valid() {
         let dir = tmp();
-        fs::write(dir.path().join(libcef_name()), "").unwrap();
+        fs::write(dir.path().join(cef_binary_name()), "").unwrap();
         assert!(validate_distribution(dir.path()).is_ok());
     }
 
@@ -599,7 +614,7 @@ mod tests {
         let dest = dir.path().join("runtime");
         materialize_cef_runtime(&dist, &dest).unwrap();
 
-        assert!(dest.join(libcef_name()).exists());
+        assert!(dest.join(cef_binary_name()).exists());
         assert!(!dest.join("include").exists());
         assert!(!dest.join("cmake").exists());
         assert!(!dest.join("libcef_dll").exists());
@@ -632,7 +647,7 @@ mod tests {
                 .exists()
         );
         assert!(
-            dest.join(libcef_name()).exists(),
+            dest.join(cef_binary_name()).exists(),
             "runtime files unaffected"
         );
     }
@@ -645,7 +660,7 @@ mod tests {
         materialize_cef_runtime(&dist, &dest).unwrap();
 
         // Corrupt the source; cache must still be returned untouched
-        fs::remove_file(dist.join(libcef_name())).unwrap();
+        fs::remove_file(dist.join(cef_binary_name())).unwrap();
         let marker = dest.join("cache-marker");
         fs::write(&marker, "hit").unwrap();
 
@@ -662,7 +677,7 @@ mod tests {
         fs::write(dest.join("garbage"), "").unwrap();
 
         materialize_cef_runtime(&dist, &dest).unwrap();
-        assert!(dest.join(libcef_name()).exists());
+        assert!(dest.join(cef_binary_name()).exists());
         assert!(!dest.join("garbage").exists());
     }
 
@@ -683,9 +698,14 @@ mod tests {
 
         match validate_cef_runtime(&runtime) {
             Err(CefError::InvalidRuntime { missing, .. }) => {
-                assert!(missing.contains(libcef_name()));
+                assert!(missing.contains(cef_binary_name()));
                 assert!(missing.contains("icudtl.dat"));
-                assert!(missing.contains("locales"));
+                if cfg!(target_os = "macos") {
+                    assert!(!missing.contains("locales"));
+                    assert!(missing.contains("*.lproj"));
+                } else {
+                    assert!(missing.contains("locales"));
+                }
             }
             other => panic!("expected InvalidRuntime, got {other:?}"),
         }
@@ -696,7 +716,7 @@ mod tests {
         let dir = tmp();
         let runtime = dir.path().join("rt");
         fs::create_dir_all(&runtime).unwrap();
-        fs::write(runtime.join(libcef_name()), "").unwrap();
+        fs::write(runtime.join(cef_binary_name()), "").unwrap();
         fs::write(runtime.join("icudtl.dat"), "").unwrap();
         fs::create_dir_all(runtime.join("locales")).unwrap();
         if cfg!(target_os = "windows") {
