@@ -149,3 +149,118 @@ fn prompt_dev_url() -> Result<String> {
 
     Ok(input)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn fake_web_app(dir: &Path) {
+        fs::create_dir_all(dir.join("dist")).unwrap();
+        fs::write(dir.join("package.json"), "{\n  \"name\": \"app\"\n}\n").unwrap();
+        fs::write(dir.join("dist/index.html"), "<html></html>\n").unwrap();
+    }
+
+    /// Stand-in for the shell repository.
+    fn fixture_shell(dir: &Path) {
+        fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"{{crate_name}}\"\nversion = \"0.0.0\"\n\n[workspace]\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(
+            dir.join("kurogane.toml"),
+            "[app]\nname = \"{{project-name}}\"\nfrontend = \"{{frontend}}\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("cargo-generate.toml"),
+            "[placeholders.frontend]\ntype = \"string\"\nprompt = \"Frontend assets directory\"\ndefault = \"dist\"\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn integration_adds_the_shell_without_touching_existing_files() {
+        let app = tempfile::tempdir().unwrap();
+        fake_web_app(app.path());
+        let package_json_before = fs::read(app.path().join("package.json")).unwrap();
+
+        let shell = tempfile::tempdir().unwrap();
+        fixture_shell(shell.path());
+
+        initialize(
+            app.path(),
+            shell.path().to_str().unwrap(),
+            false,
+            Some(PathBuf::from("dist")),
+            Some("http://localhost:5173".to_string()),
+        )
+        .unwrap();
+
+        assert!(app.path().join("Cargo.toml").exists());
+        assert!(app.path().join("src/main.rs").exists());
+        assert!(app.path().join(".cargo/config.toml").exists());
+
+        let manifest = fs::read_to_string(app.path().join("kurogane.toml")).unwrap();
+        assert!(manifest.contains("frontend = \"dist\""));
+
+        assert_eq!(
+            fs::read(app.path().join("package.json")).unwrap(),
+            package_json_before,
+            "pre-existing files must be untouched"
+        );
+    }
+
+    #[test]
+    fn missing_frontend_dir_succeeds_with_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("index.html"), "<html></html>\n").unwrap();
+
+        let shell = tempfile::tempdir().unwrap();
+        fixture_shell(shell.path());
+
+        // Should succeed even though "nonexistent" dir does not exist
+        initialize(
+            dir.path(),
+            shell.path().to_str().unwrap(),
+            false,
+            Some(PathBuf::from("nonexistent")),
+            Some("http://localhost:5173".to_string()),
+        )
+        .unwrap();
+
+        let manifest = fs::read_to_string(dir.path().join("kurogane.toml")).unwrap();
+        assert!(manifest.contains("frontend = \"nonexistent\""));
+    }
+
+    #[test]
+    fn refuses_already_initialized_projects() {
+        let dir = tempfile::tempdir().unwrap();
+        fake_web_app(dir.path());
+        fs::write(dir.path().join("kurogane.toml"), "[app]\n").unwrap();
+
+        let err = initialize(dir.path(), "unused", false, None, None).unwrap_err();
+        assert!(err.to_string().contains("already contains kurogane.toml"));
+    }
+
+    #[test]
+    fn colliding_files_abort_before_anything_is_generated() {
+        let dir = tempfile::tempdir().unwrap();
+        fake_web_app(dir.path());
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"theirs\"\n",
+        )
+        .unwrap();
+
+        let err = initialize(dir.path(), "unused", false, None, None).unwrap_err();
+        assert!(err.to_string().contains("Cargo.toml"));
+        assert!(
+            !dir.path().join("src").exists(),
+            "no generation may happen on collision"
+        );
+    }
+}
