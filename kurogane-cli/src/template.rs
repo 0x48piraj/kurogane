@@ -196,6 +196,9 @@ pub(crate) fn write_cargo_config(project_dir: &Path) -> Result<()> {
         project_dir.join(".cargo/config.toml"),
         r#"[target.'cfg(all(unix, not(target_os = "macos")))']
 rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN/cef"]
+
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "link-arg=-Wl,-rpath,@executable_path"]
 "#,
     )?;
 
