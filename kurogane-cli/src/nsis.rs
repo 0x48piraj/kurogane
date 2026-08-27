@@ -366,17 +366,7 @@ mod tests {
         tempfile::tempdir().expect("failed to create temp dir")
     }
 
-    fn create_cef_fixture(dir: &Path) -> PathBuf {
-        let cef = dir.join("cef");
-        fs::create_dir_all(&cef).unwrap();
-        fs::write(cef.join("libcef.dll"), "cef").unwrap();
-        fs::write(cef.join("chrome_elf.dll"), "elf").unwrap();
-        fs::write(cef.join("icudtl.dat"), "icu").unwrap();
-        fs::write(cef.join("v8_context_snapshot.bin"), "v8").unwrap();
-        fs::create_dir_all(cef.join("locales")).unwrap();
-        fs::write(cef.join("locales").join("en-US.pak"), "pak").unwrap();
-        cef
-    }
+    use crate::test_helpers::create_cef_fixture;
 
     fn test_distribution(dir: &Path) -> ResolvedDistribution {
         #[cfg(target_os = "windows")]
@@ -387,7 +377,7 @@ mod tests {
         let exe = dir.join(exe_name);
         fs::write(&exe, "binary").unwrap();
 
-        let frontend = dir.join("frontend/dist");
+        let frontend = dir.join("frontend");
         fs::create_dir_all(&frontend).unwrap();
         fs::write(frontend.join("index.html"), "<html></html>").unwrap();
 

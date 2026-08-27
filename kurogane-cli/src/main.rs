@@ -151,3 +151,25 @@ fn validate_platform() {
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod test_helpers {
+    use std::path::{Path, PathBuf};
+
+    pub(crate) fn create_cef_fixture(dir: &Path) -> PathBuf {
+        let cef = dir.join("cef");
+        std::fs::create_dir_all(&cef).unwrap();
+        if cfg!(target_os = "windows") {
+            std::fs::write(cef.join("libcef.dll"), "cef").unwrap();
+            std::fs::write(cef.join("chrome_elf.dll"), "elf").unwrap();
+        } else {
+            std::fs::write(cef.join("libcef.so"), "cef").unwrap();
+            std::fs::write(cef.join("chrome-sandbox"), "sandbox").unwrap();
+        }
+        std::fs::write(cef.join("icudtl.dat"), "icu").unwrap();
+        std::fs::write(cef.join("v8_context_snapshot.bin"), "v8").unwrap();
+        std::fs::create_dir_all(cef.join("locales")).unwrap();
+        std::fs::write(cef.join("locales").join("en-US.pak"), "pak").unwrap();
+        cef
+    }
+}
