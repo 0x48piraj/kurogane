@@ -45,7 +45,8 @@ pub struct EnvInfo {
 pub struct CefInfo {
     pub version: String,
     pub path: String,
-    pub exists: bool,
+    pub valid: bool,
+    pub source: String,
 }
 
 #[derive(Serialize)]
@@ -194,17 +195,28 @@ mod env {
 mod cef {
     //! Managed CEF installation information.
     use super::*;
-    use kurogane_layout::install_root;
+    use kurogane_layout::{detect_cef_root_with_version, validate_cef_runtime};
 
     pub fn collect() -> CefInfo {
         let version = env!("KUROGANE_CEF_VERSION").to_string();
 
-        let path = install_root().join(&version);
+        match detect_cef_root_with_version(Some(&version)) {
+            Ok(detected) => {
+                let valid = validate_cef_runtime(&detected.root).is_ok();
 
-        CefInfo {
-            version,
-            path: path.display().to_string(),
-            exists: path.exists(),
+                CefInfo {
+                    version,
+                    path: detected.root.display().to_string(),
+                    valid,
+                    source: detected.mode.to_string(),
+                }
+            }
+            Err(_) => CefInfo {
+                version,
+                path: String::new(),
+                valid: false,
+                source: "not found".into(),
+            },
         }
     }
 }
