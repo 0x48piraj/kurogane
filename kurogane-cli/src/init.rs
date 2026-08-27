@@ -21,7 +21,7 @@ const SHELL_FILES: &[&str] = &[
     ".cargo/config.toml",
 ];
 
-pub fn run(assume_yes: bool, assets: Option<PathBuf>, dev_url: Option<String>) -> Result<()> {
+pub fn run(assets: Option<PathBuf>, dev_url: Option<String>, assume_yes: bool) -> Result<()> {
     let dir = std::env::current_dir()?;
     initialize(&dir, SHELL_TEMPLATE_REPO, assume_yes, assets, dev_url)
 }

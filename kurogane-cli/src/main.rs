@@ -5,11 +5,13 @@
 
 use clap::{Parser, Subcommand};
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 mod install;
 mod dev;
 mod build;
 mod bundle;
+mod new;
 mod init;
 mod showcase;
 mod clean;
@@ -61,11 +63,30 @@ enum Commands {
         #[arg(long)]
         sign: bool,
     },
-    Init {
-        name: Option<String>,
+    New {
+        /// Official starter name
+        starter: Option<String>,
 
+        /// Use an arbitrary template source
         #[arg(long)]
         template: Option<String>,
+
+        /// Accept template hooks without prompting
+        #[arg(long)]
+        yes: bool,
+    },
+    Init {
+        /// Frontend assets directory
+        #[arg(long)]
+        assets: Option<PathBuf>,
+
+        /// Dev server URL
+        #[arg(long)]
+        dev_url: Option<String>,
+
+        /// Accept template hooks without prompting
+        #[arg(long)]
+        yes: bool,
     },
     Clean {
         #[arg(value_parser = ["all"])]
@@ -100,7 +121,16 @@ fn main() -> anyhow::Result<()> {
             let format = bundle::PackageFormat::from_str(&format)?;
             bundle::run(debug, format, sign)
         }
-        Commands::Init { name, template } => init::run(name, template),
+        Commands::New {
+            starter,
+            template,
+            yes,
+        } => new::run(starter, template, yes),
+        Commands::Init {
+            assets,
+            dev_url,
+            yes,
+        } => init::run(assets, dev_url, yes),
         Commands::Clean { target } => clean::run(target),
         Commands::Showcase => showcase::run(),
         Commands::Doctor { json } => doctor::run(json),
