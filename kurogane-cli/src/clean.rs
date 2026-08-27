@@ -59,6 +59,36 @@ pub fn run(target: Option<String>) -> Result<()> {
         } else {
             tui::field("cef", "clean");
         }
+
+        // Project-local materialized CEF runtimes
+        let target_kurogane = std::path::PathBuf::from("target").join("kurogane");
+
+        if target_kurogane.exists() {
+            match fs::remove_dir_all(&target_kurogane) {
+                Ok(_) => tui::field("target/kurogane", "removed"),
+                Err(e) => {
+                    tui::warn(&format!("Failed to remove materialized runtimes: {}", e));
+                    tui::field("target/kurogane", "failed");
+                }
+            }
+        } else {
+            tui::field("target/kurogane", "clean");
+        }
+
+        // Build tools cache
+        let tools = cache_root().join("tools");
+
+        if tools.exists() {
+            match fs::remove_dir_all(&tools) {
+                Ok(_) => tui::field("tools", "removed"),
+                Err(e) => {
+                    tui::warn(&format!("Failed to remove build tools: {}", e));
+                    tui::field("tools", "failed");
+                }
+            }
+        } else {
+            tui::field("tools", "clean");
+        }
     }
 
     tui::blank();
