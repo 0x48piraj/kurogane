@@ -237,11 +237,11 @@ pub fn run(json: bool) -> Result<()> {
     }
 
     // Check project structure
-    if std::path::Path::new("content").exists() {
+    if std::path::Path::new("frontend/dist").exists() {
         tui::success("Using default frontend directory");
     } else {
-        tui::warn("Default content directory not found");
-        tui::field("default", "./content");
+        tui::warn("Default frontend/dist/ directory not found");
+        tui::field("default", "./frontend/dist");
         warn += 1;
     }
 

@@ -93,7 +93,7 @@ impl StreamResponder {
 ///
 /// Implement this trait to handle a stream's full lifecycle.
 /// The framework instantiates the handler via a factory closure
-/// when a stream opens, and drops it when the stream ends or errors.
+/// when a stream opens and drops it when the stream ends or errors.
 ///
 /// Each callback receives a StreamResponder so handlers can send data
 /// back to the renderer without storing the responder themselves.

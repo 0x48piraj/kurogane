@@ -232,7 +232,7 @@
      * Open a stream to the browser process.
      *
      * Resolves with a Stream object that provides methods for
-     * reading data, writing data, and handling completion.
+     * reading data, writing data and handling completion.
      *
      * @param {string} handlerName - registered stream handler name
      * @param {string} [metadata] - optional metadata string

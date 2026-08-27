@@ -170,7 +170,7 @@ pub struct ResolvedCef {
 
 #[derive(Debug, Error)]
 pub enum CefError {
-    #[error("no usable CEF distribution — run `kurogane install` (expected {expected} at {path})")]
+    #[error("No usable CEF distribution; Run `kurogane install` (expected {expected} at {path})")]
     NotFound { expected: String, path: PathBuf },
 
     #[error("CEF_PATH does not exist: {0}")]
