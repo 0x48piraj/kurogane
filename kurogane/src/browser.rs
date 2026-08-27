@@ -95,14 +95,19 @@ wrap_browser_process_handler! {
                 self.services.window_registry.clone(),
             );
 
-            let browser_view = browser_view_create(
+            let browser_view = match browser_view_create(
                 Some(&mut client),
                 Some(&url),
                 Some(&Default::default()),
                 None, None,
                 Some(&mut bv_delegate),
-            )
-            .expect("unrecoverable: browser_view_create failed");
+            ) {
+                Some(view) => view,
+                None => {
+                    eprintln!("kurogane: browser_view_create failed; no window will appear");
+                    return;
+                }
+            };
 
             debug!("BrowserView created");
 
@@ -123,8 +128,10 @@ wrap_browser_process_handler! {
 
             // Create window
             debug!("Creating top-level window");
-            let _window = window_create_top_level(Some(&mut delegate))
-                .expect("unrecoverable: window_create_top_level failed");
+            if window_create_top_level(Some(&mut delegate)).is_none() {
+                eprintln!("kurogane: window_create_top_level failed; no window will appear");
+                return;
+            }
 
             debug!("Top-level window created");
         }
