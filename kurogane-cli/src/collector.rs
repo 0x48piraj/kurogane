@@ -107,6 +107,16 @@ mod system {
                 .filter(|s| !s.is_empty())
         }
 
+        #[cfg(target_os = "macos")]
+        {
+            Command::new("sw_vers")
+                .args(["-productVersion"])
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .filter(|s| !s.is_empty())
+        }
+
         #[cfg(target_os = "windows")]
         {
             Command::new("cmd")
@@ -117,7 +127,11 @@ mod system {
                 .filter(|s| !s.is_empty())
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "windows"
+        )))]
         {
             None
         }
@@ -127,6 +141,11 @@ mod system {
         #[cfg(target_os = "windows")]
         {
             "win32".into()
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            "appkit".into()
         }
 
         #[cfg(target_os = "linux")]
@@ -146,7 +165,11 @@ mod system {
             }
         }
 
-        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        #[cfg(not(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "linux"
+        )))]
         {
             "unknown".into()
         }
@@ -175,6 +198,10 @@ mod env {
             // runtime / linking
             "CEF_PATH",
             "LD_LIBRARY_PATH",
+            "DYLD_LIBRARY_PATH",
+            "DYLD_FALLBACK_LIBRARY_PATH",
+            // macOS application identity
+            "__CFBundleIdentifier",
         ];
 
         let relevant = relevant_keys
@@ -231,12 +258,21 @@ mod gpu {
             collect_linux()
         }
 
+        #[cfg(target_os = "macos")]
+        {
+            collect_macos()
+        }
+
         #[cfg(target_os = "windows")]
         {
             collect_windows()
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "windows"
+        )))]
         {
             return GpuInfo {
                 gl_vendor: None,
@@ -245,6 +281,19 @@ mod gpu {
                 adapter_name: None,
                 source: "unsupported".into(),
             };
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn collect_macos() -> GpuInfo {
+        let adapter_name = probe_macos_adapter_name();
+
+        GpuInfo {
+            gl_vendor: None,
+            gl_renderer: None,
+            gl_version: None,
+            adapter_name,
+            source: "system_profiler".into(),
         }
     }
 
@@ -316,6 +365,29 @@ mod gpu {
         })
     }
 
+    #[cfg(target_os = "macos")]
+    fn probe_macos_adapter_name() -> Option<String> {
+        let out = Command::new("system_profiler")
+            .arg("SPDisplaysDataType")
+            .output()
+            .ok()?;
+
+        if !out.status.success() {
+            return None;
+        }
+
+        let text = String::from_utf8_lossy(&out.stdout);
+        let chipset = find(&text, "Chipset Model:");
+        let vendor = find(&text, "Vendor:");
+
+        match (chipset, vendor) {
+            (Some(c), Some(v)) => Some(format!("{} ({})", c, v)),
+            (Some(c), None) => Some(c),
+            (None, Some(v)) => Some(v),
+            (None, None) => None,
+        }
+    }
+
     #[cfg(target_os = "windows")]
     fn probe_windows_adapter_name() -> Option<String> {
         let out = Command::new("powershell")
@@ -335,7 +407,7 @@ mod gpu {
         if s.is_empty() { None } else { Some(s) }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn find(text: &str, key: &str) -> Option<String> {
         text.lines()
             .find(|l| l.contains(key))
