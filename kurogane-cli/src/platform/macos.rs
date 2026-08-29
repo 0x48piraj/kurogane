@@ -1,7 +1,6 @@
 //! macOS-only development helpers.
 
 use anyhow::Result;
-use std::borrow::Cow;
 use std::ffi::OsString;
 use std::path::Path;
 use std::process::Command;
@@ -53,7 +52,6 @@ fn link_unbundled_gpu_libraries(cef: &Path, cargo_args: &[OsString]) -> Result<(
 /// Returns the target directory for the selected Cargo profile.
 fn profile_dir_name(cargo_args: &[OsString]) -> String {
     let mut args = cargo_args.iter();
-    let mut profile: Option<Cow<str>> = None;
 
     while let Some(arg) = args.next() {
         let arg = arg.to_string_lossy();
@@ -63,23 +61,23 @@ fn profile_dir_name(cargo_args: &[OsString]) -> String {
         }
 
         if let Some(value) = arg.strip_prefix("--profile=") {
-            profile = Some(Cow::Borrowed(value));
-            break;
+            return if value == "dev" {
+                "debug".into()
+            } else {
+                value.into()
+            };
         }
 
         if arg == "--profile" {
-            if let Some(value) = args.next() {
-                profile = Some(value.to_string_lossy());
-            }
-            break;
+            return match args.next().map(|value| value.to_string_lossy()) {
+                Some(profile) if profile == "dev" => "debug".into(),
+                Some(profile) => profile.into_owned(),
+                None => "debug".into(),
+            };
         }
     }
 
-    match profile.map(Cow::into_owned) {
-        // Cargo names the `dev` profile directory `debug`
-        Some("dev") | None => "debug".into(),
-        Some(other) => other,
-    }
+    "debug".into()
 }
 
 #[cfg(test)]

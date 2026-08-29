@@ -127,11 +127,7 @@ mod system {
                 .filter(|s| !s.is_empty())
         }
 
-        #[cfg(not(any(
-            target_os = "linux",
-            target_os = "macos",
-            target_os = "windows"
-        )))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         {
             None
         }
@@ -165,11 +161,7 @@ mod system {
             }
         }
 
-        #[cfg(not(any(
-            target_os = "windows",
-            target_os = "macos",
-            target_os = "linux"
-        )))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         {
             "unknown".into()
         }
@@ -268,11 +260,7 @@ mod gpu {
             collect_windows()
         }
 
-        #[cfg(not(any(
-            target_os = "linux",
-            target_os = "macos",
-            target_os = "windows"
-        )))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         {
             return GpuInfo {
                 gl_vendor: None,
