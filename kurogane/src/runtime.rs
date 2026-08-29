@@ -27,6 +27,7 @@ struct RuntimeLayout {
     exe: std::path::PathBuf,
     cef_root: std::path::PathBuf,
     cache_dir: std::path::PathBuf,
+    #[cfg(not(target_os = "macos"))]
     locales_dir: std::path::PathBuf,
 }
 
@@ -59,12 +60,14 @@ fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeEr
 
     debug!("CEF root: {}", cef_root.display());
 
+    #[cfg(not(target_os = "macos"))]
     let locales_dir = cef_root.join("locales");
 
     Ok(RuntimeLayout {
         exe,
         cef_root,
         cache_dir,
+        #[cfg(not(target_os = "macos"))]
         locales_dir,
     })
 }
@@ -78,6 +81,7 @@ fn build_settings(
     // This enables cookies, storage APIs and service workers
 
     let exe_str = layout.exe.to_string_lossy();
+    #[cfg(not(target_os = "macos"))]
     let cef_root_str = layout.cef_root.to_string_lossy();
 
     // Sandbox is disabled on all platforms
@@ -100,11 +104,10 @@ fn build_settings(
 
     #[cfg(target_os = "macos")]
     {
+        // CEF resolves resources, locales and V8 snapshots from the framework bundle
         let mut s = Settings {
             browser_subprocess_path: CefString::from(exe_str.as_ref()),
-            resources_dir_path: CefString::from(cef_root_str.as_ref()),
             external_message_pump: external_message_pump as i32,
-            locales_dir_path: CefString::from(layout.locales_dir.to_string_lossy().as_ref()),
             cache_path: CefString::from(layout.cache_dir.to_string_lossy().as_ref()),
             root_cache_path: CefString::from(layout.cache_dir.to_string_lossy().as_ref()),
             persist_session_cookies: if persist_session_cookies { 1 } else { 0 },
