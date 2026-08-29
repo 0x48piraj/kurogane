@@ -571,6 +571,18 @@ fn write_runtime_fixture_for(dir: &Path, platform: Platform) -> PathBuf {
             fs::write(resources.join("en.lproj").join("locale.pak"), "pak").unwrap();
             fs::write(resources.join("icudtl.dat"), "icu").unwrap();
             fs::write(resources.join("v8_context_snapshot.arm64.bin"), "v8").unwrap();
+
+            // ANGLE libraries required by Chromium's GPU process
+            let libraries = fw.join("Libraries");
+            fs::create_dir_all(&libraries).unwrap();
+            for name in [
+                "libEGL.dylib",
+                "libGLESv2.dylib",
+                "libvk_swiftshader.dylib",
+                "vk_swiftshader_icd.json",
+            ] {
+                fs::write(libraries.join(name), name).unwrap();
+            }
         }
         Platform::Linux => {
             fs::write(dir.join("libcef.so"), "cef").unwrap();
@@ -769,6 +781,17 @@ mod tests {
         let dir = tmp();
         let runtime = write_runtime_fixture(&dir.path().join("rt"));
         assert!(validate_cef_runtime(&runtime).is_ok());
+    }
+
+    #[test]
+    fn every_platform_fixture_passes_its_own_validation() {
+        for platform in [Platform::Windows, Platform::MacOs, Platform::Linux] {
+            let dir = tmp();
+            let runtime = write_runtime_fixture_for(dir.path(), platform);
+
+            validate_cef_runtime_for(&runtime, platform)
+                .unwrap_or_else(|e| panic!("{platform:?} fixture failed its own validation: {e}"));
+        }
     }
 
     #[test]
