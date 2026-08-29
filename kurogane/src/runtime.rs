@@ -172,6 +172,28 @@ fn install_ctrlc_handler(
     .expect("failed to install SIGINT handler");
 }
 
+pub(crate) fn close_all_browsers_and_windows(
+    browser_registry: &Arc<Mutex<BrowserRegistry>>,
+    window_registry: &Arc<Mutex<WindowRegistry>>,
+) {
+    // Close all browsers first; in Views mode this cascades to close their parent windows
+    // Embedded mode has no Views windows
+    let browsers: Vec<Browser> = {
+        let reg = browser_registry.lock().unwrap();
+        reg.iter().map(|(_, s)| s.browser.clone()).collect()
+    };
+    for browser in browsers {
+        if let Some(host) = browser.host() {
+            debug!("closing browser cef_id={}", browser.identifier());
+            host.close_browser(false as i32);
+        }
+    }
+
+    // Close any remaining Views windows not closed by the browser cascade
+    let wreg = window_registry.lock().unwrap();
+    wreg.close_all_windows();
+}
+
 wrap_task! {
     struct CloseAllTask {
         browser_registry: Arc<Mutex<BrowserRegistry>>,
@@ -180,22 +202,7 @@ wrap_task! {
 
     impl Task {
         fn execute(&self) {
-            // Close all browsers first in Views mode this cascades to close their parent windows
-            // In embedded mode there are no views windows
-            let browsers: Vec<Browser> = {
-                let reg = self.browser_registry.lock().unwrap();
-                reg.iter().map(|(_, s)| s.browser.clone()).collect()
-            };
-            for browser in browsers {
-                if let Some(host) = browser.host() {
-                    debug!("closing browser cef_id={}", browser.identifier());
-                    host.close_browser(false as i32);
-                }
-            }
-
-            // Close remaining CEF Views windows not already handled by the browser close cascade above
-            let wreg = self.window_registry.lock().unwrap();
-            wreg.close_all_windows();
+            close_all_browsers_and_windows(&self.browser_registry, &self.window_registry);
         }
     }
 }
