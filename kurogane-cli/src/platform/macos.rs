@@ -81,3 +81,55 @@ fn profile_dir_name(cargo_args: &[OsString]) -> String {
         Some(other) => other,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<OsString> {
+        list.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn defaults_to_debug() {
+        assert_eq!(profile_dir_name(&args(&[])), "debug");
+    }
+
+    #[test]
+    fn non_profile_args_are_ignored() {
+        assert_eq!(profile_dir_name(&args(&["--example", "foo"])), "debug");
+    }
+
+    #[test]
+    fn release_flag_wins() {
+        assert_eq!(profile_dir_name(&args(&["--release"])), "release");
+    }
+
+    #[test]
+    fn release_after_other_args() {
+        assert_eq!(
+            profile_dir_name(&args(&["--example", "foo", "--release"])),
+            "release"
+        );
+    }
+
+    #[test]
+    fn profile_equals_syntax() {
+        assert_eq!(profile_dir_name(&args(&["--profile=custom"])), "custom");
+    }
+
+    #[test]
+    fn profile_space_syntax() {
+        assert_eq!(profile_dir_name(&args(&["--profile", "custom"])), "custom");
+    }
+
+    #[test]
+    fn dev_profile_maps_to_debug() {
+        assert_eq!(profile_dir_name(&args(&["--profile", "dev"])), "debug");
+    }
+
+    #[test]
+    fn bare_profile_with_missing_value_defaults() {
+        assert_eq!(profile_dir_name(&args(&["--profile"])), "debug");
+    }
+}
