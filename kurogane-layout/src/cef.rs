@@ -545,28 +545,41 @@ fn validate_cef_runtime_for(runtime: &Path, platform: Platform) -> Result<(), Ce
 
 #[cfg(test)]
 pub(crate) fn write_runtime_fixture(dir: &Path) -> PathBuf {
+    write_runtime_fixture_for(dir, current_platform())
+}
+
+#[cfg(test)]
+fn write_runtime_fixture_for(dir: &Path, platform: Platform) -> PathBuf {
     fs::create_dir_all(dir).expect("create fixture dir");
 
-    if cfg!(target_os = "windows") {
-        fs::write(dir.join("libcef.dll"), "cef").unwrap();
-        fs::write(dir.join("chrome_elf.dll"), "elf").unwrap();
-    } else if cfg!(target_os = "macos") {
-        let fw = dir.join("Chromium Embedded Framework.framework");
-        fs::create_dir_all(&fw).unwrap();
-        fs::write(fw.join("Chromium Embedded Framework"), "cef").unwrap();
+    match platform {
+        Platform::Windows => {
+            fs::write(dir.join("libcef.dll"), "cef").unwrap();
+            fs::write(dir.join("chrome_elf.dll"), "elf").unwrap();
+            fs::write(dir.join("icudtl.dat"), "icu").unwrap();
+            fs::write(dir.join("v8_context_snapshot.bin"), "v8").unwrap();
+            fs::create_dir_all(dir.join("locales")).unwrap();
+            fs::write(dir.join("locales").join("en-US.pak"), "pak").unwrap();
+        }
+        Platform::MacOs => {
+            let fw = dir.join("Chromium Embedded Framework.framework");
+            fs::create_dir_all(&fw).unwrap();
+            fs::write(fw.join("Chromium Embedded Framework"), "cef").unwrap();
 
-        let resources = fw.join("Resources");
-        fs::create_dir_all(resources.join("en.lproj")).unwrap();
-        fs::write(resources.join("en.lproj").join("locale.pak"), "pak").unwrap();
-        fs::write(resources.join("icudtl.dat"), "icu").unwrap();
-        fs::write(resources.join("v8_context_snapshot.arm64.bin"), "v8").unwrap();
-    } else {
-        fs::write(dir.join("libcef.so"), "cef").unwrap();
-        fs::write(dir.join("chrome-sandbox"), "sandbox").unwrap();
-        fs::write(dir.join("icudtl.dat"), "icu").unwrap();
-        fs::write(dir.join("v8_context_snapshot.bin"), "v8").unwrap();
-        fs::create_dir_all(dir.join("locales")).unwrap();
-        fs::write(dir.join("locales").join("en-US.pak"), "pak").unwrap();
+            let resources = fw.join("Resources");
+            fs::create_dir_all(resources.join("en.lproj")).unwrap();
+            fs::write(resources.join("en.lproj").join("locale.pak"), "pak").unwrap();
+            fs::write(resources.join("icudtl.dat"), "icu").unwrap();
+            fs::write(resources.join("v8_context_snapshot.arm64.bin"), "v8").unwrap();
+        }
+        Platform::Linux => {
+            fs::write(dir.join("libcef.so"), "cef").unwrap();
+            fs::write(dir.join("chrome-sandbox"), "sandbox").unwrap();
+            fs::write(dir.join("icudtl.dat"), "icu").unwrap();
+            fs::write(dir.join("v8_context_snapshot.bin"), "v8").unwrap();
+            fs::create_dir_all(dir.join("locales")).unwrap();
+            fs::write(dir.join("locales").join("en-US.pak"), "pak").unwrap();
+        }
     }
     dir.to_path_buf()
 }
