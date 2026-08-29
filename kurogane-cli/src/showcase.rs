@@ -5,7 +5,7 @@ use crate::template;
 use crate::tui;
 
 /// The showcase template repository.
-const SHOWCASE_TEMPLATE_REPO: &str = "https://github.com/kurogane-rs/showcase";
+const SHOWCASE_TEMPLATE_REPO: &str = "https://github.com/kurogane-rs/kurogane-showcase";
 
 pub fn run() -> Result<()> {
     tui::section("Kurogane Showcase");

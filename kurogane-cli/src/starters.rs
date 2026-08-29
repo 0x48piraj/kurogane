@@ -25,7 +25,7 @@ const STARTERS: &[Starter] = &[
     Starter {
         name: "minimal",
         label: "Minimal",
-        source: "https://github.com/kurogane-rs/starter-minimal",
+        source: "https://github.com/kurogane-rs/kurogane-starter-minimal",
         languages: &[
             Language {
                 value: "typescript",
@@ -40,7 +40,7 @@ const STARTERS: &[Starter] = &[
     Starter {
         name: "react",
         label: "React",
-        source: "https://github.com/kurogane-rs/starter-react",
+        source: "https://github.com/kurogane-rs/kurogane-starter-react",
         languages: &[
             Language {
                 value: "typescript",
@@ -55,7 +55,7 @@ const STARTERS: &[Starter] = &[
     Starter {
         name: "svelte",
         label: "Svelte",
-        source: "https://github.com/kurogane-rs/starter-svelte",
+        source: "https://github.com/kurogane-rs/kurogane-starter-svelte",
         languages: &[
             Language {
                 value: "typescript",
@@ -70,7 +70,7 @@ const STARTERS: &[Starter] = &[
     Starter {
         name: "vue",
         label: "Vue",
-        source: "https://github.com/kurogane-rs/starter-vue",
+        source: "https://github.com/kurogane-rs/kurogane-starter-vue",
         languages: &[
             Language {
                 value: "typescript",
