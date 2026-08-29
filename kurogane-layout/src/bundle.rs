@@ -497,7 +497,7 @@ mod tests {
         layout.materialize(&dist).unwrap();
 
         // Mess shit up
-        fs::remove_file(layout.cef_dir().join("icudtl.dat")).unwrap();
+        fs::remove_file(layout.cef_dir().join(crate::cef::cef_binary_name())).unwrap();
 
         assert!(
             layout.verify(test_exe_name()).is_err(),

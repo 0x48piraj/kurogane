@@ -328,7 +328,7 @@ fn is_download_cache_artifact(name: &str) -> bool {
     name == "archive.json" || name.ends_with(".tar.bz2")
 }
 
-fn cef_binary_name() -> &'static str {
+pub(crate) fn cef_binary_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "libcef.dll"
     } else if cfg!(target_os = "macos") {
@@ -643,7 +643,12 @@ mod tests {
         let dir = tmp();
         fs::create_dir_all(dir.path().join("Release")).unwrap();
         fs::create_dir_all(dir.path().join("Resources")).unwrap();
-        fs::write(dir.path().join("Release").join(cef_binary_name()), "").unwrap();
+
+        let binary = dir.path().join("Release").join(cef_binary_name());
+        if let Some(parent) = binary.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&binary, "").unwrap();
 
         assert!(validate_distribution(dir.path()).is_ok());
     }
@@ -651,7 +656,13 @@ mod tests {
     #[test]
     fn flat_distribution_shape_is_valid() {
         let dir = tmp();
-        fs::write(dir.path().join(cef_binary_name()), "").unwrap();
+
+        let binary = dir.path().join(cef_binary_name());
+        if let Some(parent) = binary.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&binary, "").unwrap();
+
         assert!(validate_distribution(dir.path()).is_ok());
     }
 
