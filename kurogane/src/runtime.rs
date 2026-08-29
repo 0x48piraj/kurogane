@@ -1072,7 +1072,7 @@ fn initialize_cef(
     embedded_mode: bool,
 ) -> Result<RuntimeState, RuntimeError> {
     #[cfg(target_os = "macos")]
-    crate::platform::macos::init_ns_app();
+    crate::platform::macos::init_ns_app()?;
 
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
 
@@ -1090,6 +1090,9 @@ fn initialize_cef(
         browser_registry,
         window_registry,
     });
+
+    #[cfg(target_os = "macos")]
+    crate::platform::macos::set_services(services.clone());
 
     // ONE app for ALL processes
     let mut app: App = KuroganeApp::new(services.clone(), spec.clone());
@@ -1114,6 +1117,9 @@ fn initialize_cef(
     }
 
     debug!("CEF initialized");
+
+    #[cfg(target_os = "macos")]
+    crate::platform::macos::setup_app_delegate();
 
     // Only install Ctrl+C handler if CEF Views owns the window (non-embedded mode)
     // In embedded mode the host application manages its own lifecycle
