@@ -88,7 +88,7 @@ mod tests {
     use std::sync::Mutex;
 
     fn tmp() -> tempfile::TempDir {
-        tempfile::tempdir().expect("failed to create temp dir")
+        crate::test_fixtures::tmp_dir()
     }
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());

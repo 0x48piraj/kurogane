@@ -111,7 +111,7 @@ mod tests {
     use super::*;
 
     fn tmp() -> tempfile::TempDir {
-        tempfile::tempdir().expect("tempdir")
+        crate::test_fixtures::tmp_dir()
     }
 
     #[test]

@@ -544,64 +544,11 @@ fn validate_cef_runtime_for(runtime: &Path, platform: Platform) -> Result<(), Ce
 }
 
 #[cfg(test)]
-pub(crate) fn write_runtime_fixture(dir: &Path) -> PathBuf {
-    write_runtime_fixture_for(dir, current_platform())
-}
-
-#[cfg(test)]
-fn write_runtime_fixture_for(dir: &Path, platform: Platform) -> PathBuf {
-    fs::create_dir_all(dir).expect("create fixture dir");
-
-    match platform {
-        Platform::Windows => {
-            fs::write(dir.join("libcef.dll"), "cef").unwrap();
-            fs::write(dir.join("chrome_elf.dll"), "elf").unwrap();
-            fs::write(dir.join("icudtl.dat"), "icu").unwrap();
-            fs::write(dir.join("v8_context_snapshot.bin"), "v8").unwrap();
-            fs::create_dir_all(dir.join("locales")).unwrap();
-            fs::write(dir.join("locales").join("en-US.pak"), "pak").unwrap();
-        }
-        Platform::MacOs => {
-            let fw = dir.join("Chromium Embedded Framework.framework");
-            fs::create_dir_all(&fw).unwrap();
-            fs::write(fw.join("Chromium Embedded Framework"), "cef").unwrap();
-
-            let resources = fw.join("Resources");
-            fs::create_dir_all(resources.join("en.lproj")).unwrap();
-            fs::write(resources.join("en.lproj").join("locale.pak"), "pak").unwrap();
-            fs::write(resources.join("icudtl.dat"), "icu").unwrap();
-            fs::write(resources.join("v8_context_snapshot.arm64.bin"), "v8").unwrap();
-
-            // ANGLE libraries required by Chromium's GPU process
-            let libraries = fw.join("Libraries");
-            fs::create_dir_all(&libraries).unwrap();
-            for name in [
-                "libEGL.dylib",
-                "libGLESv2.dylib",
-                "libvk_swiftshader.dylib",
-                "vk_swiftshader_icd.json",
-            ] {
-                fs::write(libraries.join(name), name).unwrap();
-            }
-        }
-        Platform::Linux => {
-            fs::write(dir.join("libcef.so"), "cef").unwrap();
-            fs::write(dir.join("chrome-sandbox"), "sandbox").unwrap();
-            fs::write(dir.join("icudtl.dat"), "icu").unwrap();
-            fs::write(dir.join("v8_context_snapshot.bin"), "v8").unwrap();
-            fs::create_dir_all(dir.join("locales")).unwrap();
-            fs::write(dir.join("locales").join("en-US.pak"), "pak").unwrap();
-        }
-    }
-    dir.to_path_buf()
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
     fn tmp() -> tempfile::TempDir {
-        tempfile::tempdir().expect("tempdir")
+        crate::test_fixtures::tmp_dir()
     }
 
     // Provenance parsing
@@ -707,7 +654,7 @@ mod tests {
     #[test]
     fn flat_distribution_strips_development_material() {
         let dir = tmp();
-        let dist = write_runtime_fixture(&dir.path().join("managed"));
+        let dist = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
         fs::create_dir_all(dist.join("include").join("cef")).unwrap();
         fs::write(dist.join("include").join("cef").join("cef_app.h"), "h").unwrap();
         fs::create_dir_all(dist.join("cmake")).unwrap();
@@ -729,7 +676,7 @@ mod tests {
     #[test]
     fn flat_distribution_strips_download_cache_residue() {
         let dir = tmp();
-        let dist = write_runtime_fixture(&dir.path().join("managed"));
+        let dist = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
         fs::write(
             dist.join("archive.json"),
             r#"{"type":"minimal","name":"x.tar.bz2","sha1":"0"}"#,
@@ -759,7 +706,7 @@ mod tests {
     #[test]
     fn materialization_is_cached_when_valid() {
         let dir = tmp();
-        let dist = write_runtime_fixture(&dir.path().join("managed"));
+        let dist = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
         let dest = dir.path().join("runtime");
         materialize_cef_runtime(&dist, &dest).unwrap();
 
@@ -775,7 +722,7 @@ mod tests {
     #[test]
     fn invalid_cached_destination_is_rebuilt() {
         let dir = tmp();
-        let dist = write_runtime_fixture(&dir.path().join("managed"));
+        let dist = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
         let dest = dir.path().join("runtime");
         fs::create_dir_all(&dest).unwrap();
         fs::write(dest.join("garbage"), "").unwrap();
@@ -790,7 +737,7 @@ mod tests {
     #[test]
     fn complete_runtime_passes_validation() {
         let dir = tmp();
-        let runtime = write_runtime_fixture(&dir.path().join("rt"));
+        let runtime = crate::test_fixtures::cef_runtime(&dir.path().join("rt"));
         assert!(validate_cef_runtime(&runtime).is_ok());
     }
 
@@ -798,7 +745,12 @@ mod tests {
     fn every_platform_fixture_passes_its_own_validation() {
         for platform in [Platform::Windows, Platform::MacOs, Platform::Linux] {
             let dir = tmp();
-            let runtime = write_runtime_fixture_for(dir.path(), platform);
+            let target = match platform {
+                Platform::Windows => crate::test_fixtures::Target::Windows,
+                Platform::MacOs => crate::test_fixtures::Target::MacOs,
+                Platform::Linux => crate::test_fixtures::Target::Linux,
+            };
+            let runtime = crate::test_fixtures::cef_runtime_for(dir.path(), target);
 
             validate_cef_runtime_for(&runtime, platform)
                 .unwrap_or_else(|e| panic!("{platform:?} fixture failed its own validation: {e}"));
@@ -908,7 +860,7 @@ mod tests {
     fn unverifiable_override_is_rejected() {
         let dir = tmp();
         let fake = dir.path().join("dev-cef");
-        write_runtime_fixture(&fake); // looks like CEF but has no archive.json
+        crate::test_fixtures::cef_runtime(&fake); // looks like CEF but has no archive.json
 
         let err = resolve_cef(
             "131.3.5",
@@ -923,7 +875,7 @@ mod tests {
     #[test]
     fn version_mismatched_override_is_rejected() {
         let dir = tmp();
-        let fake = write_runtime_fixture(&dir.path().join("dev-cef"));
+        let fake = crate::test_fixtures::cef_runtime(&dir.path().join("dev-cef"));
         fs::write(
             fake.join("archive.json"),
             r#"{"type":"minimal","name":"cef_binary_127.1.1+gabcdef+chromium-127.0.1.2_linux64_minimal.tar.bz2","sha1":"x"}"#,
@@ -943,7 +895,7 @@ mod tests {
     #[test]
     fn verified_override_with_matching_provenance_is_accepted() {
         let dir = tmp();
-        let fake = write_runtime_fixture(&dir.path().join("dev-cef"));
+        let fake = crate::test_fixtures::cef_runtime(&dir.path().join("dev-cef"));
         let platform = current_platform_name().unwrap_or("linux64");
         let archive_name = format!(
             "cef_binary_131.3.5+g6a8d2b7+chromium-131.0.6778.204_{platform}_minimal.tar.bz2"
@@ -969,7 +921,7 @@ mod tests {
     // Managed-install resolution (injected root; no environment mutation)
 
     fn managed_provenance_fixture(dir: &Path) -> PathBuf {
-        let managed = write_runtime_fixture(&dir.join("managed"));
+        let managed = crate::test_fixtures::cef_runtime(&dir.join("managed"));
         let platform = current_platform_name().unwrap_or("linux64");
         let archive_name = format!(
             "cef_binary_131.3.5+g6a8d2b7+chromium-131.0.6778.204_{platform}_minimal.tar.bz2"
@@ -997,7 +949,7 @@ mod tests {
     #[test]
     fn managed_install_without_provenance_is_rejected() {
         let dir = tmp();
-        let managed = write_runtime_fixture(&dir.path().join("managed"));
+        let managed = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
 
         let err = resolve_cef("131.3.5", || None, |_| Some(managed.clone())).unwrap_err();
 
@@ -1023,7 +975,7 @@ mod tests {
     #[test]
     fn platform_mismatched_managed_install_is_rejected() {
         let dir = tmp();
-        let managed = write_runtime_fixture(&dir.path().join("managed"));
+        let managed = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
         let wrong_platform = if current_platform_name() == Some("linux64") {
             "windowsarm64"
         } else {

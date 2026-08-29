@@ -28,6 +28,7 @@ semver = "1.0.28"
 ureq = "3"
 
 [dev-dependencies]
+kurogane-layout = { workspace = true, features = ["test-fixtures"] }
 tempfile = "3"
 
 [build-dependencies]

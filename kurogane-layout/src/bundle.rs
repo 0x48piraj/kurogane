@@ -230,16 +230,7 @@ cd "$ROOT"
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AppMetadata, ResolvedDistribution};
     use std::fs;
-
-    fn tmp() -> tempfile::TempDir {
-        tempfile::tempdir().expect("failed to create temp dir")
-    }
-
-    fn create_cef_fixture(dir: &Path) -> PathBuf {
-        crate::cef::write_runtime_fixture(&dir.join("cef"))
-    }
 
     /// Platform-correct executable file name.
     fn test_exe_name() -> &'static OsStr {
@@ -250,39 +241,10 @@ mod tests {
         }
     }
 
-    fn valid_distribution(dir: &Path) -> ResolvedDistribution {
-        #[cfg(target_os = "windows")]
-        let exe_name = "myapp.exe";
-        #[cfg(not(target_os = "windows"))]
-        let exe_name = "myapp";
-
-        let exe = dir.join(exe_name);
-        fs::write(&exe, "binary").unwrap();
-
-        let frontend = dir.join("frontend");
-        fs::create_dir_all(&frontend).unwrap();
-        fs::write(frontend.join("index.html"), "<html></html>").unwrap();
-
-        let cef = create_cef_fixture(dir);
-
-        ResolvedDistribution {
-            metadata: AppMetadata {
-                name: "myapp".to_string(),
-                version: "1.0.0".to_string(),
-                exe_name: exe_name.to_string(),
-                ..Default::default()
-            },
-            executable: exe,
-            frontend: Some(frontend),
-            cef_runtime: cef,
-            extra_resources: Vec::new(),
-        }
-    }
-
     #[test]
     fn materialize_copies_executable() {
-        let dir = tmp();
-        let dist = valid_distribution(dir.path());
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("out");
         let layout = BundleLayout::new(&out);
 
@@ -294,8 +256,8 @@ mod tests {
 
     #[test]
     fn materialize_copies_cef() {
-        let dir = tmp();
-        let dist = valid_distribution(dir.path());
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("out");
         let layout = BundleLayout::new(&out);
 
@@ -318,8 +280,8 @@ mod tests {
 
     #[test]
     fn materialize_copies_frontend() {
-        let dir = tmp();
-        let dist = valid_distribution(dir.path());
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("out");
         let layout = BundleLayout::new(&out);
 
@@ -331,8 +293,8 @@ mod tests {
 
     #[test]
     fn materialize_copies_extra_resources() {
-        let dir = tmp();
-        let mut dist = valid_distribution(dir.path());
+        let dir = crate::test_fixtures::tmp_dir();
+        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
 
         let res_file = dir.path().join("data.txt");
         fs::write(&res_file, "resource content").unwrap();
@@ -374,8 +336,8 @@ mod tests {
 
     #[test]
     fn materialize_no_frontend_does_not_fabricate_content_dir() {
-        let dir = tmp();
-        let mut dist = valid_distribution(dir.path());
+        let dir = crate::test_fixtures::tmp_dir();
+        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
         dist.frontend = None;
 
         let out = dir.path().join("out");
@@ -390,8 +352,8 @@ mod tests {
 
     #[test]
     fn materialize_over_existing_output() {
-        let dir = tmp();
-        let dist = valid_distribution(dir.path());
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("out");
 
         // First materialization
@@ -408,8 +370,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn materialize_creates_launcher_script() {
-        let dir = tmp();
-        let dist = valid_distribution(dir.path());
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("out");
         let layout = BundleLayout::new(&out);
 
@@ -439,8 +401,8 @@ mod tests {
 
     #[test]
     fn verify_passes_with_valid_bundle() {
-        let dir = tmp();
-        let dist = valid_distribution(dir.path());
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("out");
         let layout = BundleLayout::new(&out);
 
@@ -450,8 +412,8 @@ mod tests {
 
     #[test]
     fn verify_requires_content_index_when_content_dir_exists() {
-        let dir = tmp();
-        let mut dist = valid_distribution(dir.path());
+        let dir = crate::test_fixtures::tmp_dir();
+        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
         dist.frontend = None;
 
         let out = dir.path().join("out");
@@ -473,13 +435,13 @@ mod tests {
 
     #[test]
     fn verify_fails_without_executable() {
-        let dir = tmp();
+        let dir = crate::test_fixtures::tmp_dir();
         let out = dir.path().join("out");
         let layout = BundleLayout::new(&out);
         fs::create_dir_all(layout.content_dir()).unwrap();
         fs::write(layout.content_dir().join("index.html"), "").unwrap();
 
-        crate::cef::write_runtime_fixture(&layout.cef_dir());
+        crate::test_fixtures::cef_runtime(&layout.cef_dir());
 
         let result = layout.verify(test_exe_name());
         assert!(
@@ -490,8 +452,8 @@ mod tests {
 
     #[test]
     fn verify_fails_with_incomplete_cef_runtime() {
-        let dir = tmp();
-        let dist = valid_distribution(dir.path());
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("out");
         let layout = BundleLayout::new(&out);
         layout.materialize(&dist).unwrap();
@@ -507,8 +469,8 @@ mod tests {
 
     #[test]
     fn exe_name_matches_executable_filename() {
-        let dir = tmp();
-        let dist = valid_distribution(dir.path());
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
 
         let actual_filename = dist.executable.file_name().unwrap().to_str().unwrap();
 

@@ -37,50 +37,11 @@ pub fn package_directory(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AppMetadata;
-    use std::fs;
-
-    fn tmp() -> tempfile::TempDir {
-        tempfile::tempdir().expect("failed to create temp dir")
-    }
-
-    fn create_cef_fixture(dir: &Path) -> PathBuf {
-        crate::cef::write_runtime_fixture(&dir.join("cef"))
-    }
-
-    fn valid_distribution(dir: &Path) -> ResolvedDistribution {
-        #[cfg(target_os = "windows")]
-        let exe_name = "myapp.exe";
-        #[cfg(not(target_os = "windows"))]
-        let exe_name = "myapp";
-
-        let exe = dir.join(exe_name);
-        fs::write(&exe, "binary").unwrap();
-
-        let frontend = dir.join("frontend");
-        fs::create_dir_all(&frontend).unwrap();
-        fs::write(frontend.join("index.html"), "<html></html>").unwrap();
-
-        let cef = create_cef_fixture(dir);
-
-        ResolvedDistribution {
-            metadata: AppMetadata {
-                name: "myapp".to_string(),
-                version: "1.0.0".to_string(),
-                exe_name: "myapp".to_string(),
-                ..Default::default()
-            },
-            executable: exe,
-            frontend: Some(frontend),
-            cef_runtime: cef,
-            extra_resources: Vec::new(),
-        }
-    }
 
     #[test]
     fn package_directory_returns_materialized_bundle() {
-        let dir = tmp();
-        let dist = valid_distribution(dir.path());
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("dist");
 
         let result = package_directory(&dist, &out).unwrap();
@@ -90,8 +51,8 @@ mod tests {
 
     #[test]
     fn package_directory_contains_executable() {
-        let dir = tmp();
-        let dist = valid_distribution(dir.path());
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("dist");
 
         let bundle = package_directory(&dist, &out).unwrap();
@@ -108,8 +69,8 @@ mod tests {
 
     #[test]
     fn package_directory_contains_cef() {
-        let dir = tmp();
-        let dist = valid_distribution(dir.path());
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("dist");
 
         let bundle = package_directory(&dist, &out).unwrap();
@@ -128,8 +89,8 @@ mod tests {
 
     #[test]
     fn package_directory_contains_frontend() {
-        let dir = tmp();
-        let dist = valid_distribution(dir.path());
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("dist");
 
         let bundle = package_directory(&dist, &out).unwrap();
@@ -139,8 +100,8 @@ mod tests {
 
     #[test]
     fn package_directory_without_frontend() {
-        let dir = tmp();
-        let mut dist = valid_distribution(dir.path());
+        let dir = crate::test_fixtures::tmp_dir();
+        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
         dist.frontend = None;
 
         let out = dir.path().join("dist");
@@ -158,15 +119,8 @@ mod tests {
 
     #[test]
     fn package_directory_contains_extra_resources() {
-        let dir = tmp();
-        let mut dist = valid_distribution(dir.path());
-
-        let res = dir.path().join("extra.txt");
-        fs::write(&res, "data").unwrap();
-        dist.extra_resources.push(crate::ResolvedResource {
-            source: res.clone(),
-            destination: "extra.txt".into(),
-        });
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
 
         let out = dir.path().join("dist");
         let bundle = package_directory(&dist, &out).unwrap();
@@ -179,8 +133,8 @@ mod tests {
 
     #[test]
     fn package_directory_rejects_invalid_distribution() {
-        let dir = tmp();
-        let mut dist = valid_distribution(dir.path());
+        let dir = crate::test_fixtures::tmp_dir();
+        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
         dist.executable = dir.path().join("nonexistent");
 
         let out = dir.path().join("dist");

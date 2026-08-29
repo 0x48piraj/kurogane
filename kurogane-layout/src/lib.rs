@@ -9,6 +9,9 @@ mod distribution;
 mod bundle;
 mod signing;
 
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod test_fixtures;
+
 pub use bundle::{BundleError, BundleLayout};
 pub use cef::{
     materialize_cef_runtime, read_provenance, resolve_cef_for_bundle, validate_cef_runtime,

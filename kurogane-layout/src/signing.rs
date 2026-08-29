@@ -464,7 +464,7 @@ mod tests {
     use super::*;
 
     fn tmp() -> tempfile::TempDir {
-        tempfile::tempdir().expect("failed to create temp dir")
+        crate::test_fixtures::tmp_dir()
     }
 
     fn os(input: &[&str]) -> Vec<OsString> {
