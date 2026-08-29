@@ -328,9 +328,11 @@ fn is_download_cache_artifact(name: &str) -> bool {
     name == "archive.json" || name.ends_with(".tar.bz2")
 }
 
-fn libcef_name() -> &'static str {
+pub(crate) fn cef_binary_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "libcef.dll"
+    } else if cfg!(target_os = "macos") {
+        "Chromium Embedded Framework.framework/Chromium Embedded Framework"
     } else {
         "libcef.so"
     }
@@ -346,14 +348,17 @@ pub fn validate_distribution(root: &Path) -> Result<(), CefError> {
     }
 
     let raw_shape = root.join("Release").is_dir() && root.join("Resources").is_dir();
-    let flat_shape = root.join(libcef_name()).exists();
+    let flat_shape = root.join(cef_binary_name()).exists();
 
     if raw_shape || flat_shape {
         Ok(())
     } else {
         Err(CefError::InvalidDistribution {
             root: root.to_path_buf(),
-            reason: format!("neither Release/+Resources/ nor {} found", libcef_name()),
+            reason: format!(
+                "neither Release/+Resources/ nor {} found",
+                cef_binary_name()
+            ),
         })
     }
 }
@@ -378,7 +383,7 @@ pub fn materialize_cef_runtime(
         // Raw official distribution
         copy_dir(&release, destination)?;
         merge_copy_dir(&resources, destination)?;
-    } else if distribution_root.join(libcef_name()).exists() {
+    } else if distribution_root.join(cef_binary_name()).exists() {
         // Already-flattened distribution
         fs::create_dir_all(destination)?;
 
@@ -403,7 +408,10 @@ pub fn materialize_cef_runtime(
     } else {
         return Err(CefError::InvalidDistribution {
             root: distribution_root.to_path_buf(),
-            reason: format!("neither Release/+Resources/ nor {} found", libcef_name()),
+            reason: format!(
+                "neither Release/+Resources/ nor {} found",
+                cef_binary_name()
+            ),
         });
     }
 
@@ -432,8 +440,32 @@ fn merge_copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// V8 snapshot file names across CEF versions.
 const V8_SNAPSHOTS: &[&str] = &["v8_context_snapshot.bin", "snapshot_blob.bin"];
 
+/// The platform for which a CEF runtime layout is validated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Platform {
+    Windows,
+    Linux,
+    MacOs,
+}
+
+/// Returns the current platform.
+fn current_platform() -> Platform {
+    if cfg!(target_os = "windows") {
+        Platform::Windows
+    } else if cfg!(target_os = "macos") {
+        Platform::MacOs
+    } else {
+        Platform::Linux
+    }
+}
+
 /// Validates the required files in a CEF runtime.
 pub fn validate_cef_runtime(runtime: &Path) -> Result<(), CefError> {
+    validate_cef_runtime_for(runtime, current_platform())
+}
+
+/// Validates a CEF runtime against a platform's expected layout.
+fn validate_cef_runtime_for(runtime: &Path, platform: Platform) -> Result<(), CefError> {
     let mut missing: Vec<&'static str> = Vec::new();
 
     let require = |missing: &mut Vec<&'static str>, name: &'static str| {
@@ -442,19 +474,63 @@ pub fn validate_cef_runtime(runtime: &Path) -> Result<(), CefError> {
         }
     };
 
-    if cfg!(target_os = "windows") {
-        require(&mut missing, "libcef.dll");
-        require(&mut missing, "chrome_elf.dll");
-    } else {
-        require(&mut missing, "libcef.so");
-        require(&mut missing, "chrome-sandbox");
-    }
+    match platform {
+        Platform::Windows => {
+            require(&mut missing, "libcef.dll");
+            require(&mut missing, "chrome_elf.dll");
+            require(&mut missing, "icudtl.dat");
+            require(&mut missing, "locales");
 
-    require(&mut missing, "icudtl.dat");
-    require(&mut missing, "locales");
+            if !V8_SNAPSHOTS.iter().any(|s| runtime.join(s).exists()) {
+                missing.push("v8_context_snapshot.bin");
+            }
+        }
+        Platform::MacOs => {
+            require(
+                &mut missing,
+                "Chromium Embedded Framework.framework/Chromium Embedded Framework",
+            );
 
-    if !V8_SNAPSHOTS.iter().any(|s| runtime.join(s).exists()) {
-        missing.push("v8_context_snapshot.bin");
+            // Resources, locales and V8 snapshots ship inside the framework on
+            // macOS rather than at the runtime root
+            let resources = runtime.join("Chromium Embedded Framework.framework/Resources");
+
+            if !resources.join("icudtl.dat").exists() {
+                missing.push("Chromium Embedded Framework.framework/Resources/icudtl.dat");
+            }
+
+            let has_locale = fs::read_dir(&resources).is_ok_and(|entries| {
+                entries.filter_map(Result::ok).any(|entry| {
+                    entry.path().is_dir() && entry.file_name().to_string_lossy().ends_with(".lproj")
+                })
+            });
+
+            if !has_locale {
+                missing.push("Chromium Embedded Framework.framework/Resources/*.lproj");
+            }
+
+            let has_snapshot = fs::read_dir(&resources).is_ok_and(|entries| {
+                entries.filter_map(Result::ok).any(|entry| {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    name == "snapshot_blob.bin" || name.starts_with("v8_context_snapshot.")
+                })
+            });
+
+            if !has_snapshot {
+                missing.push("Chromium Embedded Framework.framework/Resources/v8 snapshot");
+            }
+        }
+        Platform::Linux => {
+            require(&mut missing, "libcef.so");
+            require(&mut missing, "chrome-sandbox");
+            require(&mut missing, "icudtl.dat");
+            require(&mut missing, "locales");
+
+            if !V8_SNAPSHOTS.iter().any(|s| runtime.join(s).exists()) {
+                missing.push("v8_context_snapshot.bin");
+            }
+        }
     }
 
     if missing.is_empty() {
@@ -468,32 +544,11 @@ pub fn validate_cef_runtime(runtime: &Path) -> Result<(), CefError> {
 }
 
 #[cfg(test)]
-pub(crate) fn write_runtime_fixture(dir: &Path) -> PathBuf {
-    fs::create_dir_all(dir).expect("create fixture dir");
-    let libcef = if cfg!(target_os = "windows") {
-        dir.join("libcef.dll")
-    } else {
-        dir.join("libcef.so")
-    };
-    fs::write(libcef, "cef").unwrap();
-    fs::write(dir.join("icudtl.dat"), "icu").unwrap();
-    fs::write(dir.join("v8_context_snapshot.bin"), "v8").unwrap();
-    fs::create_dir_all(dir.join("locales")).unwrap();
-    fs::write(dir.join("locales").join("en-US.pak"), "pak").unwrap();
-    if cfg!(target_os = "windows") {
-        fs::write(dir.join("chrome_elf.dll"), "elf").unwrap();
-    } else {
-        fs::write(dir.join("chrome-sandbox"), "sandbox").unwrap();
-    }
-    dir.to_path_buf()
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
     fn tmp() -> tempfile::TempDir {
-        tempfile::tempdir().expect("tempdir")
+        crate::test_fixtures::tmp_dir()
     }
 
     // Provenance parsing
@@ -535,7 +590,12 @@ mod tests {
         let dir = tmp();
         fs::create_dir_all(dir.path().join("Release")).unwrap();
         fs::create_dir_all(dir.path().join("Resources")).unwrap();
-        fs::write(dir.path().join("Release").join(libcef_name()), "").unwrap();
+
+        let binary = dir.path().join("Release").join(cef_binary_name());
+        if let Some(parent) = binary.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&binary, "").unwrap();
 
         assert!(validate_distribution(dir.path()).is_ok());
     }
@@ -543,7 +603,13 @@ mod tests {
     #[test]
     fn flat_distribution_shape_is_valid() {
         let dir = tmp();
-        fs::write(dir.path().join(libcef_name()), "").unwrap();
+
+        let binary = dir.path().join(cef_binary_name());
+        if let Some(parent) = binary.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&binary, "").unwrap();
+
         assert!(validate_distribution(dir.path()).is_ok());
     }
 
@@ -588,7 +654,7 @@ mod tests {
     #[test]
     fn flat_distribution_strips_development_material() {
         let dir = tmp();
-        let dist = write_runtime_fixture(&dir.path().join("managed"));
+        let dist = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
         fs::create_dir_all(dist.join("include").join("cef")).unwrap();
         fs::write(dist.join("include").join("cef").join("cef_app.h"), "h").unwrap();
         fs::create_dir_all(dist.join("cmake")).unwrap();
@@ -599,7 +665,7 @@ mod tests {
         let dest = dir.path().join("runtime");
         materialize_cef_runtime(&dist, &dest).unwrap();
 
-        assert!(dest.join(libcef_name()).exists());
+        assert!(dest.join(cef_binary_name()).exists());
         assert!(!dest.join("include").exists());
         assert!(!dest.join("cmake").exists());
         assert!(!dest.join("libcef_dll").exists());
@@ -610,7 +676,7 @@ mod tests {
     #[test]
     fn flat_distribution_strips_download_cache_residue() {
         let dir = tmp();
-        let dist = write_runtime_fixture(&dir.path().join("managed"));
+        let dist = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
         fs::write(
             dist.join("archive.json"),
             r#"{"type":"minimal","name":"x.tar.bz2","sha1":"0"}"#,
@@ -632,7 +698,7 @@ mod tests {
                 .exists()
         );
         assert!(
-            dest.join(libcef_name()).exists(),
+            dest.join(cef_binary_name()).exists(),
             "runtime files unaffected"
         );
     }
@@ -640,12 +706,12 @@ mod tests {
     #[test]
     fn materialization_is_cached_when_valid() {
         let dir = tmp();
-        let dist = write_runtime_fixture(&dir.path().join("managed"));
+        let dist = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
         let dest = dir.path().join("runtime");
         materialize_cef_runtime(&dist, &dest).unwrap();
 
         // Corrupt the source; cache must still be returned untouched
-        fs::remove_file(dist.join(libcef_name())).unwrap();
+        fs::remove_file(dist.join(cef_binary_name())).unwrap();
         let marker = dest.join("cache-marker");
         fs::write(&marker, "hit").unwrap();
 
@@ -656,13 +722,13 @@ mod tests {
     #[test]
     fn invalid_cached_destination_is_rebuilt() {
         let dir = tmp();
-        let dist = write_runtime_fixture(&dir.path().join("managed"));
+        let dist = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
         let dest = dir.path().join("runtime");
         fs::create_dir_all(&dest).unwrap();
         fs::write(dest.join("garbage"), "").unwrap();
 
         materialize_cef_runtime(&dist, &dest).unwrap();
-        assert!(dest.join(libcef_name()).exists());
+        assert!(dest.join(cef_binary_name()).exists());
         assert!(!dest.join("garbage").exists());
     }
 
@@ -671,8 +737,24 @@ mod tests {
     #[test]
     fn complete_runtime_passes_validation() {
         let dir = tmp();
-        let runtime = write_runtime_fixture(&dir.path().join("rt"));
+        let runtime = crate::test_fixtures::cef_runtime(&dir.path().join("rt"));
         assert!(validate_cef_runtime(&runtime).is_ok());
+    }
+
+    #[test]
+    fn every_platform_fixture_passes_its_own_validation() {
+        for platform in [Platform::Windows, Platform::MacOs, Platform::Linux] {
+            let dir = tmp();
+            let target = match platform {
+                Platform::Windows => crate::test_fixtures::Target::Windows,
+                Platform::MacOs => crate::test_fixtures::Target::MacOs,
+                Platform::Linux => crate::test_fixtures::Target::Linux,
+            };
+            let runtime = crate::test_fixtures::cef_runtime_for(dir.path(), target);
+
+            validate_cef_runtime_for(&runtime, platform)
+                .unwrap_or_else(|e| panic!("{platform:?} fixture failed its own validation: {e}"));
+        }
     }
 
     #[test]
@@ -683,20 +765,26 @@ mod tests {
 
         match validate_cef_runtime(&runtime) {
             Err(CefError::InvalidRuntime { missing, .. }) => {
-                assert!(missing.contains(libcef_name()));
+                assert!(missing.contains(cef_binary_name()));
                 assert!(missing.contains("icudtl.dat"));
-                assert!(missing.contains("locales"));
+                if cfg!(target_os = "macos") {
+                    assert!(!missing.contains("locales"));
+                    assert!(missing.contains("*.lproj"));
+                } else {
+                    assert!(missing.contains("locales"));
+                }
             }
             other => panic!("expected InvalidRuntime, got {other:?}"),
         }
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn either_v8_snapshot_satisfies_requirement() {
         let dir = tmp();
         let runtime = dir.path().join("rt");
         fs::create_dir_all(&runtime).unwrap();
-        fs::write(runtime.join(libcef_name()), "").unwrap();
+        fs::write(runtime.join(cef_binary_name()), "").unwrap();
         fs::write(runtime.join("icudtl.dat"), "").unwrap();
         fs::create_dir_all(runtime.join("locales")).unwrap();
         if cfg!(target_os = "windows") {
@@ -722,6 +810,41 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn macos_framework_layout_passes_validation() {
+        let dir = tmp();
+        let runtime = dir.path().join("rt");
+        let fw = runtime.join("Chromium Embedded Framework.framework");
+        let resources = fw.join("Resources");
+        fs::create_dir_all(resources.join("en.lproj")).unwrap();
+        fs::write(resources.join("en.lproj").join("locale.pak"), "pak").unwrap();
+        fs::write(fw.join("Chromium Embedded Framework"), "cef").unwrap();
+        fs::write(resources.join("icudtl.dat"), "icu").unwrap();
+
+        // Architecture-suffixed snapshot name satisfies the requirement
+        fs::write(resources.join("v8_context_snapshot.arm64.bin"), "v8").unwrap();
+        assert!(validate_cef_runtime_for(&runtime, Platform::MacOs).is_ok());
+
+        // Missing snapshot is reported
+        fs::remove_file(resources.join("v8_context_snapshot.arm64.bin")).unwrap();
+        match validate_cef_runtime_for(&runtime, Platform::MacOs) {
+            Err(CefError::InvalidRuntime { missing, .. }) => {
+                assert!(missing.contains("v8 snapshot"));
+            }
+            other => panic!("expected InvalidRuntime, got {other:?}"),
+        }
+
+        // Missing locale bundle is reported
+        fs::write(resources.join("v8_context_snapshot.arm64.bin"), "v8").unwrap();
+        fs::remove_dir_all(resources.join("en.lproj")).unwrap();
+        match validate_cef_runtime_for(&runtime, Platform::MacOs) {
+            Err(CefError::InvalidRuntime { missing, .. }) => {
+                assert!(missing.contains("*.lproj"));
+            }
+            other => panic!("expected InvalidRuntime, got {other:?}"),
+        }
+    }
+
     // Resolution policy
     //
     // Tests inject both the override lookup and the managed-root lookup, so
@@ -737,7 +860,7 @@ mod tests {
     fn unverifiable_override_is_rejected() {
         let dir = tmp();
         let fake = dir.path().join("dev-cef");
-        write_runtime_fixture(&fake); // looks like CEF but has no archive.json
+        crate::test_fixtures::cef_runtime(&fake); // looks like CEF but has no archive.json
 
         let err = resolve_cef(
             "131.3.5",
@@ -752,7 +875,7 @@ mod tests {
     #[test]
     fn version_mismatched_override_is_rejected() {
         let dir = tmp();
-        let fake = write_runtime_fixture(&dir.path().join("dev-cef"));
+        let fake = crate::test_fixtures::cef_runtime(&dir.path().join("dev-cef"));
         fs::write(
             fake.join("archive.json"),
             r#"{"type":"minimal","name":"cef_binary_127.1.1+gabcdef+chromium-127.0.1.2_linux64_minimal.tar.bz2","sha1":"x"}"#,
@@ -772,7 +895,7 @@ mod tests {
     #[test]
     fn verified_override_with_matching_provenance_is_accepted() {
         let dir = tmp();
-        let fake = write_runtime_fixture(&dir.path().join("dev-cef"));
+        let fake = crate::test_fixtures::cef_runtime(&dir.path().join("dev-cef"));
         let platform = current_platform_name().unwrap_or("linux64");
         let archive_name = format!(
             "cef_binary_131.3.5+g6a8d2b7+chromium-131.0.6778.204_{platform}_minimal.tar.bz2"
@@ -798,7 +921,7 @@ mod tests {
     // Managed-install resolution (injected root; no environment mutation)
 
     fn managed_provenance_fixture(dir: &Path) -> PathBuf {
-        let managed = write_runtime_fixture(&dir.join("managed"));
+        let managed = crate::test_fixtures::cef_runtime(&dir.join("managed"));
         let platform = current_platform_name().unwrap_or("linux64");
         let archive_name = format!(
             "cef_binary_131.3.5+g6a8d2b7+chromium-131.0.6778.204_{platform}_minimal.tar.bz2"
@@ -826,7 +949,7 @@ mod tests {
     #[test]
     fn managed_install_without_provenance_is_rejected() {
         let dir = tmp();
-        let managed = write_runtime_fixture(&dir.path().join("managed"));
+        let managed = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
 
         let err = resolve_cef("131.3.5", || None, |_| Some(managed.clone())).unwrap_err();
 
@@ -852,7 +975,7 @@ mod tests {
     #[test]
     fn platform_mismatched_managed_install_is_rejected() {
         let dir = tmp();
-        let managed = write_runtime_fixture(&dir.path().join("managed"));
+        let managed = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
         let wrong_platform = if current_platform_name() == Some("linux64") {
             "windowsarm64"
         } else {

@@ -27,6 +27,7 @@ struct RuntimeLayout {
     exe: std::path::PathBuf,
     cef_root: std::path::PathBuf,
     cache_dir: std::path::PathBuf,
+    #[cfg(not(target_os = "macos"))]
     locales_dir: std::path::PathBuf,
 }
 
@@ -59,12 +60,14 @@ fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeEr
 
     debug!("CEF root: {}", cef_root.display());
 
+    #[cfg(not(target_os = "macos"))]
     let locales_dir = cef_root.join("locales");
 
     Ok(RuntimeLayout {
         exe,
         cef_root,
         cache_dir,
+        #[cfg(not(target_os = "macos"))]
         locales_dir,
     })
 }
@@ -78,6 +81,7 @@ fn build_settings(
     // This enables cookies, storage APIs and service workers
 
     let exe_str = layout.exe.to_string_lossy();
+    #[cfg(not(target_os = "macos"))]
     let cef_root_str = layout.cef_root.to_string_lossy();
 
     // Sandbox is disabled on all platforms
@@ -100,11 +104,10 @@ fn build_settings(
 
     #[cfg(target_os = "macos")]
     {
+        // CEF resolves resources, locales and V8 snapshots from the framework bundle
         let mut s = Settings {
             browser_subprocess_path: CefString::from(exe_str.as_ref()),
-            resources_dir_path: CefString::from(cef_root_str.as_ref()),
             external_message_pump: external_message_pump as i32,
-            locales_dir_path: CefString::from(layout.locales_dir.to_string_lossy().as_ref()),
             cache_path: CefString::from(layout.cache_dir.to_string_lossy().as_ref()),
             root_cache_path: CefString::from(layout.cache_dir.to_string_lossy().as_ref()),
             persist_session_cookies: if persist_session_cookies { 1 } else { 0 },
@@ -169,6 +172,28 @@ fn install_ctrlc_handler(
     .expect("failed to install SIGINT handler");
 }
 
+pub(crate) fn close_all_browsers_and_windows(
+    browser_registry: &Arc<Mutex<BrowserRegistry>>,
+    window_registry: &Arc<Mutex<WindowRegistry>>,
+) {
+    // Close all browsers first; in Views mode this cascades to close their parent windows
+    // Embedded mode has no Views windows
+    let browsers: Vec<Browser> = {
+        let reg = browser_registry.lock().unwrap();
+        reg.iter().map(|(_, s)| s.browser.clone()).collect()
+    };
+    for browser in browsers {
+        if let Some(host) = browser.host() {
+            debug!("closing browser cef_id={}", browser.identifier());
+            host.close_browser(false as i32);
+        }
+    }
+
+    // Close any remaining Views windows not closed by the browser cascade
+    let wreg = window_registry.lock().unwrap();
+    wreg.close_all_windows();
+}
+
 wrap_task! {
     struct CloseAllTask {
         browser_registry: Arc<Mutex<BrowserRegistry>>,
@@ -177,22 +202,7 @@ wrap_task! {
 
     impl Task {
         fn execute(&self) {
-            // Close all browsers first in Views mode this cascades to close their parent windows
-            // In embedded mode there are no views windows
-            let browsers: Vec<Browser> = {
-                let reg = self.browser_registry.lock().unwrap();
-                reg.iter().map(|(_, s)| s.browser.clone()).collect()
-            };
-            for browser in browsers {
-                if let Some(host) = browser.host() {
-                    debug!("closing browser cef_id={}", browser.identifier());
-                    host.close_browser(false as i32);
-                }
-            }
-
-            // Close remaining CEF Views windows not already handled by the browser close cascade above
-            let wreg = self.window_registry.lock().unwrap();
-            wreg.close_all_windows();
+            close_all_browsers_and_windows(&self.browser_registry, &self.window_registry);
         }
     }
 }
@@ -1062,7 +1072,7 @@ fn initialize_cef(
     embedded_mode: bool,
 ) -> Result<RuntimeState, RuntimeError> {
     #[cfg(target_os = "macos")]
-    crate::platform::macos::init_ns_app();
+    crate::platform::macos::init_ns_app()?;
 
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
 
@@ -1080,6 +1090,9 @@ fn initialize_cef(
         browser_registry,
         window_registry,
     });
+
+    #[cfg(target_os = "macos")]
+    crate::platform::macos::set_services(services.clone());
 
     // ONE app for ALL processes
     let mut app: App = KuroganeApp::new(services.clone(), spec.clone());
@@ -1104,6 +1117,9 @@ fn initialize_cef(
     }
 
     debug!("CEF initialized");
+
+    #[cfg(target_os = "macos")]
+    crate::platform::macos::setup_app_delegate();
 
     // Only install Ctrl+C handler if CEF Views owns the window (non-embedded mode)
     // In embedded mode the host application manages its own lifecycle

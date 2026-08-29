@@ -18,6 +18,7 @@ use crate::runtime::{RuntimeBootstrap, AppHandle, AppInstance};
 use crate::error::RuntimeError;
 use crate::spec::{RuntimeSpec, RuntimeMode};
 use crate::chromium_flags::ChromiumFlag;
+use crate::credentials::CredentialStorage;
 use crate::gpu::GpuMode;
 
 mod resolver;
@@ -176,6 +177,7 @@ pub struct App {
     profile_id: Option<String>,
     persist_session_cookies: bool,
     gpu_mode: GpuMode,
+    credential_storage: CredentialStorage,
     chromium_flags: Vec<ChromiumFlag>,
     scheduler: Option<PumpScheduler>,
     delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
@@ -206,6 +208,7 @@ impl App {
             profile_id: None,
             persist_session_cookies: true,
             gpu_mode: GpuMode::Auto,
+            credential_storage: CredentialStorage::System,
             chromium_flags: Vec::new(),
             scheduler: None,
             delegates: Vec::new(),
@@ -425,6 +428,16 @@ impl App {
         self
     }
 
+    /// Override how cookies and saved passwords are protected at rest.
+    ///
+    /// Defaults to the platform credential store. `CredentialStorage::Basic`
+    /// trades encryption for a fixed built-in key, which keeps unsigned builds
+    /// and keyring-less hosts from prompting on every run.
+    pub fn credential_storage(mut self, storage: CredentialStorage) -> Self {
+        self.credential_storage = storage;
+        self
+    }
+
     /// Add a Chromium flag with no value.
     pub fn chromium_flag(mut self, name: impl Into<String>) -> Self {
         self.chromium_flags.push(ChromiumFlag::Present(name.into()));
@@ -454,6 +467,7 @@ impl App {
             profile_id,
             persist_session_cookies,
             gpu_mode,
+            credential_storage,
             chromium_flags,
             scheduler,
             delegates,
@@ -478,6 +492,7 @@ impl App {
             profile_id,
             persist_session_cookies,
             gpu_mode,
+            credential_storage,
             chromium_flags,
             scheduler,
             delegates,
@@ -502,6 +517,7 @@ impl App {
             profile_id,
             persist_session_cookies,
             gpu_mode,
+            credential_storage,
             chromium_flags,
             scheduler,
             delegates,
@@ -526,6 +542,7 @@ impl App {
             profile_id,
             persist_session_cookies,
             gpu_mode,
+            credential_storage,
             chromium_flags,
             scheduler,
             delegates,

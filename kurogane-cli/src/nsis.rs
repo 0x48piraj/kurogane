@@ -360,41 +360,13 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kurogane_layout::AppMetadata;
 
     fn tmp() -> tempfile::TempDir {
-        tempfile::tempdir().expect("failed to create temp dir")
+        kurogane_layout::test_fixtures::tmp_dir()
     }
 
-    use crate::test_helpers::create_cef_fixture;
-
     fn test_distribution(dir: &Path) -> ResolvedDistribution {
-        #[cfg(target_os = "windows")]
-        let exe_name = "myapp.exe";
-        #[cfg(not(target_os = "windows"))]
-        let exe_name = "myapp";
-
-        let exe = dir.join(exe_name);
-        fs::write(&exe, "binary").unwrap();
-
-        let frontend = dir.join("frontend");
-        fs::create_dir_all(&frontend).unwrap();
-        fs::write(frontend.join("index.html"), "<html></html>").unwrap();
-
-        let cef = create_cef_fixture(dir);
-
-        ResolvedDistribution {
-            metadata: AppMetadata {
-                name: "myapp".to_string(),
-                version: "1.0.0".to_string(),
-                exe_name: exe_name.to_string(),
-                ..Default::default()
-            },
-            executable: exe,
-            frontend: Some(frontend),
-            cef_runtime: cef,
-            extra_resources: Vec::new(),
-        }
+        kurogane_layout::test_fixtures::sample_distribution(dir)
     }
 
     fn generated_nsi(dir: &Path) -> String {

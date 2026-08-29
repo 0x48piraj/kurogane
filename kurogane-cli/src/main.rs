@@ -31,6 +31,8 @@ mod template;
 mod starters;
 mod tui;
 
+mod platform;
+
 #[derive(Parser)]
 #[command(name = "kurogane")]
 #[command(
@@ -106,8 +108,6 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
-    validate_platform();
-
     let cli = Cli::parse();
 
     match cli.command {
@@ -137,39 +137,5 @@ fn main() -> anyhow::Result<()> {
         Commands::Doctor { json } => doctor::run(json),
         Commands::List { target } => list::run(target),
         Commands::Info => info::run(),
-    }
-}
-
-/// macOS is currently unsupported due to missing platform-specific runtime support.
-/// Fail fast to avoid undefined behavior.
-#[cold]
-fn validate_platform() {
-    #[cfg(target_os = "macos")]
-    {
-        tui::error("macOS is not supported");
-        tui::info("Support is planned but not implemented yet");
-        std::process::exit(1);
-    }
-}
-
-#[cfg(test)]
-mod test_helpers {
-    use std::path::{Path, PathBuf};
-
-    pub(crate) fn create_cef_fixture(dir: &Path) -> PathBuf {
-        let cef = dir.join("cef");
-        std::fs::create_dir_all(&cef).unwrap();
-        if cfg!(target_os = "windows") {
-            std::fs::write(cef.join("libcef.dll"), "cef").unwrap();
-            std::fs::write(cef.join("chrome_elf.dll"), "elf").unwrap();
-        } else {
-            std::fs::write(cef.join("libcef.so"), "cef").unwrap();
-            std::fs::write(cef.join("chrome-sandbox"), "sandbox").unwrap();
-        }
-        std::fs::write(cef.join("icudtl.dat"), "icu").unwrap();
-        std::fs::write(cef.join("v8_context_snapshot.bin"), "v8").unwrap();
-        std::fs::create_dir_all(cef.join("locales")).unwrap();
-        std::fs::write(cef.join("locales").join("en-US.pak"), "pak").unwrap();
-        cef
     }
 }

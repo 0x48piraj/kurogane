@@ -7,10 +7,14 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+test-fixtures = ["dep:tempfile"]
+
 [dependencies]
 dirs = "6"
 serde = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { version = "3", optional = true }
 thiserror = "2.0.18"
 toml = "0.8"
 

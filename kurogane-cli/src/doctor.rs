@@ -39,6 +39,19 @@ fn required_tools() -> Vec<ToolCheck> {
                 hint: "Install Ninja build system",
             },
         ]
+    } else if cfg!(target_os = "macos") {
+        vec![
+            ToolCheck {
+                name: "Xcode Command Line Tools (clang)",
+                cmd: "clang",
+                hint: "Install Command Line Tools: xcode-select --install",
+            },
+            ToolCheck {
+                name: "CMake",
+                cmd: "cmake",
+                hint: "Install CMake",
+            },
+        ]
     } else {
         vec![
             ToolCheck {

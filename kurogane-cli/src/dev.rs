@@ -43,42 +43,14 @@ pub fn run(cargo_args: Vec<OsString>) -> Result<()> {
     let mut cmd = Command::new("cargo");
     cmd.arg("run");
 
-    for arg in cargo_args {
+    for arg in &cargo_args {
         cmd.arg(arg);
     }
 
     cmd.env("CEF_PATH", &cef);
 
-    // OS-specific runtime linking
-
-    #[cfg(target_os = "linux")]
-    {
-        let ld = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
-        let ld = if ld.is_empty() {
-            cef.display().to_string()
-        } else {
-            format!("{}:{}", cef.display(), ld)
-        };
-        cmd.env("LD_LIBRARY_PATH", ld);
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let path = std::env::var("PATH").unwrap_or_default();
-        let path = if path.is_empty() {
-            cef.display().to_string()
-        } else {
-            format!("{};{}", cef.display(), path)
-        };
-        cmd.env("PATH", path);
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let mut dyld = std::env::var("DYLD_FALLBACK_LIBRARY_PATH").unwrap_or_default();
-        dyld = format!("{}:{}", cef.display(), dyld);
-        cmd.env("DYLD_FALLBACK_LIBRARY_PATH", dyld);
-    }
+    // Configure platform-specific runtime loading for the launched process
+    crate::platform::configure_runtime_env(&mut cmd, &cef, &cargo_args)?;
 
     tui::blank();
     tui::step("Launching application");

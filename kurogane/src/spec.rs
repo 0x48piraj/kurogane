@@ -1,6 +1,7 @@
 use crate::app::{ClientAppBrowserDelegate, ClientAppRendererDelegate, PumpScheduler};
 use crate::chromium_flags::ChromiumFlag;
 use crate::fs::CanonicalRoot;
+use crate::credentials::CredentialStorage;
 use crate::gpu::GpuMode;
 use std::sync::Arc;
 
@@ -19,6 +20,7 @@ pub(crate) struct RuntimeSpec {
     pub profile_id: Option<String>,
     pub persist_session_cookies: bool,
     pub gpu_mode: GpuMode,
+    pub credential_storage: CredentialStorage,
     pub chromium_flags: Vec<ChromiumFlag>,
     pub scheduler: Option<PumpScheduler>,
     pub delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
