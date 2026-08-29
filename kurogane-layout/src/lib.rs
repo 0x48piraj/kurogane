@@ -23,6 +23,8 @@ pub use distribution::{AppMetadata, DistributionError, ResolvedDistribution, Res
 pub use layout::{bundled_cef_root, cef_install_dir, copy_dir, install_root, installed_cef_root};
 pub use package::{PackageError, package_directory};
 pub use profile::{cache_root, profile_dir};
+#[cfg(target_os = "macos")]
+pub use platform::link_unbundled_angle_libraries;
 pub use signing::{
     SignConfig, SigningError, osslsigncode_sign_args, sign_artifact, sign_file, sign_tree,
     signtool_sign_args, signtool_verify_args, verify_signature,

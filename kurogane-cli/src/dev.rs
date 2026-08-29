@@ -43,7 +43,7 @@ pub fn run(cargo_args: Vec<OsString>) -> Result<()> {
     let mut cmd = Command::new("cargo");
     cmd.arg("run");
 
-    for arg in cargo_args {
+    for arg in &cargo_args {
         cmd.arg(arg);
     }
 
@@ -78,6 +78,8 @@ pub fn run(cargo_args: Vec<OsString>) -> Result<()> {
         let mut dyld = std::env::var("DYLD_FALLBACK_LIBRARY_PATH").unwrap_or_default();
         dyld = format!("{}:{}", cef.display(), dyld);
         cmd.env("DYLD_FALLBACK_LIBRARY_PATH", dyld);
+
+        crate::platform::link_unbundled_gpu_libraries(&cef, &cargo_args)?;
     }
 
     tui::blank();

@@ -31,6 +31,9 @@ mod template;
 mod starters;
 mod tui;
 
+#[cfg(target_os = "macos")]
+mod platform;
+
 #[derive(Parser)]
 #[command(name = "kurogane")]
 #[command(
