@@ -10,6 +10,7 @@ use crate::runtime::RuntimeServices;
 use crate::spec::RuntimeSpec;
 use crate::debug;
 use crate::chromium_flags::ChromiumFlags;
+use crate::credentials::apply_credential_flags;
 use crate::gpu::apply_gpu_flags;
 use crate::sandbox::apply_sandbox_flags;
 
@@ -49,6 +50,7 @@ wrap_app! {
 
             apply_sandbox_flags(&mut flags);
             apply_gpu_flags(&mut flags, self.spec.gpu_mode);
+            apply_credential_flags(&mut flags, self.spec.credential_storage);
 
             // Apply user overrides
             flags.extend_user_flags(&self.spec.chromium_flags);
