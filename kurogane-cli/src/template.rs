@@ -139,11 +139,12 @@ pub fn confirm_hooks(template_dir: &Path, assume_yes: bool) -> Result<()> {
 }
 
 /// Generate a new project from a template.
+///
+/// The project is created at `destination/name`.
 pub fn generate_project(
     template_dir: &Path,
     name: &str,
     destination: &Path,
-    overwrite: bool,
     defines: &[String],
 ) -> Result<PathBuf> {
     let args = GenerateArgs {
@@ -155,12 +156,47 @@ pub fn generate_project(
         destination: Some(destination.to_owned()),
         vcs: Some(Vcs::None),
         no_workspace: true,
-        overwrite,
         define: defines.to_vec(),
         ..GenerateArgs::default()
     };
 
     cargo_generate::generate(args).context("Project generation failed")
+}
+
+/// Regenerate a project in place, preserving its build artifacts.
+pub fn regenerate_project(
+    template_dir: &Path,
+    name: &str,
+    project_dir: &Path,
+    defines: &[String],
+) -> Result<PathBuf> {
+    reset_project_dir(project_dir)?;
+    generate_into_existing_dir(template_dir, name, project_dir, defines)
+}
+
+/// Empty a project directory, preserving the build directory, create if it's missing.
+fn reset_project_dir(project_dir: &Path) -> Result<()> {
+    if !project_dir.exists() {
+        return Ok(fs::create_dir_all(project_dir)?);
+    }
+
+    for entry in fs::read_dir(project_dir)? {
+        let entry = entry?;
+
+        if entry.file_name() == "target" {
+            continue;
+        }
+
+        let path = entry.path();
+
+        if entry.file_type()?.is_dir() {
+            fs::remove_dir_all(&path)?;
+        } else {
+            fs::remove_file(&path)?;
+        }
+    }
+
+    Ok(())
 }
 
 /// Generate a template into an existing project directory.
@@ -253,7 +289,7 @@ mod tests {
 
         let destination = tempfile::tempdir().unwrap();
         let project =
-            generate_project(layout_dir.path(), "my-app", destination.path(), false, &[]).unwrap();
+            generate_project(layout_dir.path(), "my-app", destination.path(), &[]).unwrap();
 
         assert!(project.join("Cargo.toml").exists());
         assert!(project.join("src/main.rs").exists());
@@ -266,7 +302,7 @@ mod tests {
         layout_template(layout_dir.path());
 
         let destination = tempfile::tempdir().unwrap();
-        generate_project(layout_dir.path(), "My App", destination.path(), false, &[]).unwrap();
+        generate_project(layout_dir.path(), "My App", destination.path(), &[]).unwrap();
 
         assert!(
             destination
@@ -290,14 +326,7 @@ mod tests {
         let layout_dir = tempfile::tempdir().unwrap();
         layout_template(layout_dir.path());
 
-        generate_project(
-            layout_dir.path(),
-            "member-app",
-            workspace.path(),
-            false,
-            &[],
-        )
-        .unwrap();
+        generate_project(layout_dir.path(), "member-app", workspace.path(), &[]).unwrap();
 
         let manifest = fs::read_to_string(workspace.path().join("Cargo.toml")).unwrap();
         assert_eq!(manifest, "[workspace]\nmembers = []\n");
@@ -333,6 +362,30 @@ mod tests {
         let contents = fs::read_to_string(dir.path().join(".cargo/config.toml")).unwrap();
         assert!(contents.starts_with("[target."));
         assert!(contents.contains("$ORIGIN/cef"));
+    }
+
+    #[test]
+    fn regeneration_replaces_project_and_preserves_build_artifacts() {
+        let layout_dir = tempfile::tempdir().unwrap();
+        layout_template(layout_dir.path());
+
+        let destination = tempfile::tempdir().unwrap();
+        let project = destination.path().join("showcase");
+
+        regenerate_project(layout_dir.path(), "showcase", &project, &[]).unwrap();
+
+        fs::write(project.join("stale.txt"), "old").unwrap();
+        fs::create_dir_all(project.join("target/debug")).unwrap();
+        fs::write(project.join("target/debug/artifact"), "cached").unwrap();
+
+        regenerate_project(layout_dir.path(), "showcase", &project, &[]).unwrap();
+
+        assert!(project.join("src/main.rs").exists());
+        assert!(!project.join("stale.txt").exists());
+        assert_eq!(
+            fs::read_to_string(project.join("target/debug/artifact")).unwrap(),
+            "cached"
+        );
     }
 
     #[test]

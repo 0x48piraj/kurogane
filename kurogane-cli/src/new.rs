@@ -29,7 +29,7 @@ pub fn run(starter: Option<String>, template_src: Option<String>, assume_yes: bo
         .map(|l| vec![format!("language={l}")])
         .unwrap_or_default();
     let destination = std::env::current_dir()?;
-    let project = template::generate_project(&template_dir, &name, &destination, false, &defines)?;
+    let project = template::generate_project(&template_dir, &name, &destination, &defines)?;
 
     template::write_cargo_config(&project)?;
 

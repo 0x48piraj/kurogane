@@ -22,7 +22,7 @@ pub fn run() -> Result<()> {
     let acquired = crate::cache::acquire(SHOWCASE_TEMPLATE_REPO)?;
     tui::field("commit", &acquired.commit);
     template::confirm_hooks(&acquired.path, false)?;
-    template::generate_project(&acquired.path, "showcase", &cache_root, true, &[])?;
+    template::regenerate_project(&acquired.path, "showcase", &root, &[])?;
 
     tui::step("Launching showcase...");
 
