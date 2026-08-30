@@ -38,8 +38,7 @@ Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
 OutFile "${OUTFILE}"
 
-!define PLACEHOLDER_INSTALL_DIR "placeholder\${PRODUCTNAME}"
-InstallDir "${PLACEHOLDER_INSTALL_DIR}"
+InstallDir "$LOCALAPPDATA\Programs\${PRODUCTNAME}"
 
 VIProductVersion "${VERSION}.0"
 VIAddVersionKey "ProductName" "${PRODUCTNAME}"
