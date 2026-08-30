@@ -29,14 +29,26 @@ fn build_frontend(
         return Ok(());
     }
 
-    let parts: Vec<&str> = command.split_whitespace().collect();
-    let (program, args) = parts
-        .split_first()
-        .ok_or_else(|| anyhow::anyhow!("empty frontend-build command"))?;
-
     tui::step("Building frontend...");
 
-    let status = Command::new(*program).args(args).status()?;
+    #[cfg(target_os = "windows")]
+    let status = Command::new("cmd")
+        .args(["/C", command])
+        .current_dir(workspace_root)
+        .status()?;
+
+    #[cfg(not(target_os = "windows"))]
+    let status = {
+        let parts: Vec<&str> = command.split_whitespace().collect();
+        let (program, args) = parts
+            .split_first()
+            .ok_or_else(|| anyhow::anyhow!("empty frontend-build command"))?;
+
+        Command::new(*program)
+            .args(args)
+            .current_dir(workspace_root)
+            .status()?
+    };
 
     if !status.success() {
         bail!("Frontend build failed: {command}");
