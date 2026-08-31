@@ -327,4 +327,72 @@ mod tests {
     fn rejects_empty_format() {
         assert!(PackageFormat::from_str("").is_err());
     }
+
+    fn resource(source: &str, destination: Option<&str>) -> kurogane_layout::ResourceConfig {
+        kurogane_layout::ResourceConfig {
+            source: source.into(),
+            destination: destination.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn resource_sources_anchor_to_the_project_root() {
+        let root = std::path::Path::new("/workspace/app");
+
+        let resolved = resolve_resources(root, &[resource("assets/data", Some("share/data"))])
+            .expect("resources should resolve");
+
+        assert_eq!(
+            resolved[0].source,
+            std::path::PathBuf::from("/workspace/app/assets/data"),
+            "a relative source must resolve against the project, not the shell's cwd"
+        );
+    }
+
+    #[test]
+    fn resource_destinations_stay_bundle_relative() {
+        let root = std::path::Path::new("/workspace/app");
+
+        let resolved = resolve_resources(
+            root,
+            &[
+                resource("assets/data", Some("share/data")),
+                resource("README.md", None),
+            ],
+        )
+        .expect("resources should resolve");
+
+        assert_eq!(
+            resolved[0].destination,
+            std::path::PathBuf::from("share/data")
+        );
+        assert_eq!(
+            resolved[1].destination,
+            std::path::PathBuf::from("README.md"),
+            "an omitted destination defaults to the source file name"
+        );
+        for entry in &resolved {
+            assert!(
+                entry.destination.is_relative(),
+                "anchoring must never leak into the bundle destination"
+            );
+        }
+    }
+
+    #[test]
+    fn absolute_resource_sources_are_left_alone() {
+        let absolute = if cfg!(windows) {
+            r"C:\shared\assets"
+        } else {
+            "/shared/assets"
+        };
+
+        let resolved = resolve_resources(
+            std::path::Path::new("/workspace/app"),
+            &[resource(absolute, None)],
+        )
+        .expect("resources should resolve");
+
+        assert_eq!(resolved[0].source, std::path::PathBuf::from(absolute));
+    }
 }
