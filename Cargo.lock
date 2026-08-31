@@ -1854,7 +1854,6 @@ dependencies = [
  "download-cef 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "git2",
  "kurogane-layout",
- "semver",
  "serde",
  "serde_json",
  "tempfile",
