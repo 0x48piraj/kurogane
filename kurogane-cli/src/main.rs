@@ -40,6 +40,9 @@ mod platform;
     version
 )]
 struct Cli {
+    #[arg(long, global = true)]
+    ci: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -69,6 +72,14 @@ enum Commands {
     New {
         /// Official starter name
         starter: Option<String>,
+
+        /// Project name (required when non-interactive)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Starter language (required when non-interactive)
+        #[arg(long)]
+        language: Option<String>,
 
         /// Use an arbitrary template source
         #[arg(long)]
@@ -107,8 +118,25 @@ enum Commands {
     Info,
 }
 
+/// Enables non-interactive execution.
+///
+/// The flag takes precedence, `CI` enables non-interactive execution
+/// unless its value is empty, `0`, or `false`. `CI` is parsed manually
+/// because Clap's `env` bool parser rejects values such as `CI=1`.
+fn non_interactive(flag: bool) -> bool {
+    flag || std::env::var_os("CI").is_some_and(|value| {
+        let value = value.to_string_lossy();
+        let value = value.trim();
+
+        !value.is_empty()
+            && value != "0"
+            && !value.eq_ignore_ascii_case("false")
+    })
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let ci = non_interactive(cli.ci);
 
     match cli.command {
         Commands::Install => install::run(),
@@ -124,9 +152,11 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::New {
             starter,
+            name,
+            language,
             template,
             yes,
-        } => new::run(starter, template, yes),
+        } => new::run(starter, name, language, template, yes || ci, ci),
         Commands::Init {
             assets,
             dev_url,

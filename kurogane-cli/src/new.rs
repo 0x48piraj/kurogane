@@ -11,12 +11,19 @@ use crate::starters;
 use crate::template;
 use crate::tui;
 
-pub fn run(starter: Option<String>, template_src: Option<String>, assume_yes: bool) -> Result<()> {
+pub fn run(
+    starter: Option<String>,
+    name: Option<String>,
+    language: Option<String>,
+    template_src: Option<String>,
+    assume_yes: bool,
+    non_interactive: bool,
+) -> Result<()> {
     tui::section("Kurogane project setup");
 
-    let (source, language) = resolve_source(starter, template_src)?;
+    let (source, language) = resolve_source(starter, language, template_src, non_interactive)?;
 
-    let name = prompt_project_name()?;
+    let name = resolve_project_name(name, non_interactive)?;
 
     tui::step("Creating project");
     tui::field("name", &name);
@@ -58,12 +65,14 @@ pub fn run(starter: Option<String>, template_src: Option<String>, assume_yes: bo
 
 fn resolve_source(
     starter: Option<String>,
+    language: Option<String>,
     template_src: Option<String>,
+    non_interactive: bool,
 ) -> Result<(String, Option<String>)> {
     match (starter, template_src) {
         (None, None) => {
-            let s = starters::choose()?;
-            let lang = starters::choose_language(s)?;
+            let s = starters::choose(non_interactive)?;
+            let lang = starters::resolve_language(s, language, non_interactive)?;
             Ok((s.source.to_owned(), lang.map(str::to_owned)))
         }
         (None, Some(tpl)) => Ok((tpl, None)),
@@ -79,7 +88,7 @@ fn resolve_source(
                      kurogane new --template gh:owner/repository"
                 )
             })?;
-            let lang = starters::choose_language(s)?;
+            let lang = starters::resolve_language(s, language, non_interactive)?;
             Ok((s.source.to_owned(), lang.map(str::to_owned)))
         }
         (Some(_), Some(_)) => {
@@ -88,27 +97,41 @@ fn resolve_source(
     }
 }
 
-fn prompt_project_name() -> Result<String> {
+/// Resolves the project name from the flag, or prompts for it.
+///
+/// `--name` cannot smuggle in a name that the prompt would have rejected.
+fn resolve_project_name(name: Option<String>, non_interactive: bool) -> Result<String> {
     use std::io::IsTerminal;
 
-    if !std::io::stdin().is_terminal() {
-        bail!("Project name is required in non-interactive mode");
-    }
+    let name = match name {
+        Some(name) => name.trim().to_string(),
+        None => {
+            if non_interactive || !std::io::stdin().is_terminal() {
+                bail!("Project name is required in non-interactive mode; pass --name <NAME>");
+            }
 
-    print!("Project name: ");
-    io::stdout().flush()?;
+            print!("Project name: ");
+            io::stdout().flush()?;
 
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let name = input.trim().to_string();
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            input.trim().to_string()
+        }
+    };
 
+    validate_project_name(&name)?;
+
+    Ok(name)
+}
+
+fn validate_project_name(name: &str) -> Result<()> {
     if name.is_empty() {
         bail!("Project name cannot be empty.");
     }
 
-    if Path::new(&name).exists() {
-        bail!("Directory already exists.");
+    if Path::new(name).exists() {
+        bail!("Directory already exists: {name}");
     }
 
-    Ok(name)
+    Ok(())
 }
