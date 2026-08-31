@@ -136,9 +136,7 @@ fn ci_requested(flag: bool) -> bool {
         let value = value.to_string_lossy();
         let value = value.trim();
 
-        !value.is_empty()
-            && value != "0"
-            && !value.eq_ignore_ascii_case("false")
+        !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
     })
 }
 

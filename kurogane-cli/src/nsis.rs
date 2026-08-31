@@ -30,7 +30,6 @@ SetCompressor /SOLID lzma
 !define OUTFILE "{{out_file}}"
 !define ARCH "{{arch}}"
 !define BUNDLEDIR "{{bundle_dir}}"
-!define INSTALLMODE "{{install_mode}}"
 !define MANUFACTURER "{{manufacturer}}"
 !define ESTIMATEDSIZE "{{estimated_size}}"
 
@@ -211,17 +210,17 @@ fn generate_installer_nsi(
         ""
     };
 
+    // These values are interpolated and must be escaped
     let nsi_content = INSTALLER_NSI
-        .replace("{{product_name}}", name)
-        .replace("{{version}}", version)
-        .replace("{{main_binary_name}}", exe_name)
-        .replace("{{copyright}}", &copyright)
-        .replace("{{file_description}}", &file_description)
-        .replace("{{out_file}}", &out_file)
-        .replace("{{arch}}", arch)
-        .replace("{{bundle_dir}}", &bundle_source)
-        .replace("{{install_mode}}", "currentUser")
-        .replace("{{manufacturer}}", &manufacturer)
+        .replace("{{product_name}}", &escape_nsis(name))
+        .replace("{{version}}", &escape_nsis(version))
+        .replace("{{main_binary_name}}", &escape_nsis(exe_name))
+        .replace("{{copyright}}", &escape_nsis(&copyright))
+        .replace("{{file_description}}", &escape_nsis(&file_description))
+        .replace("{{out_file}}", &escape_nsis(&out_file))
+        .replace("{{arch}}", &escape_nsis(arch))
+        .replace("{{bundle_dir}}", &escape_nsis(&bundle_source))
+        .replace("{{manufacturer}}", &escape_nsis(&manufacturer))
         .replace("{{estimated_size}}", &estimated_size.to_string())
         .replace("{{start_menu_shortcut}}", start_menu_shortcut)
         .replace("{{desktop_shortcut}}", desktop_shortcut);
@@ -229,6 +228,28 @@ fn generate_installer_nsi(
     let nsi_path = output_dir.join("installer.nsi");
     fs::write(&nsi_path, &nsi_content)?;
     Ok(nsi_path)
+}
+
+/// Escapes a value for use in a quoted NSIS string.
+///
+/// Escapes `$` and `"` as `$$` and `$"`, respectively.
+/// Backslashes are preserved.
+///
+/// Newlines are replaced with spaces; a `!define` cannot span lines.
+fn escape_nsis(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+
+    for ch in value.chars() {
+        match ch {
+            // Quote escaping introduces `$`, so handle `$` first
+            '$' => escaped.push_str("$$"),
+            '"' => escaped.push_str("$\\\""),
+            '\r' | '\n' => escaped.push(' '),
+            _ => escaped.push(ch),
+        }
+    }
+
+    escaped
 }
 
 /// Resolves the installer architecture, preferring `ARCH` when provided.
@@ -359,6 +380,62 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escaping_leaves_ordinary_values_untouched() {
+        assert_eq!(escape_nsis("My App"), "My App");
+        assert_eq!(escape_nsis("1.2.3"), "1.2.3");
+    }
+
+    #[test]
+    fn escaping_preserves_windows_path_separators() {
+        assert_eq!(escape_nsis(r"bundle\runtime"), r"bundle\runtime");
+    }
+
+    #[test]
+    fn quotes_cannot_terminate_the_define_early() {
+        assert_eq!(escape_nsis(r#"Acme "Corp""#), r#"Acme $\"Corp$\""#);
+    }
+
+    #[test]
+    fn dollars_cannot_introduce_an_nsis_variable() {
+        assert_eq!(escape_nsis("$INSTDIR"), "$$INSTDIR");
+        assert_eq!(escape_nsis("100$"), "100$$");
+    }
+
+    #[test]
+    fn newlines_cannot_split_a_define_across_lines() {
+        let escaped = escape_nsis("Acme\nCorp\r\nLtd");
+
+        assert!(!escaped.contains('\n'));
+        assert!(!escaped.contains('\r'));
+        assert_eq!(escaped, "Acme Corp  Ltd");
+    }
+
+    #[test]
+    fn generated_script_escapes_a_hostile_publisher() {
+        let dir = tmp();
+        let mut dist = test_distribution(dir.path());
+        dist.metadata.publisher = Some(r#"Evil" ; MessageBox MB_OK "pwned"#.to_string());
+
+        let out = dir.path().join("out");
+        let bundle = out.join("bundle");
+        std::fs::create_dir_all(&bundle).unwrap();
+
+        let nsi =
+            generate_installer_nsi(&dist, &PackagingConfig::default(), &bundle, &out).unwrap();
+        let content = std::fs::read_to_string(nsi).unwrap();
+
+        let manufacturer = content
+            .lines()
+            .find(|line| line.starts_with("!define MANUFACTURER "))
+            .expect("MANUFACTURER define should be present");
+
+        assert!(
+            manufacturer.ends_with('"') && manufacturer.matches("$\\\"").count() == 2,
+            "embedded quotes must be escaped, not closing the define: {manufacturer}"
+        );
+    }
 
     fn tmp() -> tempfile::TempDir {
         kurogane_layout::test_fixtures::tmp_dir()
