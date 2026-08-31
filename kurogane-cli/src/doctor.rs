@@ -256,22 +256,29 @@ pub fn run(json: bool) -> Result<()> {
     }
 
     // Check configured frontend from the resolved workspace root
-    let packaging_config = workspace_root
-        .as_ref()
-        .and_then(|root| kurogane_layout::PackagingConfig::load(root).ok());
+    let packaging_config = workspace_root.as_deref().and_then(|root| {
+        kurogane_layout::PackagingConfig::load(root)
+            .ok()
+            .map(|c| (root, c))
+    });
 
-    if let Some(ref config) = packaging_config {
-        if let Some(frontend) = &config.app.frontend {
-            if frontend.exists() {
+    if let Some((root, config)) = packaging_config {
+        match config
+            .app
+            .frontend
+            .as_deref()
+            .map(|path| kurogane_layout::anchor_path(root, path))
+        {
+            Some(frontend) if frontend.exists() => {
                 tui::success("Frontend directory");
-                tui::field("path", frontend.display());
-            } else {
+                tui::field("path", tui::format_path(&frontend));
+            }
+            Some(frontend) => {
                 tui::warn("Configured frontend directory not found");
-                tui::field("path", frontend.display());
+                tui::field("path", tui::format_path(&frontend));
                 warn += 1;
             }
-        } else {
-            tui::info("No frontend directory configured in kurogane.toml");
+            None => tui::info("No frontend directory configured in kurogane.toml"),
         }
     } else {
         tui::info("No kurogane.toml found");

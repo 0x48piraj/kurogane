@@ -5,12 +5,11 @@
 //! optional signing.
 
 use anyhow::{Result, bail};
-use std::path::PathBuf;
 use std::process::Command;
 use cargo_metadata::{MetadataCommand, TargetKind};
 use kurogane_layout::{
-    AppMetadata, PackagingConfig, ResolvedDistribution, SignConfig, materialize_cef_runtime,
-    package_directory, resolve_cef_for_bundle, sign_tree,
+    AppMetadata, PackagingConfig, ResolvedDistribution, SignConfig, anchor_path,
+    materialize_cef_runtime, package_directory, resolve_cef_for_bundle, sign_tree,
 };
 
 use crate::tui;
@@ -81,6 +80,23 @@ impl PackageFormat {
             _ => bail!("unsupported format: {s}"),
         }
     }
+}
+
+/// Resolves configured bundle resources against the project root.
+///
+/// Only the source is anchored; the destination is bundle-relative.
+fn resolve_resources(
+    project_root: &std::path::Path,
+    configured: &[kurogane_layout::ResourceConfig],
+) -> Result<Vec<kurogane_layout::ResolvedResource>> {
+    configured
+        .iter()
+        .map(|resource| {
+            let mut resolved = resource.to_resolved()?;
+            resolved.source = anchor_path(project_root, &resolved.source);
+            Ok(resolved)
+        })
+        .collect()
 }
 
 /// Resolves the signing policy for a packaging operation.
@@ -194,10 +210,13 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
     let cef_runtime = materialize_cef_runtime(&cef.root, runtime_dir.as_std_path())?;
 
+    let project_root = metadata.workspace_root.as_std_path();
+
     let frontend = match &packaging_config.app.frontend {
         Some(path) => {
+            let path = anchor_path(project_root, path);
             if path.exists() {
-                Some(path.clone())
+                Some(path)
             } else {
                 tui::warn(&format!(
                     "Configured frontend directory '{}' does not exist",
@@ -212,12 +231,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
         }
     };
 
-    let extra_resources = packaging_config
-        .bundle
-        .resources
-        .iter()
-        .map(|r| r.to_resolved())
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let extra_resources = resolve_resources(project_root, &packaging_config.bundle.resources)?;
 
     let dist = ResolvedDistribution {
         metadata: AppMetadata {
@@ -231,7 +245,11 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
             publisher: packaging_config.app.publisher.clone(),
             description: packaging_config.app.description.clone(),
             copyright: packaging_config.app.copyright.clone(),
-            icon: packaging_config.app.icon.clone(),
+            icon: packaging_config
+                .app
+                .icon
+                .as_ref()
+                .map(|icon| anchor_path(project_root, icon)),
         },
         executable: exe_path.into(),
         frontend,
@@ -248,7 +266,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     // Package the distribution
     tui::step("Packaging...");
 
-    let output_dir = PathBuf::from("dist");
+    let output_dir = project_root.join("dist");
     let sign_config = resolve_sign_config(sign, &packaging_config)?;
 
     match format {
@@ -277,7 +295,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
     tui::blank();
     tui::success("Bundle ready");
-    tui::field("path", "./dist");
+    tui::field("path", tui::format_path(&output_dir));
 
     Ok(())
 }
