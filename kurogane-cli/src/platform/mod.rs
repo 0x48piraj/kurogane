@@ -45,3 +45,36 @@ pub(crate) fn configure_runtime_env(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn empty_existing_value_yields_no_separator() {
+        let path = prepend_search_path(&PathBuf::from("/opt/cef"), "", ':');
+
+        assert_eq!(path, "/opt/cef");
+        assert!(
+            !path.ends_with(':'),
+            "a trailing separator is an empty search-path entry"
+        );
+    }
+
+    #[test]
+    fn existing_value_is_preserved_after_the_new_entry() {
+        assert_eq!(
+            prepend_search_path(&PathBuf::from("/opt/cef"), "/usr/lib:/lib", ':'),
+            "/opt/cef:/usr/lib:/lib"
+        );
+    }
+
+    #[test]
+    fn windows_uses_its_own_separator() {
+        assert_eq!(
+            prepend_search_path(&PathBuf::from(r"C:\cef"), r"C:\Windows", ';'),
+            r"C:\cef;C:\Windows"
+        );
+    }
+}
