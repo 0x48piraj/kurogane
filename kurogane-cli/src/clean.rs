@@ -9,17 +9,28 @@ use kurogane_layout::cache_root;
 
 use crate::tui;
 
-pub fn run(target: Option<String>) -> Result<()> {
+pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Result<()> {
     tui::section("Kurogane Clean");
 
     let nuclear = target.as_deref() == Some("all");
 
-    // Confirmation
-    if nuclear {
+    // Track failed removals for the final error
+    let mut failed: Vec<&str> = Vec::new();
+
+    // Confirm destructive system-wide cleanup
+    if nuclear && !confirmed {
         tui::warn("This will remove ALL Kurogane data.");
         tui::warn("Including installed Chromium runtimes.");
 
-        let confirmed = loop {
+        // Never prompt when running unattended
+        if non_interactive {
+            anyhow::bail!(
+                "`clean all` needs confirmation and cannot prompt here.\n\n  \
+                 Re-run with --yes to confirm."
+            );
+        }
+
+        let accepted = loop {
             print!("\nContinue? [y/N]: ");
             std::io::Write::flush(&mut std::io::stdout())?;
 
@@ -38,7 +49,7 @@ pub fn run(target: Option<String>) -> Result<()> {
 
         tui::blank();
 
-        if !confirmed {
+        if !accepted {
             tui::info("Aborted");
             return Ok(());
         }
@@ -54,6 +65,7 @@ pub fn run(target: Option<String>) -> Result<()> {
                 Err(e) => {
                     tui::warn(&format!("Failed to remove CEF runtimes: {}", e));
                     tui::field("cef", "failed");
+                    failed.push("cef");
                 }
             }
         } else {
@@ -69,6 +81,7 @@ pub fn run(target: Option<String>) -> Result<()> {
                 Err(e) => {
                     tui::warn(&format!("Failed to remove materialized runtimes: {}", e));
                     tui::field("target/kurogane", "failed");
+                    failed.push("target/kurogane");
                 }
             }
         } else {
@@ -84,6 +97,7 @@ pub fn run(target: Option<String>) -> Result<()> {
                 Err(e) => {
                     tui::warn(&format!("Failed to remove build tools: {}", e));
                     tui::field("tools", "failed");
+                    failed.push("tools");
                 }
             }
         } else {
@@ -104,6 +118,7 @@ pub fn run(target: Option<String>) -> Result<()> {
             Err(e) => {
                 tui::warn(&format!("Failed to remove dist: {}", e));
                 tui::field("dist", "failed");
+                failed.push("dist");
             }
         }
     } else {
@@ -117,6 +132,15 @@ pub fn run(target: Option<String>) -> Result<()> {
 
     if !base.exists() {
         tui::info("Nothing to clean");
+
+        // Report failures from earlier cleanup stages
+        if !failed.is_empty() {
+            anyhow::bail!(
+                "Cleanup incomplete; could not remove: {}",
+                failed.join(", ")
+            );
+        }
+
         return Ok(());
     }
 
@@ -133,6 +157,7 @@ pub fn run(target: Option<String>) -> Result<()> {
             Err(e) => {
                 tui::warn(&format!("Failed to remove template cache: {}", e));
                 tui::field("templates", "failed");
+                failed.push("templates");
             }
         }
     } else {
@@ -146,6 +171,7 @@ pub fn run(target: Option<String>) -> Result<()> {
             Err(e) => {
                 tui::warn(&format!("Failed to remove profiles: {}", e));
                 tui::field("profiles", "failed");
+                failed.push("profiles");
             }
         }
     } else {
@@ -159,6 +185,7 @@ pub fn run(target: Option<String>) -> Result<()> {
             Err(e) => {
                 tui::warn(&format!("Failed to remove showcase: {}", e));
                 tui::field("showcase", "failed");
+                failed.push("showcase");
             }
         }
     } else {
@@ -166,6 +193,13 @@ pub fn run(target: Option<String>) -> Result<()> {
     }
 
     tui::blank();
+
+    if !failed.is_empty() {
+        anyhow::bail!(
+            "Cleanup incomplete; could not remove: {}",
+            failed.join(", ")
+        );
+    }
 
     if nuclear {
         tui::success("System-wide cleanup complete");
