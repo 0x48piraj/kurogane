@@ -149,6 +149,15 @@ pub fn confirm_hooks(template_dir: &Path, consent: Consent) -> Result<()> {
     Ok(())
 }
 
+/// Translate generation permissions into cargo-generate options.
+fn generation_mode(consent: Consent) -> GenerateArgs {
+    GenerateArgs {
+        silent: consent.non_interactive,
+        allow_commands: consent.hooks,
+        ..GenerateArgs::default()
+    }
+}
+
 /// Generate a new project from a template.
 ///
 /// The project is created at `destination/name`.
@@ -169,7 +178,7 @@ pub fn generate_project(
         vcs: Some(Vcs::None),
         no_workspace: true,
         define: defines.to_vec(),
-        ..GenerateArgs::default()
+        ..generation_mode(consent)
     };
 
     cargo_generate::generate(args).context("Project generation failed")
@@ -232,7 +241,7 @@ pub fn generate_into_existing_dir(
         init: true,
         overwrite: false,
         define: defines.to_vec(),
-        ..GenerateArgs::default()
+        ..generation_mode(consent)
     };
 
     cargo_generate::generate(args).context("Project generation failed")
@@ -372,6 +381,118 @@ mod tests {
         layout_template(dir.path());
         assert!(detect_hooks(dir.path()).is_empty());
         confirm_hooks(dir.path(), Consent::default()).unwrap();
+    }
+
+    fn template_with_hooks(dir: &Path) {
+        layout_template(dir);
+        fs::write(
+            dir.join("cargo-generate.toml"),
+            "[hooks]\npre = [\"pre.rhai\"]\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn non_interactive_without_yes_refuses_to_run_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        template_with_hooks(dir.path());
+
+        let err = confirm_hooks(
+            dir.path(),
+            Consent {
+                hooks: false,
+                non_interactive: true,
+            },
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("--yes"),
+            "the error must name the flag that grants the missing consent, got: {err}"
+        );
+    }
+
+    #[test]
+    fn yes_alone_approves_hooks_without_any_terminal() {
+        let dir = tempfile::tempdir().unwrap();
+        template_with_hooks(dir.path());
+
+        confirm_hooks(
+            dir.path(),
+            Consent {
+                hooks: true,
+                non_interactive: true,
+            },
+        )
+        .unwrap();
+    }
+
+    /// A non-interactive run must not pre-authorize hook execution consent.
+    #[test]
+    fn ci_does_not_grant_hook_consent() {
+        assert!(
+            !generation_mode(Consent {
+                hooks: false,
+                non_interactive: true,
+            })
+            .allow_commands
+        );
+    }
+
+    /// Non-interactive mode enables silent placeholder resolution.
+    #[test]
+    fn non_interactive_silences_template_placeholder_prompts() {
+        assert!(
+            generation_mode(Consent {
+                hooks: false,
+                non_interactive: true,
+            })
+            .silent
+        );
+        assert!(
+            !generation_mode(Consent {
+                hooks: true,
+                non_interactive: false,
+            })
+            .silent,
+            "--yes alone must not enable silent mode"
+        );
+    }
+
+    #[test]
+    fn non_interactive_generation_takes_declared_defaults_without_prompting() {
+        let template = tempfile::tempdir().unwrap();
+        layout_template(template.path());
+        fs::write(
+            template.path().join("kurogane.toml"),
+            "[app]\ndev-url = \"{{dev_url}}\"\n",
+        )
+        .unwrap();
+        fs::write(
+            template.path().join("cargo-generate.toml"),
+            "[placeholders.dev_url]\ntype = \"string\"\nprompt = \"Development server URL\"\ndefault = \"http://localhost:5173\"\n",
+        )
+        .unwrap();
+
+        let destination = tempfile::tempdir().unwrap();
+        let project = generate_project(
+            template.path(),
+            "quiet-app",
+            destination.path(),
+            &[],
+            Consent {
+                hooks: false,
+                non_interactive: true,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            fs::read_to_string(project.join("kurogane.toml"))
+                .unwrap()
+                .contains("http://localhost:5173"),
+            "the declared default must be used instead of a prompt"
+        );
     }
 
     #[test]
