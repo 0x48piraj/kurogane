@@ -9,6 +9,8 @@ use std::path::PathBuf;
 
 mod install;
 mod dev;
+mod launch;
+mod run;
 mod build;
 mod bundle;
 mod new;
@@ -50,7 +52,13 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Install,
-    Dev {
+    /// Run the Kurogane development workflow.
+    Dev,
+    /// Run the application with Cargo.
+    ///
+    /// Unlike `dev`, this command passes arguments directly to Cargo.
+    #[command(disable_help_flag = true)]
+    Run {
         #[arg(
             num_args = 0..,
             trailing_var_arg = true,
@@ -65,40 +73,40 @@ enum Commands {
         debug: bool,
         #[arg(long, default_value = "dir")]
         format: String,
-        /// Sign bundle binaries
+        /// Sign bundle binaries.
         #[arg(long)]
         sign: bool,
     },
     New {
-        /// Official starter name
+        /// Official starter name.
         starter: Option<String>,
 
-        /// Project name
+        /// Project name.
         #[arg(long)]
         name: Option<String>,
 
-        /// Starter language
+        /// Starter language.
         #[arg(long)]
         language: Option<String>,
 
-        /// Use an arbitrary template source
+        /// Use an arbitrary template source.
         #[arg(long)]
         template: Option<String>,
 
-        /// Accept template hooks without prompting
+        /// Accept template hooks without prompting.
         #[arg(long)]
         yes: bool,
     },
     Init {
-        /// Frontend assets directory
+        /// Frontend assets directory.
         #[arg(long)]
         assets: Option<PathBuf>,
 
-        /// Dev server URL
+        /// Dev server URL.
         #[arg(long)]
         dev_url: Option<String>,
 
-        /// Accept template hooks without prompting
+        /// Accept template hooks without prompting.
         #[arg(long)]
         yes: bool,
     },
@@ -106,12 +114,12 @@ enum Commands {
         #[arg(value_parser = ["all"])]
         target: Option<String>,
 
-        /// Accept the confirmation without prompting
+        /// Accept the confirmation without prompting.
         #[arg(long)]
         yes: bool,
     },
     Showcase {
-        /// Accept template hooks without prompting
+        /// Accept template hooks without prompting.
         #[arg(long)]
         yes: bool,
     },
@@ -159,7 +167,8 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Install => install::run(),
-        Commands::Dev { cargo_args } => dev::run(cargo_args),
+        Commands::Dev => dev::run(),
+        Commands::Run { cargo_args } => run::run(cargo_args),
         Commands::Build => build::run(),
         Commands::Bundle {
             debug,

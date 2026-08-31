@@ -14,6 +14,9 @@ mod windows;
 #[cfg(target_os = "macos")]
 mod macos;
 
+#[cfg(any(target_os = "macos", test))]
+mod probe;
+
 /// Prepends a directory to a platform search path.
 pub(crate) fn prepend_search_path(entry: &Path, existing: &str, separator: char) -> String {
     if existing.is_empty() {
@@ -24,25 +27,28 @@ pub(crate) fn prepend_search_path(entry: &Path, existing: &str, separator: char)
 }
 
 /// Configures a `cargo run` process to discover the CEF runtime.
-pub(crate) fn configure_runtime_env(
-    cmd: &mut Command,
-    cef: &Path,
-    cargo_args: &[OsString],
-) -> Result<()> {
+pub(crate) fn configure_runtime_env(cmd: &mut Command, cef: &Path) -> Result<()> {
     #[cfg(target_os = "linux")]
-    {
-        let _ = (cargo_args,);
-        linux::set_env(cmd, cef);
-    }
+    linux::set_env(cmd, cef);
     #[cfg(target_os = "windows")]
-    {
-        let _ = (cargo_args,);
-        windows::set_env(cmd, cef);
-    }
+    windows::set_env(cmd, cef);
+    #[cfg(target_os = "macos")]
+    macos::set_env(cmd, cef);
+
+    Ok(())
+}
+
+/// Places the GPU libraries a launched application needs beside its executable.
+pub(crate) fn prepare_gpu_libraries(cef: &Path, cargo_args: &[OsString]) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        macos::set_env(cmd, cef, cargo_args)?;
+        macos::link_gpu_libraries(cef, cargo_args)?;
     }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (cef, cargo_args);
+    }
+
     Ok(())
 }
 
