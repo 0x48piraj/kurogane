@@ -14,6 +14,15 @@ mod windows;
 #[cfg(target_os = "macos")]
 mod macos;
 
+/// Prepends a directory to a platform search path.
+pub(crate) fn prepend_search_path(entry: &Path, existing: &str, separator: char) -> String {
+    if existing.is_empty() {
+        entry.display().to_string()
+    } else {
+        format!("{}{separator}{existing}", entry.display())
+    }
+}
+
 /// Configures a `cargo run` process to discover the CEF runtime.
 pub(crate) fn configure_runtime_env(
     cmd: &mut Command,

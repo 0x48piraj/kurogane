@@ -10,9 +10,11 @@ use crate::tui;
 /// Configures a macOS `cargo run` process to discover the CEF runtime and
 /// links the unbundled GPU libraries into the target directory.
 pub(crate) fn set_env(cmd: &mut Command, cef: &Path, cargo_args: &[OsString]) -> Result<()> {
-    let mut dyld = std::env::var("DYLD_FALLBACK_LIBRARY_PATH").unwrap_or_default();
-    dyld = format!("{}:{}", cef.display(), dyld);
-    cmd.env("DYLD_FALLBACK_LIBRARY_PATH", dyld);
+    let existing = std::env::var("DYLD_FALLBACK_LIBRARY_PATH").unwrap_or_default();
+    cmd.env(
+        "DYLD_FALLBACK_LIBRARY_PATH",
+        super::prepend_search_path(cef, &existing, ':'),
+    );
 
     link_unbundled_gpu_libraries(cef, cargo_args)
 }
