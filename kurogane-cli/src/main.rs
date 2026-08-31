@@ -73,11 +73,11 @@ enum Commands {
         /// Official starter name
         starter: Option<String>,
 
-        /// Project name (required when non-interactive)
+        /// Project name
         #[arg(long)]
         name: Option<String>,
 
-        /// Starter language (required when non-interactive)
+        /// Starter language
         #[arg(long)]
         language: Option<String>,
 
@@ -167,5 +167,67 @@ fn main() -> anyhow::Result<()> {
         Commands::Doctor { json } => doctor::run(json),
         Commands::List { target } => list::run(target),
         Commands::Info => info::run(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Runs a test with `CI` temporarily set to the given value.
+    ///
+    /// Access is serialized because environment variables are process-global.
+    fn with_ci<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
+        use std::sync::Mutex;
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let original = std::env::var_os("CI");
+        // SAFETY: CI access is serialized by LOCK
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var("CI", v),
+                None => std::env::remove_var("CI"),
+            }
+        }
+        let result = f();
+        // SAFETY: CI access is serialized by LOCK
+        unsafe {
+            match original {
+                Some(v) => std::env::set_var("CI", v),
+                None => std::env::remove_var("CI"),
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn the_flag_alone_is_enough() {
+        assert!(with_ci(None, || non_interactive(true)));
+    }
+
+    #[test]
+    fn unset_ci_stays_interactive() {
+        assert!(!with_ci(None, || non_interactive(false)));
+    }
+
+    #[test]
+    fn common_truthy_ci_values_are_detected() {
+        for value in ["true", "1", "yes", "TRUE"] {
+            assert!(
+                with_ci(Some(value), || non_interactive(false)),
+                "CI={value} should be non-interactive"
+            );
+        }
+    }
+
+    #[test]
+    fn explicitly_falsey_ci_values_stay_interactive() {
+        for value in ["", "0", "false", "FALSE"] {
+            assert!(
+                !with_ci(Some(value), || non_interactive(false)),
+                "CI={value} should remain interactive"
+            );
+        }
     }
 }

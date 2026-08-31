@@ -135,3 +135,46 @@ fn validate_project_name(name: &str) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_name_is_rejected() {
+        assert!(validate_project_name("").is_err());
+    }
+
+    #[test]
+    fn existing_directory_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("taken");
+        std::fs::create_dir(&existing).unwrap();
+
+        assert!(validate_project_name(existing.to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn a_fresh_name_is_accepted() {
+        validate_project_name("my-new-app").unwrap();
+    }
+
+    #[test]
+    fn non_interactive_without_a_name_fails_instead_of_prompting() {
+        let err = resolve_project_name(None, true).unwrap_err();
+
+        assert!(
+            err.to_string().contains("--name"),
+            "the error must name the flag that fixes it, got: {err}"
+        );
+    }
+
+    #[test]
+    fn non_interactive_accepts_an_explicit_name() {
+        assert_eq!(
+            resolve_project_name(Some("  my-app  ".into()), true).unwrap(),
+            "my-app",
+            "an explicit name is trimmed like prompted input"
+        );
+    }
+}
