@@ -105,8 +105,16 @@ enum Commands {
     Clean {
         #[arg(value_parser = ["all"])]
         target: Option<String>,
+
+        /// Accept the confirmation without prompting
+        #[arg(long)]
+        yes: bool,
     },
-    Showcase,
+    Showcase {
+        /// Accept template hooks without prompting
+        #[arg(long)]
+        yes: bool,
+    },
     Doctor {
         #[arg(long)]
         json: bool,
@@ -118,12 +126,12 @@ enum Commands {
     Info,
 }
 
-/// Enables non-interactive execution.
+/// Whether `--ci` was asked for, by flag or by environment.
 ///
 /// The flag takes precedence, `CI` enables non-interactive execution
 /// unless its value is empty, `0`, or `false`. `CI` is parsed manually
 /// because Clap's `env` bool parser rejects values such as `CI=1`.
-fn non_interactive(flag: bool) -> bool {
+fn ci_requested(flag: bool) -> bool {
     flag || std::env::var_os("CI").is_some_and(|value| {
         let value = value.to_string_lossy();
         let value = value.trim();
@@ -134,9 +142,22 @@ fn non_interactive(flag: bool) -> bool {
     })
 }
 
+/// Whether the CLI must run without prompting.
+fn is_unattended(ci: bool) -> bool {
+    use std::io::IsTerminal;
+    ci || !std::io::stdin().is_terminal()
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let ci = non_interactive(cli.ci);
+
+    // Keep prompting and consent separate.
+    // `--ci` means "do not ask"; `--yes` means "approve"
+    let unattended = is_unattended(ci_requested(cli.ci));
+    let consent = |yes: bool| template::Consent {
+        hooks: yes,
+        non_interactive: unattended,
+    };
 
     match cli.command {
         Commands::Install => install::run(),
@@ -156,14 +177,14 @@ fn main() -> anyhow::Result<()> {
             language,
             template,
             yes,
-        } => new::run(starter, name, language, template, yes || ci, ci),
+        } => new::run(starter, name, language, template, consent(yes)),
         Commands::Init {
             assets,
             dev_url,
             yes,
-        } => init::run(assets, dev_url, yes),
-        Commands::Clean { target } => clean::run(target),
-        Commands::Showcase => showcase::run(),
+        } => init::run(assets, dev_url, consent(yes)),
+        Commands::Clean { target, yes } => clean::run(target, yes, unattended),
+        Commands::Showcase { yes } => showcase::run(consent(yes)),
         Commands::Doctor { json } => doctor::run(json),
         Commands::List { target } => list::run(target),
         Commands::Info => info::run(),
@@ -174,7 +195,8 @@ fn main() -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    /// Runs a test with `CI` temporarily set to the given value.
+    /// `CI` is read directly, so these cases are asserted against the values
+    /// providers actually set rather than clap's bool grammar.
     ///
     /// Access is serialized because environment variables are process-global.
     fn with_ci<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
@@ -203,19 +225,19 @@ mod tests {
 
     #[test]
     fn the_flag_alone_is_enough() {
-        assert!(with_ci(None, || non_interactive(true)));
+        assert!(with_ci(None, || ci_requested(true)));
     }
 
     #[test]
     fn unset_ci_stays_interactive() {
-        assert!(!with_ci(None, || non_interactive(false)));
+        assert!(!with_ci(None, || ci_requested(false)));
     }
 
     #[test]
     fn common_truthy_ci_values_are_detected() {
         for value in ["true", "1", "yes", "TRUE"] {
             assert!(
-                with_ci(Some(value), || non_interactive(false)),
+                with_ci(Some(value), || ci_requested(false)),
                 "CI={value} should be non-interactive"
             );
         }
@@ -225,7 +247,7 @@ mod tests {
     fn explicitly_falsey_ci_values_stay_interactive() {
         for value in ["", "0", "false", "FALSE"] {
             assert!(
-                !with_ci(Some(value), || non_interactive(false)),
+                !with_ci(Some(value), || ci_requested(false)),
                 "CI={value} should remain interactive"
             );
         }

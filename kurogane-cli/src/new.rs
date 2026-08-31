@@ -16,27 +16,28 @@ pub fn run(
     name: Option<String>,
     language: Option<String>,
     template_src: Option<String>,
-    assume_yes: bool,
-    non_interactive: bool,
+    consent: template::Consent,
 ) -> Result<()> {
     tui::section("Kurogane project setup");
 
-    let (source, language) = resolve_source(starter, language, template_src, non_interactive)?;
+    let (source, language) =
+        resolve_source(starter, language, template_src, consent.non_interactive)?;
 
-    let name = resolve_project_name(name, non_interactive)?;
+    let name = resolve_project_name(name, consent.non_interactive)?;
 
     tui::step("Creating project");
     tui::field("name", &name);
 
     let resolved = template::resolve(&source);
     let template_dir = template::acquire(&resolved)?;
-    template::confirm_hooks(&template_dir, assume_yes)?;
+    template::confirm_hooks(&template_dir, consent)?;
 
     let defines = language
         .map(|l| vec![format!("language={l}")])
         .unwrap_or_default();
     let destination = std::env::current_dir()?;
-    let project = template::generate_project(&template_dir, &name, &destination, &defines)?;
+    let project =
+        template::generate_project(&template_dir, &name, &destination, &defines, consent)?;
 
     template::write_cargo_config(&project)?;
 
@@ -101,12 +102,10 @@ fn resolve_source(
 ///
 /// `--name` cannot smuggle in a name that the prompt would have rejected.
 fn resolve_project_name(name: Option<String>, non_interactive: bool) -> Result<String> {
-    use std::io::IsTerminal;
-
     let name = match name {
         Some(name) => name.trim().to_string(),
         None => {
-            if non_interactive || !std::io::stdin().is_terminal() {
+            if non_interactive {
                 bail!("Project name is required in non-interactive mode; pass --name <NAME>");
             }
 

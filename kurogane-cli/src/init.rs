@@ -21,15 +21,19 @@ const SHELL_FILES: &[&str] = &[
     ".cargo/config.toml",
 ];
 
-pub fn run(assets: Option<PathBuf>, dev_url: Option<String>, assume_yes: bool) -> Result<()> {
+pub fn run(
+    assets: Option<PathBuf>,
+    dev_url: Option<String>,
+    consent: template::Consent,
+) -> Result<()> {
     let dir = std::env::current_dir()?;
-    initialize(&dir, SHELL_TEMPLATE_REPO, assume_yes, assets, dev_url)
+    initialize(&dir, SHELL_TEMPLATE_REPO, consent, assets, dev_url)
 }
 
 pub(crate) fn initialize(
     dir: &Path,
     shell_source: &str,
-    assume_yes: bool,
+    consent: template::Consent,
     assets: Option<PathBuf>,
     dev_url: Option<String>,
 ) -> Result<()> {
@@ -59,8 +63,7 @@ pub(crate) fn initialize(
         );
     }
 
-    use std::io::IsTerminal;
-    let interactive = io::stdin().is_terminal();
+    let interactive = !consent.non_interactive;
 
     let assets = match assets {
         Some(a) => a,
@@ -104,9 +107,9 @@ pub(crate) fn initialize(
     tui::field("project", &name);
     let source = template::resolve(shell_source);
     let template_dir = template::acquire(&source)?;
-    template::confirm_hooks(&template_dir, assume_yes)?;
+    template::confirm_hooks(&template_dir, consent)?;
 
-    template::generate_into_existing_dir(&template_dir, &name, dir, &defines)?;
+    template::generate_into_existing_dir(&template_dir, &name, dir, &defines, consent)?;
     template::write_cargo_config(dir)?;
 
     tui::success("Kurogane added");
@@ -194,7 +197,7 @@ mod tests {
         initialize(
             app.path(),
             shell.path().to_str().unwrap(),
-            false,
+            template::Consent::default(),
             Some(PathBuf::from("dist")),
             Some("http://localhost:5173".to_string()),
         )
@@ -226,7 +229,7 @@ mod tests {
         initialize(
             dir.path(),
             shell.path().to_str().unwrap(),
-            false,
+            template::Consent::default(),
             Some(PathBuf::from("nonexistent")),
             Some("http://localhost:5173".to_string()),
         )
@@ -242,7 +245,14 @@ mod tests {
         fake_web_app(dir.path());
         fs::write(dir.path().join("kurogane.toml"), "[app]\n").unwrap();
 
-        let err = initialize(dir.path(), "unused", false, None, None).unwrap_err();
+        let err = initialize(
+            dir.path(),
+            "unused",
+            template::Consent::default(),
+            None,
+            None,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("already contains kurogane.toml"));
     }
 
@@ -256,7 +266,14 @@ mod tests {
         )
         .unwrap();
 
-        let err = initialize(dir.path(), "unused", false, None, None).unwrap_err();
+        let err = initialize(
+            dir.path(),
+            "unused",
+            template::Consent::default(),
+            None,
+            None,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("Cargo.toml"));
         assert!(
             !dir.path().join("src").exists(),

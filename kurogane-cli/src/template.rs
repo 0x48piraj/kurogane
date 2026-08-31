@@ -11,6 +11,15 @@ use cargo_generate::{GenerateArgs, TemplatePath, Vcs};
 use crate::cache;
 use crate::tui;
 
+/// Permissions for a template generation run.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Consent {
+    /// Whether template hooks may execute.
+    pub hooks: bool,
+    /// Whether the run must complete without prompting.
+    pub non_interactive: bool,
+}
+
 /// A resolved template reference.
 #[derive(Debug, Clone)]
 pub enum TemplateSource {
@@ -90,8 +99,8 @@ fn locate_config(template_dir: &Path) -> PathBuf {
 ///
 /// Once cargo-generate exposes hook information directly through its API,
 /// [`detect_hooks`] logic should be replaced by that native upstream signal.
-pub fn confirm_hooks(template_dir: &Path, assume_yes: bool) -> Result<()> {
-    use std::io::{IsTerminal, Write};
+pub fn confirm_hooks(template_dir: &Path, consent: Consent) -> Result<()> {
+    use std::io::Write;
 
     let hooks = detect_hooks(template_dir);
     if hooks.is_empty() {
@@ -103,13 +112,15 @@ pub fn confirm_hooks(template_dir: &Path, assume_yes: bool) -> Result<()> {
         tui::field("hook", hook);
     }
 
-    if assume_yes {
+    if consent.hooks {
         return Ok(());
     }
 
-    if !std::io::stdin().is_terminal() {
+    if consent.non_interactive {
         anyhow::bail!(
-            "Template declares hooks. Re-run with --yes to accept them in non-interactive mode."
+            "This template declares hooks that would execute during generation, \
+             and hook execution has not been approved.\n\n  \
+             Re-run with --yes to approve them."
         );
     }
 
@@ -146,6 +157,7 @@ pub fn generate_project(
     name: &str,
     destination: &Path,
     defines: &[String],
+    consent: Consent,
 ) -> Result<PathBuf> {
     let args = GenerateArgs {
         template_path: TemplatePath {
@@ -169,9 +181,10 @@ pub fn regenerate_project(
     name: &str,
     project_dir: &Path,
     defines: &[String],
+    consent: Consent,
 ) -> Result<PathBuf> {
     reset_project_dir(project_dir)?;
-    generate_into_existing_dir(template_dir, name, project_dir, defines)
+    generate_into_existing_dir(template_dir, name, project_dir, defines, consent)
 }
 
 /// Empty a project directory, preserving the build directory, create if it's missing.
@@ -205,6 +218,7 @@ pub fn generate_into_existing_dir(
     name: &str,
     destination: &Path,
     defines: &[String],
+    consent: Consent,
 ) -> Result<PathBuf> {
     let args = GenerateArgs {
         template_path: TemplatePath {
@@ -288,8 +302,14 @@ mod tests {
         layout_template(layout_dir.path());
 
         let destination = tempfile::tempdir().unwrap();
-        let project =
-            generate_project(layout_dir.path(), "my-app", destination.path(), &[]).unwrap();
+        let project = generate_project(
+            layout_dir.path(),
+            "my-app",
+            destination.path(),
+            &[],
+            Consent::default(),
+        )
+        .unwrap();
 
         assert!(project.join("Cargo.toml").exists());
         assert!(project.join("src/main.rs").exists());
@@ -302,7 +322,14 @@ mod tests {
         layout_template(layout_dir.path());
 
         let destination = tempfile::tempdir().unwrap();
-        generate_project(layout_dir.path(), "My App", destination.path(), &[]).unwrap();
+        generate_project(
+            layout_dir.path(),
+            "My App",
+            destination.path(),
+            &[],
+            Consent::default(),
+        )
+        .unwrap();
 
         assert!(
             destination
@@ -326,7 +353,14 @@ mod tests {
         let layout_dir = tempfile::tempdir().unwrap();
         layout_template(layout_dir.path());
 
-        generate_project(layout_dir.path(), "member-app", workspace.path(), &[]).unwrap();
+        generate_project(
+            layout_dir.path(),
+            "member-app",
+            workspace.path(),
+            &[],
+            Consent::default(),
+        )
+        .unwrap();
 
         let manifest = fs::read_to_string(workspace.path().join("Cargo.toml")).unwrap();
         assert_eq!(manifest, "[workspace]\nmembers = []\n");
@@ -337,7 +371,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         layout_template(dir.path());
         assert!(detect_hooks(dir.path()).is_empty());
-        confirm_hooks(dir.path(), false).unwrap();
+        confirm_hooks(dir.path(), Consent::default()).unwrap();
     }
 
     #[test]
@@ -372,13 +406,27 @@ mod tests {
         let destination = tempfile::tempdir().unwrap();
         let project = destination.path().join("showcase");
 
-        regenerate_project(layout_dir.path(), "showcase", &project, &[]).unwrap();
+        regenerate_project(
+            layout_dir.path(),
+            "showcase",
+            &project,
+            &[],
+            Consent::default(),
+        )
+        .unwrap();
 
         fs::write(project.join("stale.txt"), "old").unwrap();
         fs::create_dir_all(project.join("target/debug")).unwrap();
         fs::write(project.join("target/debug/artifact"), "cached").unwrap();
 
-        regenerate_project(layout_dir.path(), "showcase", &project, &[]).unwrap();
+        regenerate_project(
+            layout_dir.path(),
+            "showcase",
+            &project,
+            &[],
+            Consent::default(),
+        )
+        .unwrap();
 
         assert!(project.join("src/main.rs").exists());
         assert!(!project.join("stale.txt").exists());
@@ -403,6 +451,7 @@ mod tests {
             "my-vite-app",
             destination.path(),
             &["frontend=dist".to_string()],
+            Consent::default(),
         )
         .unwrap();
 
