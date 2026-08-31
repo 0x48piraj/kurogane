@@ -162,13 +162,8 @@ fn build_appdir(
     // Desktop entry
     let categories = config.linux.categories.as_deref().unwrap_or_default();
     let terminal = config.linux.terminal.unwrap_or(false);
-    let desktop_content = generate_desktop(
-        name,
-        exe_name,
-        &dist.metadata.version,
-        &categories,
-        terminal,
-    );
+    let desktop_content =
+        generate_desktop(name, exe_name, &dist.metadata.version, categories, terminal);
     let desktop_dir = app_dir.join("usr").join("share").join("applications");
     fs::create_dir_all(&desktop_dir)?;
     fs::write(

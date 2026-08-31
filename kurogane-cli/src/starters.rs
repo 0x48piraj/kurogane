@@ -112,10 +112,11 @@ pub fn choose() -> Result<&'static Starter> {
         io::stdin().read_line(&mut input)?;
         let input = input.trim();
 
-        if let Ok(index) = input.parse::<usize>() {
-            if index >= 1 && index <= STARTERS.len() {
-                return Ok(&STARTERS[index - 1]);
-            }
+        if let Ok(index) = input.parse::<usize>()
+            && index >= 1
+            && index <= STARTERS.len()
+        {
+            return Ok(&STARTERS[index - 1]);
         }
 
         crate::tui::error(&format!(
@@ -152,10 +153,11 @@ pub fn choose_language(starter: &Starter) -> Result<Option<&'static str>> {
         io::stdin().read_line(&mut input)?;
         let input = input.trim();
 
-        if let Ok(index) = input.parse::<usize>() {
-            if index >= 1 && index <= starter.languages.len() {
-                return Ok(Some(starter.languages[index - 1].value));
-            }
+        if let Ok(index) = input.parse::<usize>()
+            && index >= 1
+            && index <= starter.languages.len()
+        {
+            return Ok(Some(starter.languages[index - 1].value));
         }
 
         crate::tui::error(&format!(
