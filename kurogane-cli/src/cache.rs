@@ -134,7 +134,7 @@ mod tests {
         let tree_id = index.write_tree().unwrap();
         {
             let tree = repo.find_tree(tree_id).unwrap();
-            let sig = repo.signature().unwrap();
+            let sig = git2::Signature::now("Kurogane Tests", "tests@kurogane.invalid").unwrap();
             repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
                 .unwrap();
         }
