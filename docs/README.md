@@ -26,6 +26,14 @@ Covers integration patterns and real-world setups: [see recipes and guides](reci
 
 _Use this when building real applications._
 
+### Bundling
+
+End-to-end guide for packaging Kurogane applications into distributable bundles.
+
+Covers output formats, configuration and CI integration: [see bundling](bundling.md)
+
+_Use this when preparing releases._
+
 ### Install notes
 
 Details on how Kurogane manages Chromium setup and runtime configuration.

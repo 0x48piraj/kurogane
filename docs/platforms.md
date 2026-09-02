@@ -1,6 +1,6 @@
 # Install notes
 
-Kurogane manages CEF setup and runtime configuration automatically.
+Kurogane manages Chromium setup and runtime configuration automatically.
 
 Most platform-specific environment configuration is handled by the CLI.
 
@@ -10,7 +10,7 @@ Only minimal system dependencies are required.
 
 No manual setup or environment variables are usually required.
 
-The Kurogane CLI handles CEF runtime configuration internally.
+The Kurogane CLI handles Chromium runtime configuration internally.
 
 ### Optional (sandbox fallback)
 
@@ -19,8 +19,8 @@ In some restricted Linux environments, Chromium may require the SUID sandbox for
 If you encounter startup or GPU issues, you may need to run:
 
 ```bash
-sudo chown root:root ~/.local/share/cef/{INSTALLED_CEF_VERSION}/chrome-sandbox
-sudo chmod 4755 ~/.local/share/cef/{INSTALLED_CEF_VERSION}/chrome-sandbox
+sudo chown root:root ~/.local/share/kurogane/cef/{INSTALLED_CEF_VERSION}/chrome-sandbox
+sudo chmod 4755 ~/.local/share/kurogane/cef/{INSTALLED_CEF_VERSION}/chrome-sandbox
 ```
 
 > [!NOTE]
@@ -45,17 +45,36 @@ x64 Native Tools Command Prompt for VS
 Then run:
 
 ```bat
-kurogane init
+kurogane new react
+cd my-app
+npm install
+npm run dev
 kurogane dev
 ```
 
 ## macOS
 
-While early development work exists, the runtime is not functional on macOS in its current state.
+Requires CMake and Ninja.
 
-App bundling, code signing and proper `.app` distribution are not implemented yet.
+`kurogane dev` runs. The runtime resolves the managed Chromium framework, starts the browser, renderer and GPU processes and opens a window.
 
-Do not expect successful execution on macOS at this time.
+Distribution does not. App bundling, code signing and `.app` packaging are not implemented, so `kurogane bundle` does not yet produce an artifact you can ship.
+
+Treat macOS as usable for development and not yet for release.
+
+### GPU libraries in development
+
+Chromium resolves specific libraries against the running executable's own directory whenever the process is not inside an application bundle. Chromium ships them inside the framework, so `kurogane dev` copies them next to the binaries cargo produces.
+
+Without that step the GPU process exits during initialization and the application falls back to software rendering everywhere.
+
+### Keychain prompts
+
+Chromium encrypts cookies and saved passwords with a key held by the Keychain. Keychain access is granted to a specific code identity and an unsigned binary has none that survives a rebuild, so every run raises a fresh authorization prompt.
+
+Denying it is harmless. Chromium logs `Encryption is not available` and stores the data unencrypted.
+
+Signing the application resolves it permanently. Until then, `CredentialStorage::Basic` bypasses the Keychain entirely; see [credential storage](recipes.md#credential-storage).
 
 ## NixOS
 
@@ -69,7 +88,7 @@ Enter the development environment with:
 nix develop github:0x48piraj/kurogane
 ```
 
-The shell includes the Rust toolchain, CEF, native build dependencies and runtime libraries required to build and work on the project.
+The shell includes the Rust toolchain, Chromium, native build dependencies and runtime libraries required to build and work on the project.
 
 > [!NOTE]
 > **Known Nix limitation:** `nix develop` currently fails if the project is
@@ -93,7 +112,7 @@ You can also run the packaged application directly without installing it:
 nix run github:0x48piraj/kurogane
 ```
 
-The packaged application automatically configures the required CEF runtime environment.
+The packaged application automatically configures the required Chromium runtime environment.
 
 ### Why Cargo?
 

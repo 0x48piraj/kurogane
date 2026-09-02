@@ -18,11 +18,13 @@ fn main() {
 
 Works with Vite, React, Vue, Svelte and any HTTP server.
 
-Generate a starter project:
+Generate a starter project (see [templates](templates.md) for git-hosted template references):
 
 ```bash
-kurogane init --template spa
+kurogane new my-app
 ```
+
+To wrap an existing frontend project instead, run `kurogane init` inside it.
 
 ### Production assets
 
@@ -257,6 +259,51 @@ fn main() {
 ```
 
 Disables GPU compositing and hardware acceleration.
+
+## Credential storage
+
+Control how Chromium protects cookies and saved passwords at rest.
+
+### Platform credential store (default)
+
+```rust
+use kurogane::{App, CredentialStorage};
+
+fn main() {
+    App::new("frontend")
+        .credential_storage(CredentialStorage::System)
+        .run_or_exit();
+}
+```
+
+Encryption keys are held by the Keychain on macOS, kwallet or gnome-keyring on
+Linux and DPAPI on Windows.
+
+Reaching those stores is not always possible. Access is granted to a specific code identity, so an unsigned macOS binary is re-authorized on every rebuild and raises a Keychain prompt each run.
+
+Hosts with no keyring daemon have nothing to reach at all.
+
+### Built-in store
+
+```rust
+use kurogane::{App, CredentialStorage};
+
+fn main() {
+    App::new("frontend")
+        .credential_storage(CredentialStorage::Basic)
+        .run_or_exit();
+}
+```
+
+Chromium falls back to a fixed built-in key, which is obfuscation rather than encryption. Anything the process can read is readable by anyone with access to the profile directory.
+
+Useful for:
+
+* Unsigned development builds
+* Containers and CI environments
+* Headless hosts with no keyring daemon
+
+Not suited to profiles holding data worth protecting.
 
 ## Custom runtime integration
 

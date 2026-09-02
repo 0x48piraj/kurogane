@@ -2,7 +2,7 @@
 
 Build high-performance, GPU-accelerated desktop applications on Chromium, or embed it directly into existing applications.
 
-Kurogane is a Rust-native runtime built on [CEF](https://en.wikipedia.org/wiki/Chromium_Embedded_Framework), exposing Chromium's rendering engine while leaving windowing, event loops and lifecycle management to the host application.
+Kurogane is a Rust-native runtime built on [Chromium Embedded Framework (CEF)](https://en.wikipedia.org/wiki/Chromium_Embedded_Framework), bringing Chromium to desktop applications while giving you control over windowing, event loops and lifecycle when you need it.
 
 <p align="center">
   <img alt="Kurogane demo" src="docs/media/output.gif" width="400"><br>
@@ -21,39 +21,57 @@ cargo install --git https://github.com/0x48piraj/kurogane kurogane-cli
 
 ### 2. Try it
 
-Run the built-in showcase and watch the runtime come alive:
+Run the built-in showcase and see Kurogane in action:
 
 ```bash
 kurogane showcase
 ```
 
-Launches a native window running a Canvas-based animation. This is the **primary demo** for evaluating rendering behavior and performance.
+## Create a project
 
-## Initialize a project
+Start with one of the official starters, or bring your own Cargo Generate-compatible template.
 
-```sh
-kurogane init                  # Minimal starter, basic HTML frontend
-kurogane init --template spa   # SPA template (frontend app entrypoint for dev-server use)
-kurogane init --template ipc   # Structured IPC between Rust runtime and frontend (commands/events)
+| Starter   | TypeScript | JavaScript | Best for                |
+| --------- | :--------: | :--------: | ----------------------- |
+| `minimal` |      ✔️     |      ✔️     | Smallest starting point |
+| `react`   |      ✔️     |      ✔️     | React applications      |
+| `svelte`  |      ✔️     |      ✔️     | Svelte applications     |
+| `vue`     |      ✔️     |      ✔️     | Vue applications        |
+
+```bash
+kurogane new
 ```
+
+Or choose one directly:
+
+```bash
+kurogane new react
+```
+
+See [Templates](docs/templates.md) for custom templates, caching and authoring.
 
 ### Run your app
 
-```sh
-cd my-app
+From your new project:
+
+```bash
 kurogane dev
 ```
 
-The CLI will resolve and load the appropriate Chromium runtime automatically.
+Launches the development workflow and automatically resolves the required Chromium runtime.
 
-### Tooling
+### Add Kurogane to an existing app
+
+Already have a frontend project? `init` integrates Kurogane around it without touching your files:
 
 ```sh
-kurogane info      # Environment and runtime inspection
-kurogane doctor    # Validate setup and project integrity
-kurogane list      # Installed versions, profiles, runtime state
-kurogane clean     # Remove runtime state and cache data
+cd my-vite-app
+kurogane init
+# or non-interactive:
+kurogane init --assets dist --dev-url http://localhost:5173
 ```
+
+See [Development](docs/development.md) for frontend dev servers, runtime configuration and advanced workflows.
 
 ## Production packaging
 
@@ -73,15 +91,15 @@ Outputs a distributable app in the `dist/` directory.
 
 ## Motivation
 
-This started as a GPU-accelerated visualization tool built on **Tauri** that performed well on **Windows (WebView2)** out-of-the-box but encountered hard limitations on **Linux**:
+This started as a GPU-accelerated visualization tool built on **Tauri** that performed well on **Windows (WebView2)** out-of-the-box but encountered hard limitations on **Linux**.
 
 System WebViews vary across platforms: WebKitGTK on Linux, WebView2 on Windows and WKWebView on macOS. This variation affects rendering behavior, GPU paths and performance characteristics that are not directly controllable from the application layer.
 
 Those constraints are inherent to _system WebViews_.
 
-Switching to [Chromium Embedded Framework (CEF)](https://github.com/chromiumembedded/cef) removes platform-level rendering variability but introduces a new set of tradeoffs around integration, lifecycle management and process coordination.
+Switching to [CEF](https://github.com/chromiumembedded/cef) removes platform-level rendering variability but introduces a new set of tradeoffs around integration, lifecycle management and process coordination.
 
-The alternatives weren't satisfying either. **Electron** provides a complete application platform built around Chromium and Node.js, but that convenience comes with a predefined runtime and application model. Building directly on Chromium or CEF provides maximum control, but is complex, fragile and expensive to maintain without a solid abstraction layer.
+The alternatives weren't satisfying either. **Electron** provides a complete application platform built around Chromium and Node.js, but that convenience comes with a predefined runtime and application model. Building directly on Chromium provides maximum control, but is complex, fragile and expensive to maintain without a solid abstraction layer.
 
 Kurogane exists as that layer, built for Rust.
 
@@ -89,7 +107,7 @@ Kurogane exists as that layer, built for Rust.
 
 * **Applications with existing architecture:** Supports embedding into host-managed environments with an existing event loop, window hierarchy, or GUI framework. Kurogane integrates Chromium as a component within the application, while the host retains control over execution flow and window ownership.
 * **High-frequency rendering workloads:** WebGL, Canvas, WASM-heavy visualization, anything where rendering behavior across platforms matters and where you cannot accept the variance that system WebViews introduce
-* **Developers who want Chromium-based rendering without Electron:** No embedded Node.js runtime. No imposed process model. Direct access to CEF's lifecycle hooks.
+* **Developers who want Chromium-based rendering without Electron:** No embedded Node.js runtime. No imposed process model. Direct access to Chromium's lifecycle hooks.
 * **Building custom desktop shells, engines or non-standard desktop applications:** Applications that need direct control over browser process lifecycle, renderer-side extension points, or fine-grained IPC between Rust and JavaScript.
 
 > Anyone who likes Tauri's philosophy but prefers Chromium instead of WebViews.
@@ -101,34 +119,6 @@ When you should *not* use this project:
 * You're building a standard CRUD UI: _use either Tauri or Electron_
 
 This project is not intended as a replacement for Tauri or Electron. Kurogane optimizes for control over convenience and breadth.
-
-## Architecture overview
-
-Kurogane's runtime model is organized around a small set of clear ownership boundaries.
-
-### Runtime and event loop
-
-The runtime can be initialized without entering Chromium's internal blocking message loop. Applications provide their own event loop and drive Chromium's message pump explicitly. This is the foundation for embedding Kurogane into existing GUI frameworks: [`winit`](docs/winit.md), raw OS window handles, or anything else that manages its own run loop.
-
-### Runtime configuration
-
-The runtime provides a minimal set of application-level controls for configuring Chromium behavior, GPU mode selection and startup flags. These are intentionally exposed at the application boundary so embedding applications can adjust runtime behavior without coupling to internal implementation details.
-
-### Browser and window ownership
-
-Browsers and windows are independently tracked entities with separate lifetimes. The runtime maintains a browser/window ownership graph with O(1) lookup, explicit popup ownership derived from opener browsers and DevTools browsers classified separately from application windows. Runtime shutdown is tied to browser lifetime, not window destruction. DevTools windows and auxiliary popups do not inadvertently tear down the application.
-
-### Browser lifecycle
-
-Browser creation returns a browser handle. Close routing follows CEF's expected browser shutdown protocol, including closing-state tracking, reentrancy protection and deterministic destruction sequencing. [`on_before_close`](https://magpcss.org/ceforum/apidocs3/projects/(default)/CefLifeSpanHandler.html#OnBeforeClose) fires reliably and shutdown signals propagate in a controlled and predictable order.
-
-### Request/response IPC (RPC-style)
-
-Kurogane provides IPC as a direct Rust-to-Chromium communication bridge designed for high-throughput interaction between runtime and renderer processes. Messages are structured and low-overhead, designed for high-frequency interaction between runtime and frontend. Large payloads are routed through a zero-copy transfer path instead of serialized IPC, allowing efficient exchange of binary data without additional runtime layers.
-
-### Runtime extensibility
-
-Applications can participate in browser process initialization and renderer process lifecycle without replacing Kurogane's default infrastructure. This includes custom command-line processing, V8 context lifecycle hooks, JavaScript exception handling, process message routing and more.
 
 ## 🚧 Current status
 
@@ -157,11 +147,12 @@ Early days! Architecture and APIs may change as the project evolves.
 - [x] Higher-level application runtime API
 - [x] Packaging and distribution tooling
 - [x] Project scaffolding / template system (CLI-driven generation)
+- [x] First-class starters (vanilla, react, svelte, vue) with language selection
 
 #### In progress / planned
 
 - [ ] End-to-end packaging pipeline (cross-platform artifacts)
-- [ ] CI pipeline for runtime validation
+- [x] CI pipeline for runtime validation
 
 ##### Platform support
 
@@ -169,14 +160,13 @@ Early days! Architecture and APIs may change as the project evolves.
 |----------|--------|
 | Linux    | Supported |
 | Windows  | Supported |
-| macOS    | Planned |
+| macOS    | Development only; packaging and signing not implemented ([notes](docs/platforms.md#macos)) |
 
 ## Philosophy
 
-Most desktop runtimes optimize for convenience and integration. Kurogane prioritizes control and predictable behavior.
+Kurogane is built around one clear idea: **Chromium should be composable.**
 
-System WebViews abstract rendering behind platform APIs. This simplifies application integration and provides platform-native behavior, but it also introduces variability across platforms and reduces visibility into performance-critical paths.
+* **The host application can own the architecture:** Your event loop, your windows, your application lifecycle.
+* **Kurogane provides the developer experience:** Tooling, templates, dev server routing and high-performance Rust IPC, all while giving you complete control over the application lifecycle.
 
-Kurogane tries to expose the underlying rendering stack instead of hiding it behind high-level abstractions.
-
-The longer-term ambition is to make Chromium a genuinely composable component in the Rust ecosystem: something you can embed into complex applications with the same confidence you would have embedding any other library with clear ownership, predictable lifecycle and no hidden states.
+The longer-term ambition isn't to build another opinionated framework. It's to give Rust developers modern tooling and a high-performance browser runtime without hiding the architecture behind a black box.
