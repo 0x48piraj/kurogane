@@ -121,7 +121,7 @@ pub fn run(json: bool) -> Result<()> {
 
             tui::info("Run: kurogane install");
 
-            warn += 1;
+            fail += 1;
         }
     }
 
@@ -193,8 +193,8 @@ pub fn run(json: bool) -> Result<()> {
         }
 
         Err(_) => {
-            tui::warn("Environment override");
-            tui::field("CEF_PATH", "not set");
+            tui::info("No CEF_PATH override");
+            tui::field("default", "managed install");
         }
     }
 

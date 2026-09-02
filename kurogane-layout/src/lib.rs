@@ -25,7 +25,7 @@ pub use config::{
 pub use distribution::{AppMetadata, DistributionError, ResolvedDistribution, ResolvedResource};
 pub use layout::{bundled_cef_root, cef_install_dir, copy_dir, install_root, installed_cef_root};
 pub use package::{PackageError, package_directory};
-pub use profile::{cache_root, profile_dir};
+pub use profile::{cache_root, profile_dir, PROFILE_HASH_HEX_DIGITS};
 #[cfg(target_os = "macos")]
 pub use platform::link_unbundled_angle_libraries;
 pub use signing::{
