@@ -78,7 +78,7 @@ The runtime provides:
 * Deterministic startup
 * Window + browser creation
 * Custom protocol handling
-* Renderer ↔ browser messaging
+* Renderer <-> browser messaging
 * Asset resolution
 
 It does not provide a UI framework; the frontend remains the application's responsibility.
@@ -105,13 +105,37 @@ Cocoa's default `terminate:` calls `exit()`, which bypasses the run loop Chromiu
 
 ## Startup policy
 
+Chromium's command line is assembled once in the browser process from a small set of runtime policies plus user overrides. Each policy contributes switches independently to a normalized switch set with last-write-wins precedence. User-supplied flags are applied last, so they can override runtime defaults.
+
+
 Chromium's command line is assembled once in the browser process from a small set of runtime policies plus user overrides:
 
-```
-sandbox flags → GPU flags → credential flags → user flags
-```
+```mermaid
+flowchart LR
+    A["Sandbox policy"]
+    B["GPU policy"]
+    C["Credential policy"]
+    D["User flags"]
 
-Each policy contributes switches independently, to a normalized switch set with last-write-wins precedence. User-supplied flags are applied last, so they can override runtime defaults.
+    E["Chromium command line<br/><span style='font-size:12px'>normalized switch set</span>"]
+
+    A --> E
+    B --> E
+    C --> E
+    D --> E
+
+    N["Last write wins<br/><span style='font-size:12px'>user flags override runtime defaults</span>"]
+
+    E --- N
+
+    classDef policy fill:#f6f8fa,stroke:#6e7781,stroke-width:2px;
+    classDef command fill:#ddf4ff,stroke:#0969da,stroke-width:2px;
+    classDef note fill:#fff8c5,stroke:#9a6700,stroke-width:2px;
+
+    class A,B,C,D policy;
+    class E command;
+    class N note;
+```
 
 * **Sandbox**: Process privilege isolation.
 * **GPU**: Backend selection (`GpuMode`) based on the detected environment.
@@ -160,17 +184,50 @@ flowchart LR
     STR --> JS
 ```
 
-Renderer cannot access native APIs directly.
+Renderer code cannot access native APIs directly. Native access goes through a clear message boundary between JavaScript and the browser process. JavaScript only gets access to the native operations that the application explicitly exposes.
 
-Instead, native access goes through an clear message boundary:
+```mermaid
+flowchart LR
+    A["Renderer<br/><span style='font-size:12px'>JavaScript</span>"]
+    B["Message transport"]
+    C["Browser process<br/><span style='font-size:12px'>Rust handler</span>"]
 
+    A -->|structured message| B
+    B --> C
+    C -->|response| B
+    B --> A
+
+    classDef renderer fill:#f6f8fa,stroke:#6e7781,stroke-width:2px;
+    classDef transport fill:#ddf4ff,stroke:#0969da,stroke-width:2px;
+    classDef browser fill:#dafbe1,stroke:#1a7f37,stroke-width:2px;
+
+    class A renderer;
+    class B transport;
+    class C browser;
 ```
-JS -> structured message -> browser process -> Rust handler -> response
-```
-
-This creates a capability-based boundary: JavaScript only gets access to the native operations that the application explicitly exposes.
 
 Three subsystems share that boundary:
+
+```mermaid
+flowchart TD
+    A["JavaScript <-> Browser process"]
+
+    A --> B["Request / response"]
+    A --> C["Events"]
+    A --> D["Streams"]
+
+    B --> B1["RPC-style calls"]
+    C --> C1["Publish / subscribe"]
+    D --> D1["Bi-directional transfer"]
+
+    classDef root fill:#dafbe1,stroke:#1a7f37,stroke-width:2px;
+    classDef mode fill:#ddf4ff,stroke:#0969da,stroke-width:2px;
+    classDef detail fill:#f6f8fa,stroke:#6e7781,stroke-width:2px;
+
+    class A root;
+    class B,C,D mode;
+    class B1,C1,D1 detail;
+```
 
 * **Request/response**: RPC-style calls resolving to a JS promise.
 * **Events**: Publish/subscribe delivery to subscribed frames.
@@ -184,11 +241,38 @@ See [exposing Rust commands to JavaScript](docs/recipes.md#exposing-rust-command
 
 Chromium enforces thread affinity:
 
-* UI thread -> browser logic
-* IO thread -> resource loading
-* Renderer thread -> V8 execution
+| Thread   | Owns             |
+| -------- | ---------------- |
+| UI       | Browser logic    |
+| IO       | Resource loading |
+| Renderer | V8 execution     |
 
-The runtime keeps these threads non-blocking and moves longer-running work to worker pools when needed.
+Kurogane keeps these threads non-blocking and moves longer-running work to worker pools when needed.
+
+```mermaid
+flowchart LR
+    A["UI thread<br/><span style='font-size:12px'>Browser logic</span>"]
+    B["IO thread<br/><span style='font-size:12px'>Resource loading</span>"]
+    C["Renderer thread<br/><span style='font-size:12px'>V8 execution</span>"]
+
+    D["Worker pools<br/><span style='font-size:12px'>Long-running work</span>"]
+
+    A -.-> D
+    B -.-> D
+    C -.-> D
+
+    N["CEF threads stay non-blocking"]
+
+    D --- N
+
+    classDef thread fill:#ddf4ff,stroke:#0969da,stroke-width:2px;
+    classDef worker fill:#dafbe1,stroke:#1a7f37,stroke-width:2px;
+    classDef note fill:#fff8c5,stroke:#9a6700,stroke-width:2px;
+
+    class A,B,C thread;
+    class D worker;
+    class N note;
+```
 
 ## Embedding
 
