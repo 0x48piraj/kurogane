@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use kurogane_layout::{
-    PackagingConfig, ResolvedDistribution, SignConfig, package_directory, sign_artifact, sign_tree,
+    PackagingConfig, ResolvedDistribution, SignConfig, package_directory, sign_artifact,
     verify_signature,
 };
 
@@ -326,10 +326,9 @@ pub fn build(
     let bundle_dir = output_dir.join("bundle");
     package_directory(dist, &bundle_dir)?;
 
-    // Sign staged binaries using configured signing policy
+    // Sign and verify staged binaries using the configured signing policy
     if let Some(sign_config) = sign {
-        let signed = sign_tree(&bundle_dir, sign_config)?;
-        tui::field("signed", format!("{signed} file(s)"));
+        crate::bundle::sign_and_verify_tree(&bundle_dir, sign_config)?;
     }
 
     tui::step("Generating installer script...");
