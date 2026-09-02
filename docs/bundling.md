@@ -497,6 +497,8 @@ flowchart TD
     D["Validate Chromium runtime"]
     E{"Runnable CEF?"}
     F["Canonical bundle"]
+    G["Format backend"]
+    H["Verify"]
     X["Packaging refused"]
 
     A --> B --> C
@@ -504,20 +506,20 @@ flowchart TD
     C -->|No| X
     D --> E
     E -->|Yes| F
-    F --> G["Format backend"]
-    G --> H["Verify"]
-
     E -->|No| X
+    F --> G --> H
 
-    classDef process fill:#ddf4ff,stroke:#0969da,stroke-width:2px;
+    classDef source fill:#f6f8fa,stroke:#6e7781,stroke-width:2px;
+    classDef process fill:#fff8c5,stroke:#9a6700,stroke-width:2px;
     classDef decision fill:#f6f8fa,stroke:#6e7781,stroke-width:2px;
-    classDef error fill:#fff8c5,stroke:#9a6700,stroke-width:2px;
     classDef success fill:#dafbe1,stroke:#1a7f37,stroke-width:2px;
+    classDef failure fill:#ffebe9,stroke:#cf222e,stroke-width:2px;
 
-    class A,B,D process;
-    class F success;
+    class A source;
+    class B,D,G,H process;
     class C,E decision;
-    class X error;
+    class F success;
+    class X failure;
 ```
 
 ### Distribution check (pre-packaging)
@@ -531,7 +533,7 @@ flowchart TD
 
 ### Runtime check (the gate)
 
-`validate_cef_runtime()` requires the complete runnable subset:
+[`validate_cef_runtime()`](https://github.com/0x48piraj/kurogane/blob/2caa063cf8cd32352a57f5691417750b2bf3bc2d/kurogane-layout/src/cef.rs#L463) requires the complete runnable subset:
 
 | Linux | Windows |
 |-------|---------|
@@ -556,7 +558,7 @@ kurogane bundle
 # Bundle proceeds without frontend
 ```
 
-The bundle will not contain a `content/` directory and `verify()` will not require `index.html`.
+The bundle will not contain a `content/` directory and [`verify()`](https://github.com/0x48piraj/kurogane/blob/2caa063cf8cd32352a57f5691417750b2bf3bc2d/kurogane-layout/src/distribution.rs#L78) will not require `index.html`.
 
 ## Troubleshooting
 

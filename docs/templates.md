@@ -12,10 +12,10 @@ The starters and their source code are available in the [`kurogane-rs`](https://
 
 | Starter | Repository | Description |
 |---------|------------|-------------|
-| `minimal` | [`kurogane-rs/starter-minimal`](https://github.com/kurogane-rs/starter-minimal) | Bare-bones project with a Vite frontend |
-| `react` | [`kurogane-rs/starter-react`](https://github.com/kurogane-rs/starter-react) | React + Vite |
-| `svelte` | [`kurogane-rs/starter-svelte`](https://github.com/kurogane-rs/starter-svelte) | Svelte 5 + Vite |
-| `vue` | [`kurogane-rs/starter-vue`](https://github.com/kurogane-rs/starter-vue) | Vue 3 + Vite |
+| `minimal` | [`kurogane-rs/starter-minimal`](https://github.com/kurogane-rs/kurogane-starter-minimal) | Bare-bones project with a Vite frontend |
+| `react` | [`kurogane-rs/starter-react`](https://github.com/kurogane-rs/kurogane-starter-react) | React + Vite |
+| `svelte` | [`kurogane-rs/starter-svelte`](https://github.com/kurogane-rs/kurogane-starter-svelte) | Svelte 5 + Vite |
+| `vue` | [`kurogane-rs/starter-vue`](https://github.com/kurogane-rs/kurogane-starter-vue) | Vue 3 + Vite |
 
 When no arguments are given, `kurogane new` prompts you to choose a starter and language interactively. You can also pass the starter name directly:
 
@@ -76,15 +76,15 @@ Generated projects include a `.cargo/config.toml` that makes the bundled Chromiu
 
 Kurogane templates are ordinary cargo-generate templates with a Kurogane application manifest (`kurogane.toml`) and a Rust entry point.
 
-Liquid placeholders follow the [cargo-generate template guide](https://cargo-generate.github.io/cargo-generate/templates.html).
+Liquid placeholders follow the [cargo-generate template guide](https://shopify.github.io/liquid/).
 
 ### Kurogane application manifest
 
 ```toml
 [app]
 name = "{{project-name}}"
-frontend = "{{frontend_dist}}"       # source-time path to built frontend
-frontend-build = "npm run build"     # command run by kurogane bundle before cargo build
+frontend = "{{frontend_dist}}"   # source-time path to built frontend
+frontend-build = "npm run build" # command run by kurogane bundle before cargo build
 ```
 
 The `frontend-build` field tells `kurogane bundle` how to produce frontend assets before packaging. When present, the bundler runs this command from the
