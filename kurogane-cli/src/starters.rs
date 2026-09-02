@@ -110,7 +110,9 @@ pub fn choose(non_interactive: bool) -> Result<&'static Starter> {
         io::stdout().flush()?;
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
+        if io::stdin().read_line(&mut input)? == 0 {
+            bail!("No starter selected; input ended unexpectedly");
+        }
         let input = input.trim();
 
         if let Ok(index) = input.parse::<usize>()
@@ -191,7 +193,9 @@ fn choose_language(starter: &Starter, non_interactive: bool) -> Result<Option<&'
         io::stdout().flush()?;
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
+        if io::stdin().read_line(&mut input)? == 0 {
+            bail!("No language selected; input ended unexpectedly");
+        }
         let input = input.trim();
 
         if let Ok(index) = input.parse::<usize>()

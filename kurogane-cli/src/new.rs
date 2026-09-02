@@ -113,7 +113,9 @@ fn resolve_project_name(name: Option<String>, non_interactive: bool) -> Result<S
             io::stdout().flush()?;
 
             let mut input = String::new();
-            io::stdin().read_line(&mut input)?;
+            if io::stdin().read_line(&mut input)? == 0 {
+                bail!("No project name provided; input ended unexpectedly");
+            }
             input.trim().to_string()
         }
     };
@@ -126,6 +128,17 @@ fn resolve_project_name(name: Option<String>, non_interactive: bool) -> Result<S
 fn validate_project_name(name: &str) -> Result<()> {
     if name.is_empty() {
         bail!("Project name cannot be empty.");
+    }
+
+    if name.contains('/') || name.contains('\\') {
+        bail!(
+            "Project name must not contain path separators: {name:?}\n\
+             Pass a bare name; use `--template` for a source path."
+        );
+    }
+
+    if name.chars().any(|c| c.is_control()) {
+        bail!("Project name must not contain control characters: {name:?}");
     }
 
     if Path::new(name).exists() {
@@ -156,6 +169,20 @@ mod tests {
     #[test]
     fn a_fresh_name_is_accepted() {
         validate_project_name("my-new-app").unwrap();
+    }
+
+    #[test]
+    fn a_path_separator_is_rejected() {
+        assert!(
+            validate_project_name("../escape").is_err(),
+            "a name must not traverse directories"
+        );
+        assert!(validate_project_name("a/b").is_err());
+    }
+
+    #[test]
+    fn a_control_character_is_rejected() {
+        assert!(validate_project_name("bad\nname").is_err());
     }
 
     #[test]
