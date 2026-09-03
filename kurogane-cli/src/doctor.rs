@@ -265,7 +265,7 @@ pub fn run(json: bool) -> Result<()> {
     let check_frontend = |root: &std::path::Path, label: &str, path: &std::path::Path| -> bool {
         let anchored = kurogane_layout::anchor_path(root, path);
         if anchored.exists() {
-            tui::success(&format!("{label}"));
+            tui::success(label);
             tui::field("path", tui::format_path(&anchored));
             true
         } else {

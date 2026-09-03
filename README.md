@@ -55,10 +55,12 @@ See [Templates](docs/templates.md) for custom templates, caching and authoring.
 From your new project:
 
 ```bash
-kurogane dev
+npm --prefix frontend install     # install frontend dependencies once
+npm --prefix frontend run dev     # start the dev server
+kurogane dev                      # launch the app at the dev server
 ```
 
-Launches the development workflow and automatically resolves the required Chromium runtime.
+`kurogane dev` launches the development workflow in debug mode and automatically resolves the required Chromium runtime. Both the dev server and the Kurogane window must be running together during development.
 
 ### Add Kurogane to an existing app
 
@@ -75,19 +77,34 @@ See [Development](docs/development.md) for frontend dev servers, runtime configu
 
 ## Production packaging
 
-Kurogane does not impose a packaging format.
-
-In production, the embedding application is responsible for bundling frontend assets and selecting the startup URL.
-
-For convenience, we include a straightforward way to do this:
+Kurogane bundles your binary, the Chromium runtime and your built frontend into a self-contained, distributable artifact.
 
 ```bash
 kurogane bundle
 ```
 
-Outputs a distributable app in the `dist/` directory.
+By default this produces a directory bundle in `dist/`. Use `--format` to pick a specific distribution format:
 
-> **Note:** The bundling workflow is still under active development and should be considered experimental.
+```bash
+kurogane bundle --format appimage   # Linux single-file AppImage
+kurogane bundle --format nsis       # Windows setup.exe installer
+```
+
+> [!NOTE]
+> You do not need to understand the bundling internals to use `kurogane bundle`. Pick a format, run the command and Kurogane handles the rest. The mechanics are for contributors and anyone debugging or extending the bundler.
+>
+> For the quick path, see [quick start](docs/bundling.md#quick-start). If something goes wrong, jump straight to [troubleshooting](docs/bundling.md#troubleshooting).
+
+> [!TIP]
+> For most projects, bundling is just:
+>
+> ```bash
+> kurogane bundle
+> ```
+>
+> Use `--format appimage` or `--format nsis` when you need a specific distribution format.
+
+See [Bundling](docs/bundling.md) for formats, Chromium resolution, signing and the comprehensive configuration reference.
 
 ## Motivation
 

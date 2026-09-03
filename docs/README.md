@@ -18,6 +18,14 @@ See available templates and how to run them: [see templates](templates.md)
 
 _New users should start here._
 
+### Development
+
+Day-to-day workflow for running and configuring your app.
+
+Covers the dev server, choosing a frontend source and the runtime setup: [see development](development.md)
+
+_Use this while building._
+
 ### Recipes
 
 Common workflows and advanced usage patterns.
