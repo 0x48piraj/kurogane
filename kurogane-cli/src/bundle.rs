@@ -65,6 +65,16 @@ pub enum PackageFormat {
 }
 
 impl PackageFormat {
+    /// The formats available on the current build platform.
+    fn available() -> Vec<&'static str> {
+        let mut formats = vec!["dir; directory"];
+        #[cfg(target_os = "linux")]
+        formats.push("appimage");
+        #[cfg(target_os = "windows")]
+        formats.push("nsis");
+        formats
+    }
+
     pub fn from_str(s: &str) -> Result<Self> {
         match s {
             "dir" | "directory" => Ok(PackageFormat::Directory),
@@ -72,7 +82,12 @@ impl PackageFormat {
             "appimage" => Ok(PackageFormat::AppImage),
             #[cfg(target_os = "windows")]
             "nsis" => Ok(PackageFormat::Nsis),
-            _ => bail!("unsupported format: {s}"),
+            _ => bail!(
+                "unsupported format: {s}\n\n\
+                 Available on this platform: {}\n\
+                 (appimage requires Linux; nsis requires Windows)",
+                Self::available().join(", ")
+            ),
         }
     }
 }
@@ -318,6 +333,10 @@ mod tests {
         let err = PackageFormat::from_str("msi").unwrap_err();
 
         assert!(err.to_string().contains("unsupported format"));
+        assert!(
+            err.to_string().contains("Available on this platform"),
+            "the error should list what this platform actually supports"
+        );
     }
 
     #[test]
