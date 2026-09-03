@@ -262,23 +262,41 @@ pub fn run(json: bool) -> Result<()> {
             .map(|c| (root, c))
     });
 
+    let check_frontend = |root: &std::path::Path, label: &str, path: &std::path::Path| -> bool {
+        let anchored = kurogane_layout::anchor_path(root, path);
+        if anchored.exists() {
+            tui::success(&format!("{label}"));
+            tui::field("path", tui::format_path(&anchored));
+            true
+        } else {
+            tui::warn(&format!("{label} not found"));
+            tui::field("path", tui::format_path(&anchored));
+            false
+        }
+    };
+
     if let Some((root, config)) = packaging_config {
-        match config
-            .app
-            .frontend
-            .as_deref()
-            .map(|path| kurogane_layout::anchor_path(root, path))
-        {
-            Some(frontend) if frontend.exists() => {
-                tui::success("Frontend directory");
-                tui::field("path", tui::format_path(&frontend));
-            }
-            Some(frontend) => {
-                tui::warn("Configured frontend directory not found");
-                tui::field("path", tui::format_path(&frontend));
+        if let Some(src) = &config.app.frontend {
+            if !check_frontend(root, "Frontend source", src) {
                 warn += 1;
             }
-            None => tui::info("No frontend directory configured in kurogane.toml"),
+        } else {
+            tui::info("No frontend source configured in kurogane.toml");
+        }
+
+        if let Some(dist) = &config.app.frontend_dist {
+            if !check_frontend(root, "Frontend distribution", dist) {
+                warn += 1;
+            }
+        } else {
+            tui::info("No frontend-dist configured in kurogane.toml");
+        }
+
+        if let Some(install) = &config.app.frontend_install {
+            tui::field("frontend-install", install);
+        }
+        if let Some(run) = &config.app.frontend_run {
+            tui::field("frontend-run", run);
         }
     } else {
         tui::info("No kurogane.toml found");
