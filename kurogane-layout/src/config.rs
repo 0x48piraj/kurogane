@@ -157,10 +157,19 @@ impl Default for WindowsPackagingConfig {
 }
 
 /// Code signing configuration.
+///
+/// A certificate is supplied either as a file (`certificate`) or as a Windows
+/// certificate store thumbprint (`certificate-thumbprint`), never both.
+///
+/// Passwords are never stored here: `certificate-password-env` names the
+/// environment variable the password is read from, so CI keeps it in secrets
+/// and it stays out of version control naturally.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct SigningFileConfig {
     pub certificate: Option<PathBuf>,
+    pub certificate_thumbprint: Option<String>,
+    pub certificate_password_env: Option<String>,
     pub timestamp_url: Option<String>,
     pub digest_algorithm: Option<String>,
     pub custom_command: Option<String>,
@@ -304,6 +313,34 @@ custom-command = "signtool sign /fd sha256"
         assert_eq!(
             config.signing.custom_command.as_deref(),
             Some("signtool sign /fd sha256")
+        );
+    }
+
+    #[test]
+    fn signing_accepts_a_store_thumbprint_and_password_variable() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config(
+            dir.path(),
+            r#"
+[signing]
+certificate-thumbprint = "AB12CD34"
+certificate-password-env = "KUROGANE_CERT_PASSWORD"
+"#,
+        );
+
+        let config = PackagingConfig::load(dir.path()).unwrap();
+
+        assert_eq!(
+            config.signing.certificate_thumbprint.as_deref(),
+            Some("AB12CD34")
+        );
+        assert_eq!(
+            config.signing.certificate_password_env.as_deref(),
+            Some("KUROGANE_CERT_PASSWORD")
+        );
+        assert!(
+            config.signing.certificate.is_none(),
+            "a thumbprint is not a certificate file"
         );
     }
 

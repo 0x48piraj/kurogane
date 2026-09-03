@@ -9,7 +9,7 @@ use std::process::Command;
 use cargo_metadata::{MetadataCommand, TargetKind};
 use kurogane_layout::{
     AppMetadata, PackagingConfig, ResolvedDistribution, SignConfig, anchor_path,
-    materialize_cef_runtime, package_directory, resolve_cef_for_bundle, sign_tree,
+    materialize_cef_runtime, package_directory, resolve_cef_for_bundle, sign_tree, verify_tree,
 };
 
 use crate::tui;
@@ -109,24 +109,54 @@ fn resolve_resources(
         .collect()
 }
 
+/// Signs and verifies all signable artifacts in a staged bundle.
+///
+/// Warns when the bundle contains no signable artifacts.
+pub(crate) fn sign_and_verify_tree(root: &std::path::Path, config: &SignConfig) -> Result<()> {
+    let signed = sign_tree(root, config)?;
+
+    if signed == 0 {
+        tui::warn("No signable artifacts found in the bundle");
+        return Ok(());
+    }
+
+    tui::field("signed", format!("{signed} file(s)"));
+
+    let verified = verify_tree(root, config)?;
+    tui::field("verified", format!("{verified} file(s)"));
+
+    Ok(())
+}
+
 /// Resolves the signing policy for a packaging operation.
 fn resolve_sign_config(
     sign_requested: bool,
     config: &PackagingConfig,
+    project_root: &std::path::Path,
 ) -> Result<Option<SignConfig>> {
     if !sign_requested {
         return Ok(None);
     }
 
-    SignConfig::from_file_config(&config.signing)
-        .map(Some)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "--sign requested but no usable [signing] configuration found in {} \
-                 (set `certificate` or `custom-command`)",
-                kurogane_layout::CONFIG_FILE_NAME
-            )
-        })
+    let mut resolved = SignConfig::from_file_config(&config.signing)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "--sign requested but no usable [signing] configuration found in {} \
+             (set `certificate`, `certificate-thumbprint` or `custom-command`)",
+            kurogane_layout::CONFIG_FILE_NAME
+        )
+    })?;
+
+    // Configured certificate path is project-relative
+    if let Some(kurogane_layout::CertificateSource::File { path, password_env }) =
+        resolved.certificate
+    {
+        resolved.certificate = Some(kurogane_layout::CertificateSource::File {
+            path: anchor_path(project_root, &path),
+            password_env,
+        });
+    }
+
+    Ok(Some(resolved))
 }
 
 /// Build the application in the requested profile.
@@ -279,7 +309,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     tui::step("Packaging...");
 
     let output_dir = project_root.join("dist");
-    let sign_config = resolve_sign_config(sign, &packaging_config)?;
+    let sign_config = resolve_sign_config(sign, &packaging_config, project_root)?;
 
     match format {
         PackageFormat::Directory => {
@@ -287,8 +317,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
             let output = package_directory(&dist, &output_dir)?;
 
             if let Some(config) = &sign_config {
-                let signed = sign_tree(&output, config)?;
-                tui::field("signed", format!("{signed} file(s)"));
+                sign_and_verify_tree(&output, config)?;
             }
 
             tui::field("output", tui::format_path(&output));

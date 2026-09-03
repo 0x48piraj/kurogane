@@ -29,6 +29,6 @@ pub use profile::{cache_root, profile_dir, PROFILE_HASH_HEX_DIGITS};
 #[cfg(target_os = "macos")]
 pub use platform::link_unbundled_angle_libraries;
 pub use signing::{
-    SignConfig, SigningError, osslsigncode_sign_args, sign_artifact, sign_file, sign_tree,
-    signtool_sign_args, signtool_verify_args, verify_signature,
+    CertificateSource, SignConfig, SigningError, osslsigncode_sign_args, sign_artifact, sign_file,
+    sign_tree, signtool_sign_args, signtool_verify_args, verify_signature, verify_tree,
 };

@@ -8,14 +8,29 @@ use thiserror::Error;
 
 use crate::SigningFileConfig;
 
+/// Source of the signing certificate.
+///
+/// Represents either a certificate file or a Windows certificate-store thumbprint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CertificateSource {
+    /// A certificate file with an optional password environment variable.
+    File {
+        path: PathBuf,
+        password_env: Option<String>,
+    },
+
+    /// A SHA-1 thumbprint identifying a certificate in the Windows store.
+    Thumbprint(String),
+}
+
 /// Code signing configuration.
 #[derive(Debug, Clone)]
 pub struct SignConfig {
     /// Signing tool override.
     pub tool: Option<PathBuf>,
 
-    /// Certificate thumbprint or path to certificate file.
-    pub certificate: Option<String>,
+    /// How the signing certificate is supplied.
+    pub certificate: Option<CertificateSource>,
 
     /// RFC-3161 timestamp authority URL.
     pub timestamp_url: Option<String>,
@@ -51,9 +66,21 @@ impl SignConfig {
     }
 
     /// Resolves file configuration into signing settings.
-    pub fn from_file_config(file: &SigningFileConfig) -> Option<SignConfig> {
+    ///
+    /// Returns `Ok(None)` when nothing is configured.
+    pub fn from_file_config(file: &SigningFileConfig) -> Result<Option<SignConfig>, SigningError> {
+        let certificate = match (&file.certificate, &file.certificate_thumbprint) {
+            (Some(_), Some(_)) => return Err(SigningError::AmbiguousCertificate),
+            (Some(path), None) => Some(CertificateSource::File {
+                path: path.clone(),
+                password_env: file.certificate_password_env.clone(),
+            }),
+            (None, Some(thumbprint)) => Some(CertificateSource::Thumbprint(thumbprint.clone())),
+            (None, None) => None,
+        };
+
         let mut config = SignConfig {
-            certificate: file.certificate.as_ref().map(|p| p.display().to_string()),
+            certificate,
             timestamp_url: file.timestamp_url.clone(),
             digest_algorithm: file
                 .digest_algorithm
@@ -70,18 +97,49 @@ impl SignConfig {
             config.custom_args = parts.map(String::from).collect();
         }
 
-        if config.is_configured() {
-            Some(config)
-        } else {
-            None
-        }
+        Ok(config.is_configured().then_some(config))
     }
+}
+
+/// Resolves the certificate password from its configured environment variable.
+fn resolve_password(
+    certificate: Option<&CertificateSource>,
+) -> Result<Option<String>, SigningError> {
+    let Some(CertificateSource::File {
+        password_env: Some(name),
+        ..
+    }) = certificate
+    else {
+        return Ok(None);
+    };
+
+    std::env::var(name)
+        .map(Some)
+        .map_err(|_| SigningError::MissingCertificatePassword { env: name.clone() })
 }
 
 #[derive(Debug, Error)]
 pub enum SigningError {
     #[error("no signing tool found; install signtool.exe (Windows SDK) or osslsigncode")]
     NoSigningTool,
+
+    #[error(
+        "[signing] sets both `certificate` and `certificate-thumbprint`; \
+         choose one (a certificate file or a Windows certificate store thumbprint)"
+    )]
+    AmbiguousCertificate,
+
+    #[error(
+        "certificate password environment variable `{env}` is not set; \
+         export it or remove `certificate-password-env` from [signing]"
+    )]
+    MissingCertificatePassword { env: String },
+
+    #[error(
+        "osslsigncode cannot use a Windows certificate store thumbprint; \
+         set `certificate` to a PKCS#12 or PEM file instead"
+    )]
+    ThumbprintUnsupported,
 
     #[error("custom sign command failed: {command}")]
     CustomCommandFailed { command: String },
@@ -99,20 +157,30 @@ pub enum SigningError {
     Io(#[from] std::io::Error),
 }
 
-/// Builds signtool `sign` arguments, excluding the tool path and target file.
-///
-/// The digest algorithm defaults to SHA-256 and timestamps use the RFC-3161
-/// `/tr` + `/td` pair.
-pub fn signtool_sign_args(config: &SignConfig) -> Vec<OsString> {
+/// Builds `signtool sign` arguments, excluding the tool path and target file.
+pub fn signtool_sign_args(config: &SignConfig, password: Option<&str>) -> Vec<OsString> {
     let mut args = vec![
         OsString::from("sign"),
         OsString::from("/fd"),
         OsString::from(&config.digest_algorithm),
     ];
 
-    if let Some(cert) = &config.certificate {
-        args.push(OsString::from("/sha1"));
-        args.push(OsString::from(cert));
+    match &config.certificate {
+        // Certificate files use `/f`; store certificates use `/sha1`
+        Some(CertificateSource::File { path, .. }) => {
+            args.push(OsString::from("/f"));
+            args.push(path.into());
+
+            if let Some(password) = password {
+                args.push(OsString::from("/p"));
+                args.push(OsString::from(password));
+            }
+        }
+        Some(CertificateSource::Thumbprint(thumbprint)) => {
+            args.push(OsString::from("/sha1"));
+            args.push(OsString::from(thumbprint));
+        }
+        None => {}
     }
 
     if let Some(url) = &config.timestamp_url {
@@ -125,29 +193,48 @@ pub fn signtool_sign_args(config: &SignConfig) -> Vec<OsString> {
     args
 }
 
-/// Builds the certificate input arguments for `osslsigncode`.
+/// Builds certificate arguments for `osslsigncode`.
 ///
 /// Uses `-pkcs12` for PKCS#12 certificates and `-certs` for PEM/DER certificates.
-fn osslsigncode_cert_args(certificate: &str) -> Vec<OsString> {
-    let is_pkcs12 = Path::new(certificate)
+fn osslsigncode_cert_args(
+    certificate: &CertificateSource,
+    password: Option<&str>,
+) -> Result<Vec<OsString>, SigningError> {
+    let CertificateSource::File { path, .. } = certificate else {
+        // osslsigncode has no equivalent of the Windows certificate store
+        return Err(SigningError::ThumbprintUnsupported);
+    };
+
+    let is_pkcs12 = path
         .extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| matches!(ext.to_ascii_lowercase().as_str(), "pfx" | "p12" | "pkcs12"));
 
-    if is_pkcs12 {
-        vec![OsString::from("-pkcs12"), OsString::from(certificate)]
+    let mut args = if is_pkcs12 {
+        vec![OsString::from("-pkcs12"), path.into()]
     } else {
-        vec![OsString::from("-certs"), OsString::from(certificate)]
+        vec![OsString::from("-certs"), path.into()]
+    };
+
+    if is_pkcs12 && let Some(password) = password {
+        args.push(OsString::from("-pass"));
+        args.push(OsString::from(password));
     }
+
+    Ok(args)
 }
 
-/// Builds arguments for `osslsigncode sign` using the configured certificate,
-/// timestamp URL and digest algorithm.
-pub fn osslsigncode_sign_args(config: &SignConfig, input: &Path, output: &Path) -> Vec<OsString> {
+/// Builds arguments for `osslsigncode sign`.
+pub fn osslsigncode_sign_args(
+    config: &SignConfig,
+    password: Option<&str>,
+    input: &Path,
+    output: &Path,
+) -> Result<Vec<OsString>, SigningError> {
     let mut args = vec![OsString::from("sign")];
 
     if let Some(cert) = &config.certificate {
-        args.extend(osslsigncode_cert_args(cert));
+        args.extend(osslsigncode_cert_args(cert, password)?);
     }
 
     if let Some(url) = &config.timestamp_url {
@@ -162,7 +249,7 @@ pub fn osslsigncode_sign_args(config: &SignConfig, input: &Path, output: &Path) 
     args.push(OsString::from("-out"));
     args.push(OsString::from(output));
 
-    args
+    Ok(args)
 }
 
 /// Builds arguments for `signtool verify` using the default Authenticode
@@ -331,8 +418,10 @@ fn sign_with_signtool(
     signtool: &Path,
     config: &SignConfig,
 ) -> Result<(), SigningError> {
+    let password = resolve_password(config.certificate.as_ref())?;
+
     let status = Command::new(signtool)
-        .args(signtool_sign_args(config))
+        .args(signtool_sign_args(config, password.as_deref()))
         .arg(path)
         .status()?;
 
@@ -356,9 +445,10 @@ fn sign_with_osslsigncode(
     output.push(".kurogane-sign-tmp");
     let output = PathBuf::from(output);
 
-    let result = Command::new(osslsigncode)
-        .args(osslsigncode_sign_args(config, path, &output))
-        .status();
+    let password = resolve_password(config.certificate.as_ref())?;
+    let args = osslsigncode_sign_args(config, password.as_deref(), path, &output)?;
+
+    let result = Command::new(osslsigncode).args(args).status();
 
     match result {
         Ok(status) if status.success() => {
@@ -421,6 +511,34 @@ pub fn sign_artifact(path: &Path, config: &SignConfig) -> Result<(), SigningErro
     sign_file(path, config)
 }
 
+/// Verifies every signable artifact within a bundle.
+///
+/// The counterpart to [`sign_tree`]. Returns the number of verified artifacts.
+pub fn verify_tree(root: &Path, config: &SignConfig) -> Result<usize, SigningError> {
+    if !config.is_configured() {
+        return Ok(0);
+    }
+
+    let mut verified = 0;
+    let mut stack = vec![root.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                stack.push(path);
+            } else if should_sign(&path) {
+                verify_signature(&path, config)?;
+                verified += 1;
+            }
+        }
+    }
+
+    Ok(verified)
+}
+
 /// Verifies a packaged artifact using the configured signing strategy.
 pub fn verify_signature(path: &Path, config: &SignConfig) -> Result<(), SigningError> {
     if !config.is_configured() {
@@ -479,7 +597,7 @@ mod tests {
     #[test]
     fn certificate_config_enables_signing() {
         let config = SignConfig {
-            certificate: Some("thumbprint".to_string()),
+            certificate: Some(CertificateSource::Thumbprint("thumbprint".into())),
             ..Default::default()
         };
         assert!(config.is_configured());
@@ -567,30 +685,87 @@ mod tests {
         assert_eq!(expanded, os(&["/bin/app.exe", "--flag", "/literal %1"]));
     }
 
+    fn file_cert(path: &str) -> Option<CertificateSource> {
+        Some(CertificateSource::File {
+            path: PathBuf::from(path),
+            password_env: None,
+        })
+    }
+
     #[test]
     fn signtool_args_default_to_sha256_without_timestamp() {
         let config = SignConfig {
-            certificate: Some("abc123".to_string()),
+            certificate: Some(CertificateSource::Thumbprint("abc123".into())),
             ..Default::default()
         };
 
         assert_eq!(
-            signtool_sign_args(&config),
+            signtool_sign_args(&config, None),
             os(&["sign", "/fd", "sha256", "/sha1", "abc123"])
         );
     }
 
     #[test]
+    fn signtool_uses_the_file_flag_for_a_certificate_file() {
+        let config = SignConfig {
+            certificate: file_cert("/certs/codesign.pfx"),
+            ..Default::default()
+        };
+
+        let args = signtool_sign_args(&config, None);
+
+        assert_eq!(
+            args,
+            os(&["sign", "/fd", "sha256", "/f", "/certs/codesign.pfx"])
+        );
+        assert!(
+            !args.contains(&OsString::from("/sha1")),
+            "/sha1 selects a store certificate by thumbprint; a file needs /f"
+        );
+    }
+
+    #[test]
+    fn signtool_passes_the_password_when_one_is_resolved() {
+        let config = SignConfig {
+            certificate: file_cert("/certs/codesign.pfx"),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            signtool_sign_args(&config, Some("hunter2")),
+            os(&[
+                "sign",
+                "/fd",
+                "sha256",
+                "/f",
+                "/certs/codesign.pfx",
+                "/p",
+                "hunter2"
+            ])
+        );
+    }
+
+    #[test]
+    fn signtool_omits_the_password_flag_when_there_is_none() {
+        let config = SignConfig {
+            certificate: file_cert("/certs/codesign.pfx"),
+            ..Default::default()
+        };
+
+        assert!(!signtool_sign_args(&config, None).contains(&OsString::from("/p")));
+    }
+
+    #[test]
     fn signtool_args_pair_rfc3161_directives() {
         let config = SignConfig {
-            certificate: Some("abc123".to_string()),
+            certificate: Some(CertificateSource::Thumbprint("abc123".into())),
             timestamp_url: Some("http://ts.example".to_string()),
             digest_algorithm: "sha1".to_string(),
             ..Default::default()
         };
 
         assert_eq!(
-            signtool_sign_args(&config),
+            signtool_sign_args(&config, None),
             os(&[
                 "sign",
                 "/fd",
@@ -608,7 +783,7 @@ mod tests {
     #[test]
     fn osslsigncode_uses_in_out_form() {
         let config = SignConfig {
-            certificate: Some("/certs/cert.pfx".to_string()),
+            certificate: file_cert("/certs/cert.pfx"),
             timestamp_url: Some("http://ts.example".to_string()),
             ..Default::default()
         };
@@ -616,9 +791,11 @@ mod tests {
         assert_eq!(
             osslsigncode_sign_args(
                 &config,
+                None,
                 Path::new("/dist/app.exe"),
                 Path::new("/dist/app.exe.kurogane-sign-tmp"),
-            ),
+            )
+            .unwrap(),
             os(&[
                 "sign",
                 "-pkcs12",
@@ -638,11 +815,12 @@ mod tests {
     #[test]
     fn osslsigncode_selects_certs_flag_for_pem_chains() {
         let config = SignConfig {
-            certificate: Some("/certs/chain.pem".to_string()),
+            certificate: file_cert("/certs/chain.pem"),
             ..Default::default()
         };
 
-        let args = osslsigncode_sign_args(&config, Path::new("/a.exe"), Path::new("/b.tmp"));
+        let args = osslsigncode_sign_args(&config, None, Path::new("/a.exe"), Path::new("/b.tmp"))
+            .unwrap();
 
         assert!(
             args.windows(2).any(|w| w[0] == "-certs"),
@@ -657,8 +835,28 @@ mod tests {
     #[test]
     fn osslsigncode_p12_extension_also_uses_pkcs12() {
         assert_eq!(
-            osslsigncode_cert_args("/certs/store.P12"),
+            osslsigncode_cert_args(&file_cert("/certs/store.P12").unwrap(), None).unwrap(),
             os(&["-pkcs12", "/certs/store.P12"])
+        );
+    }
+
+    #[test]
+    fn osslsigncode_passes_the_password_for_pkcs12() {
+        assert_eq!(
+            osslsigncode_cert_args(&file_cert("/certs/store.pfx").unwrap(), Some("hunter2"))
+                .unwrap(),
+            os(&["-pkcs12", "/certs/store.pfx", "-pass", "hunter2"])
+        );
+    }
+
+    #[test]
+    fn osslsigncode_rejects_a_store_thumbprint() {
+        let err = osslsigncode_cert_args(&CertificateSource::Thumbprint("ABCD".into()), None)
+            .unwrap_err();
+
+        assert!(
+            matches!(err, SigningError::ThumbprintUnsupported),
+            "osslsigncode has no certificate store, got: {err}"
         );
     }
 
@@ -680,12 +878,12 @@ mod tests {
             certificate: Some("/certs/codesign.pfx".into()),
             timestamp_url: Some("http://ts.example".into()),
             digest_algorithm: Some("sha512".into()),
-            custom_command: None,
+            ..Default::default()
         };
 
-        let config = SignConfig::from_file_config(&file).unwrap();
+        let config = SignConfig::from_file_config(&file).unwrap().unwrap();
 
-        assert_eq!(config.certificate.as_deref(), Some("/certs/codesign.pfx"));
+        assert_eq!(config.certificate, file_cert("/certs/codesign.pfx"));
         assert_eq!(config.timestamp_url.as_deref(), Some("http://ts.example"));
         assert_eq!(config.digest_algorithm, "sha512");
         assert!(config.is_configured());
@@ -698,7 +896,7 @@ mod tests {
             ..Default::default()
         };
 
-        let config = SignConfig::from_file_config(&file).unwrap();
+        let config = SignConfig::from_file_config(&file).unwrap().unwrap();
 
         assert_eq!(config.custom_command.as_deref(), Some("signtool"));
         assert_eq!(
@@ -714,14 +912,72 @@ mod tests {
 
     #[test]
     fn from_file_config_defaults_digest_and_none_when_unconfigured() {
-        assert!(SignConfig::from_file_config(&SigningFileConfig::default()).is_none());
+        assert!(
+            SignConfig::from_file_config(&SigningFileConfig::default())
+                .unwrap()
+                .is_none()
+        );
 
         let file = SigningFileConfig {
             certificate: Some("/c.pfx".into()),
             ..Default::default()
         };
-        let config = SignConfig::from_file_config(&file).unwrap();
+        let config = SignConfig::from_file_config(&file).unwrap().unwrap();
         assert_eq!(config.digest_algorithm, "sha256");
+    }
+
+    #[test]
+    fn from_file_config_carries_the_password_variable_name_not_the_secret() {
+        let file = SigningFileConfig {
+            certificate: Some("/c.pfx".into()),
+            certificate_password_env: Some("KUROGANE_CERT_PASSWORD".into()),
+            ..Default::default()
+        };
+
+        let config = SignConfig::from_file_config(&file).unwrap().unwrap();
+
+        assert_eq!(
+            config.certificate,
+            Some(CertificateSource::File {
+                path: PathBuf::from("/c.pfx"),
+                password_env: Some("KUROGANE_CERT_PASSWORD".into()),
+            })
+        );
+        assert!(
+            !format!("{config:?}").contains("hunter2"),
+            "only the variable name is stored, never the secret"
+        );
+    }
+
+    #[test]
+    fn from_file_config_rejects_both_certificate_forms() {
+        let file = SigningFileConfig {
+            certificate: Some("/c.pfx".into()),
+            certificate_thumbprint: Some("ABCD".into()),
+            ..Default::default()
+        };
+
+        let err = SignConfig::from_file_config(&file).unwrap_err();
+
+        assert!(
+            matches!(err, SigningError::AmbiguousCertificate),
+            "a file and a thumbprint are different signing identities, got: {err}"
+        );
+    }
+
+    #[test]
+    fn from_file_config_maps_a_thumbprint() {
+        let file = SigningFileConfig {
+            certificate_thumbprint: Some("ABCD1234".into()),
+            ..Default::default()
+        };
+
+        let config = SignConfig::from_file_config(&file).unwrap().unwrap();
+
+        assert_eq!(
+            config.certificate,
+            Some(CertificateSource::Thumbprint("ABCD1234".into()))
+        );
     }
 
     #[test]

@@ -9,7 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use kurogane_layout::{PackagingConfig, ResolvedDistribution, SignConfig, package_directory, sign_tree};
+use kurogane_layout::{PackagingConfig, ResolvedDistribution, SignConfig, package_directory};
 
 use crate::tui;
 
@@ -289,10 +289,9 @@ pub fn build(
     tui::step("Assembling AppDir...");
     build_appdir(dist, &app_dir, config)?;
 
-    // Sign staged binaries before imaging
+    // Sign and verify staged binaries before imaging
     if let Some(sign_config) = sign {
-        let signed = sign_tree(&bundle_dir, sign_config)?;
-        tui::field("signed", format!("{signed} file(s)"));
+        crate::bundle::sign_and_verify_tree(&bundle_dir, sign_config)?;
     }
 
     let appimage_path = output_dir.join(format!("{appimage_name}.AppImage"));
