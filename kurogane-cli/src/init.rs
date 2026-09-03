@@ -100,7 +100,8 @@ pub(crate) fn initialize(
         .to_owned();
 
     let mut defines = Vec::new();
-    defines.push(format!("frontend={}", assets.display()));
+    // Existing frontend projects use the project root
+    defines.push(format!("frontend_dist={}", assets.display()));
     defines.push(format!("dev_url={dev_url}"));
 
     tui::step("Integrating Kurogane");
@@ -175,12 +176,12 @@ mod tests {
         fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
         fs::write(
             dir.join("kurogane.toml"),
-            "[app]\nname = \"{{project-name}}\"\nfrontend = \"{{frontend}}\"\n",
+            "[app]\nname = \"{{project-name}}\"\nfrontend-dist = \"{{frontend_dist}}\"\n",
         )
         .unwrap();
         fs::write(
             dir.join("cargo-generate.toml"),
-            "[placeholders.frontend]\ntype = \"string\"\nprompt = \"Frontend assets directory\"\ndefault = \"dist\"\n",
+            "[placeholders.frontend_dist]\ntype = \"string\"\nprompt = \"Frontend build output directory\"\ndefault = \"dist\"\n",
         )
         .unwrap();
     }
@@ -208,7 +209,7 @@ mod tests {
         assert!(app.path().join(".cargo/config.toml").exists());
 
         let manifest = fs::read_to_string(app.path().join("kurogane.toml")).unwrap();
-        assert!(manifest.contains("frontend = \"dist\""));
+        assert!(manifest.contains("frontend-dist = \"dist\""));
 
         assert_eq!(
             fs::read(app.path().join("package.json")).unwrap(),
@@ -236,7 +237,7 @@ mod tests {
         .unwrap();
 
         let manifest = fs::read_to_string(dir.path().join("kurogane.toml")).unwrap();
-        assert!(manifest.contains("frontend = \"nonexistent\""));
+        assert!(manifest.contains("frontend-dist = \"nonexistent\""));
     }
 
     #[test]

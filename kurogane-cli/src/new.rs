@@ -50,12 +50,12 @@ pub fn run(
     tui::info("Next steps");
     println!("    cd {}", name);
 
-    if project.join("package.json").exists() {
-        println!("    npm install");
+    if let Some(cmd) = &generated_config.app.frontend_install {
+        println!("    {cmd}");
     }
 
-    if let Some(cmd) = &generated_config.app.frontend_build {
-        println!("    {cmd}");
+    if let Some(cmd) = &generated_config.app.frontend_run {
+        println!("    {cmd}  # start the dev server");
     }
 
     println!("    kurogane dev  # in another terminal");

@@ -83,23 +83,40 @@ Liquid placeholders follow the [cargo-generate template guide](https://shopify.g
 ```toml
 [app]
 name = "{{project-name}}"
-frontend = "{{frontend_dist}}"   # source-time path to built frontend
-frontend-build = "npm run build" # command run by kurogane bundle before cargo build
+frontend = "{{frontend}}"                           # source npm project root
+frontend-dist = "{{frontend_dist}}"                 # build output; what gets packaged
+frontend-install = "{{frontend_install}}"           # command run to install frontend deps
+frontend-run = "{{frontend_run}}"                   # command run to start the dev server
+frontend-build = "npm --prefix frontend run build"  # command run by kurogane bundle before cargo build
 ```
 
-The `frontend-build` field tells `kurogane bundle` how to produce frontend assets before packaging. When present, the bundler runs this command from the
-workspace root (and skips it if `package.json` is absent).
+`frontend` names the source npm project (`frontend/`) and `frontend-dist` names the compiled output that `kurogane bundle` packages (`frontend/dist`). These are build-time paths, resolved relative to the project root.
 
-The command is executed directly rather than through a shell, so shell syntax such as pipes and `&&` is not supported.
+`frontend-install` and `frontend-run` are the commands `kurogane new` echoes in its "Next steps" for the dev workflow: installing dependencies and starting the live dev server before `kurogane dev`.
+
+The `frontend-build` field tells `kurogane bundle` how to produce frontend assets before packaging. When present, the bundler runs this command verbatim from the workspace root.
+
+The command is executed directly rather than through a shell, so shell syntax such as pipes and `&&` is not supported. `npm` runs the script and handles any `&&` chains inside `package.json` itself.
+
+The scaffolded `src/main.rs` points the release build at the bundle's fixed `content/` directory, not at `frontend-dist`:
+
+```rust
+#[cfg(not(debug_assertions))]
+App::new("content").run_or_exit();
+```
+
+`frontend-dist` is a build-time path only; the packaged app always serves its frontend from `content/` inside the bundle.
 
 ### Directory convention
 
-Official starters use a three-layer layout:
+Official starters keep the frontend as a self-contained Vite project inside a `frontend/` directory, using a three-layer layout:
 
 ```
-frontend/      # source (Vite root)
+frontend/      # self-contained frontend source
 frontend/dist/ # build output (Vite default outDir)
 content/       # bundle-internal (copied by bundler at package time)
 ```
 
-The frontend is built into `frontend/dist`, then `kurogane bundle` copies that output into `content/`. The packaged application serves its frontend from `content/`.
+`frontend/` is a normal frontend project, so `cd frontend && npm install && npm run dev` works exactly like any Vite app. During development the Vite dev server serves `frontend/` directly; the desktop app loads it via the configured dev URL.
+
+For building, `npm --prefix frontend run build` compiles the frontend into `frontend/dist`. `kurogane bundle` then copies that output into `content/` and the packaged application serves its frontend from `content/`.

@@ -71,7 +71,7 @@ flowchart TD
 - **Code signing:** Signing requires either `osslsigncode` or `signtool.exe`. See [Code signing](#code-signing) for configuration details.
 
 > [!NOTE]
-> You do not need to understand the bundling internals to use `kurogane bundle`. Pick a format, run the command, and Kurogane handles the rest. The sections below go into the mechanics for contributors and anyone debugging or extending the bundler.
+> You do not need to understand the bundling internals to use `kurogane bundle`. Pick a format, run the command and Kurogane handles the rest. The sections below go into the mechanics for contributors and anyone debugging or extending the bundler.
 >
 > For the quick path, see [Quick start](#quick-start). If something goes wrong, jump straight to [Troubleshooting](#troubleshooting).
 
@@ -394,10 +394,16 @@ Packaging behavior is configured declaratively in `kurogane.toml` at the project
 [app]
 # Display name; defaults to the cargo package name
 name = "My App"
-# Frontend directory relative to the project root
-frontend = "frontend/dist"
-# Command to build frontend before cargo build; skipped if package.json is absent
-frontend-build = "npm run build"
+# Frontend source directory relative to the project root
+frontend = "frontend"
+# Frontend build output that gets bundled; relative to the project root
+frontend-dist = "frontend/dist"
+# Command to install frontend dependencies
+frontend-install = "npm --prefix frontend install"
+# Command to run the frontend dev server
+frontend-run = "npm --prefix frontend run dev"
+# Command to build the frontend before cargo build
+frontend-build = "npm --prefix frontend run build"
 publisher = "Example Corp"          # NSIS Manufacturer / Add-Remove Programs Publisher
 description = "A demo application"  # NSIS FileDescription
 copyright = "(c) 2026 Example Corp" # NSIS LegalCopyright + BrandingText
@@ -420,6 +426,13 @@ certificate = "certs/codesign.pfx"  # thumbprint (signtool) or cert file (.pfx/.
 timestamp-url = "http://timestamp.digicert.com"
 digest-algorithm = "sha256"
 custom-command = "signtool sign /fd sha256"  # first token is the program; %1 expands to the target path
+```
+
+`frontend` and `frontend-dist` are build-time paths resolved against the project root. At runtime the packaged app serves its frontend from the bundle's fixed `content/` directory, so the scaffolded `src/main.rs` points the release build there:
+
+```rust
+#[cfg(not(debug_assertions))]
+App::new("content").run_or_exit();
 ```
 
 Resource destinations are validated before packaging: absolute paths and `..` components are rejected.
@@ -549,10 +562,10 @@ Every format runs this check after materializing: [`package_directory()`](https:
 
 ## Frontend-less bundles
 
-If your app has no HTML frontend (e.g., pure Rust with IPC), omit the `frontend/dist/` directory:
+If your app has no HTML frontend (e.g., pure Rust with IPC), leave `frontend-dist` unset:
 
 ```bash
-# No frontend/dist/ directory present
+# No frontend-dist/ directory present
 kurogane bundle
 # Warns: "No frontend/dist/ directory found"
 # Bundle proceeds without frontend

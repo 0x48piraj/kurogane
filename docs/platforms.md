@@ -46,9 +46,8 @@ Then run:
 
 ```bat
 kurogane new react
-cd my-app
-npm install
-npm run dev
+npm --prefix frontend install
+npm --prefix frontend run dev
 kurogane dev
 ```
 

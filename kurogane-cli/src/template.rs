@@ -571,7 +571,7 @@ mod tests {
             shell_dir.path(),
             "my-vite-app",
             destination.path(),
-            &["frontend=dist".to_string()],
+            &["frontend_dist=dist".to_string()],
             Consent::default(),
         )
         .unwrap();

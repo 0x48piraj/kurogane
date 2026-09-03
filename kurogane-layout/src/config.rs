@@ -66,7 +66,10 @@ pub fn anchor_path(project_root: &Path, path: &Path) -> PathBuf {
 pub struct AppConfig {
     pub name: Option<String>,
     pub frontend: Option<PathBuf>,
+    pub frontend_dist: Option<PathBuf>,
     pub frontend_build: Option<String>,
+    pub frontend_install: Option<String>,
+    pub frontend_run: Option<String>,
     pub publisher: Option<String>,
     pub description: Option<String>,
     pub copyright: Option<String>,
@@ -204,6 +207,10 @@ mod tests {
 [app]
 name = "My App"
 frontend = "web"
+frontend-dist = "web/dist"
+frontend-build = "npm --prefix web run build"
+frontend-install = "npm --prefix web install"
+frontend-run = "npm --prefix web run dev"
 publisher = "Example Corp"
 description = "A demo application"
 copyright = "(c) 2026 Example Corp"
@@ -236,6 +243,22 @@ custom-command = "signtool sign /fd sha256"
 
         assert_eq!(config.app.name.as_deref(), Some("My App"));
         assert_eq!(config.app.frontend.as_deref(), Some(Path::new("web")));
+        assert_eq!(
+            config.app.frontend_dist.as_deref(),
+            Some(Path::new("web/dist"))
+        );
+        assert_eq!(
+            config.app.frontend_build.as_deref(),
+            Some("npm --prefix web run build")
+        );
+        assert_eq!(
+            config.app.frontend_install.as_deref(),
+            Some("npm --prefix web install")
+        );
+        assert_eq!(
+            config.app.frontend_run.as_deref(),
+            Some("npm --prefix web run dev")
+        );
         assert_eq!(config.app.publisher.as_deref(), Some("Example Corp"));
         assert_eq!(
             config.app.description.as_deref(),
@@ -292,7 +315,8 @@ custom-command = "signtool sign /fd sha256"
             r#"
 [app]
 name = "kurogane-vanilla-template"
-frontend = "content"
+frontend = "web"
+frontend-dist = "content"
 dev_url = "http://localhost:3000"
 
 [bundle]
@@ -306,7 +330,11 @@ future-option = 42
             config.app.name.as_deref(),
             Some("kurogane-vanilla-template")
         );
-        assert_eq!(config.app.frontend.as_deref(), Some(Path::new("content")));
+        assert_eq!(config.app.frontend.as_deref(), Some(Path::new("web")));
+        assert_eq!(
+            config.app.frontend_dist.as_deref(),
+            Some(Path::new("content"))
+        );
         assert!(config.linux.terminal.is_none());
     }
 

@@ -23,11 +23,6 @@ fn build_frontend(
         return Ok(());
     };
 
-    let package_json = workspace_root.join("package.json");
-    if !package_json.exists() {
-        return Ok(());
-    }
-
     tui::step("Building frontend...");
 
     #[cfg(target_os = "windows")]
@@ -210,23 +205,25 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
     let cef_runtime = materialize_cef_runtime(&cef.root, runtime_dir.as_std_path())?;
 
+    // Configured paths are relative to the project root
     let project_root = metadata.workspace_root.as_std_path();
 
-    let frontend = match &packaging_config.app.frontend {
+    let frontend = match &packaging_config.app.frontend_dist {
         Some(path) => {
             let path = anchor_path(project_root, path);
             if path.exists() {
                 Some(path)
             } else {
                 tui::warn(&format!(
-                    "Configured frontend directory '{}' does not exist",
+                    "Configured frontend distribution '{}' does not exist. \
+                     Build it first (e.g. the frontend-build command).",
                     path.display()
                 ));
                 None
             }
         }
         None => {
-            tui::info("No frontend directory configured in kurogane.toml");
+            tui::info("No frontend-dist configured in kurogane.toml");
             None
         }
     };
