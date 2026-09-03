@@ -67,12 +67,14 @@ pub enum PackageFormat {
 impl PackageFormat {
     /// The formats available on the current build platform.
     fn available() -> Vec<&'static str> {
-        let mut formats = vec!["dir; directory"];
-        #[cfg(target_os = "linux")]
-        formats.push("appimage");
-        #[cfg(target_os = "windows")]
-        formats.push("nsis");
-        formats
+        [
+            "dir; directory",
+            #[cfg(target_os = "linux")]
+            "appimage",
+            #[cfg(target_os = "windows")]
+            "nsis",
+        ]
+        .to_vec()
     }
 
     pub fn from_str(s: &str) -> Result<Self> {
