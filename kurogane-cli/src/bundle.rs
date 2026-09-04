@@ -5,12 +5,11 @@
 //! optional signing.
 
 use anyhow::{Result, bail};
-use std::path::PathBuf;
 use std::process::Command;
 use cargo_metadata::{MetadataCommand, TargetKind};
 use kurogane_layout::{
-    AppMetadata, PackagingConfig, ResolvedDistribution, SignConfig, materialize_cef_runtime,
-    package_directory, resolve_cef_for_bundle, sign_tree,
+    AppMetadata, PackagingConfig, ResolvedDistribution, SignConfig, anchor_path,
+    materialize_cef_runtime, package_directory, resolve_cef_for_bundle, sign_tree, verify_tree,
 };
 
 use crate::tui;
@@ -23,11 +22,6 @@ fn build_frontend(
     let Some(command) = &config.frontend_build else {
         return Ok(());
     };
-
-    let package_json = workspace_root.join("package.json");
-    if !package_json.exists() {
-        return Ok(());
-    }
 
     tui::step("Building frontend...");
 
@@ -71,6 +65,18 @@ pub enum PackageFormat {
 }
 
 impl PackageFormat {
+    /// The formats available on the current build platform.
+    fn available() -> Vec<&'static str> {
+        [
+            "dir; directory",
+            #[cfg(target_os = "linux")]
+            "appimage",
+            #[cfg(target_os = "windows")]
+            "nsis",
+        ]
+        .to_vec()
+    }
+
     pub fn from_str(s: &str) -> Result<Self> {
         match s {
             "dir" | "directory" => Ok(PackageFormat::Directory),
@@ -78,29 +84,81 @@ impl PackageFormat {
             "appimage" => Ok(PackageFormat::AppImage),
             #[cfg(target_os = "windows")]
             "nsis" => Ok(PackageFormat::Nsis),
-            _ => bail!("unsupported format: {s}"),
+            _ => bail!(
+                "unsupported format: {s}\n\n\
+                 Available on this platform: {}\n\
+                 (appimage requires Linux; nsis requires Windows)",
+                Self::available().join(", ")
+            ),
         }
     }
+}
+
+/// Resolves configured bundle resources against the project root.
+///
+/// Only the source is anchored; the destination is bundle-relative.
+fn resolve_resources(
+    project_root: &std::path::Path,
+    configured: &[kurogane_layout::ResourceConfig],
+) -> Result<Vec<kurogane_layout::ResolvedResource>> {
+    configured
+        .iter()
+        .map(|resource| {
+            let mut resolved = resource.to_resolved()?;
+            resolved.source = anchor_path(project_root, &resolved.source);
+            Ok(resolved)
+        })
+        .collect()
+}
+
+/// Signs and verifies all signable artifacts in a staged bundle.
+///
+/// Warns when the bundle contains no signable artifacts.
+pub(crate) fn sign_and_verify_tree(root: &std::path::Path, config: &SignConfig) -> Result<()> {
+    let signed = sign_tree(root, config)?;
+
+    if signed == 0 {
+        tui::warn("No signable artifacts found in the bundle");
+        return Ok(());
+    }
+
+    tui::field("signed", format!("{signed} file(s)"));
+
+    let verified = verify_tree(root, config)?;
+    tui::field("verified", format!("{verified} file(s)"));
+
+    Ok(())
 }
 
 /// Resolves the signing policy for a packaging operation.
 fn resolve_sign_config(
     sign_requested: bool,
     config: &PackagingConfig,
+    project_root: &std::path::Path,
 ) -> Result<Option<SignConfig>> {
     if !sign_requested {
         return Ok(None);
     }
 
-    SignConfig::from_file_config(&config.signing)
-        .map(Some)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "--sign requested but no usable [signing] configuration found in {} \
-                 (set `certificate` or `custom-command`)",
-                kurogane_layout::CONFIG_FILE_NAME
-            )
-        })
+    let mut resolved = SignConfig::from_file_config(&config.signing)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "--sign requested but no usable [signing] configuration found in {} \
+             (set `certificate`, `certificate-thumbprint` or `custom-command`)",
+            kurogane_layout::CONFIG_FILE_NAME
+        )
+    })?;
+
+    // Configured certificate path is project-relative
+    if let Some(kurogane_layout::CertificateSource::File { path, password_env }) =
+        resolved.certificate
+    {
+        resolved.certificate = Some(kurogane_layout::CertificateSource::File {
+            path: anchor_path(project_root, &path),
+            password_env,
+        });
+    }
+
+    Ok(Some(resolved))
 }
 
 /// Build the application in the requested profile.
@@ -194,30 +252,30 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
     let cef_runtime = materialize_cef_runtime(&cef.root, runtime_dir.as_std_path())?;
 
-    let frontend = match &packaging_config.app.frontend {
+    // Configured paths are relative to the project root
+    let project_root = metadata.workspace_root.as_std_path();
+
+    let frontend = match &packaging_config.app.frontend_dist {
         Some(path) => {
+            let path = anchor_path(project_root, path);
             if path.exists() {
-                Some(path.clone())
+                Some(path)
             } else {
                 tui::warn(&format!(
-                    "Configured frontend directory '{}' does not exist",
+                    "Configured frontend distribution '{}' does not exist. \
+                     Build it first (e.g. the frontend-build command).",
                     path.display()
                 ));
                 None
             }
         }
         None => {
-            tui::info("No frontend directory configured in kurogane.toml");
+            tui::info("No frontend-dist configured in kurogane.toml");
             None
         }
     };
 
-    let extra_resources = packaging_config
-        .bundle
-        .resources
-        .iter()
-        .map(|r| r.to_resolved())
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let extra_resources = resolve_resources(project_root, &packaging_config.bundle.resources)?;
 
     let dist = ResolvedDistribution {
         metadata: AppMetadata {
@@ -231,7 +289,11 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
             publisher: packaging_config.app.publisher.clone(),
             description: packaging_config.app.description.clone(),
             copyright: packaging_config.app.copyright.clone(),
-            icon: packaging_config.app.icon.clone(),
+            icon: packaging_config
+                .app
+                .icon
+                .as_ref()
+                .map(|icon| anchor_path(project_root, icon)),
         },
         executable: exe_path.into(),
         frontend,
@@ -248,8 +310,8 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     // Package the distribution
     tui::step("Packaging...");
 
-    let output_dir = PathBuf::from("dist");
-    let sign_config = resolve_sign_config(sign, &packaging_config)?;
+    let output_dir = project_root.join("dist");
+    let sign_config = resolve_sign_config(sign, &packaging_config, project_root)?;
 
     match format {
         PackageFormat::Directory => {
@@ -257,8 +319,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
             let output = package_directory(&dist, &output_dir)?;
 
             if let Some(config) = &sign_config {
-                let signed = sign_tree(&output, config)?;
-                tui::field("signed", format!("{signed} file(s)"));
+                sign_and_verify_tree(&output, config)?;
             }
 
             tui::field("output", tui::format_path(&output));
@@ -277,7 +338,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
     tui::blank();
     tui::success("Bundle ready");
-    tui::field("path", "./dist");
+    tui::field("path", tui::format_path(&output_dir));
 
     Ok(())
 }
@@ -303,10 +364,82 @@ mod tests {
         let err = PackageFormat::from_str("msi").unwrap_err();
 
         assert!(err.to_string().contains("unsupported format"));
+        assert!(
+            err.to_string().contains("Available on this platform"),
+            "the error should list what this platform actually supports"
+        );
     }
 
     #[test]
     fn rejects_empty_format() {
         assert!(PackageFormat::from_str("").is_err());
+    }
+
+    fn resource(source: &str, destination: Option<&str>) -> kurogane_layout::ResourceConfig {
+        kurogane_layout::ResourceConfig {
+            source: source.into(),
+            destination: destination.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn resource_sources_anchor_to_the_project_root() {
+        let root = std::path::Path::new("/workspace/app");
+
+        let resolved = resolve_resources(root, &[resource("assets/data", Some("share/data"))])
+            .expect("resources should resolve");
+
+        assert_eq!(
+            resolved[0].source,
+            std::path::PathBuf::from("/workspace/app/assets/data"),
+            "a relative source must resolve against the project, not the shell's cwd"
+        );
+    }
+
+    #[test]
+    fn resource_destinations_stay_bundle_relative() {
+        let root = std::path::Path::new("/workspace/app");
+
+        let resolved = resolve_resources(
+            root,
+            &[
+                resource("assets/data", Some("share/data")),
+                resource("README.md", None),
+            ],
+        )
+        .expect("resources should resolve");
+
+        assert_eq!(
+            resolved[0].destination,
+            std::path::PathBuf::from("share/data")
+        );
+        assert_eq!(
+            resolved[1].destination,
+            std::path::PathBuf::from("README.md"),
+            "an omitted destination defaults to the source file name"
+        );
+        for entry in &resolved {
+            assert!(
+                entry.destination.is_relative(),
+                "anchoring must never leak into the bundle destination"
+            );
+        }
+    }
+
+    #[test]
+    fn absolute_resource_sources_are_left_alone() {
+        let absolute = if cfg!(windows) {
+            r"C:\shared\assets"
+        } else {
+            "/shared/assets"
+        };
+
+        let resolved = resolve_resources(
+            std::path::Path::new("/workspace/app"),
+            &[resource(absolute, None)],
+        )
+        .expect("resources should resolve");
+
+        assert_eq!(resolved[0].source, std::path::PathBuf::from(absolute));
     }
 }

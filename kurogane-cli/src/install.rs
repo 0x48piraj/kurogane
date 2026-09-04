@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use download_cef::{CefIndex, DEFAULT_TARGET};
-use kurogane_layout::install_root;
+use kurogane_layout::{install_root, validate_cef_runtime};
 use std::time::Duration;
 
 use crate::tui;
@@ -17,10 +17,19 @@ pub fn run() -> Result<()> {
     let install_dir = install_root().join(&cef_version);
 
     if install_dir.exists() {
-        tui::success("Chromium engine already installed");
-        tui::field("version", &cef_version);
-        tui::field("path", tui::format_path(&install_dir));
-        return Ok(());
+        match validate_cef_runtime(&install_dir) {
+            Ok(()) => {
+                tui::success("Chromium engine already installed");
+                tui::field("version", &cef_version);
+                tui::field("path", tui::format_path(&install_dir));
+                return Ok(());
+            }
+            Err(err) => {
+                tui::warn("Existing Chromium runtime is incomplete; reinstalling");
+                tui::field("reason", err);
+                std::fs::remove_dir_all(&install_dir)?;
+            }
+        }
     }
 
     tui::step("Resolving version...");
@@ -56,6 +65,10 @@ pub fn run() -> Result<()> {
     {
         tui::warn(&format!("failed to remove downloaded archive: {err}"));
     }
+
+    // Fail rather than leaving an unusable tree for the next run to trip on
+    validate_cef_runtime(&install_dir)
+        .map_err(|e| anyhow::anyhow!("installed Chromium runtime is invalid: {e}"))?;
 
     tui::blank();
 

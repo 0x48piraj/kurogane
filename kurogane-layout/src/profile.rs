@@ -8,6 +8,10 @@ use std::path::{Path, PathBuf};
 
 use crate::platform;
 
+/// Number of hex digits rendered for the per-exe identity hash in a
+/// profile directory name matching the width used by [`profile_dir`].
+pub const PROFILE_HASH_HEX_DIGITS: usize = 16;
+
 pub fn cache_root() -> PathBuf {
     platform::cache_dir().join("kurogane")
 }
@@ -23,9 +27,10 @@ pub fn profile_dir(app_id: &str, exe: &Path) -> PathBuf {
     let app_id = sanitize_name(app_id);
 
     // Formats the identity hash for use in the profile directory name
-    cache_root()
-        .join("profiles")
-        .join(format!("{app_id}-{hash:016x}"))
+    cache_root().join("profiles").join(format!(
+        "{app_id}-{hash:0width$x}",
+        width = PROFILE_HASH_HEX_DIGITS
+    ))
 }
 
 /// Computes a deterministic FNV-1a 64-bit digest of a filesystem path.

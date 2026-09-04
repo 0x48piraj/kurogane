@@ -5,7 +5,7 @@
 
 use anyhow::{Result, bail};
 use std::fs;
-use kurogane_layout::cache_root;
+use kurogane_layout::{cache_root, PROFILE_HASH_HEX_DIGITS};
 
 use crate::tui;
 
@@ -29,16 +29,20 @@ fn list_all() -> Result<()> {
 fn list_profiles() -> Result<()> {
     tui::section("Kurogane Profiles");
 
-    let base = cache_root().join("profiles");
+    let profiles_dir = cache_root().join("profiles");
 
-    if !base.exists() {
+    if !profiles_dir.exists() {
         tui::info("No profiles found");
         return Ok(());
     }
 
     let mut found = false;
 
-    for entry in fs::read_dir(&base)? {
+    // A profile directory is "<sanitized-app>-<16-hex-digit hash>"
+    let hash_width = PROFILE_HASH_HEX_DIGITS;
+    let min_profile_name = hash_width + 1; // at least one app character and the "-" separator
+
+    for entry in fs::read_dir(&profiles_dir)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
             continue;
@@ -47,16 +51,24 @@ fn list_profiles() -> Result<()> {
         let name = entry.file_name();
         let name = name.to_string_lossy();
 
-        if name.len() < 18 {
+        if name.len() < min_profile_name {
+            tui::warn(&format!(
+                "Skipping unrecognized cache entry (name too short): {name}"
+            ));
             continue;
         }
 
-        let (left, id) = name.split_at(name.len() - 16);
+        let (app_with_separator, id) = name.split_at(name.len() - hash_width);
 
-        // Format: "<app>-<uid16>"
-        let app = match left.strip_suffix('-') {
+        // Format: "<app>-<uid 16 hex>"
+        let app = match app_with_separator.strip_suffix('-') {
             Some(a) if id.chars().all(|c| c.is_ascii_hexdigit()) => a,
-            _ => continue,
+            _ => {
+                tui::warn(&format!(
+                    "Skipping unrecognized cache entry (malformed profile): {name}"
+                ));
+                continue;
+            }
         };
 
         println!("    {:<20} {}", app, id);

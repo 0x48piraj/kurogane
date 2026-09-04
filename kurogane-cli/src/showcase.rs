@@ -7,7 +7,7 @@ use crate::tui;
 /// The showcase template repository.
 const SHOWCASE_TEMPLATE_REPO: &str = "https://github.com/kurogane-rs/kurogane-showcase";
 
-pub fn run() -> Result<()> {
+pub fn run(consent: template::Consent) -> Result<()> {
     tui::section("Kurogane Showcase");
 
     let cache_root = dirs::cache_dir()
@@ -21,8 +21,8 @@ pub fn run() -> Result<()> {
     // Regenerate the showcase project from the cached template
     let acquired = crate::cache::acquire(SHOWCASE_TEMPLATE_REPO)?;
     tui::field("commit", &acquired.commit);
-    template::confirm_hooks(&acquired.path, false)?;
-    template::regenerate_project(&acquired.path, "showcase", &root, &[])?;
+    template::confirm_hooks(&acquired.path, consent)?;
+    template::regenerate_project(&acquired.path, "showcase", &root, &[], consent)?;
 
     tui::step("Launching showcase...");
 

@@ -66,7 +66,10 @@ pub fn anchor_path(project_root: &Path, path: &Path) -> PathBuf {
 pub struct AppConfig {
     pub name: Option<String>,
     pub frontend: Option<PathBuf>,
+    pub frontend_dist: Option<PathBuf>,
     pub frontend_build: Option<String>,
+    pub frontend_install: Option<String>,
+    pub frontend_run: Option<String>,
     pub publisher: Option<String>,
     pub description: Option<String>,
     pub copyright: Option<String>,
@@ -154,10 +157,19 @@ impl Default for WindowsPackagingConfig {
 }
 
 /// Code signing configuration.
+///
+/// A certificate is supplied either as a file (`certificate`) or as a Windows
+/// certificate store thumbprint (`certificate-thumbprint`), never both.
+///
+/// Passwords are never stored here: `certificate-password-env` names the
+/// environment variable the password is read from, so CI keeps it in secrets
+/// and it stays out of version control naturally.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct SigningFileConfig {
     pub certificate: Option<PathBuf>,
+    pub certificate_thumbprint: Option<String>,
+    pub certificate_password_env: Option<String>,
     pub timestamp_url: Option<String>,
     pub digest_algorithm: Option<String>,
     pub custom_command: Option<String>,
@@ -204,6 +216,10 @@ mod tests {
 [app]
 name = "My App"
 frontend = "web"
+frontend-dist = "web/dist"
+frontend-build = "npm --prefix web run build"
+frontend-install = "npm --prefix web install"
+frontend-run = "npm --prefix web run dev"
 publisher = "Example Corp"
 description = "A demo application"
 copyright = "(c) 2026 Example Corp"
@@ -236,6 +252,22 @@ custom-command = "signtool sign /fd sha256"
 
         assert_eq!(config.app.name.as_deref(), Some("My App"));
         assert_eq!(config.app.frontend.as_deref(), Some(Path::new("web")));
+        assert_eq!(
+            config.app.frontend_dist.as_deref(),
+            Some(Path::new("web/dist"))
+        );
+        assert_eq!(
+            config.app.frontend_build.as_deref(),
+            Some("npm --prefix web run build")
+        );
+        assert_eq!(
+            config.app.frontend_install.as_deref(),
+            Some("npm --prefix web install")
+        );
+        assert_eq!(
+            config.app.frontend_run.as_deref(),
+            Some("npm --prefix web run dev")
+        );
         assert_eq!(config.app.publisher.as_deref(), Some("Example Corp"));
         assert_eq!(
             config.app.description.as_deref(),
@@ -285,6 +317,34 @@ custom-command = "signtool sign /fd sha256"
     }
 
     #[test]
+    fn signing_accepts_a_store_thumbprint_and_password_variable() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config(
+            dir.path(),
+            r#"
+[signing]
+certificate-thumbprint = "AB12CD34"
+certificate-password-env = "KUROGANE_CERT_PASSWORD"
+"#,
+        );
+
+        let config = PackagingConfig::load(dir.path()).unwrap();
+
+        assert_eq!(
+            config.signing.certificate_thumbprint.as_deref(),
+            Some("AB12CD34")
+        );
+        assert_eq!(
+            config.signing.certificate_password_env.as_deref(),
+            Some("KUROGANE_CERT_PASSWORD")
+        );
+        assert!(
+            config.signing.certificate.is_none(),
+            "a thumbprint is not a certificate file"
+        );
+    }
+
+    #[test]
     fn template_schema_unknown_keys_are_ignored() {
         let dir = tempfile::tempdir().unwrap();
         write_config(
@@ -292,7 +352,8 @@ custom-command = "signtool sign /fd sha256"
             r#"
 [app]
 name = "kurogane-vanilla-template"
-frontend = "content"
+frontend = "web"
+frontend-dist = "content"
 dev_url = "http://localhost:3000"
 
 [bundle]
@@ -306,7 +367,11 @@ future-option = 42
             config.app.name.as_deref(),
             Some("kurogane-vanilla-template")
         );
-        assert_eq!(config.app.frontend.as_deref(), Some(Path::new("content")));
+        assert_eq!(config.app.frontend.as_deref(), Some(Path::new("web")));
+        assert_eq!(
+            config.app.frontend_dist.as_deref(),
+            Some(Path::new("content"))
+        );
         assert!(config.linux.terminal.is_none());
     }
 

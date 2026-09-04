@@ -9,15 +9,49 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use kurogane_layout::{PackagingConfig, ResolvedDistribution, SignConfig, package_directory, sign_tree};
+use kurogane_layout::{PackagingConfig, ResolvedDistribution, SignConfig, package_directory};
 
 use crate::tui;
 
-const DOWNLOAD_LIMIT: u64 = 20 * 1024 * 1024;
+const DOWNLOAD_LIMIT: u64 = 32 * 1024 * 1024;
 
 const LINUXDEPLOY_VERSION: &str = "1-alpha-20251107-1";
 
 const LINUXDEPLOY_URL: &str = "https://github.com/linuxdeploy/linuxdeploy/releases/download";
+
+/// SHA-256 digests of the pinned linuxdeploy release assets.
+///
+/// These must be updated together with [`LINUXDEPLOY_VERSION`].
+const LINUXDEPLOY_DIGESTS: &[(&str, &str)] = &[
+    (
+        "x86_64",
+        "c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d",
+    ),
+    (
+        "aarch64",
+        "620095110d693282b8ebeb244a95b5e911cf8f65f76c88b4b47d16ae6346fcff",
+    ),
+];
+
+fn expected_digest(arch: &str) -> Result<&'static str> {
+    LINUXDEPLOY_DIGESTS
+        .iter()
+        .find(|(candidate, _)| *candidate == arch)
+        .map(|(_, digest)| *digest)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no pinned linuxdeploy digest for architecture '{arch}' \
+                 (linuxdeploy {LINUXDEPLOY_VERSION})"
+            )
+        })
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
 
 fn tools_arch() -> Result<String> {
     match std::env::var("ARCH") {
@@ -59,16 +93,35 @@ fn download(url: &str) -> Result<Vec<u8>> {
         .read_to_vec()?)
 }
 
+/// Downloads and caches the pinned linuxdeploy release.
+///
+/// Downloads are verified against [`LINUXDEPLOY_DIGESTS`] before being written
+/// to the cache. Cached copies are not re-hashed because [`patch_linuxdeploy`]
+/// three bytes of the file in place.
 fn prepare_linuxdeploy(arch: &str) -> Result<PathBuf> {
     let tools = tools_dir()?;
 
     // linuxdeploy
     let path = tools.join(format!("linuxdeploy-{arch}.AppImage"));
     if !path.exists() {
+        let expected = expected_digest(arch)?;
+
         tui::step(&format!("Downloading linuxdeploy-{arch}..."));
         let data = download(&format!(
             "{LINUXDEPLOY_URL}/{LINUXDEPLOY_VERSION}/linuxdeploy-{arch}.AppImage"
         ))?;
+
+        let actual = sha256_hex(&data);
+        if actual != expected {
+            bail!(
+                "linuxdeploy-{arch} failed checksum verification\n  \
+                 expected: {expected}\n  \
+                 actual:   {actual}\n\
+                 Refusing to execute an unverified build tool."
+            );
+        }
+        tui::field("sha256", &actual[..16]);
+
         write_and_make_executable(&path, &data)?;
         // Mask linuxdeploy's magic bytes
         patch_linuxdeploy(&path)?;
@@ -236,10 +289,9 @@ pub fn build(
     tui::step("Assembling AppDir...");
     build_appdir(dist, &app_dir, config)?;
 
-    // Sign staged binaries before imaging
+    // Sign and verify staged binaries before imaging
     if let Some(sign_config) = sign {
-        let signed = sign_tree(&bundle_dir, sign_config)?;
-        tui::field("signed", format!("{signed} file(s)"));
+        crate::bundle::sign_and_verify_tree(&bundle_dir, sign_config)?;
     }
 
     let appimage_path = output_dir.join(format!("{appimage_name}.AppImage"));
@@ -287,6 +339,34 @@ mod tests {
 
     fn test_distribution(dir: &Path) -> ResolvedDistribution {
         kurogane_layout::test_fixtures::sample_distribution(dir)
+    }
+
+    #[test]
+    fn sha256_matches_known_vector() {
+        // NIST FIPS 180-4 test vector
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn every_supported_arch_has_a_pinned_digest() {
+        for arch in ["x86_64", "aarch64"] {
+            let digest = expected_digest(arch).expect("supported arch must be pinned");
+            assert_eq!(digest.len(), 64, "a SHA-256 digest is 64 hex characters");
+            assert!(digest.chars().all(|c| c.is_ascii_hexdigit()));
+        }
+    }
+
+    #[test]
+    fn unpinned_arch_is_rejected_rather_than_downloaded() {
+        let err = expected_digest("riscv64").unwrap_err();
+
+        assert!(
+            err.to_string().contains("no pinned linuxdeploy digest"),
+            "an unpinned architecture must fail loudly, got: {err}"
+        );
     }
 
     #[test]

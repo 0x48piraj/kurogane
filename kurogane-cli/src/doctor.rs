@@ -121,7 +121,7 @@ pub fn run(json: bool) -> Result<()> {
 
             tui::info("Run: kurogane install");
 
-            warn += 1;
+            fail += 1;
         }
     }
 
@@ -193,8 +193,8 @@ pub fn run(json: bool) -> Result<()> {
         }
 
         Err(_) => {
-            tui::warn("Environment override");
-            tui::field("CEF_PATH", "not set");
+            tui::info("No CEF_PATH override");
+            tui::field("default", "managed install");
         }
     }
 
@@ -256,22 +256,47 @@ pub fn run(json: bool) -> Result<()> {
     }
 
     // Check configured frontend from the resolved workspace root
-    let packaging_config = workspace_root
-        .as_ref()
-        .and_then(|root| kurogane_layout::PackagingConfig::load(root).ok());
+    let packaging_config = workspace_root.as_deref().and_then(|root| {
+        kurogane_layout::PackagingConfig::load(root)
+            .ok()
+            .map(|c| (root, c))
+    });
 
-    if let Some(ref config) = packaging_config {
-        if let Some(frontend) = &config.app.frontend {
-            if frontend.exists() {
-                tui::success("Frontend directory");
-                tui::field("path", frontend.display());
-            } else {
-                tui::warn("Configured frontend directory not found");
-                tui::field("path", frontend.display());
+    let check_frontend = |root: &std::path::Path, label: &str, path: &std::path::Path| -> bool {
+        let anchored = kurogane_layout::anchor_path(root, path);
+        if anchored.exists() {
+            tui::success(label);
+            tui::field("path", tui::format_path(&anchored));
+            true
+        } else {
+            tui::warn(&format!("{label} not found"));
+            tui::field("path", tui::format_path(&anchored));
+            false
+        }
+    };
+
+    if let Some((root, config)) = packaging_config {
+        if let Some(src) = &config.app.frontend {
+            if !check_frontend(root, "Frontend source", src) {
                 warn += 1;
             }
         } else {
-            tui::info("No frontend directory configured in kurogane.toml");
+            tui::info("No frontend source configured in kurogane.toml");
+        }
+
+        if let Some(dist) = &config.app.frontend_dist {
+            if !check_frontend(root, "Frontend distribution", dist) {
+                warn += 1;
+            }
+        } else {
+            tui::info("No frontend-dist configured in kurogane.toml");
+        }
+
+        if let Some(install) = &config.app.frontend_install {
+            tui::field("frontend-install", install);
+        }
+        if let Some(run) = &config.app.frontend_run {
+            tui::field("frontend-run", run);
         }
     } else {
         tui::info("No kurogane.toml found");

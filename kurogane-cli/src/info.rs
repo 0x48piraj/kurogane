@@ -67,6 +67,17 @@ pub fn run() -> Result<()> {
                 } else {
                     tui::field("frontend", "(not configured)");
                 }
+                if let Some(frontend_dist) = &config.app.frontend_dist {
+                    tui::field("frontend-dist", frontend_dist.display());
+                } else {
+                    tui::field("frontend-dist", "(not configured)");
+                }
+                if let Some(install) = &config.app.frontend_install {
+                    tui::field("frontend-install", install);
+                }
+                if let Some(run) = &config.app.frontend_run {
+                    tui::field("frontend-run", run);
+                }
                 if let Some(publisher) = &config.app.publisher {
                     tui::field("publisher", publisher);
                 }

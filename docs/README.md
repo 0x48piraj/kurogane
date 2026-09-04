@@ -18,6 +18,14 @@ See available templates and how to run them: [see templates](templates.md)
 
 _New users should start here._
 
+### Development
+
+Day-to-day workflow for running and configuring your app.
+
+Covers the dev server, choosing a frontend source and the runtime setup: [see development](development.md)
+
+_Use this while building._
+
 ### Recipes
 
 Common workflows and advanced usage patterns.
@@ -25,6 +33,14 @@ Common workflows and advanced usage patterns.
 Covers integration patterns and real-world setups: [see recipes and guides](recipes.md)
 
 _Use this when building real applications._
+
+### Bundling
+
+End-to-end guide for packaging Kurogane applications into distributable bundles.
+
+Covers output formats, configuration and CI integration: [see bundling](bundling.md)
+
+_Use this when preparing releases._
 
 ### Install notes
 
