@@ -20,7 +20,7 @@ use crate::tui;
 
 /// Resolve the CEF runtime, installing it if necessary.
 ///
-/// `CEF_PATH` overrides the managed install for development convenience.
+/// `CEF_PATH` overrides the managed install when valid for development convenience.
 /// Provenance is deliberately not checked.
 pub(crate) fn ensure_cef_runtime() -> Result<PathBuf> {
     let version = env!("KUROGANE_CEF_VERSION");
@@ -35,6 +35,8 @@ pub(crate) fn ensure_cef_runtime() -> Result<PathBuf> {
         Ok(_) => {
             tui::success("Chromium engine ready");
             tui::field("path", tui::format_path(&cef));
+
+            Ok(cef)
         }
 
         Err(err) => {
@@ -43,10 +45,24 @@ pub(crate) fn ensure_cef_runtime() -> Result<PathBuf> {
             tui::field("reason", err);
 
             crate::install::run()?;
+
+            // The installer populates the managed cache, not `cef`
+            // Use the managed path after a failed validation
+            let installed = cef_install_dir(version);
+
+            validate_cef_runtime(&installed).map_err(|err| {
+                anyhow::anyhow!(
+                    "CEF runtime at {} is still invalid after install: {err}",
+                    installed.display()
+                )
+            })?;
+
+            tui::success("Chromium engine ready");
+            tui::field("path", tui::format_path(&installed));
+
+            Ok(installed)
         }
     }
-
-    Ok(cef)
 }
 
 /// Run Cargo with the Kurogane runtime environment.
