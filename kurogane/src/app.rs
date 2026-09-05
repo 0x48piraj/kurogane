@@ -19,6 +19,7 @@ use crate::error::RuntimeError;
 use crate::spec::{RuntimeSpec, RuntimeMode};
 use crate::chromium_flags::ChromiumFlag;
 use crate::credentials::CredentialStorage;
+use crate::window::WindowIdentity;
 use crate::gpu::GpuMode;
 
 mod resolver;
@@ -175,6 +176,7 @@ pub struct App {
     resolver: Option<crate::ipc::handle_cell::AppCellResolver>,
 
     profile_id: Option<String>,
+    cache_dir: Option<PathBuf>,
     persist_session_cookies: bool,
     gpu_mode: GpuMode,
     credential_storage: CredentialStorage,
@@ -182,6 +184,7 @@ pub struct App {
     scheduler: Option<PumpScheduler>,
     delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
     renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
+    window_identity: WindowIdentity,
 }
 
 impl App {
@@ -206,6 +209,7 @@ impl App {
             resolver: Some(resolver),
 
             profile_id: None,
+            cache_dir: None,
             persist_session_cookies: true,
             gpu_mode: GpuMode::Auto,
             credential_storage: CredentialStorage::System,
@@ -213,6 +217,7 @@ impl App {
             scheduler: None,
             delegates: Vec::new(),
             renderer_delegates: Vec::new(),
+            window_identity: WindowIdentity::default(),
         }
     }
 
@@ -417,6 +422,28 @@ impl App {
         self
     }
 
+    /// Put the Chromium profile (CEF's cache_path) in this directory instead of
+    /// the per-executable one derived from the profile id. The directory is
+    /// created if missing.
+    pub fn cache_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.cache_dir = Some(dir.into());
+        self
+    }
+
+    /// Name the windows for the window manager: WM_CLASS under X11, app_id under
+    /// Wayland. It is what a `.desktop` file's `StartupWMClass` and per-app
+    /// compositor rules match on. Linux only; other platforms ignore it.
+    pub fn window_class(mut self, class: impl Into<String>) -> Self {
+        self.window_identity.class = Some(class.into());
+        self
+    }
+
+    /// Title of the native window. Without it the window carries no title.
+    pub fn window_title(mut self, title: impl Into<String>) -> Self {
+        self.window_identity.title = Some(title.into());
+        self
+    }
+
     pub fn persist_session_cookies(mut self, value: bool) -> Self {
         self.persist_session_cookies = value;
         self
@@ -465,6 +492,7 @@ impl App {
             async_handlers,
             stream_handlers,
             profile_id,
+            cache_dir,
             persist_session_cookies,
             gpu_mode,
             credential_storage,
@@ -472,6 +500,7 @@ impl App {
             scheduler,
             delegates,
             renderer_delegates,
+            window_identity,
             ..
         } = self;
 
@@ -490,6 +519,7 @@ impl App {
             start_url,
             asset_root,
             profile_id,
+            cache_dir,
             persist_session_cookies,
             gpu_mode,
             credential_storage,
@@ -497,6 +527,7 @@ impl App {
             scheduler,
             delegates,
             renderer_delegates,
+            window_identity,
         };
 
         let instance = RuntimeBootstrap::start(spec, router)?;
@@ -515,6 +546,7 @@ impl App {
             async_handlers,
             stream_handlers,
             profile_id,
+            cache_dir,
             persist_session_cookies,
             gpu_mode,
             credential_storage,
@@ -522,6 +554,7 @@ impl App {
             scheduler,
             delegates,
             renderer_delegates,
+            window_identity,
             ..
         } = self;
 
@@ -540,6 +573,7 @@ impl App {
             start_url,
             asset_root,
             profile_id,
+            cache_dir,
             persist_session_cookies,
             gpu_mode,
             credential_storage,
@@ -547,6 +581,7 @@ impl App {
             scheduler,
             delegates,
             renderer_delegates,
+            window_identity,
         };
 
         let instance = RuntimeBootstrap::start_embedded(spec, router)?;

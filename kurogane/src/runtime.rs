@@ -8,7 +8,7 @@ use crate::error::RuntimeError;
 use crate::ShutdownSignal;
 use crate::browser_registry::{BrowserRegistry, BrowserId, BrowserMetadata};
 use crate::window_registry::{WindowRegistry, WindowId, WindowMetadata};
-use crate::window::{KuroganeWindowDelegate, KuroganeBrowserViewDelegate};
+use crate::window::{KuroganeBrowserViewDelegate, KuroganeWindowDelegate, WindowIdentity};
 use kurogane_layout::{detect_cef_root_with_version, validate_cef_runtime, profile_dir};
 use crate::ipc::IpcRouter;
 use crate::spec::RuntimeSpec;
@@ -31,7 +31,10 @@ struct RuntimeLayout {
     locales_dir: std::path::PathBuf,
 }
 
-fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeError> {
+fn resolve_layout(
+    profile_id: Option<String>,
+    cache_dir: Option<std::path::PathBuf>,
+) -> Result<RuntimeLayout, RuntimeError> {
     debug!("Resolving runtime layout");
 
     // Isolate the CEF cache per executable
@@ -40,7 +43,7 @@ fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeEr
 
     let raw_name = profile_id.unwrap_or_else(|| "kurogane-app".to_string());
 
-    let cache_dir = profile_dir(&raw_name, &exe);
+    let cache_dir = cache_dir.unwrap_or_else(|| profile_dir(&raw_name, &exe));
     debug!("Cache dir: {}", cache_dir.display());
 
     std::fs::create_dir_all(&cache_dir).map_err(|e| RuntimeError::CacheUnavailable {
@@ -823,6 +826,7 @@ impl AppInstance {
             },
             options.show_state.into(),
             is_closing,
+            WindowIdentity::default(),
         );
 
         window_create_top_level(Some(&mut delegate)).ok_or(RuntimeError::WindowCreationFailed)?;
@@ -1100,7 +1104,7 @@ fn initialize_cef(
     debug!("Executing subprocess dispatch");
     execute_subprocesses(&args, &mut app);
 
-    let layout = resolve_layout(spec.profile_id)?;
+    let layout = resolve_layout(spec.profile_id, spec.cache_dir)?;
     let external_message_pump = spec.scheduler.is_some();
     let settings = build_settings(&layout, spec.persist_session_cookies, external_message_pump);
 
