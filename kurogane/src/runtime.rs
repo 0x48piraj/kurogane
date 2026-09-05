@@ -8,7 +8,7 @@ use crate::error::RuntimeError;
 use crate::ShutdownSignal;
 use crate::browser_registry::{BrowserRegistry, BrowserId, BrowserMetadata};
 use crate::window_registry::{WindowRegistry, WindowId, WindowMetadata};
-use crate::window::{KuroganeWindowDelegate, KuroganeBrowserViewDelegate};
+use crate::window::{KuroganeBrowserViewDelegate, KuroganeWindowDelegate, WindowIdentity};
 use kurogane_layout::{detect_cef_root_with_version, validate_cef_runtime, profile_dir};
 use crate::ipc::IpcRouter;
 use crate::spec::RuntimeSpec;
@@ -823,6 +823,7 @@ impl AppInstance {
             },
             options.show_state.into(),
             is_closing,
+            WindowIdentity::default(),
         );
 
         window_create_top_level(Some(&mut delegate)).ok_or(RuntimeError::WindowCreationFailed)?;

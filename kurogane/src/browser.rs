@@ -124,6 +124,7 @@ wrap_browser_process_handler! {
                 Rect::default(),
                 ShowState::NORMAL,
                 is_closing,
+                self.spec.window_identity.clone(),
             );
 
             // Create window
