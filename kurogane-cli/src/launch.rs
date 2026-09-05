@@ -71,6 +71,10 @@ pub(crate) fn cargo_run(cef: &std::path::Path, cargo_args: &[OsString]) -> Resul
 
     let mut cmd = Command::new("cargo");
     cmd.arg("run");
+
+    // Skip cef-dll-sys's redundant runtime staging
+    cmd.args(crate::platform::cef_build_script_override(cef)?);
+
     cmd.args(cargo_args);
     cmd.env("CEF_PATH", cef);
 

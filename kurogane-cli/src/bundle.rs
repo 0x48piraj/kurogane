@@ -196,6 +196,9 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
     cmd.arg("build");
 
+    // Skip cef-dll-sys's redundant runtime staging
+    cmd.args(crate::platform::cef_build_script_override(cef.root.as_path())?);
+
     if debug {
         cmd.arg("--features").arg("kurogane/debug");
     } else {
