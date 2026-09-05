@@ -24,12 +24,15 @@ struct RuntimeLayout {
     subprocess: Option<std::path::PathBuf>,
 }
 
-fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeError> {
+fn resolve_layout(
+    profile_id: Option<String>,
+    cache_dir: Option<std::path::PathBuf>,
+) -> Result<RuntimeLayout, RuntimeError> {
     debug!("Resolving runtime layout");
 
     let exe = std::env::current_exe().map_err(RuntimeError::ExecutableUnavailable)?;
 
-    let cache_dir = profile_dir(&profile_name(profile_id, &exe));
+    let cache_dir = cache_dir.unwrap_or_else(|| profile_dir(&profile_name(profile_id, &exe)));
     debug!("Cache dir: {}", cache_dir.display());
 
     std::fs::create_dir_all(&cache_dir).map_err(|e| RuntimeError::CacheUnavailable {
@@ -1299,7 +1302,7 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
     debug!("Executing subprocess dispatch");
     execute_subprocesses(&args, &mut app, sandbox_info);
 
-    let layout = resolve_layout(spec.profile_id)?;
+    let layout = resolve_layout(spec.profile_id, spec.cache_dir)?;
     crate::sandbox::preflight(spec.sandbox_mode, &layout.cef_root)?;
 
     let external_message_pump = spec.scheduler.is_some();

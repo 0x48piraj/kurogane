@@ -7,6 +7,7 @@ use crate::credentials::CredentialStorage;
 use crate::gpu::GpuMode;
 use crate::scheme::CustomScheme;
 use crate::window::WindowIdentity;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,6 +49,8 @@ pub(crate) struct RuntimeSpec {
     pub start_url: String,
     pub asset_root: Option<CanonicalRoot>,
     pub profile_id: Option<String>,
+    /// Where the Chromium profile (cache_path) lives; None derives it from profile_id.
+    pub cache_dir: Option<PathBuf>,
     pub persist_session_cookies: bool,
     pub gpu_mode: GpuMode,
     pub credential_storage: CredentialStorage,

@@ -256,6 +256,7 @@ pub struct App {
     acl: crate::acl::CommandAcl,
 
     profile_id: Option<String>,
+    cache_dir: Option<PathBuf>,
     sandbox_mode: SandboxMode,
     persist_session_cookies: bool,
     gpu_mode: GpuMode,
@@ -295,6 +296,7 @@ impl App {
             acl: crate::acl::CommandAcl::new(),
 
             profile_id: None,
+            cache_dir: None,
             sandbox_mode: SandboxMode::default(),
             persist_session_cookies: true,
             gpu_mode: GpuMode::Auto,
@@ -746,6 +748,14 @@ impl App {
         self
     }
 
+    /// Put the Chromium profile (CEF's cache_path) in this directory instead of
+    /// the one derived from the profile id. The directory is created if
+    /// missing.
+    pub fn cache_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.cache_dir = Some(dir.into());
+        self
+    }
+
     /// Name the application's first window for the window manager: WM_CLASS
     /// under X11, app_id under Wayland. It is what a `.desktop` file's
     /// `StartupWMClass` and per-app compositor rules match on. Linux only;
@@ -841,6 +851,7 @@ impl App {
             stream_handlers,
             acl,
             profile_id,
+            cache_dir,
             sandbox_mode,
             persist_session_cookies,
             gpu_mode,
@@ -871,6 +882,7 @@ impl App {
             start_url,
             asset_root,
             profile_id,
+            cache_dir,
             persist_session_cookies,
             gpu_mode,
             credential_storage,
