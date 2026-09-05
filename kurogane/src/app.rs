@@ -21,6 +21,7 @@ use crate::scheme::{CustomScheme, SchemeHandler, validate_scheme_name};
 use crate::chromium_flags::ChromiumFlag;
 use crate::credentials::CredentialStorage;
 use crate::gpu::GpuMode;
+use crate::window::WindowIdentity;
 use crate::capability::{FilesystemBuilder, FsConfigError};
 use crate::acl::Origin;
 
@@ -265,6 +266,7 @@ pub struct App {
     delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
     renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
     scheme_handlers: Vec<CustomScheme>,
+    window_identity: WindowIdentity,
 
     /// Builder misuse, reported together by `build()` before anything starts.
     problems: Vec<ConfigError>,
@@ -303,6 +305,7 @@ impl App {
             delegates: Vec::new(),
             renderer_delegates: Vec::new(),
             scheme_handlers: Vec::new(),
+            window_identity: WindowIdentity::default(),
             problems: Vec::new(),
             filesystem_error: None,
         }
@@ -743,6 +746,22 @@ impl App {
         self
     }
 
+    /// Name the application's first window for the window manager: WM_CLASS
+    /// under X11, app_id under Wayland. It is what a `.desktop` file's
+    /// `StartupWMClass` and per-app compositor rules match on. Linux only;
+    /// other platforms ignore it.
+    pub fn window_class(mut self, class: impl Into<String>) -> Self {
+        self.window_identity.class = Some(class.into());
+        self
+    }
+
+    /// Title of the application's first window. Without it the window carries
+    /// no title.
+    pub fn window_title(mut self, title: impl Into<String>) -> Self {
+        self.window_identity.title = Some(title.into());
+        self
+    }
+
     pub fn persist_session_cookies(mut self, value: bool) -> Self {
         self.persist_session_cookies = value;
         self
@@ -832,6 +851,7 @@ impl App {
             delegates,
             renderer_delegates,
             scheme_handlers,
+            window_identity,
             ..
         } = self;
 
@@ -860,6 +880,7 @@ impl App {
             delegates,
             renderer_delegates,
             scheme_handlers,
+            window_identity,
         };
 
         crate::runtime::start(spec, router)

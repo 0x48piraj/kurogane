@@ -6,6 +6,7 @@ use crate::fs::CanonicalRoot;
 use crate::credentials::CredentialStorage;
 use crate::gpu::GpuMode;
 use crate::scheme::CustomScheme;
+use crate::window::WindowIdentity;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,4 +57,6 @@ pub(crate) struct RuntimeSpec {
     pub delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
     pub renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
     pub scheme_handlers: Vec<CustomScheme>,
+    /// How the window manager sees the application's first window.
+    pub window_identity: WindowIdentity,
 }

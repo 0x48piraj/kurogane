@@ -84,6 +84,27 @@ impl PendingPopups {
     }
 }
 
+/// What the window manager sees of a window: its class and its title.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WindowIdentity {
+    /// WM_CLASS under X11, app_id under Wayland. Linux only; other platforms ignore it.
+    pub class: Option<String>,
+    /// The native title. None leaves the window untitled.
+    pub title: Option<String>,
+}
+
+/// A string that survives cef-rs writing an out-parameter struct back to CEF:
+/// that conversion drops any `CefString` it did not borrow from CEF, so the
+/// buffer is allocated through CEF itself (destructor attached) and freed by CEF.
+fn cef_owned_string(value: &str) -> CefString {
+    let utf16: Vec<u16> = value.encode_utf16().collect();
+    // SAFETY: all zeroes is CEF's empty string: a null buffer, no length, no destructor.
+    let mut raw: sys::_cef_string_utf16_t = unsafe { std::mem::zeroed() };
+    // SAFETY: `utf16` outlives the call, and copy = 1 makes CEF allocate its own buffer.
+    unsafe { sys::cef_string_utf16_set(utf16.as_ptr(), utf16.len(), &mut raw, 1) };
+    CefString::from(raw)
+}
+
 /// Where a new top-level window opens and how it first shows.
 #[derive(Clone, Debug)]
 pub(crate) enum Placement {
@@ -136,6 +157,7 @@ wrap_window_delegate! {
         // links it
         browser_id: Option<BrowserId>,
         placement: Placement,
+        identity: WindowIdentity,
     }
 
     impl ViewDelegate {
@@ -147,6 +169,20 @@ wrap_window_delegate! {
     impl PanelDelegate {}
 
     impl WindowDelegate {
+        fn linux_window_properties(
+            &self,
+            _window: Option<&mut Window>,
+            properties: Option<&mut LinuxWindowProperties>,
+        ) -> ::std::os::raw::c_int {
+            let (Some(class), Some(properties)) = (&self.identity.class, properties) else {
+                return 0;
+            };
+            properties.wayland_app_id = cef_owned_string(class);
+            properties.wm_class_class = cef_owned_string(class);
+            properties.wm_class_name = cef_owned_string(class);
+            1
+        }
+
         fn initial_bounds(&self, _window: Option<&mut Window>) -> Rect {
             self.placement.initial_bounds()
         }
@@ -167,6 +203,9 @@ wrap_window_delegate! {
                 .insert(self.window_id, window.clone(), self.browser_id);
 
             window.add_child_view(Some(&mut (&self.browser_view).into()));
+            if let Some(title) = &self.identity.title {
+                window.set_title(Some(&CefString::from(title.as_str())));
+            }
             if self.placement.show_state() != ShowState::HIDDEN {
                 window.show();
             }
@@ -317,6 +356,7 @@ wrap_browser_view_delegate! {
                     self.app.clone(),
                     browser_id,
                     Placement::Popup(requested),
+                    WindowIdentity::default(),
                 );
                 if window_create_top_level(Some(&mut delegate)).is_some() {
                     debug!("[BrowserViewDelegate] popup window created");
@@ -329,7 +369,8 @@ wrap_browser_view_delegate! {
     }
 }
 
-/// Opens `url` in a new browser, in a new top-level window at `placement`.
+/// Opens `url` in a new browser, in a new top-level window at `placement`,
+/// which the window manager sees as `identity`.
 /// UI thread, where CEF creates browsers and windows.
 ///
 /// The browser is created when the window adds its view
@@ -339,6 +380,7 @@ pub(crate) fn open_browser_window(
     app: &AppHandle,
     url: &str,
     placement: Placement,
+    identity: WindowIdentity,
 ) -> Result<WindowId, RuntimeError> {
     let mut client = KuroganeClient::new(app.clone(), BrowserType::Main);
     // The guard ends with the statement, before any CEF call
@@ -359,8 +401,14 @@ pub(crate) fn open_browser_window(
     )
     .ok_or(RuntimeError::BrowserCreationFailed)?;
 
-    let mut delegate =
-        KuroganeWindowDelegate::new(window_id, browser_view, app.clone(), None, placement);
+    let mut delegate = KuroganeWindowDelegate::new(
+        window_id,
+        browser_view,
+        app.clone(),
+        None,
+        placement,
+        identity,
+    );
     window_create_top_level(Some(&mut delegate)).ok_or(RuntimeError::WindowCreationFailed)?;
     debug!("Top-level window created");
 
