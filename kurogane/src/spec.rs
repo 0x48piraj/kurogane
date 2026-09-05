@@ -1,4 +1,5 @@
 use crate::app::{ClientAppBrowserDelegate, ClientAppRendererDelegate, PumpScheduler};
+use crate::window::WindowIdentity;
 use crate::chromium_flags::ChromiumFlag;
 use crate::fs::CanonicalRoot;
 use crate::credentials::CredentialStorage;
@@ -25,4 +26,6 @@ pub(crate) struct RuntimeSpec {
     pub scheduler: Option<PumpScheduler>,
     pub delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
     pub renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
+    /// How the window manager sees the windows this app opens.
+    pub window_identity: WindowIdentity,
 }
