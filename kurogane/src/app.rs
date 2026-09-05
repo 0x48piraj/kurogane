@@ -176,6 +176,7 @@ pub struct App {
     resolver: Option<crate::ipc::handle_cell::AppCellResolver>,
 
     profile_id: Option<String>,
+    cache_dir: Option<PathBuf>,
     persist_session_cookies: bool,
     gpu_mode: GpuMode,
     credential_storage: CredentialStorage,
@@ -208,6 +209,7 @@ impl App {
             resolver: Some(resolver),
 
             profile_id: None,
+            cache_dir: None,
             persist_session_cookies: true,
             gpu_mode: GpuMode::Auto,
             credential_storage: CredentialStorage::System,
@@ -420,6 +422,14 @@ impl App {
         self
     }
 
+    /// Put the Chromium profile (CEF's cache_path) in this directory instead of
+    /// the per-executable one derived from the profile id. The directory is
+    /// created if missing.
+    pub fn cache_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.cache_dir = Some(dir.into());
+        self
+    }
+
     /// Name the windows for the window manager: WM_CLASS under X11, app_id under
     /// Wayland. It is what a `.desktop` file's `StartupWMClass` and per-app
     /// compositor rules match on. Linux only; other platforms ignore it.
@@ -482,6 +492,7 @@ impl App {
             async_handlers,
             stream_handlers,
             profile_id,
+            cache_dir,
             persist_session_cookies,
             gpu_mode,
             credential_storage,
@@ -508,6 +519,7 @@ impl App {
             start_url,
             asset_root,
             profile_id,
+            cache_dir,
             persist_session_cookies,
             gpu_mode,
             credential_storage,
@@ -534,6 +546,7 @@ impl App {
             async_handlers,
             stream_handlers,
             profile_id,
+            cache_dir,
             persist_session_cookies,
             gpu_mode,
             credential_storage,
@@ -560,6 +573,7 @@ impl App {
             start_url,
             asset_root,
             profile_id,
+            cache_dir,
             persist_session_cookies,
             gpu_mode,
             credential_storage,
