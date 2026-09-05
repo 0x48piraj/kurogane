@@ -173,6 +173,23 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     // Build frontend before cargo build
     build_frontend(metadata.workspace_root.as_std_path(), &packaging_config.app)?;
 
+    tui::step("Resolving CEF runtime...");
+
+    let cef = resolve_cef_for_bundle(env!("KUROGANE_CEF_VERSION"))?;
+
+    match cef.source {
+        kurogane_layout::CefSource::ManagedCache => {
+            if let Some(p) = &cef.provenance {
+                tui::field("cef", format!("{} (managed)", p.cef_version));
+            }
+        }
+        kurogane_layout::CefSource::EnvironmentOverride => {
+            if let Some(p) = &cef.provenance {
+                tui::field("cef", format!("{} (CEF_PATH)", p.cef_version));
+            }
+        }
+    }
+
     tui::step("Building release...");
 
     let mut cmd = Command::new("cargo");
@@ -218,23 +235,6 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
     if !exe_path.exists() {
         bail!("Executable not found: {:?}", exe_path);
-    }
-
-    tui::step("Resolving CEF runtime...");
-
-    let cef = resolve_cef_for_bundle(env!("KUROGANE_CEF_VERSION"))?;
-
-    match cef.source {
-        kurogane_layout::CefSource::ManagedCache => {
-            if let Some(p) = &cef.provenance {
-                tui::field("cef", format!("{} (managed)", p.cef_version));
-            }
-        }
-        kurogane_layout::CefSource::EnvironmentOverride => {
-            if let Some(p) = &cef.provenance {
-                tui::field("cef", format!("{} (CEF_PATH)", p.cef_version));
-            }
-        }
     }
 
     // Materialize the runnable runtime
