@@ -67,8 +67,6 @@
           ];
 
           nativeBuildInputs = with pkgs; [
-            rustc
-            cargo
             pkg-config
             cmake
             ninja
