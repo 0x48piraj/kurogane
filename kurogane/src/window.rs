@@ -22,6 +22,14 @@ pub(crate) struct WindowIdentity {
     pub class: Option<String>,
     /// The native title. None leaves the window untitled.
     pub title: Option<String>,
+    /// The native icon, an encoded PNG. None leaves the platform's default.
+    pub icon: Option<Vec<u8>>,
+}
+
+/// A CEF image decoded from a PNG, or None when CEF could not decode it.
+fn cef_image(png: &[u8]) -> Option<Image> {
+    let image = image_create()?;
+    (image.add_png(1.0, Some(png)) == 1).then_some(image)
 }
 
 fn cef_owned_string(value: &str) -> CefString {
@@ -94,6 +102,13 @@ wrap_window_delegate! {
                 window.add_child_view(Some(&mut (&view).into()));
                 if let Some(title) = &self.identity.title {
                     window.set_title(Some(&CefString::from(title.as_str())));
+                }
+                // One image for both: the app icon is what the taskbar and
+                // the switcher draw, the window icon what the title bar does,
+                // and CEF scales each from it.
+                if let Some(mut image) = self.identity.icon.as_deref().and_then(cef_image) {
+                    window.set_window_icon(Some(&mut image));
+                    window.set_window_app_icon(Some(&mut image));
                 }
                 if self.show_state != ShowState::HIDDEN {
                     window.show();
