@@ -1,7 +1,28 @@
 use cef::*;
 use kurogane::App;
 
-struct BrowserDelegate;
+// Chrome-style browsers run Chromium's own accelerators; a command handler
+// sees each one first. Returning 1 would swallow it.
+wrap_command_handler! {
+    pub struct EchoCommands {}
+
+    impl CommandHandler {
+        fn on_chrome_command(
+            &self,
+            _browser: Option<&mut Browser>,
+            command_id: ::std::os::raw::c_int,
+            _disposition: WindowOpenDisposition,
+        ) -> ::std::os::raw::c_int {
+            println!("[browser delegate] chrome command {command_id}");
+            0
+        }
+    }
+}
+
+// CEF asks for the handler on every command: one instance, handed out as clones.
+struct BrowserDelegate {
+    commands: CommandHandler,
+}
 
 impl kurogane::ClientAppBrowserDelegate for BrowserDelegate {
     fn on_before_command_line_processing(&self, _command_line: &mut CommandLine) {
@@ -10,6 +31,10 @@ impl kurogane::ClientAppBrowserDelegate for BrowserDelegate {
 
     fn on_context_initialized(&self) {
         println!("[browser delegate] browser context initialized");
+    }
+
+    fn command_handler(&self) -> Option<CommandHandler> {
+        Some(self.commands.clone())
     }
 }
 
@@ -76,7 +101,7 @@ impl kurogane::ClientAppRendererDelegate for RendererDelegate {
 
 fn main() {
     let runtime = App::url("https://example.com")
-        .delegate(BrowserDelegate)
+        .delegate(BrowserDelegate { commands: EchoCommands::new() })
         .renderer_delegate(RendererDelegate)
         .command(
             "ping",

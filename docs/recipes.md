@@ -374,10 +374,56 @@ fn main() {
 }
 ```
 
+A delegate can also supply any handler of the CEF client that Kurogane does
+not implement itself, everything but load and life span: keyboard, command,
+dialog, context menu, drag, permission, display, download, focus, find, JS
+dialog, print, request, frame, audio and render. Each has a getter on the
+delegate returning `None` by default; the first delegate returning one wins.
+CEF asks for the handler each time it needs one, so a delegate holds the
+instance and returns a clone.
+
+```rust
+use cef::*;
+
+wrap_command_handler! {
+    pub struct VetoNewTab {}
+
+    impl CommandHandler {
+        fn on_chrome_command(
+            &self,
+            _browser: Option<&mut Browser>,
+            command_id: ::std::os::raw::c_int,
+            _disposition: WindowOpenDisposition,
+        ) -> ::std::os::raw::c_int {
+            // 1 swallows the accelerator, 0 lets Chromium run it. The ids are
+            // chrome/app/chrome_command_ids.h: 34014 is IDC_NEW_TAB (Ctrl+T).
+            (command_id == 34014).into()
+        }
+    }
+}
+
+struct BrowserDelegate {
+    veto: CommandHandler,
+}
+
+impl kurogane::ClientAppBrowserDelegate for BrowserDelegate {
+    fn command_handler(&self) -> Option<CommandHandler> {
+        Some(self.veto.clone())
+    }
+}
+
+fn main() {
+    App::url("https://example.com")
+        .delegate(BrowserDelegate { veto: VetoNewTab::new() })
+        .run_or_exit();
+}
+```
+
 Useful for:
 
 * browser process initialization
 * Chromium integration
+* application-wide shortcuts, native pickers, drag and drop
 * diagnostics and logging
 
 See:
