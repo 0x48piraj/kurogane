@@ -2,6 +2,7 @@ use cef::{args::Args, sys::cef_window_handle_t, *};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::app::ClientAppBrowserDelegate;
 use crate::cef_app::KuroganeApp;
 use crate::client::KuroganeClient;
 use crate::error::RuntimeError;
@@ -243,6 +244,8 @@ pub(crate) struct RuntimeServices {
     pub router: Arc<IpcRouter>,
     pub browser_registry: Arc<Mutex<BrowserRegistry>>,
     pub window_registry: Arc<Mutex<WindowRegistry>>,
+    /// The host's browser delegates, asked for handlers by every client Kurogane builds.
+    pub delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
 }
 
 pub(crate) struct RuntimeState {
@@ -1118,6 +1121,7 @@ fn initialize_cef(
         router,
         browser_registry,
         window_registry,
+        delegates: spec.delegates.clone(),
     });
 
     #[cfg(target_os = "macos")]
