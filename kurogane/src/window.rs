@@ -84,13 +84,21 @@ impl PendingPopups {
     }
 }
 
-/// What the window manager sees of a window: its class and its title.
+/// What the window manager sees of a window: its class, its title and its icon.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct WindowIdentity {
     /// WM_CLASS under X11, app_id under Wayland. Linux only; other platforms ignore it.
     pub class: Option<String>,
     /// The native title. None leaves the window untitled.
     pub title: Option<String>,
+    /// The native icon, an encoded PNG. None leaves the platform's default.
+    pub icon: Option<Vec<u8>>,
+}
+
+/// A CEF image decoded from a PNG, or None when CEF could not decode it.
+fn cef_image(png: &[u8]) -> Option<Image> {
+    let image = image_create()?;
+    (image.add_png(1.0, Some(png)) == 1).then_some(image)
 }
 
 /// A string that survives cef-rs writing an out-parameter struct back to CEF:
@@ -205,6 +213,13 @@ wrap_window_delegate! {
             window.add_child_view(Some(&mut (&self.browser_view).into()));
             if let Some(title) = &self.identity.title {
                 window.set_title(Some(&CefString::from(title.as_str())));
+            }
+            // One image for both: the app icon is what the taskbar and the
+            // switcher draw, the window icon what the title bar does, and CEF
+            // scales each from it.
+            if let Some(mut image) = self.identity.icon.as_deref().and_then(cef_image) {
+                window.set_window_icon(Some(&mut image));
+                window.set_window_app_icon(Some(&mut image));
             }
             if self.placement.show_state() != ShowState::HIDDEN {
                 window.show();
