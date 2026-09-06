@@ -444,6 +444,16 @@ impl App {
         self
     }
 
+    /// Icon of the native window, as an encoded PNG: the title bar, the
+    /// taskbar button and the app switcher draw it, scaled by the platform.
+    /// Without it Windows draws the executable's icon resource and X11 draws
+    /// nothing; Wayland takes the icon from the desktop entry the class names
+    /// and ignores this.
+    pub fn window_icon(mut self, png: impl Into<Vec<u8>>) -> Self {
+        self.window_identity.icon = Some(png.into());
+        self
+    }
+
     pub fn persist_session_cookies(mut self, value: bool) -> Self {
         self.persist_session_cookies = value;
         self
