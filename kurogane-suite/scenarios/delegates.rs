@@ -101,7 +101,9 @@ impl kurogane::ClientAppRendererDelegate for RendererDelegate {
 
 fn main() {
     let runtime = App::url("https://example.com")
-        .delegate(BrowserDelegate { commands: EchoCommands::new() })
+        .delegate(BrowserDelegate {
+            commands: EchoCommands::new(),
+        })
         .renderer_delegate(RendererDelegate)
         .command(
             "ping",
