@@ -9,7 +9,7 @@ let
     inherit version gitRevision chromiumVersion;
 
     srcHashes = {
-      aarch64-linux = pkgs.lib.fakeHash;
+      aarch64-linux = "sha256-+5U2KskaH3GuaoyLpNBkHK0IN1kExOfdHMPO67Gi2HU=";
       x86_64-linux = "sha256-bB1Ike84huPM9l0JKI2DBOP343JKR8kyk+K9Y+dlKOQ=";
     };
   };
