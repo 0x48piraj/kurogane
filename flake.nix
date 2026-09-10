@@ -12,6 +12,7 @@
     let
       supportedSystems = [
         "x86_64-linux"
+        "aarch64-linux"
       ];
 
       cefVersion = "150.0.10";
@@ -91,9 +92,7 @@
             nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
 
             # Fallback when git.user and git.email aren't set
-            preCheck = ''
-              export USER="Kurogane Tests"
-            '';
+            env.USER = "Kurogane Tests";
 
             # TODO: Avoid envvars
             postInstall = ''
@@ -117,13 +116,16 @@
               license = pkgs.lib.licenses.mit;
               sourceProvenance =
                 with pkgs.lib.sourceTypes;
-                [ fromSource ] ++ pkgs.cef-binary.meta.sourceProvenance;
+                [ fromSource ] ++ pkgs.cef-binary.meta.sourceProvenance; # cef is binaryNativeCode
               # maintainers = with pkgs.lib.maintainers; [ _0x48piraj R0M-A ]; # TODO: get on maintainers list
-              platforms = [ "x86_64-linux" ];
+              platforms = supportedSystems;
               mainProgram = "kurogane";
             };
           }
         );
+
+        testTemplates = import ./nix/testTemplates.nix { inherit pkgs kurogane; };
+
       in
       {
         packages = {
@@ -141,6 +143,9 @@
           packages = [ kurogane ];
         };
 
+        checks = pkgs.lib.mergeAttrsList [
+          testTemplates
+        ];
       }
     );
 }
