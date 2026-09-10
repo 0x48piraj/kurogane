@@ -113,7 +113,7 @@
               '';
               homepage = "https://github.com/0x48piraj/kurogane";
               changelog = "https://github.com/0x48piraj/kurogane/releases";
-              license = pkgs.lib.licenses.mit;
+              license = with pkgs.lib.licenses; [ mit ]; # TODO: add licenses from all packages used
               sourceProvenance =
                 with pkgs.lib.sourceTypes;
                 [ fromSource ] ++ pkgs.cef-binary.meta.sourceProvenance; # cef is binaryNativeCode
