@@ -68,6 +68,8 @@
           ];
 
           nativeBuildInputs = with pkgs; [
+            rustc
+            cargo
             pkg-config
             cmake
             ninja
@@ -139,8 +141,8 @@
           meta = kurogane.meta;
         };
 
-        devShells.default = craneLib.devShell {
-          packages = [ kurogane ];
+        devShells.default = pkgs.mkShell {
+          packages = with pkgs; [ kurogane clippy rustfmt ];
         };
 
         checks = pkgs.lib.mergeAttrsList [
