@@ -12,6 +12,7 @@
     let
       supportedSystems = [
         "x86_64-linux"
+        "aarch64-linux"
       ];
 
       cefVersion = "150.0.10";
@@ -23,14 +24,8 @@
         pkgs = import nixpkgs { inherit system; };
         craneLib = inputs.crane.mkLib pkgs;
 
-        includeTemplates =
-          path: _type: builtins.match ".*\/kurogane-cli\/templates.*" (toString path) != null;
         commonArgs = {
-          src = pkgs.lib.cleanSourceWith {
-            src = ./.;
-            filter = path: type: (includeTemplates path type) || (craneLib.filterCargoSources path type);
-            name = "source";
-          };
+          src = craneLib.cleanCargoSource ./.;
 
           strictDeps = true;
 
@@ -73,8 +68,6 @@
           ];
 
           nativeBuildInputs = with pkgs; [
-            rustc
-            cargo
             pkg-config
             cmake
             ninja
@@ -98,6 +91,9 @@
 
             nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
 
+            # Fallback when git.user and git.email aren't set
+            env.USER = "Kurogane Tests";
+
             # TODO: Avoid envvars
             postInstall = ''
               wrapProgram $out/bin/kurogane \
@@ -109,8 +105,27 @@
                 }:${cef} \
                 --prefix PKG_CONFIG_PATH : ${pkgs.lib.makeSearchPath "lib/pkgconfig" commonArgs.buildInputs}
             '';
+
+            meta = {
+              description = "Composable Chromium runtime for Rust";
+              longDescription = ''
+                Kurogane is a Rust-native runtime built on [Chromium Embedded Framework (CEF)](https://en.wikipedia.org/wiki/Chromium_Embedded_Framework), bringing Chromium to desktop applications while giving you control over windowing, event loops and lifecycle when you need it.
+              '';
+              homepage = "https://github.com/0x48piraj/kurogane";
+              changelog = "https://github.com/0x48piraj/kurogane/releases";
+              license = with pkgs.lib.licenses; [ mit ]; # TODO: add licenses from all packages used
+              sourceProvenance =
+                with pkgs.lib.sourceTypes;
+                [ fromSource ] ++ pkgs.cef-binary.meta.sourceProvenance; # cef is binaryNativeCode
+              # maintainers = with pkgs.lib.maintainers; [ _0x48piraj R0M-A ]; # TODO: get on maintainers list
+              platforms = supportedSystems;
+              mainProgram = "kurogane";
+            };
           }
         );
+
+        testTemplates = import ./nix/testTemplates.nix { inherit pkgs kurogane; };
+
       in
       {
         packages = {
@@ -121,11 +136,16 @@
         apps.default = {
           type = "app";
           program = "${kurogane}/bin/kurogane";
+          meta = kurogane.meta;
         };
 
         devShells.default = craneLib.devShell {
           packages = [ kurogane ];
         };
+
+        checks = pkgs.lib.mergeAttrsList [
+          testTemplates
+        ];
       }
     );
 }
