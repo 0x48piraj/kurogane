@@ -142,7 +142,8 @@
         };
 
         devShells.default = pkgs.mkShell {
-          packages = with pkgs; [ kurogane clippy rustfmt ];
+          inputsFrom = [ kurogane ];
+          packages = with pkgs; [ rustc cargo clippy rustfmt ];
         };
 
         checks = pkgs.lib.mergeAttrsList [
