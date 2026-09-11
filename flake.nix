@@ -96,10 +96,8 @@
             # Fallback when git.user and git.email aren't set
             env.USER = "Kurogane Tests";
 
-            # TODO: Avoid envvars
             postInstall = ''
               wrapProgram $out/bin/kurogane \
-                --set KUROGANE_CEF_VERSION ${cefVersion} \
                 --set CEF_PATH ${cef} \
                 --prefix PATH : ${pkgs.lib.makeBinPath commonArgs.nativeBuildInputs} \
                 --prefix LD_LIBRARY_PATH : ${
