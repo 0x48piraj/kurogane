@@ -12,6 +12,34 @@ use crate::browser_registry::{BrowserId, BrowserRegistry, BrowserType};
 use crate::window_registry::WindowRegistry;
 use crate::window_registry::WindowId;
 
+/// A string that survives cef-rs writing an out-parameter struct back to CEF:
+/// that conversion drops any `CefString` it did not borrow from CEF, so the
+/// buffer is allocated through CEF itself (destructor attached) and freed by CEF.
+/// What the window manager sees of a window: its class and its title.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WindowIdentity {
+    /// WM_CLASS under X11, app_id under Wayland. Linux only; other platforms ignore it.
+    pub class: Option<String>,
+    /// The native title. None leaves the window untitled.
+    pub title: Option<String>,
+    /// The native icon, an encoded PNG. None leaves the platform's default.
+    pub icon: Option<Vec<u8>>,
+}
+
+/// A CEF image decoded from a PNG, or None when CEF could not decode it.
+fn cef_image(png: &[u8]) -> Option<Image> {
+    let image = image_create()?;
+    (image.add_png(1.0, Some(png)) == 1).then_some(image)
+}
+
+fn cef_owned_string(value: &str) -> CefString {
+    let utf16: Vec<u16> = value.encode_utf16().collect();
+    let mut raw: sys::_cef_string_utf16_t = unsafe { std::mem::zeroed() };
+    // SAFETY: `utf16` outlives the call, and copy = 1 makes CEF allocate its own buffer.
+    unsafe { sys::cef_string_utf16_set(utf16.as_ptr(), utf16.len(), &mut raw, 1) };
+    CefString::from(raw)
+}
+
 wrap_window_delegate! {
     pub struct KuroganeWindowDelegate {
         window_id: WindowId,
@@ -20,6 +48,7 @@ wrap_window_delegate! {
         initial_bounds: Rect,
         show_state: ShowState,
         is_closing: Arc<AtomicBool>,
+        identity: WindowIdentity,
     }
 
     impl ViewDelegate {
@@ -36,6 +65,20 @@ wrap_window_delegate! {
     impl PanelDelegate {}
 
     impl WindowDelegate {
+        fn linux_window_properties(
+            &self,
+            _window: Option<&mut Window>,
+            properties: Option<&mut LinuxWindowProperties>,
+        ) -> ::std::os::raw::c_int {
+            let (Some(class), Some(properties)) = (&self.identity.class, properties) else {
+                return 0;
+            };
+            properties.wayland_app_id = cef_owned_string(class);
+            properties.wm_class_class = cef_owned_string(class);
+            properties.wm_class_name = cef_owned_string(class);
+            1
+        }
+
         fn initial_bounds(&self, _window: Option<&mut Window>) -> Rect {
             self.initial_bounds.clone()
         }
@@ -57,6 +100,16 @@ wrap_window_delegate! {
 
                 let view = self.browser_view.clone();
                 window.add_child_view(Some(&mut (&view).into()));
+                if let Some(title) = &self.identity.title {
+                    window.set_title(Some(&CefString::from(title.as_str())));
+                }
+                // One image for both: the app icon is what the taskbar and
+                // the switcher draw, the window icon what the title bar does,
+                // and CEF scales each from it.
+                if let Some(mut image) = self.identity.icon.as_deref().and_then(cef_image) {
+                    window.set_window_icon(Some(&mut image));
+                    window.set_window_app_icon(Some(&mut image));
+                }
                 if self.show_state != ShowState::HIDDEN {
                     window.show();
                 }
