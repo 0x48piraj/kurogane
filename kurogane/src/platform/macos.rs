@@ -24,13 +24,38 @@ pub fn set_services(services: Arc<RuntimeServices>) {
     let _ = SERVICES.set(services);
 }
 
-/// Loads CEF and installs the required `NSApplication` subclass.
+/// Loads CEF and, in the browser process, installs the required
+/// `NSApplication` subclass.
 ///
 /// Uses the runtime-resolved CEF root rather than the app-bundle-only loader
 /// path used by `cef::library_loader`.
 ///
+/// CEF's subprocesses (`--type=renderer`, `gpu-process`, `utility`) get the
+/// library alone: an `NSApplication` registers its process with LaunchServices
+/// as an application, and inside a bundle every subprocess would then own a
+/// Dock tile of its own. CEF's helper executables install none.
+///
 /// Must run on the main thread before CEF initialization.
 pub fn init_ns_app() -> Result<(), RuntimeError> {
+    load_framework()?;
+
+    if !crate::runtime::is_browser_process() {
+        return Ok(());
+    }
+
+    let mtm = MainThreadMarker::new().expect("init_ns_app must run on the main thread");
+
+    unsafe {
+        let _: Retained<AnyObject> = msg_send![SimpleApplication::class(), sharedApplication];
+    }
+
+    assert!(NSApp(mtm).isKindOfClass(SimpleApplication::class()));
+
+    Ok(())
+}
+
+/// Loads the Chromium Embedded Framework from the resolved CEF root.
+fn load_framework() -> Result<(), RuntimeError> {
     // The library loader assumes an app-bundle layout
     // (<exe>/../Frameworks/...), which is unavailable in non-bundled dev runs
     let detected = detect_cef_root_with_version(None).map_err(|_| RuntimeError::CefNotInstalled)?;
@@ -50,14 +75,6 @@ pub fn init_ns_app() -> Result<(), RuntimeError> {
             "failed to load Chromium Embedded Framework".into(),
         ));
     }
-
-    let mtm = MainThreadMarker::new().expect("init_ns_app must run on the main thread");
-
-    unsafe {
-        let _: Retained<AnyObject> = msg_send![SimpleApplication::class(), sharedApplication];
-    }
-
-    assert!(NSApp(mtm).isKindOfClass(SimpleApplication::class()));
 
     Ok(())
 }
