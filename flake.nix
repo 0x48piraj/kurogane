@@ -144,6 +144,10 @@
         devShells.default = pkgs.mkShell {
           inputsFrom = [ kurogane ];
           packages = with pkgs; [ rustc cargo clippy rustfmt ];
+
+          # Reuse the Nix store CEF instead of letting cef-dll-sys re-download
+          env.CEF_PATH = "${cef}";
+          env.KUROGANE_CEF_VERSION = cefVersion;
         };
 
         checks = pkgs.lib.mergeAttrsList [
