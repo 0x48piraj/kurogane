@@ -4,46 +4,44 @@
 }:
 let
   owner = "kurogane-rs";
-  rev = "master";
 
+  # Each template is pinned to the commit used to compute its hashes
   templates = {
-    starter-minimal = pkgs.fetchFromGitHub {
-      inherit owner rev;
-      repo = "kurogane-starter-minimal";
-      hash = "sha256-50794DZCWXH+lqZGA96+h9TzwDrbF8DTNkLf1IKCVR4=";
+    starter-minimal = {
+      rev = "2beecfd19c69e9b0e74944a96b2d9c8c444536d1";
+      srcHash = "sha256-50794DZCWXH+lqZGA96+h9TzwDrbF8DTNkLf1IKCVR4=";
+      outputHash = "sha256-gwUR92YfK3l7lTo1qyc6ykHgnCn4eiinJkNeIg0vcew=";
     };
 
-    starter-vue = pkgs.fetchFromGitHub {
-      inherit owner rev;
-      repo = "kurogane-starter-vue";
-      hash = "sha256-Gg6YRYw7aT5avPrbraBOC2ewS552iTJWgqrKpN9QbTE=";
+    starter-vue = {
+      rev = "199a6e0ec7847266f127f8ed4fbef9c0aa0e84bd";
+      srcHash = "sha256-Gg6YRYw7aT5avPrbraBOC2ewS552iTJWgqrKpN9QbTE=";
+      outputHash = "sha256-gwUR92YfK3l7lTo1qyc6ykHgnCn4eiinJkNeIg0vcew=";
     };
 
-    starter-svelte = pkgs.fetchFromGitHub {
-      inherit owner rev;
-      repo = "kurogane-starter-svelte";
-      hash = "sha256-1xd2MoL33k8kOt1qN98vwf8WUqNWDAGDJhypNHWUsRg=";
+    starter-svelte = {
+      rev = "866bd9232f03ee414810fa1eb40c4368e7c024f8";
+      srcHash = "sha256-1xd2MoL33k8kOt1qN98vwf8WUqNWDAGDJhypNHWUsRg=";
+      outputHash = "sha256-gwUR92YfK3l7lTo1qyc6ykHgnCn4eiinJkNeIg0vcew=";
     };
 
-    starter-react = pkgs.fetchFromGitHub {
-      inherit owner rev;
-      repo = "kurogane-starter-react";
-      hash = "sha256-N25nEretOGNjYfVl9beFIgr1pGD3s/EXgzav5N2OoKU=";
+    starter-react = {
+      rev = "f2883e5f1d434baacb82f7f68f063768d42bed2b";
+      srcHash = "sha256-N25nEretOGNjYfVl9beFIgr1pGD3s/EXgzav5N2OoKU=";
+      outputHash = "sha256-gwUR92YfK3l7lTo1qyc6ykHgnCn4eiinJkNeIg0vcew=";
     };
-  };
-
-  templateHashes = {
-    starter-minimal = "sha256-gwUR92YfK3l7lTo1qyc6ykHgnCn4eiinJkNeIg0vcew=";
-    starter-vue = "sha256-gwUR92YfK3l7lTo1qyc6ykHgnCn4eiinJkNeIg0vcew=";
-    starter-svelte = "sha256-gwUR92YfK3l7lTo1qyc6ykHgnCn4eiinJkNeIg0vcew=";
-    starter-react = "sha256-gwUR92YfK3l7lTo1qyc6ykHgnCn4eiinJkNeIg0vcew=";
   };
 
   mkTest =
-    tName: tHash:
+    tName: tCfg:
     pkgs.stdenv.mkDerivation {
       name = "test-kurogane-${tName}";
-      src = templates.${tName};
+      src = pkgs.fetchFromGitHub {
+        inherit owner;
+        inherit (tCfg) rev;
+        repo = "kurogane-${tName}";
+        hash = tCfg.srcHash;
+      };
 
       nativeBuildInputs = with pkgs; [
         kurogane
@@ -101,12 +99,12 @@ let
 
       outputHashMode = "recursive";
       outputHashAlgo = "sha256";
-      outputHash = tHash;
+      outputHash = tCfg.outputHash;
     };
 
 
 in
-pkgs.lib.mapAttrs' (tName: tHash: {
+pkgs.lib.mapAttrs' (tName: tCfg: {
   name = "test-${tName}";
-  value = mkTest tName tHash;
-}) templateHashes
+  value = mkTest tName tCfg;
+}) templates
