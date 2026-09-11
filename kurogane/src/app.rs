@@ -73,6 +73,95 @@ pub trait ClientAppBrowserDelegate: Send + Sync {
     fn default_client(&self) -> Option<Client> {
         None
     }
+
+    // Handlers of the CEF client. Kurogane's built-in client implements the
+    // two it needs (load, life span) and asks its delegates for every other
+    // one, in registration order; the first delegate returning Some wins.
+    // Every browser Kurogane creates with its own client asks; a client
+    // supplied through Self::default_client only replaces it for the first
+    // browser. CEF asks for a handler each time it needs one, per key event
+    // or per command: a handler that keeps state between calls must be held
+    // by the delegate and returned as a clone, not built in the getter.
+
+    /// Audio capture from the page.
+    fn audio_handler(&self) -> Option<AudioHandler> {
+        None
+    }
+
+    /// Chromium's own accelerators and menu commands (new tab, close, print, quit): where a host vetoes them.
+    fn command_handler(&self) -> Option<CommandHandler> {
+        None
+    }
+
+    /// The right-click menu.
+    fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
+        None
+    }
+
+    /// File and folder pickers.
+    fn dialog_handler(&self) -> Option<DialogHandler> {
+        None
+    }
+
+    /// Title, favicon, fullscreen, status text, console messages and cursor changes.
+    fn display_handler(&self) -> Option<DisplayHandler> {
+        None
+    }
+
+    /// Downloads the page starts.
+    fn download_handler(&self) -> Option<DownloadHandler> {
+        None
+    }
+
+    /// What a drag into or out of the window does.
+    fn drag_handler(&self) -> Option<DragHandler> {
+        None
+    }
+
+    /// Results of an in-page find.
+    fn find_handler(&self) -> Option<FindHandler> {
+        None
+    }
+
+    /// Focus moving into and out of the browser.
+    fn focus_handler(&self) -> Option<FocusHandler> {
+        None
+    }
+
+    /// Frame lifecycle.
+    fn frame_handler(&self) -> Option<FrameHandler> {
+        None
+    }
+
+    /// alert, confirm, prompt and the before-unload dialog.
+    fn jsdialog_handler(&self) -> Option<JsdialogHandler> {
+        None
+    }
+
+    /// Every key event, before the renderer sees it: where a host owns its application-wide shortcuts.
+    fn keyboard_handler(&self) -> Option<KeyboardHandler> {
+        None
+    }
+
+    /// Clipboard, media and the other page permissions.
+    fn permission_handler(&self) -> Option<PermissionHandler> {
+        None
+    }
+
+    /// Printing. Linux only: CEF has no print handler elsewhere.
+    fn print_handler(&self) -> Option<PrintHandler> {
+        None
+    }
+
+    /// Off-screen rendering; only consulted for windowless browsers.
+    fn render_handler(&self) -> Option<RenderHandler> {
+        None
+    }
+
+    /// Navigation, resource requests, certificates and credentials.
+    fn request_handler(&self) -> Option<RequestHandler> {
+        None
+    }
 }
 
 /// Customizes render-process behavior.
