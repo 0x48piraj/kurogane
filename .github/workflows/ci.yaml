@@ -158,3 +158,20 @@ jobs:
 
       - name: Clippy
         run: cargo clippy -p kurogane --all-targets --locked -- -D warnings
+
+  nixChecks:
+    name: nix flake checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Check Nix Flake
+        run: nix flake check
