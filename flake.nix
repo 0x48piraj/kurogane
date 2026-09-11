@@ -113,7 +113,23 @@
               '';
               homepage = "https://github.com/0x48piraj/kurogane";
               changelog = "https://github.com/0x48piraj/kurogane/releases";
-              license = with pkgs.lib.licenses; [ mit ]; # TODO: add licenses from all packages used
+              # Mirrors the allow-list in cargo-deny
+              license = with pkgs.lib.licenses; [
+                asl20
+                llvm-exception
+                bsd2
+                bsd3
+                isc
+                mit
+                zlib
+                mpl20
+                cc0
+                ofl
+                unicode-30
+                bzip2
+                { free = true; shortName = "LicenseRef-UFL-1.0"; }
+                { free = true; shortName = "CDLA-Permissive-2.0"; }
+              ];
               sourceProvenance =
                 with pkgs.lib.sourceTypes;
                 [ fromSource ] ++ pkgs.cef-binary.meta.sourceProvenance; # cef is binaryNativeCode
