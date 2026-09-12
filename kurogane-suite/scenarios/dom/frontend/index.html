@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Kurogane: DOM-based educational template</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #0f172a;
+      overflow: hidden;
+      font-family: system-ui, sans-serif;
+    }
+
+    #fps {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      font-size: 32px;
+      padding: 8px 12px;
+      background: rgba(0, 0, 0, 0.5);
+      border-radius: 8px;
+      color: #e5e7eb;
+      z-index: 10;
+    }
+
+    .box {
+      position: absolute;
+      width: 120px;
+      height: 120px;
+      border-radius: 16px;
+      will-change: transform;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+    }
+  </style>
+</head>
+
+<body>
+  <div id="fps">FPS: 0</div>
+
+  <script>
+    window.addEventListener("DOMContentLoaded", () => {
+      const fpsEl = document.getElementById("fps");
+
+      const boxCount = 100; // more boxes, more fun
+      const boxSize = 120;
+      const boxes = [];
+
+      for (let i = 0; i < boxCount; i++) {
+        const el = document.createElement("div");
+        el.className = "box";
+        el.style.background = `hsl(${Math.random() * 360}, 70%, 60%)`;
+        document.body.appendChild(el);
+
+        boxes.push({
+          el,
+          x: Math.random() * (window.innerWidth - boxSize),
+          y: Math.random() * (window.innerHeight - boxSize),
+          vx: Math.random() * 6 - 3, // speed -3 to 3
+          vy: Math.random() * 6 - 3,
+        });
+      }
+
+      let lastFpsTime = performance.now();
+      let frameCount = 0;
+
+      function animate(time) {
+        frameCount++;
+
+        if (time - lastFpsTime >= 1000) {
+          fpsEl.textContent = `FPS: ${frameCount}`;
+          frameCount = 0;
+          lastFpsTime = time;
+        }
+
+        for (const box of boxes) {
+          box.x += box.vx;
+          box.y += box.vy;
+
+          if (box.x <= 0 || box.x + boxSize >= window.innerWidth) box.vx *= -1;
+          if (box.y <= 0 || box.y + boxSize >= window.innerHeight) box.vy *= -1;
+
+          box.el.style.transform = `translate(${box.x}px, ${box.y}px)`;
+        }
+
+        requestAnimationFrame(animate);
+      }
+
+      requestAnimationFrame(animate);
+    });
+  </script>
+</body>
+</html>

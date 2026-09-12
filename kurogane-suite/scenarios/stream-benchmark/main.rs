@@ -13,7 +13,7 @@ impl StreamHandler for EchoStream {
 }
 
 fn main() {
-    App::new("stream-benchmark")
+    App::new("scenarios/stream-benchmark/frontend")
         .stream("echo", || EchoStream)
         .run_or_exit();
 }

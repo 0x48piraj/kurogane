@@ -314,76 +314,6 @@ mod tests {
     }
 
     #[test]
-    fn generation_from_a_local_template_yields_a_usable_project() {
-        let layout_dir = tempfile::tempdir().unwrap();
-        layout_template(layout_dir.path());
-
-        let destination = tempfile::tempdir().unwrap();
-        let project = generate_project(
-            layout_dir.path(),
-            "my-app",
-            destination.path(),
-            &[],
-            Consent::default(),
-        )
-        .unwrap();
-
-        assert!(project.join("Cargo.toml").exists());
-        assert!(project.join("src/main.rs").exists());
-        assert!(!project.join(".git").exists());
-    }
-
-    #[test]
-    fn non_kebab_names_are_kebab_cased_in_the_destination() {
-        let layout_dir = tempfile::tempdir().unwrap();
-        layout_template(layout_dir.path());
-
-        let destination = tempfile::tempdir().unwrap();
-        generate_project(
-            layout_dir.path(),
-            "My App",
-            destination.path(),
-            &[],
-            Consent::default(),
-        )
-        .unwrap();
-
-        assert!(
-            destination
-                .path()
-                .join("my-app")
-                .join("Cargo.toml")
-                .exists()
-        );
-        assert!(!destination.path().join("My App").exists());
-    }
-
-    #[test]
-    fn generation_does_not_mutate_a_parent_workspace() {
-        let workspace = tempfile::tempdir().unwrap();
-        fs::write(
-            workspace.path().join("Cargo.toml"),
-            "[workspace]\nmembers = []\n",
-        )
-        .unwrap();
-
-        let layout_dir = tempfile::tempdir().unwrap();
-        layout_template(layout_dir.path());
-
-        generate_project(
-            layout_dir.path(),
-            "member-app",
-            workspace.path(),
-            &[],
-            Consent::default(),
-        )
-        .unwrap();
-
-        let manifest = fs::read_to_string(workspace.path().join("Cargo.toml")).unwrap();
-        assert_eq!(manifest, "[workspace]\nmembers = []\n");
-    }
-
-    #[test]
     fn templates_without_hooks_require_no_confirmation() {
         let dir = tempfile::tempdir().unwrap();
         layout_template(dir.path());
@@ -468,42 +398,6 @@ mod tests {
     }
 
     #[test]
-    fn non_interactive_generation_takes_declared_defaults_without_prompting() {
-        let template = tempfile::tempdir().unwrap();
-        layout_template(template.path());
-        fs::write(
-            template.path().join("kurogane.toml"),
-            "[app]\ndev-url = \"{{dev_url}}\"\n",
-        )
-        .unwrap();
-        fs::write(
-            template.path().join("cargo-generate.toml"),
-            "[placeholders.dev_url]\ntype = \"string\"\nprompt = \"Development server URL\"\ndefault = \"http://localhost:5173\"\n",
-        )
-        .unwrap();
-
-        let destination = tempfile::tempdir().unwrap();
-        let project = generate_project(
-            template.path(),
-            "quiet-app",
-            destination.path(),
-            &[],
-            Consent {
-                hooks: false,
-                non_interactive: true,
-            },
-        )
-        .unwrap();
-
-        assert!(
-            fs::read_to_string(project.join("kurogane.toml"))
-                .unwrap()
-                .contains("http://localhost:5173"),
-            "the declared default must be used instead of a prompt"
-        );
-    }
-
-    #[test]
     fn declared_hooks_are_detected_from_the_config_file() {
         let dir = tempfile::tempdir().unwrap();
         layout_template(dir.path());
@@ -525,69 +419,5 @@ mod tests {
         let contents = fs::read_to_string(dir.path().join(".cargo/config.toml")).unwrap();
         assert!(contents.starts_with("[target."));
         assert!(contents.contains("$ORIGIN/cef"));
-    }
-
-    #[test]
-    fn regeneration_replaces_project_and_preserves_build_artifacts() {
-        let layout_dir = tempfile::tempdir().unwrap();
-        layout_template(layout_dir.path());
-
-        let destination = tempfile::tempdir().unwrap();
-        let project = destination.path().join("showcase");
-
-        regenerate_project(
-            layout_dir.path(),
-            "showcase",
-            &project,
-            &[],
-            Consent::default(),
-        )
-        .unwrap();
-
-        fs::write(project.join("stale.txt"), "old").unwrap();
-        fs::create_dir_all(project.join("target/debug")).unwrap();
-        fs::write(project.join("target/debug/artifact"), "cached").unwrap();
-
-        regenerate_project(
-            layout_dir.path(),
-            "showcase",
-            &project,
-            &[],
-            Consent::default(),
-        )
-        .unwrap();
-
-        assert!(project.join("src/main.rs").exists());
-        assert!(!project.join("stale.txt").exists());
-        assert_eq!(
-            fs::read_to_string(project.join("target/debug/artifact")).unwrap(),
-            "cached"
-        );
-    }
-
-    #[test]
-    fn init_mode_generation_targets_the_destination_itself() {
-        let shell_dir = tempfile::tempdir().unwrap();
-        fs::write(
-            shell_dir.path().join("Cargo.toml"),
-            "[package]\nname = \"{{crate_name}}\"\nversion = \"0.0.0\"\n\n[workspace]\n",
-        )
-        .unwrap();
-
-        let destination = tempfile::tempdir().unwrap();
-        let project = generate_into_existing_dir(
-            shell_dir.path(),
-            "my-vite-app",
-            destination.path(),
-            &["frontend_dist=dist".to_string()],
-            Consent::default(),
-        )
-        .unwrap();
-
-        assert_eq!(project, destination.path());
-        assert!(
-            destination.path().join("Cargo.toml").exists(),
-            "files land directly in the destination, no subfolder"
-        );
     }
 }

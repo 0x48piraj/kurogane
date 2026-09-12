@@ -117,7 +117,7 @@ fn main() {
     let event_loop = EventLoop::new().unwrap();
     let proxy = event_loop.create_proxy();
 
-    let handle = App::new("dom")
+    let handle = App::new("winit/frontend")
         .scheduler(move |_request: PumpRequest| {
             // Marshal Chromium wake requests onto the event loop thread
             let _ = proxy.send_event(());

@@ -98,9 +98,6 @@
 
             nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
 
-            # Fallback when git.user and git.email aren't set
-            env.USER = "Kurogane Tests";
-
             postInstall = ''
               wrapProgram $out/bin/kurogane \
                 --set CEF_PATH ${cef} \

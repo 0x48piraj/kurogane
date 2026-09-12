@@ -1,5 +1,5 @@
 [package]
-name = "kurogane-tests"
+name = "kurogane-suite"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,42 +10,47 @@ publish = false
 
 [dependencies]
 cef.workspace = true
-kurogane = { path = "../kurogane" }
+kurogane = { workspace = true }
 serde_json = "1.0.149"
 winit = "0.30"
 raw-window-handle = "0.6"
 
+[dev-dependencies]
+kurogane-cli = { workspace = true }
+tempfile = "3"
+git2 = "0.21"
+
 [[example]]
 name = "benchmark"
-path = "benchmark.rs"
+path = "scenarios/benchmark/main.rs"
 
 [[example]]
 name = "gpu"
-path = "gpu.rs"
+path = "scenarios/gpu/main.rs"
 
 [[example]]
 name = "files-cors"
-path = "files-cors.rs"
+path = "scenarios/files-cors/main.rs"
 
 [[example]]
 name = "dom"
-path = "dom.rs"
+path = "scenarios/dom/main.rs"
 
 [[example]]
 name = "pump"
-path = "pump.rs"
+path = "scenarios/pump.rs"
 
 [[example]]
 name = "css-to-shader"
-path = "css-to-shader.rs"
+path = "scenarios/css-to-shader/main.rs"
 
 [[example]]
 name = "ipc"
-path = "ipc.rs"
+path = "scenarios/ipc/main.rs"
 
 [[example]]
 name = "wasm"
-path = "wasm.rs"
+path = "scenarios/wasm/main.rs"
 
 [[example]]
 name = "winit_views_poll"
@@ -65,20 +70,20 @@ path = "winit/host_window.rs"
 
 [[example]]
 name = "popups"
-path = "popups.rs"
+path = "scenarios/popups/main.rs"
 
 [[example]]
 name = "multi-window"
-path = "multi-window.rs"
+path = "scenarios/multi-window.rs"
 
 [[example]]
 name = "window-management"
-path = "window-management.rs"
+path = "scenarios/window-management.rs"
 
 [[example]]
 name = "delegates"
-path = "delegates.rs"
+path = "scenarios/delegates.rs"
 
 [[example]]
 name = "stream-benchmark"
-path = "stream-benchmark.rs"
+path = "scenarios/stream-benchmark/main.rs"

@@ -154,7 +154,7 @@ jobs:
 
       # Compile-only coverage for platform-specific examples
       - name: Build examples
-        run: cargo build -p kurogane-tests --examples --locked
+        run: cargo build -p kurogane-suite --examples --locked
 
       - name: Clippy
         run: cargo clippy -p kurogane --all-targets --locked -- -D warnings

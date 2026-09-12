@@ -4,7 +4,7 @@ members = [
     "kurogane",
     "kurogane-cli",
     "kurogane-layout",
-    "tests"
+    "kurogane-suite"
 ]
 
 [workspace.package]
@@ -20,6 +20,8 @@ repository = "https://github.com/0x48piraj/kurogane"
 [workspace.dependencies]
 cef = { git = "https://github.com/tauri-apps/cef-rs", rev = "c73f792f245d71ac1716448cdb7c165c8009e20c" }
 download-cef = "2.3"
+kurogane = { path = "kurogane" }
+kurogane-cli = { path = "kurogane-cli" }
 kurogane-layout = { path = "kurogane-layout" }
 semver = "1"
 serde = { version = "1", features = ["derive"] }

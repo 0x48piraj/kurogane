@@ -122,7 +122,7 @@ cargo install --git https://github.com/0x48piraj/kurogane kurogane-cli
 cargo install --path . --force
 
 # Execute the target test binary directly
-kurogane dev --example gpu
+kurogane run --example gpu
 ```
 
 ### Creating custom test applications
@@ -141,7 +141,7 @@ path = "test-feature-1.rs"
 3. **Execute the target:**
 
 ```bash
-kurogane dev --bin test-feature-1
+kurogane run --bin test-feature-1
 ```
 
 > **Important working directory Note:** If your test application initializes a local frontend via `App::new()` using relative file paths, ensure your working directory is set to the `tests/` directory prior to execution. Running the binary from the workspace root may result in path resolution errors for frontend assets.

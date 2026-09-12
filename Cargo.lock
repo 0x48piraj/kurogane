@@ -1929,13 +1929,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "kurogane-tests"
+name = "kurogane-suite"
 version = "0.0.4"
 dependencies = [
  "cef",
+ "git2",
  "kurogane",
+ "kurogane-cli",
  "raw-window-handle",
  "serde_json",
+ "tempfile",
  "winit",
 ]
 
