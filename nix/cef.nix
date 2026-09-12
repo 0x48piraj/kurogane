@@ -1,6 +1,7 @@
 {
   lib,
   stdenv,
+  fetchurl,
   cef-binary,
   cefVersion,
   symlinkJoin,
@@ -11,6 +12,7 @@ let
   version = cefVersion;
   gitRevision = "8042e43";
   chromiumVersion = "150.0.7871.101";
+
   platform =
     {
       "x86_64-linux" = "linux64";
@@ -26,14 +28,38 @@ let
     }
     .${stdenv.hostPlatform.system} or (throw "Unsupported platform: ${stdenv.hostPlatform.system}");
 
-  cef = cef-binary.override {
-    inherit version gitRevision chromiumVersion;
+  cef =
+    if stdenv.hostPlatform.isDarwin then
+      stdenv.mkDerivation {
+        pname = "cef-binary";
+        inherit version;
 
-    srcHashes = {
-      aarch64-linux = "sha256-+5U2KskaH3GuaoyLpNBkHK0IN1kExOfdHMPO67Gi2HU=";
-      x86_64-linux = "sha256-bB1Ike84huPM9l0JKI2DBOP343JKR8kyk+K9Y+dlKOQ=";
-    };
-  };
+        src = fetchurl {
+          url = "https://cef-builds.spotifycdn.com/cef_binary_${version}+g${gitRevision}+chromium-${chromiumVersion}_${platform}_minimal.tar.bz2";
+
+          hash =
+            {
+              "aarch64-darwin" = "sha256-71/kZBhOLgA4GizHPpEbtLjMIZ8Ob5/WEK8LyJ0OpY0=";
+            }
+            .${stdenv.hostPlatform.system};
+        };
+
+        dontConfigure = true;
+        dontBuild = true;
+
+        installPhase = ''
+          cp -R . $out
+        '';
+      }
+    else
+      cef-binary.override {
+        inherit version gitRevision chromiumVersion;
+
+        srcHashes = {
+          aarch64-linux = "sha256-+5U2KskaH3GuaoyLpNBkHK0IN1kExOfdHMPO67Gi2HU=";
+          x86_64-linux = "sha256-bB1Ike84huPM9l0JKI2DBOP343JKR8kyk+K9Y+dlKOQ=";
+        };
+      };
 
   archiveJson = writeTextFile {
     name = "cef-archive.json";
@@ -47,6 +73,7 @@ let
 in
 symlinkJoin {
   name = "cef-with-archive-${cefVersion}";
+
   paths = [
     cef
     archiveJson

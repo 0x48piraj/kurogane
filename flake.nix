@@ -13,6 +13,7 @@
       supportedSystems = [
         "x86_64-linux"
         "aarch64-linux"
+        "aarch64-darwin"
       ];
 
       cefVersion = "150.0.10";
@@ -29,43 +30,47 @@
 
           strictDeps = true;
 
-          buildInputs = with pkgs; [
-            openssl
-            dbus
-            at-spi2-core
-            glib
-            libGL
-            libxkbcommon
-            wayland
-            libX11
-            libXcomposite
-            libXcursor
-            libXdamage
-            libXext
-            libXfixes
-            libXi
-            libXrandr
-            libXrender
-            libXScrnSaver
-            libXtst
-            libxcb
-            gtk3
-            nss
-            nspr
-            pango
-            cairo
-            alsa-lib
-            at-spi2-atk
-            atk
-            cups
-            expat
-            fontconfig
-            gdk-pixbuf
-            libva
-            libgbm
-            libvdpau
-            systemd
-          ];
+          buildInputs =
+            with pkgs;
+            [
+              openssl
+              nss
+              nspr
+              pango
+              cairo
+              glib
+              expat
+              fontconfig
+            ]
+            ++ lib.optionals stdenv.hostPlatform.isLinux [
+              dbus
+              at-spi2-core
+              libGL
+              libxkbcommon
+              wayland
+              libX11
+              libXcomposite
+              libXcursor
+              libXdamage
+              libXext
+              libXfixes
+              libXi
+              libXrandr
+              libXrender
+              libXScrnSaver
+              libXtst
+              libxcb
+              gtk3
+              alsa-lib
+              at-spi2-atk
+              atk
+              cups
+              gdk-pixbuf
+              libva
+              libgbm
+              libvdpau
+              systemd
+            ];
 
           nativeBuildInputs = with pkgs; [
             rustc
@@ -127,8 +132,14 @@
                 ofl
                 unicode-30
                 bzip2
-                { free = true; shortName = "LicenseRef-UFL-1.0"; }
-                { free = true; shortName = "CDLA-Permissive-2.0"; }
+                {
+                  free = true;
+                  shortName = "LicenseRef-UFL-1.0";
+                }
+                {
+                  free = true;
+                  shortName = "CDLA-Permissive-2.0";
+                }
               ];
               sourceProvenance =
                 with pkgs.lib.sourceTypes;
@@ -157,7 +168,12 @@
 
         devShells.default = pkgs.mkShell {
           inputsFrom = [ kurogane ];
-          packages = with pkgs; [ rustc cargo clippy rustfmt ];
+          packages = with pkgs; [
+            rustc
+            cargo
+            clippy
+            rustfmt
+          ];
 
           # Reuse the Nix store CEF instead of letting cef-dll-sys re-download
           env.CEF_PATH = "${cef}";
