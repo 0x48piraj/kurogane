@@ -29,14 +29,7 @@ kurogane showcase
 
 ## Create a project
 
-Start with one of the official starters, or bring your own Cargo Generate-compatible template.
-
-| Starter   | TypeScript | JavaScript | Best for                |
-| --------- | :--------: | :--------: | ----------------------- |
-| `minimal` |      ✔️     |      ✔️     | Smallest starting point |
-| `react`   |      ✔️     |      ✔️     | React applications      |
-| `svelte`  |      ✔️     |      ✔️     | Svelte applications     |
-| `vue`     |      ✔️     |      ✔️     | Vue applications        |
+Start with one of the official starters, or bring your own project.
 
 ```bash
 kurogane new
@@ -48,7 +41,7 @@ Or choose one directly:
 kurogane new react
 ```
 
-See [Templates](docs/templates.md) for custom templates, caching and authoring.
+See [templates](docs/templates.md) for custom templates, caching and authoring.
 
 ### Run your app
 
@@ -73,38 +66,76 @@ kurogane init
 kurogane init --assets dist --dev-url http://localhost:5173
 ```
 
-See [Development](docs/development.md) for frontend dev servers, runtime configuration and advanced workflows.
+See [development](docs/development.md) for frontend dev servers, runtime configuration and advanced workflows.
 
 ## Production packaging
 
-Kurogane bundles your binary, the Chromium runtime and your built frontend into a self-contained, distributable artifact.
+Once your Kurogane app works, you can turn it into a standalone app that you can share with other people.
+
+Run:
 
 ```bash
 kurogane bundle
 ```
 
-By default this produces a directory bundle in `dist/`. Use `--format` to pick a specific distribution format:
+That's it.
+
+Kurogane packages your app together with everything it needs to run, including the Chromium runtime and your built frontend.
+
+The finished app is placed in `dist/`.
+
+> [!TIP]
+> #### Something went wrong?
+>
+> You don't need to understand how Kurogane's bundler works to fix most problems. _That's what we're telling ourselves, anyway._
+>
+> Go straight to [troubleshooting](docs/bundling.md#troubleshooting).
+>
+> Want to know how the bundler works under the hood? That's what [bundling](docs/bundling.md) is for. It's mostly for contributors, debugging and people who enjoy reading packaging code for fun.
+
+### Want a specific format?
+
+You usually don't need to choose one. Kurogane picks the default format for your platform.
+
+If you want a specific format, use one of these:
 
 ```bash
-kurogane bundle --format appimage   # Linux single-file AppImage
-kurogane bundle --format nsis       # Windows setup.exe installer
+# Linux single-file AppImage
+kurogane bundle --format appimage
+
+# Windows NSIS installer
+kurogane bundle --format nsis
+
+# macOS app bundle and DMG
+kurogane bundle --format app
 ```
 
 > [!NOTE]
-> You do not need to understand the bundling internals to use `kurogane bundle`. Pick a format, run the command and Kurogane handles the rest. The mechanics are for contributors and anyone debugging or extending the bundler.
->
-> For the quick path, see [quick start](docs/bundling.md#quick-start). If something goes wrong, jump straight to [troubleshooting](docs/bundling.md#troubleshooting).
+> Bundles are platform-specific. You must build an app on the platform you're packaging for. For example, you can't build a Linux AppImage from Windows or a macOS `.app` from Linux.
 
-> [!TIP]
-> For most projects, bundling is just:
->
-> ```bash
-> kurogane bundle
-> ```
->
-> Use `--format appimage` or `--format nsis` when you need a specific distribution format.
+### First time bundling?
 
-See [Bundling](docs/bundling.md) for formats, Chromium resolution, signing and the comprehensive configuration reference.
+If you've already used `kurogane dev`, Kurogane has probably installed the required Chromium runtime for you.
+
+Otherwise, run:
+
+```bash
+kurogane install
+```
+
+You normally only need to do this once. After that, `kurogane bundle` has everything it needs to package your app.
+
+### Have a frontend?
+
+If your app has a frontend, Kurogane can build it for you before packaging.
+
+If you've configured a frontend build command, `kurogane bundle` runs it automatically and includes the finished frontend in your app.
+
+If you haven't configured one, just build your frontend yourself first before bundling.
+
+> **Side note:** Bundling is still experimental. If something breaks, congratulations.
+>
+> You've found the edge case. _Also, tell us what the fuck you did._
 
 ## Motivation
 
@@ -177,7 +208,7 @@ Early days! Architecture and APIs may change as the project evolves.
 |----------|--------|
 | Linux    | Supported |
 | Windows  | Supported |
-| macOS    | Development only; packaging and signing not implemented ([notes](docs/platforms.md#macos)) |
+| macOS    | Supported: dev, `.app` bundle + `.dmg` via `--format app`, optional signing ([notes](docs/platforms.md#macos)) |
 
 ## Philosophy
 

@@ -53,19 +53,14 @@ kurogane dev
 
 ## macOS
 
-Requires CMake and Ninja.
+Requires CMake and Ninja. `hdiutil` ships with macOS; `--sign` additionally needs `codesign` from the Xcode Command Line Tools.
 
 `kurogane dev` runs. The runtime resolves the managed Chromium framework, starts the browser, renderer and GPU processes and opens a window.
 
-Distribution does not. App bundling, code signing and `.app` packaging are not implemented, so `kurogane bundle` does not yet produce an artifact you can ship.
+Distribution is supported via `kurogane bundle --format app`, which produces a macOS `.app` bundle with the CEF framework intact plus a `.dmg` disk image. Optionally sign with `--sign` and a `certificate-identity` (see [Code signing](bundling.md#code-signing)).
 
-Treat macOS as usable for development and not yet for release.
-
-### GPU libraries in development
-
-Chromium resolves specific libraries against the running executable's own directory whenever the process is not inside an application bundle. Chromium ships them inside the framework, so `kurogane dev` copies them next to the binaries cargo produces.
-
-Without that step the GPU process exits during initialization and the application falls back to software rendering everywhere.
+> [!NOTE]
+> `--format dir` is not a macOS output and is rejected; `--format app` is the default on macOS.
 
 ### Keychain prompts
 
@@ -75,24 +70,32 @@ Denying it is harmless. Chromium logs `Encryption is not available` and stores t
 
 Signing the application resolves it permanently. Until then, `CredentialStorage::Basic` bypasses the Keychain entirely; see [credential storage](recipes.md#credential-storage).
 
-## NixOS
+## Nix
 
-Kurogane provides a Nix flake so contributors can obtain a reproducible environment while the project itself remains tool-native and does not require Nix for normal development.
+Kurogane provides a Nix flake for both development and installation. Nix is not required for normal Kurogane development or use, but it provides a reproducible way to obtain the CLI together with its managed Chromium runtime and native dependencies.
 
 ### Development
 
-Enter the development environment with:
+If you are **working on Kurogane itself**, use `nix develop`:
 
 ```bash
 nix develop github:0x48piraj/kurogane
 ```
 
-The shell includes the Rust toolchain, Chromium, native build dependencies and runtime libraries required to build and work on the project.
+This enters a development shell containing the tools and dependencies needed to build Kurogane from source, including Rust, CEF and the required native libraries.
+
+Inside the shell, development remains a normal Cargo workflow:
+
+```bash
+cargo build
+cargo test
+cargo run -p kurogane-cli
+```
+
+`nix develop` is **not an installation command**. It does not put the packaged `kurogane` CLI on your `PATH`; it provides the environment in which you develop and build the source tree.
 
 > [!NOTE]
-> **Known Nix limitation:** `nix develop` currently fails if the project is
-> located in a directory whose path contains spaces (for example
-> `/home/user/My Projects/kurogane`). This is a known upstream Nix issue:
+> **Known Nix limitation:** `nix develop` currently fails if the project is located in a directory whose path contains spaces (for example `/home/user/My Projects/kurogane`). This is a known upstream Nix issue:
 > https://github.com/NixOS/nix/issues/12413.
 >
 > If you encounter linker errors such as:
@@ -103,25 +106,49 @@ The shell includes the Rust toolchain, Chromium, native build dependencies and r
 >
 > Move the project to a path without spaces. If renaming the original directory isn't practical, a space-free symlink may also work depending on how the shell is entered.
 
-### Running
+### Running without installing
 
-You can also run the packaged application directly without installing it:
+To try the packaged Kurogane CLI without installing it into your user environment:
 
 ```bash
 nix run github:0x48piraj/kurogane
 ```
 
-The packaged application automatically configures the required Chromium runtime environment.
+Nix builds the package if necessary and runs it directly. The packaged CLI is wrapped with the Chromium runtime configuration it needs.
 
-### Why Cargo?
+### Installing the CLI
 
-While the project ships a Nix flake, day-to-day development intentionally remains centered around standard Rust tooling.
+If you want to **use Kurogane normally**, install the packaged CLI into your Nix user profile:
 
-This keeps the workflow simple while still allowing Nix to provide a reproducible environment:
+```bash
+nix profile add github:0x48piraj/kurogane
+```
 
-* Rust tooling (`cargo`) continues to handle fast incremental builds
-* Contributors don't need Nix knowledge to get started
-* The same development workflow works both inside and outside Nix
-* Nix handles toolchain provisioning, native dependencies and runtime setup
+After installation, `kurogane` is available on your `PATH`:
 
-The flake also serves as the basis for reproducible packaging and distribution without requiring the project itself to become Nix-native.
+```bash
+kurogane --version
+kurogane init
+kurogane dev
+```
+
+This is the Nix equivalent of installing the Kurogane CLI. The CLI and its required Chromium runtime are provided by the Nix package rather than requiring a separate imperative CEF installation.
+
+To remove it later:
+
+```bash
+nix profile list
+nix profile remove <index>
+```
+
+### The mental model
+
+The three commands serve different purposes:
+
+| Command               | Purpose                                                 |
+| --------------------- | ------------------------------------------------------- |
+| `nix develop`         | Develop **Kurogane itself** from source                 |
+| `nix run`             | Run the packaged Kurogane CLI **without installing it** |
+| `nix profile install` | **Install** the packaged Kurogane CLI for normal use    |
+
+Nix therefore handles the reproducible packaging and runtime dependencies, while Kurogane itself remains a normal Rust/Cargo project. You do not need to make your application or development workflow Nix-native just because you use Nix to install or develop Kurogane.
