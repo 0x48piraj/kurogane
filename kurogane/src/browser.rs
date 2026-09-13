@@ -44,12 +44,30 @@ wrap_browser_process_handler! {
             }
 
             debug!("Creating main browser with URL: {}", self.spec.start_url);
-            let placement = Placement::Main {
-                bounds: Rect::default(),
-                show_state: ShowState::NORMAL,
-            };
+            let (bounds, show_state) = self
+                .spec
+                .delegates
+                .iter()
+                .find_map(|d| d.initial_window_geometry())
+                .map(|(b, state)| {
+                    let bounds = Rect {
+                        x: b.x,
+                        y: b.y,
+                        width: b.width,
+                        height: b.height,
+                    };
+                    (bounds, state.into())
+                })
+                .unwrap_or((Rect::default(), ShowState::NORMAL));
+            let placement = Placement::Main { bounds, show_state };
             // A CEF callback has nowhere to return the error
-            if let Err(error) = open_browser_window(&self.app, &self.spec.start_url, placement) {
+            let opened = open_browser_window(
+                &self.app,
+                &self.spec.start_url,
+                placement,
+                self.spec.delegates.clone(),
+            );
+            if let Err(error) = opened {
                 eprintln!("kurogane: no window will appear:\n{error}");
             }
         }

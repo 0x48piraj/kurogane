@@ -14,7 +14,7 @@ use crate::ipc::{
     IpcRouter, RequestResponseSubsystem, EventSubsystem, StreamSubsystem, StreamFactory, Responder,
     BinaryResponder, SyncHandler, AsyncHandler, IpcError,
 };
-use crate::runtime::{AppHandle, AppInstance};
+use crate::runtime::{AppHandle, AppInstance, BrowserBounds, WindowState};
 use crate::error::{ConfigError, RuntimeError};
 use crate::spec::{RuntimeSpec, RuntimeMode, SandboxMode};
 use crate::scheme::{CustomScheme, SchemeHandler, validate_scheme_name};
@@ -142,6 +142,23 @@ pub trait ClientAppBrowserDelegate: Send + Sync {
     ///
     /// At this point global browser-process initialization has completed and browser creation may begin.
     fn on_context_initialized(&self) {}
+
+    // The main window's geometry, for a host that remembers it between runs.
+    // Both concern only the window Kurogane opens itself, not popups or the
+    // windows opened through AppInstance, which take their bounds as options.
+
+    /// Where the main window opens and in which state, in DIP screen
+    /// coordinates. The first delegate returning Some wins; None everywhere
+    /// leaves CEF's default size at the origin. Wayland ignores the position:
+    /// a client cannot place its own window there.
+    fn initial_window_geometry(&self) -> Option<(BrowserBounds, WindowState)> {
+        None
+    }
+
+    /// The main window is closing: its last bounds in DIP screen coordinates,
+    /// and whether it was maximized or minimized. CEF has no restored bounds,
+    /// so a maximized window reports the maximized rectangle.
+    fn on_window_closing(&self, _bounds: BrowserBounds, _state: WindowState) {}
 }
 
 /// Customizes render-process behavior.
