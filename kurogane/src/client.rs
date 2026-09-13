@@ -4,6 +4,7 @@ use cef::*;
 use crate::debug;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use crate::app::ClientAppBrowserDelegate;
 use crate::runtime::RuntimeServices;
 use crate::browser_registry::{BrowserRegistry, BrowserType};
 use crate::window_registry::WindowRegistry;
@@ -130,6 +131,14 @@ wrap_load_handler! {
     }
 }
 
+/// The first handler a host delegate supplies, in registration order.
+fn host_handler<T>(
+    delegates: &[Arc<dyn ClientAppBrowserDelegate>],
+    pick: impl Fn(&dyn ClientAppBrowserDelegate) -> Option<T>,
+) -> Option<T> {
+    delegates.iter().find_map(|d| pick(d.as_ref()))
+}
+
 //
 // CLIENT
 //
@@ -151,6 +160,71 @@ wrap_client! {
                 self.is_closing.clone(),
                 self.services.router.clone(),
             ))
+        }
+
+        // Every other handler comes from the host, if any delegate supplies it
+        fn audio_handler(&self) -> Option<AudioHandler> {
+            host_handler(&self.services.delegates, |d| d.audio_handler())
+        }
+
+        fn command_handler(&self) -> Option<CommandHandler> {
+            host_handler(&self.services.delegates, |d| d.command_handler())
+        }
+
+        fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
+            host_handler(&self.services.delegates, |d| d.context_menu_handler())
+        }
+
+        fn dialog_handler(&self) -> Option<DialogHandler> {
+            host_handler(&self.services.delegates, |d| d.dialog_handler())
+        }
+
+        fn display_handler(&self) -> Option<DisplayHandler> {
+            host_handler(&self.services.delegates, |d| d.display_handler())
+        }
+
+        fn download_handler(&self) -> Option<DownloadHandler> {
+            host_handler(&self.services.delegates, |d| d.download_handler())
+        }
+
+        fn drag_handler(&self) -> Option<DragHandler> {
+            host_handler(&self.services.delegates, |d| d.drag_handler())
+        }
+
+        fn find_handler(&self) -> Option<FindHandler> {
+            host_handler(&self.services.delegates, |d| d.find_handler())
+        }
+
+        fn focus_handler(&self) -> Option<FocusHandler> {
+            host_handler(&self.services.delegates, |d| d.focus_handler())
+        }
+
+        fn frame_handler(&self) -> Option<FrameHandler> {
+            host_handler(&self.services.delegates, |d| d.frame_handler())
+        }
+
+        fn jsdialog_handler(&self) -> Option<JsdialogHandler> {
+            host_handler(&self.services.delegates, |d| d.jsdialog_handler())
+        }
+
+        fn keyboard_handler(&self) -> Option<KeyboardHandler> {
+            host_handler(&self.services.delegates, |d| d.keyboard_handler())
+        }
+
+        fn permission_handler(&self) -> Option<PermissionHandler> {
+            host_handler(&self.services.delegates, |d| d.permission_handler())
+        }
+
+        fn print_handler(&self) -> Option<PrintHandler> {
+            host_handler(&self.services.delegates, |d| d.print_handler())
+        }
+
+        fn render_handler(&self) -> Option<RenderHandler> {
+            host_handler(&self.services.delegates, |d| d.render_handler())
+        }
+
+        fn request_handler(&self) -> Option<RequestHandler> {
+            host_handler(&self.services.delegates, |d| d.request_handler())
         }
 
         fn on_process_message_received(
@@ -188,5 +262,48 @@ wrap_client! {
 impl Drop for KuroganeClient {
     fn drop(&mut self) {
         debug!("KuroganeClient dropped");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    wrap_command_handler! {
+        pub struct Nop {}
+
+        impl CommandHandler {}
+    }
+
+    struct Silent;
+    impl ClientAppBrowserDelegate for Silent {}
+
+    // Counts how often it was asked: the delegate after the winner must not be.
+    struct Supplies(Arc<AtomicUsize>);
+    impl ClientAppBrowserDelegate for Supplies {
+        fn command_handler(&self) -> Option<CommandHandler> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Some(Nop::new())
+        }
+    }
+
+    #[test]
+    fn first_delegate_supplying_a_handler_wins() {
+        let (first, second) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let delegates: Vec<Arc<dyn ClientAppBrowserDelegate>> = vec![
+            Arc::new(Silent),
+            Arc::new(Supplies(first.clone())),
+            Arc::new(Supplies(second.clone())),
+        ];
+        assert!(host_handler(&delegates, |d| d.command_handler()).is_some());
+        assert_eq!(first.load(Ordering::Relaxed), 1);
+        assert_eq!(second.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn no_delegate_no_handler() {
+        let delegates: Vec<Arc<dyn ClientAppBrowserDelegate>> = vec![Arc::new(Silent)];
+        assert!(host_handler(&delegates, |d| d.command_handler()).is_none());
     }
 }
