@@ -8,6 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::debug;
+use crate::app::ClientAppBrowserDelegate;
+use crate::runtime::{BrowserBounds, WindowState};
 use crate::browser_registry::{BrowserId, BrowserRegistry, BrowserType};
 use crate::window_registry::WindowRegistry;
 use crate::window_registry::WindowId;
@@ -20,6 +22,7 @@ wrap_window_delegate! {
         initial_bounds: Rect,
         show_state: ShowState,
         is_closing: Arc<AtomicBool>,
+        delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
     }
 
     impl ViewDelegate {
@@ -61,6 +64,24 @@ wrap_window_delegate! {
                     window.show();
                 }
                 debug!("Window shown");
+            }
+        }
+
+        fn on_window_closing(&self, window: Option<&mut Window>) {
+            let Some(window) = window else {
+                return;
+            };
+            let rect = window.bounds_in_screen();
+            let bounds = BrowserBounds { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+            let state = if window.is_maximized() == 1 {
+                WindowState::Maximized
+            } else if window.is_minimized() == 1 {
+                WindowState::Minimized
+            } else {
+                WindowState::Normal
+            };
+            for delegate in &self.delegates {
+                delegate.on_window_closing(bounds, state);
             }
         }
 
