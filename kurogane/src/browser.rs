@@ -116,13 +116,19 @@ wrap_browser_process_handler! {
                 reg.allocate_id()
             };
 
+            let (bounds, show_state) = self.spec.delegates.iter()
+                .find_map(|d| d.initial_window_geometry())
+                .map(|(b, state)| (Rect { x: b.x, y: b.y, width: b.width, height: b.height }, state.into()))
+                .unwrap_or((Rect::default(), ShowState::NORMAL));
+
             let mut delegate = KuroganeWindowDelegate::new(
                 window_id,
                 browser_view,
                 self.services.window_registry.clone(),
-                Rect::default(),
-                ShowState::NORMAL,
+                bounds,
+                show_state,
                 is_closing,
+                self.spec.delegates.clone(),
             );
 
             // Create window

@@ -852,6 +852,7 @@ impl AppInstance {
             },
             options.show_state.into(),
             is_closing,
+            Vec::new(),
         );
 
         window_create_top_level(Some(&mut delegate)).ok_or(RuntimeError::WindowCreationFailed)?;
