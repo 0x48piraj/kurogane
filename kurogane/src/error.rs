@@ -33,6 +33,10 @@ pub enum RuntimeError {
     SandboxUnavailable {
         reason: String,
     },
+
+    /// The [`App`](crate::App) builder was misconfigured. Every problem is
+    /// listed; nothing was started.
+    InvalidConfiguration(Vec<ConfigError>),
 }
 
 impl Display for RuntimeError {
@@ -157,11 +161,17 @@ impl Display for RuntimeError {
                 reason
             ),
 
-            RuntimeError::SandboxUnavailable { reason } => write!(
-                f,
-                "Chromium sandbox is unavailable.\n\n{}",
-                reason
-            ),
+            RuntimeError::SandboxUnavailable { reason } => {
+                write!(f, "Chromium sandbox is unavailable.\n\n{}", reason)
+            }
+
+            RuntimeError::InvalidConfiguration(problems) => {
+                f.write_str("Invalid application configuration:\n\n")?;
+                for problem in problems {
+                    writeln!(f, "  - {problem}")?;
+                }
+                f.write_str("\nNothing was started. Fix the builder calls above.")
+            }
         }
     }
 }
@@ -182,7 +192,54 @@ impl std::error::Error for RuntimeError {
             | RuntimeError::BrowserCreationFailed
             | RuntimeError::WindowCreationFailed
             | RuntimeError::SandboxUnsupported { .. }
-            | RuntimeError::SandboxUnavailable { .. } => None,
+            | RuntimeError::SandboxUnavailable { .. }
+            | RuntimeError::InvalidConfiguration(_) => None,
         }
     }
 }
+
+/// One problem in the [`App`](crate::App) builder configuration, reported
+/// by `build()` / `start_embedded()` as [`RuntimeError::InvalidConfiguration`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ConfigError {
+    /// Two handlers share a name. Commands, async and binary commands,
+    /// streams and capability commands share one namespace.
+    DuplicateHandler(String),
+    /// A custom scheme name is invalid or reserved.
+    InvalidScheme { name: String, reason: &'static str },
+    /// Two custom schemes share a name.
+    DuplicateScheme(String),
+    /// An ACL rule and a native capability both claim a command.
+    CapabilityCommand(String),
+    /// An ACL rule names the opaque origin, which would match every frame
+    /// without a host.
+    OpaqueOrigin(String),
+}
+
+impl Display for ConfigError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConfigError::DuplicateHandler(name) => {
+                write!(f, "handler '{name}' is registered twice")
+            }
+            ConfigError::InvalidScheme { name, reason } => {
+                write!(f, "invalid custom scheme '{name}': {reason}")
+            }
+            ConfigError::DuplicateScheme(name) => {
+                write!(f, "custom scheme '{name}' is registered twice")
+            }
+            ConfigError::CapabilityCommand(name) => write!(
+                f,
+                "'{name}' is authorized by a native capability: grant access with \
+                 Filesystem::grant, not App::permit"
+            ),
+            ConfigError::OpaqueOrigin(name) => write!(
+                f,
+                "the rule for '{name}' names the opaque origin, which matches every frame without a host"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
