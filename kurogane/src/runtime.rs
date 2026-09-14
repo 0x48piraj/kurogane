@@ -11,7 +11,7 @@ use crate::window_registry::{WindowRegistry, WindowId, WindowMetadata};
 use crate::window::{KuroganeWindowDelegate, KuroganeBrowserViewDelegate};
 use kurogane_layout::{detect_cef_root_with_version, validate_cef_runtime, profile_dir};
 use crate::ipc::IpcRouter;
-use crate::spec::RuntimeSpec;
+use crate::spec::{RuntimeSpec, SandboxMode};
 use crate::debug;
 
 /// Public entry point for launching a CEF application.
@@ -76,6 +76,7 @@ fn build_settings(
     layout: &RuntimeLayout,
     persist_session_cookies: bool,
     external_message_pump: bool,
+    sandbox: SandboxMode,
 ) -> Settings {
     // Use a persistent profile instead of CEF's default incognito mode
     // This enables cookies, storage APIs and service workers
@@ -85,8 +86,7 @@ fn build_settings(
     #[cfg(not(target_os = "macos"))]
     let cef_root_str = layout.cef_root.to_string_lossy();
 
-    // Sandbox is disabled on all platforms
-    let no_sandbox: i32 = 1;
+    let no_sandbox = crate::sandbox::cef_no_sandbox(sandbox);
 
     #[cfg(not(target_os = "macos"))]
     {
@@ -1101,7 +1101,7 @@ fn initialize_cef(
     embedded_mode: bool,
 ) -> Result<RuntimeState, RuntimeError> {
     #[cfg(target_os = "macos")]
-    crate::platform::macos::init_ns_app()?;
+    crate::platform::macos::init_ns_app(spec.sandbox_mode)?;
 
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
 
@@ -1130,8 +1130,15 @@ fn initialize_cef(
     execute_subprocesses(&args, &mut app);
 
     let layout = resolve_layout(spec.profile_id)?;
+    crate::sandbox::preflight(spec.sandbox_mode, &layout.cef_root)?;
+
     let external_message_pump = spec.scheduler.is_some();
-    let settings = build_settings(&layout, spec.persist_session_cookies, external_message_pump);
+    let settings = build_settings(
+        &layout,
+        spec.persist_session_cookies,
+        external_message_pump,
+        spec.sandbox_mode,
+    );
 
     debug!("Initializing CEF");
 

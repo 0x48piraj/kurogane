@@ -48,12 +48,16 @@ wrap_app! {
                 flags.set_with_value("js-flags", "--expose-gc");
             }
 
-            apply_sandbox_flags(&mut flags);
+            apply_sandbox_flags(&mut flags, self.spec.sandbox_mode);
             apply_gpu_flags(&mut flags, self.spec.gpu_mode);
             apply_credential_flags(&mut flags, self.spec.credential_storage);
 
             // Apply user overrides
             flags.extend_user_flags(&self.spec.chromium_flags);
+
+            for name in crate::sandbox::sandbox_overrides(&flags, self.spec.sandbox_mode) {
+                eprintln!("kurogane: sandbox_mode(Chromium) is weakened by user flag --{name}");
+            }
 
             debug!("Chromium startup flags:\n{}", flags);
 

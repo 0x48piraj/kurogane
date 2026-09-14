@@ -37,6 +37,11 @@ impl ChromiumFlags {
             .insert(name.into(), SwitchValue::Value(value.into()));
     }
 
+    /// Returns whether a switch is present, with or without a value.
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        self.switches.contains_key(name)
+    }
+
     /// Apply user-supplied Chromium flags.
     ///
     /// User flags are appended after runtime policies and therefore
@@ -145,6 +150,18 @@ mod tests {
         flags.set("foo");
 
         assert_eq!(flags.switches.get("foo"), Some(&SwitchValue::Present));
+    }
+
+    #[test]
+    fn contains_reports_switches_with_and_without_values() {
+        let mut flags = ChromiumFlags::default();
+
+        flags.set("no-sandbox");
+        flags.set_with_value("use-gl", "egl");
+
+        assert!(flags.contains("no-sandbox"));
+        assert!(flags.contains("use-gl"));
+        assert!(!flags.contains("disable-gpu"));
     }
 }
 

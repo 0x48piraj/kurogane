@@ -16,7 +16,7 @@ use crate::ipc::{
 };
 use crate::runtime::{RuntimeBootstrap, AppHandle, AppInstance};
 use crate::error::RuntimeError;
-use crate::spec::{RuntimeSpec, RuntimeMode};
+use crate::spec::{RuntimeSpec, RuntimeMode, SandboxMode};
 use crate::chromium_flags::ChromiumFlag;
 use crate::credentials::CredentialStorage;
 use crate::gpu::GpuMode;
@@ -175,6 +175,7 @@ pub struct App {
     resolver: Option<crate::ipc::handle_cell::AppCellResolver>,
 
     profile_id: Option<String>,
+    sandbox_mode: SandboxMode,
     persist_session_cookies: bool,
     gpu_mode: GpuMode,
     credential_storage: CredentialStorage,
@@ -206,6 +207,7 @@ impl App {
             resolver: Some(resolver),
 
             profile_id: None,
+            sandbox_mode: SandboxMode::default(),
             persist_session_cookies: true,
             gpu_mode: GpuMode::Auto,
             credential_storage: CredentialStorage::System,
@@ -417,6 +419,18 @@ impl App {
         self
     }
 
+    /// Sets the Chromium process sandbox policy.
+    ///
+    /// Defaults to [`SandboxMode::Disabled`].
+    ///
+    /// [`SandboxMode::Chromium`] is checked before CEF starts and fails with a
+    /// [`RuntimeError`] when this platform or machine cannot enforce it. See
+    /// [`SandboxMode::Chromium`] for the per-platform requirements.
+    pub fn sandbox_mode(mut self, mode: SandboxMode) -> Self {
+        self.sandbox_mode = mode;
+        self
+    }
+
     pub fn persist_session_cookies(mut self, value: bool) -> Self {
         self.persist_session_cookies = value;
         self
@@ -465,6 +479,7 @@ impl App {
             async_handlers,
             stream_handlers,
             profile_id,
+            sandbox_mode,
             persist_session_cookies,
             gpu_mode,
             credential_storage,
@@ -487,6 +502,7 @@ impl App {
 
         let spec = RuntimeSpec {
             mode: RuntimeMode::Views,
+            sandbox_mode,
             start_url,
             asset_root,
             profile_id,
@@ -515,6 +531,7 @@ impl App {
             async_handlers,
             stream_handlers,
             profile_id,
+            sandbox_mode,
             persist_session_cookies,
             gpu_mode,
             credential_storage,
@@ -537,6 +554,7 @@ impl App {
 
         let spec = RuntimeSpec {
             mode: RuntimeMode::Embedded,
+            sandbox_mode,
             start_url,
             asset_root,
             profile_id,

@@ -32,6 +32,7 @@ pub use browser_registry::{BrowserId, BrowserMetadata, BrowserType};
 pub use window_registry::{WindowId, WindowMetadata};
 pub use gpu::GpuMode;
 pub use credentials::CredentialStorage;
+pub use spec::SandboxMode;
 pub use error::RuntimeError;
 pub use app::App;
 pub use resources::resource_dir;

@@ -93,6 +93,9 @@ pub fn parse_envelope(data: &[u8]) -> Option<(Envelope, &[u8])> {
 }
 
 /// Longest command name the wire format can express.
+///
+/// Command names are untrusted renderer input and must fit within the
+/// wire-format length limit.
 pub const MAX_CMD_LEN: usize = u16::MAX as usize;
 
 /// Encodes a command payload.
@@ -588,12 +591,15 @@ mod tests {
         assert!(rest.is_empty());
     }
 
+    // A command longer than the u16 wire-format limit cannot be represented
+    // without truncation, encoding must reject it rather than wrap the length
     #[test]
     fn cmd_payload_rejects_command_past_the_limit() {
         let cmd = "x".repeat(MAX_CMD_LEN + 1);
         assert!(encode_cmd_payload(&cmd, b"").is_none());
     }
 
+    // The command-length limit applies independently of the payload size
     #[test]
     fn cmd_payload_rejects_oversized_command_regardless_of_payload() {
         let cmd = "x".repeat(MAX_CMD_LEN + 1);

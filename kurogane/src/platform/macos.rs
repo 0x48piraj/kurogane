@@ -35,11 +35,20 @@ pub fn set_services(services: Arc<RuntimeServices>) {
 /// as an application, and inside a bundle every subprocess would then own a
 /// Dock tile of its own. CEF's helper executables install none.
 ///
+/// Under [`SandboxMode::Chromium`](crate::SandboxMode::Chromium) subprocesses
+/// enter the seatbelt sandbox before the framework is loaded.
+///
 /// Must run on the main thread before CEF initialization.
-pub fn init_ns_app() -> Result<(), RuntimeError> {
+pub fn init_ns_app(sandbox: crate::SandboxMode) -> Result<(), RuntimeError> {
+    let browser = crate::runtime::is_browser_process();
+
+    if !browser && matches!(sandbox, crate::SandboxMode::Chromium) {
+        crate::sandbox::macos::initialize_helper()?;
+    }
+
     load_framework()?;
 
-    if !crate::runtime::is_browser_process() {
+    if !browser {
         return Ok(());
     }
 

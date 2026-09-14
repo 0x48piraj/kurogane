@@ -16,7 +16,6 @@ winit = "0.30"
 raw-window-handle = "0.6"
 
 [dev-dependencies]
-kurogane-cli = { workspace = true }
 tempfile = "3"
 git2 = "0.21"
 
@@ -87,3 +86,7 @@ path = "scenarios/delegates.rs"
 [[example]]
 name = "stream-benchmark"
 path = "scenarios/stream-benchmark/main.rs"
+
+[[example]]
+name = "sandbox-smoke"
+path = "scenarios/sandbox-smoke.rs"

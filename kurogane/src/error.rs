@@ -23,6 +23,16 @@ pub enum RuntimeError {
 
     BrowserCreationFailed,
     WindowCreationFailed,
+
+    /// The requested sandbox cannot be enforced on this platform or layout.
+    SandboxUnsupported {
+        reason: String,
+    },
+
+    /// The requested sandbox is supported but not usable on this machine.
+    SandboxUnavailable {
+        reason: String,
+    },
 }
 
 impl Display for RuntimeError {
@@ -135,6 +145,23 @@ impl Display for RuntimeError {
                     "This usually indicates a Chromium internal error."
                 )
             ),
+
+            RuntimeError::SandboxUnsupported { reason } => write!(
+                f,
+                concat!(
+                    "Chromium sandbox is not supported here.\n\n",
+                    "Reason:\n",
+                    "  {}\n\n",
+                    "Use SandboxMode::Disabled (the default) in this environment."
+                ),
+                reason
+            ),
+
+            RuntimeError::SandboxUnavailable { reason } => write!(
+                f,
+                "Chromium sandbox is unavailable.\n\n{}",
+                reason
+            ),
         }
     }
 }
@@ -153,7 +180,9 @@ impl std::error::Error for RuntimeError {
             | RuntimeError::CefNotInstalled
             | RuntimeError::InvalidCefInstallation(_)
             | RuntimeError::BrowserCreationFailed
-            | RuntimeError::WindowCreationFailed => None,
+            | RuntimeError::WindowCreationFailed
+            | RuntimeError::SandboxUnsupported { .. }
+            | RuntimeError::SandboxUnavailable { .. } => None,
         }
     }
 }
