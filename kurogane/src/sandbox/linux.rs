@@ -83,9 +83,16 @@ fn user_namespaces_available() -> bool {
 
         let mut status = 0;
 
-        libc::waitpid(pid, &mut status, 0) == pid
-            && libc::WIFEXITED(status)
-            && libc::WEXITSTATUS(status) == 0
+        // Retry when a signal interrupts the wait
+        let waited = loop {
+            let result = libc::waitpid(pid, &mut status, 0);
+
+            if result != -1 || std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                break result;
+            }
+        };
+
+        waited == pid && libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0
     }
 }
 

@@ -70,7 +70,10 @@ pub(crate) fn initialize_helper() -> Result<(), RuntimeError> {
         .collect();
     let mut argv: Vec<*mut c_char> = args.iter().map(|arg| arg.as_ptr().cast_mut()).collect();
 
-    let context = unsafe { initialize(argv.len() as c_int, argv.as_mut_ptr()) };
+    // C argv ends with a null pointer that argc does not count
+    argv.push(std::ptr::null_mut());
+
+    let context = unsafe { initialize(args.len() as c_int, argv.as_mut_ptr()) };
 
     if context.is_null() {
         return Err(unavailable("cef_sandbox_initialize failed".into()));
