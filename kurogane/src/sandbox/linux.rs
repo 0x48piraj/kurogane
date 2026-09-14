@@ -72,11 +72,11 @@ fn user_namespaces_available() -> bool {
         }
 
         if pid == 0 {
-            let mapped = libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWPID | libc::CLONE_NEWNET)
-                == 0
-                && write_proc(c"/proc/self/setgroups", b"deny")
-                && write_proc(c"/proc/self/uid_map", uid_map.as_bytes())
-                && write_proc(c"/proc/self/gid_map", gid_map.as_bytes());
+            let mapped =
+                libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWPID | libc::CLONE_NEWNET) == 0
+                    && write_proc(c"/proc/self/setgroups", b"deny")
+                    && write_proc(c"/proc/self/uid_map", uid_map.as_bytes())
+                    && write_proc(c"/proc/self/gid_map", gid_map.as_bytes());
 
             libc::_exit(if mapped { 0 } else { 1 });
         }

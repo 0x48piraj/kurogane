@@ -21,8 +21,11 @@ mod windows;
 pub(crate) mod macos;
 
 /// Chromium switches that turn off all or part of the sandbox.
-const SANDBOX_DISABLING_SWITCHES: [&str; 3] =
-    ["no-sandbox", "disable-setuid-sandbox", "disable-gpu-sandbox"];
+const SANDBOX_DISABLING_SWITCHES: [&str; 3] = [
+    "no-sandbox",
+    "disable-setuid-sandbox",
+    "disable-gpu-sandbox",
+];
 
 /// Returns the CEF `Settings::no_sandbox` value for the policy.
 pub(crate) fn cef_no_sandbox(mode: SandboxMode) -> i32 {
@@ -114,7 +117,11 @@ mod tests {
     fn disabled_policy_adds_disabling_switches() {
         let mut flags = ChromiumFlags::default();
         apply_sandbox_flags(&mut flags, SandboxMode::Disabled);
-        assert!(SANDBOX_DISABLING_SWITCHES.iter().any(|name| flags.contains(name)));
+        assert!(
+            SANDBOX_DISABLING_SWITCHES
+                .iter()
+                .any(|name| flags.contains(name))
+        );
     }
 
     #[test]
@@ -125,7 +132,10 @@ mod tests {
             ChromiumFlag::Present("disable-gpu".into()),
         ]);
 
-        assert_eq!(sandbox_overrides(&flags, SandboxMode::Chromium), ["no-sandbox"]);
+        assert_eq!(
+            sandbox_overrides(&flags, SandboxMode::Chromium),
+            ["no-sandbox"]
+        );
         assert!(sandbox_overrides(&flags, SandboxMode::Disabled).is_empty());
     }
 

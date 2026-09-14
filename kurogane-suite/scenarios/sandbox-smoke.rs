@@ -108,7 +108,10 @@ mod probe {
                 continue;
             };
 
-            let Some(seccomp) = status.lines().find_map(|line| line.strip_prefix("Seccomp:")) else {
+            let Some(seccomp) = status
+                .lines()
+                .find_map(|line| line.strip_prefix("Seccomp:"))
+            else {
                 continue;
             };
 
