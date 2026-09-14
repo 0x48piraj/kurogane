@@ -3,6 +3,7 @@ use crate::chromium_flags::ChromiumFlag;
 use crate::fs::CanonicalRoot;
 use crate::credentials::CredentialStorage;
 use crate::gpu::GpuMode;
+use crate::scheme::CustomScheme;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,4 +51,5 @@ pub(crate) struct RuntimeSpec {
     pub scheduler: Option<PumpScheduler>,
     pub delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
     pub renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
+    pub scheme_handlers: Vec<CustomScheme>,
 }

@@ -18,8 +18,8 @@ wrap_browser_process_handler! {
         services: Arc<RuntimeServices>,
         spec: RuntimeSpec,
 
-        // Keep factory alive for browser lifetime; RefCell for interior mutability
-        scheme_factory: RefCell<Option<SchemeHandlerFactory>>,
+        // Keep factories alive for the browser lifetime; RefCell for interior mutability
+        scheme_factories: RefCell<Vec<SchemeHandlerFactory>>,
         default_client_stored: RefCell<Option<Client>>,
     }
 
@@ -33,28 +33,43 @@ wrap_browser_process_handler! {
             }
 
             // Register once per request context
-            if self.scheme_factory.borrow().is_none() {
-                // Only register the app:// scheme when serving local assets.
-                // In URL mode (App::url), there is no asset root and no scheme handler.
+            if self.scheme_factories.borrow().is_empty() {
+                let mut factories = std::mem::take(&mut *self.scheme_factories.borrow_mut());
+                let global = request_context_get_global_context().unwrap();
+
+                // Register `app://` only when serving local assets; URL mode (App::url) has
+                // no asset root or scheme handler.
                 if let Some(root) = &self.spec.asset_root {
                     debug!("Registering scheme handler factory for app://");
-                    // Create factory
                     let mut factory = crate::scheme::AppSchemeHandlerFactory::new(root.clone());
-
-                    // Register the scheme handler factory for app:// URLs
-                    let global = request_context_get_global_context().unwrap();
-
                     let result = global.register_scheme_handler_factory(
                         Some(&CefString::from("app")),
                         Some(&CefString::from("app")),
                         Some(&mut factory),
                     );
-
-                    // Store so CEF never calls freed memory
-                    *self.scheme_factory.borrow_mut() = Some(factory);
-
-                    debug!("register_scheme_handler_factory result: {}", result);
+                    debug!("register app:// scheme handler factory result: {result}");
+                    factories.push(factory);
                 }
+
+                // User-registered custom schemes are served on any host
+                for scheme in &self.spec.scheme_handlers {
+                    debug!("Registering scheme handler factory for {}://", scheme.name);
+                    let mut factory =
+                        crate::scheme::CustomSchemeHandlerFactory::new(scheme.handler.clone());
+                    let result = global.register_scheme_handler_factory(
+                        Some(&CefString::from(scheme.name.as_str())),
+                        Some(&CefString::from("")),
+                        Some(&mut factory),
+                    );
+                    debug!(
+                        "register {}:// scheme handler factory result: {result}",
+                        scheme.name
+                    );
+                    factories.push(factory);
+                }
+
+                // Store so CEF never calls freed memory
+                *self.scheme_factories.borrow_mut() = factories;
             }
 
             let is_closing = Arc::new(AtomicBool::new(false));

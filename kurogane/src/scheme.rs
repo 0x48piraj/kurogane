@@ -17,6 +17,10 @@
 //! - Focused on safe, predictable asset access within the runtime
 
 use cef::*;
+use cef::sys::cef_scheme_options_t::{
+    CEF_SCHEME_OPTION_STANDARD, CEF_SCHEME_OPTION_SECURE, CEF_SCHEME_OPTION_CORS_ENABLED,
+    CEF_SCHEME_OPTION_FETCH_ENABLED,
+};
 use std::sync::Arc;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -78,6 +82,70 @@ pub struct ResolvedAsset {
     pub path: PathBuf,
     pub bytes: Vec<u8>,
     pub mime: String,
+}
+
+/// Generates a [`ResourceHandler`] for requests on a custom scheme.
+///
+/// Implement this trait and pass the instance to
+/// [`App::register_scheme`](crate::App::register_scheme) to expose a custom
+/// scheme to the frontend. The trait method mirrors
+/// [`SchemeHandlerFactory::create`](cef::SchemeHandlerFactory) minus the
+/// scheme name which is fixed per registration.
+///
+/// The handler is invoked on the browser-process IO thread and must serve the
+/// response asynchronously or synchronously via a [`ResourceHandler`].
+///
+/// [`AppResourceHandler`] covers the common static-bytes case.
+pub trait SchemeHandler: Send + Sync {
+    /// Create a resource handler for `request`, or `None` to fail the request.
+    fn create(
+        &self,
+        browser: Option<&mut Browser>,
+        frame: Option<&mut Frame>,
+        request: Option<&mut Request>,
+    ) -> Option<ResourceHandler>;
+}
+
+/// A user-registered scheme and its handler.
+///
+/// Created via [`App::register_scheme`](crate::App::register_scheme).
+#[derive(Clone)]
+pub struct CustomScheme {
+    /// Scheme name, such as `data`. The `app` scheme is reserved for the
+    /// built-in asset scheme and cannot be registered.
+    pub name: String,
+    /// Handler invoked for every request on this scheme, regardless of host.
+    pub handler: Arc<dyn SchemeHandler>,
+}
+
+/// Returns the CEF scheme option flags applied to registered custom schemes.
+pub(crate) fn custom_scheme_flags() -> i32 {
+    CEF_SCHEME_OPTION_STANDARD as i32
+        | CEF_SCHEME_OPTION_SECURE as i32
+        | CEF_SCHEME_OPTION_CORS_ENABLED as i32
+        | CEF_SCHEME_OPTION_FETCH_ENABLED as i32
+}
+
+/// Validates a custom scheme name against CEF's naming rules.
+///
+/// Names start with a letter and may contain letters, digits, `+`, `-` and
+/// `.`. The `app` scheme is reserved for the built-in asset scheme.
+pub(crate) fn validate_scheme_name(name: &str) -> Result<(), &'static str> {
+    if name == "app" {
+        return Err("'app' is reserved for the built-in asset scheme");
+    }
+
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return Err("scheme name is empty");
+    };
+    if !first.is_ascii_alphabetic() {
+        return Err("scheme name must start with a letter");
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
+        return Err("scheme name may only contain letters, digits, '+', '-' or '.'");
+    }
+    Ok(())
 }
 
 //
@@ -149,6 +217,30 @@ wrap_scheme_handler_factory! {
 }
 
 //
+// CustomSchemeHandlerFactory
+//
+// CEF factory implementation that forwards requests to a user-supplied
+// SchemeHandler.
+
+wrap_scheme_handler_factory! {
+    pub struct CustomSchemeHandlerFactory {
+        handler: Arc<dyn SchemeHandler>,
+    }
+
+    impl SchemeHandlerFactory {
+        fn create(
+            &self,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            _scheme_name: Option<&CefString>,
+            request: Option<&mut Request>,
+        ) -> Option<ResourceHandler> {
+            self.handler.create(browser, frame, request)
+        }
+    }
+}
+
+//
 // ResourceHandler
 //
 
@@ -179,6 +271,10 @@ wrap_resource_handler! {
             1
         }
 
+        #[expect(
+            clippy::not_unsafe_ptr_arg_deref,
+            reason = "signature fixed by cef-rs ImplResourceHandler; CEF owns the buffer contract"
+        )]
         fn read(
             &self,
             data_out: *mut u8,
@@ -186,7 +282,11 @@ wrap_resource_handler! {
             bytes_read: Option<&mut i32>,
             _callback: Option<&mut ResourceReadCallback>,
         ) -> i32 {
-            let br = bytes_read.unwrap();
+            // Runs inside a CEF FFI callback; refuse rather than panic
+            let Some(br) = bytes_read else {
+                debug!("[app://] read: refused (no bytes_read out-parameter)");
+                return 0;
+            };
 
             // FFI safety guard (invalid pointer or non-positive length)
             if bytes_to_read <= 0 || data_out.is_null() {
@@ -216,7 +316,12 @@ wrap_resource_handler! {
             let read = remaining.len().min(bytes_to_read as usize);
 
             if read > 0 {
-                // Safety: writes at most bytes_to_read into valid CEF buffer
+                // SAFETY: CEF guarantees `data_out` is a writable buffer of at
+                // least `bytes_to_read` bytes that does not alias `self.data`.
+                // It is non-null and `bytes_to_read > 0` (checked above), and
+                // `read <= bytes_to_read`, so the copy stays in bounds. The raw
+                // copy never forms a reference to the possibly uninitialized
+                // buffer.
                 unsafe {
                     std::ptr::copy_nonoverlapping(remaining.as_ptr(), data_out, read);
                 }
@@ -353,6 +458,20 @@ fn mime_from_path(path: &Path) -> String {
             .essence_str()
             .to_owned(),
     }
+}
+
+/// Builds a [`ResourceHandler`] serving `data` once with the given MIME type
+/// and status code.
+///
+/// Convenience wrapper around [`AppResourceHandler`] for custom scheme
+/// handlers that answer with static bytes.
+pub fn resource_handler_from_bytes(data: Vec<u8>, mime: &str, status: i32) -> ResourceHandler {
+    AppResourceHandler::new(
+        Arc::<[u8]>::from(data),
+        Arc::new(AtomicUsize::new(0)),
+        mime.to_string(),
+        status,
+    )
 }
 
 #[cfg(test)]
@@ -683,6 +802,36 @@ mod tests {
         let s = ResolveError::Forbidden(PathBuf::from("/etc/passwd")).to_string();
         assert!(s.contains("Forbidden"));
         assert!(s.contains("passwd"));
+    }
+
+    // Custom scheme name validation
+
+    #[test]
+    fn scheme_name_accepts_valid_names() {
+        for name in ["data", "myapp", "k", "app-helper", "x.y", "a+b", "Kuro9"] {
+            assert!(validate_scheme_name(name).is_ok(), "{name} should be valid");
+        }
+    }
+
+    #[test]
+    fn scheme_name_reserves_builtin_app() {
+        assert!(validate_scheme_name("app").is_err());
+    }
+
+    #[test]
+    fn scheme_name_rejects_empty_and_bad_start() {
+        assert!(validate_scheme_name("").is_err());
+        assert!(validate_scheme_name("1data").is_err());
+        assert!(validate_scheme_name("-data").is_err());
+        assert!(validate_scheme_name(".data").is_err());
+    }
+
+    #[test]
+    fn scheme_name_rejects_invalid_characters() {
+        assert!(validate_scheme_name("da ta").is_err());
+        assert!(validate_scheme_name("da/ta").is_err());
+        assert!(validate_scheme_name("da*ta").is_err());
+        assert!(validate_scheme_name("app:foo").is_err());
     }
 }
 

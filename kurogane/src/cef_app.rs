@@ -14,8 +14,6 @@ use crate::credentials::apply_credential_flags;
 use crate::gpu::apply_gpu_flags;
 use crate::sandbox::apply_sandbox_flags;
 
-use cef::sys::cef_scheme_options_t::*;
-
 wrap_app! {
     pub struct KuroganeApp {
         services: Arc<RuntimeServices>,
@@ -72,11 +70,7 @@ wrap_app! {
 
             let registrar = registrar.unwrap();
 
-            let flags =
-                CEF_SCHEME_OPTION_STANDARD as i32 |
-                CEF_SCHEME_OPTION_SECURE as i32 |
-                CEF_SCHEME_OPTION_CORS_ENABLED as i32 |
-                CEF_SCHEME_OPTION_FETCH_ENABLED as i32;
+            let flags = crate::scheme::custom_scheme_flags();
 
             let result = registrar.add_custom_scheme(
                 Some(&CefString::from("app")),
@@ -84,6 +78,17 @@ wrap_app! {
             );
 
             debug!("Registered 'app://' scheme with flags {} result: {}", flags, result);
+
+            for scheme in &self.spec.scheme_handlers {
+                let result = registrar.add_custom_scheme(
+                    Some(&CefString::from(scheme.name.as_str())),
+                    flags,
+                );
+                debug!(
+                    "Registered '{}://' scheme with flags {} result: {}",
+                    scheme.name, flags, result
+                );
+            }
         }
 
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
@@ -91,7 +96,7 @@ wrap_app! {
                 KuroganeBrowserProcessHandler::new(
                     self.services.clone(),
                     self.spec.clone(),
-                    RefCell::new(None),
+                    RefCell::new(Vec::new()),
                     RefCell::new(None),
                 )
             )
