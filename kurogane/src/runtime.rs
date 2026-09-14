@@ -135,8 +135,20 @@ fn build_settings(
     }
 }
 
-/// Returns whether this process is the browser process.
-pub(crate) fn is_browser_process() -> bool {
+/// Returns whether this process is Chromium's browser process rather than
+/// one of its helper processes (renderer, GPU, utility) which run this same
+/// binary again with a `--type=` argument.
+///
+/// Code before [`App::run`](crate::App::run) runs in every process. Use this
+/// to guard one-time side effects:
+///
+/// ```no_run
+/// if kurogane::is_browser_process() {
+///     // create files, print, open sockets; once, not once per helper
+/// }
+/// kurogane::App::new("content").run_or_exit();
+/// ```
+pub fn is_browser_process() -> bool {
     browser_process_from_args(std::env::args_os())
 }
 

@@ -15,11 +15,14 @@ use crate::ipc::{
     Responder, BinaryResponder, SyncHandler, AsyncHandler, IpcContext, IpcError,
 };
 use crate::runtime::{RuntimeBootstrap, AppHandle, AppInstance};
-use crate::error::RuntimeError;
+use crate::error::{ConfigError, RuntimeError};
 use crate::spec::{RuntimeSpec, RuntimeMode, SandboxMode};
+use crate::scheme::{CustomScheme, SchemeHandler, validate_scheme_name};
 use crate::chromium_flags::ChromiumFlag;
 use crate::credentials::CredentialStorage;
 use crate::gpu::GpuMode;
+use crate::capability::Filesystem;
+use crate::acl::Origin;
 
 mod resolver;
 
@@ -165,12 +168,25 @@ pub trait ClientAppRendererDelegate: Send + Sync {
 /// Public application builder.
 ///
 /// Configures how the first browser instance starts.
+///
+/// # Processes
+///
+/// Chromium's helper processes (renderer, GPU, utility) run this same binary
+/// again, with a `--type=` argument. In a helper, the call that starts the
+/// runtime ([`App::run`], [`App::run_or_exit`], [`App::start`],
+/// [`App::build`] or [`App::start_embedded`]) becomes the helper and never
+/// returns, so code before it runs once per process. Keep side effects
+/// (files, output, sockets, spawned processes) out of that code. Guard them
+/// with [`is_browser_process`](crate::is_browser_process), or move them into
+/// [`ClientAppBrowserDelegate::on_context_initialized`] which only the
+/// browser process calls.
 pub struct App {
     source: Source,
     sync_handlers: HashMap<String, SyncHandler>,
     async_handlers: HashMap<String, AsyncHandler>,
     stream_handlers: HashMap<String, StreamFactory>,
 
+    acl: crate::acl::CommandAcl,
     cell: AppCell,
     resolver: Option<crate::ipc::handle_cell::AppCellResolver>,
 
@@ -183,6 +199,10 @@ pub struct App {
     scheduler: Option<PumpScheduler>,
     delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
     renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
+    scheme_handlers: Vec<CustomScheme>,
+
+    /// Builder misuse, reported together by `build()` before anything starts.
+    problems: Vec<ConfigError>,
 }
 
 impl App {
@@ -203,6 +223,7 @@ impl App {
             sync_handlers: HashMap::new(),
             async_handlers: HashMap::new(),
             stream_handlers: HashMap::new(),
+            acl: crate::acl::CommandAcl::new(),
             cell,
             resolver: Some(resolver),
 
@@ -215,16 +236,122 @@ impl App {
             scheduler: None,
             delegates: Vec::new(),
             renderer_delegates: Vec::new(),
+            scheme_handlers: Vec::new(),
+            problems: Vec::new(),
         }
     }
 
-    fn guard_unique_name(&self, name: &str) {
+    /// Records a second registration of `name`; `build()` reports it.
+    fn guard_unique_name(&mut self, name: &str) {
         if self.sync_handlers.contains_key(name)
             || self.async_handlers.contains_key(name)
             || self.stream_handlers.contains_key(name)
         {
-            panic!("handler '{name}' registered twice");
+            self.problems
+                .push(ConfigError::DuplicateHandler(name.to_owned()));
         }
+    }
+
+    /// Fails with every recorded configuration problem.
+    fn check_configuration(&mut self) -> Result<(), RuntimeError> {
+        if self.problems.is_empty() {
+            Ok(())
+        } else {
+            Err(RuntimeError::InvalidConfiguration(std::mem::take(
+                &mut self.problems,
+            )))
+        }
+    }
+
+    /// Restricts the command or stream `name` to the given origins.
+    ///
+    /// An origin is `scheme://host[:port]`, as `location.origin` reports it
+    /// (`app://app` for the bundled frontend, or the development server's origin);
+    /// parse one with [`Origin::parse`]. Calls for the same name accumulate.
+    ///
+    /// Until the first `permit`, `permit_all` or `deny_unlisted`, everything is
+    /// reachable from every origin, exactly as before. A refused invocation is
+    /// rejected with [`ErrorCode::Acl`](crate::ErrorCode::Acl); a refused stream
+    /// open fails the stream.
+    ///
+    /// Naming a capability command such as `fs.read_file` (granted through
+    /// [`Filesystem`]) or the opaque origin is a configuration error, reported
+    /// by [`App::build`].
+    pub fn permit(
+        mut self,
+        name: impl Into<String>,
+        origins: impl IntoIterator<Item = Origin>,
+    ) -> Self {
+        if let Err(problem) = self.acl.allow(name, origins) {
+            self.problems.push(problem);
+        }
+        self
+    }
+
+    /// Makes the command or stream `name` callable from any origin.
+    ///
+    /// Naming a capability command is a configuration error, reported by
+    /// [`App::build`].
+    pub fn permit_all(mut self, name: impl Into<String>) -> Self {
+        if let Err(problem) = self.acl.allow_all(name) {
+            self.problems.push(problem);
+        }
+        self
+    }
+
+    /// Restricts subscriptions to the event `name` to the given origins.
+    /// Calls for the same event accumulate.
+    ///
+    /// A refused subscription is removed and reported to the `onError` of
+    /// `kurogane.on(name, callback, onError)` with code `-4`. Naming the
+    /// opaque origin is a configuration error, reported by [`App::build`].
+    pub fn permit_event(
+        mut self,
+        name: impl Into<String>,
+        origins: impl IntoIterator<Item = Origin>,
+    ) -> Self {
+        if let Err(problem) = self.acl.allow_event(name, origins) {
+            self.problems.push(problem);
+        }
+        self
+    }
+
+    /// Makes the event `name` subscribable from any origin.
+    pub fn permit_event_all(mut self, name: impl Into<String>) -> Self {
+        self.acl.allow_event_all(name);
+        self
+    }
+
+    /// Switches to deny-by-default. Only commands, streams and events with a
+    /// configured rule ([`App::permit`], [`App::permit_all`],
+    /// [`App::permit_event`], [`App::permit_event_all`]) stay reachable, only
+    /// from their permitted origins. Capability commands stay authorized by
+    /// their grants.
+    pub fn deny_unlisted(mut self) -> Self {
+        self.acl.deny_unlisted();
+        self
+    }
+
+    /// Installs the filesystem capability: the `fs.*` commands, each call
+    /// authorized by filesystem grants for the invoking frame's origin.
+    ///
+    /// Grants are the only authorization for these commands; the ACL never
+    /// gates them, `permit` cannot name them and an origin without a grant
+    /// is rejected with [`ErrorCode::Capability`](crate::ErrorCode::Capability).
+    /// Without this call there are no `fs.*` commands at all.
+    ///
+    /// A handler or ACL rule already using an `fs.*` name (including a second
+    /// call to this method) is a configuration error, reported by [`App::build`].
+    pub fn filesystem(mut self, fs: Filesystem) -> Self {
+        for (command, handler) in crate::capability::commands::handlers(fs) {
+            let name = command.name();
+            self.guard_unique_name(name);
+            if let Err(problem) = self.acl.capability(name) {
+                self.problems.push(problem);
+            }
+            self.async_handlers.insert(name.to_owned(), handler);
+        }
+        self
     }
 
     /// Register a browser lifecycle delegate.
@@ -239,6 +366,37 @@ impl App {
         delegate: D,
     ) -> Self {
         self.renderer_delegates.push(Arc::new(delegate));
+        self
+    }
+
+    /// Register a handler for a custom URL scheme.
+    ///
+    /// The scheme becomes loadable by the frontend (e.g. for a scheme named
+    /// `data`, URLs `data://...`). The handler is invoked for every request on
+    /// the scheme regardless of host.
+    ///
+    /// The built-in `app` scheme (used to serve bundled assets) is reserved
+    /// and cannot be overridden.
+    ///
+    /// An invalid or reserved name, or one registered twice, is a
+    /// configuration error, reported by [`App::build`].
+    pub fn register_scheme<H: SchemeHandler + 'static>(
+        mut self,
+        name: impl Into<String>,
+        handler: H,
+    ) -> Self {
+        let name = name.into();
+        if let Err(reason) = validate_scheme_name(&name) {
+            self.problems
+                .push(ConfigError::InvalidScheme { name, reason });
+        } else if self.scheme_handlers.iter().any(|s| s.name == name) {
+            self.problems.push(ConfigError::DuplicateScheme(name));
+        } else {
+            self.scheme_handlers.push(CustomScheme {
+                name,
+                handler: Arc::new(handler),
+            });
+        }
         self
     }
 
@@ -265,7 +423,8 @@ impl App {
     ///
     /// Ignore it with _ when not needed.
     ///
-    /// Panics if a handler with the same name has already been registered.
+    /// A name that is already registered is a configuration error, reported
+    /// by [`App::build`].
     pub fn command<Req, Res, F>(mut self, name: impl Into<String>, f: F) -> Self
     where
         Req: serde::de::DeserializeOwned + Send + 'static,
@@ -296,7 +455,8 @@ impl App {
     /// The closure receives the deserialized request, a typed responder to
     /// send the response later and the shared runtime handle.
     ///
-    /// Panics if a handler with the same name has already been registered.
+    /// A name that is already registered is a configuration error, reported
+    /// by [`App::build`].
     pub fn async_command<Req, Res, F>(mut self, name: impl Into<String>, f: F) -> Self
     where
         Req: serde::de::DeserializeOwned + Send + 'static,
@@ -334,7 +494,8 @@ impl App {
     ///
     /// The closure receives the raw payload bytes and the shared runtime handle.
     ///
-    /// Panics if a handler with the same name has already been registered.
+    /// A name that is already registered is a configuration error, reported
+    /// by [`App::build`].
     pub fn binary_command<F>(mut self, name: impl Into<String>, f: F) -> Self
     where
         F: Fn(&[u8], &AppHandle) -> Result<Vec<u8>, IpcError> + Send + Sync + 'static,
@@ -354,7 +515,8 @@ impl App {
     /// The closure receives the payload bytes (owned), a BinaryResponder to
     /// send the response later and the shared runtime handle.
     ///
-    /// Panics if a handler with the same name has already been registered.
+    /// A name that is already registered is a configuration error, reported
+    /// by [`App::build`].
     pub fn async_binary_command<F>(mut self, name: impl Into<String>, f: F) -> Self
     where
         F: Fn(Vec<u8>, BinaryResponder, &AppHandle) + Send + Sync + 'static,
@@ -379,7 +541,8 @@ impl App {
     /// closure is called once per stream open to create a dedicated handler
     /// instance, giving each stream its own mutable state.
     ///
-    /// Panics if a handler with the same name is already registered.
+    /// A name that is already registered is a configuration error, reported
+    /// by [`App::build`].
     pub fn stream<F, H>(mut self, name: impl Into<String>, factory: F) -> Self
     where
         F: Fn() -> H + Send + Sync + 'static,
@@ -398,7 +561,8 @@ impl App {
     /// reference to the shared runtime handle, useful for broadcasting events
     /// or querying runtime state from within stream lifecycle callbacks.
     ///
-    /// Panics if a handler with the same name is already registered.
+    /// A name that is already registered is a configuration error, reported
+    /// by [`App::build`].
     pub fn stream_h<F, H>(mut self, name: impl Into<String>, factory: F) -> Self
     where
         F: Fn(&AppHandle) -> H + Send + Sync + 'static,
@@ -470,7 +634,16 @@ impl App {
     }
 
     /// Initialize CEF and return an AppInstance.
+    ///
+    /// In a Chromium helper process this never returns; see
+    /// [Processes](App#processes).
+    ///
+    /// # Errors
+    ///
+    /// [`RuntimeError::InvalidConfiguration`] lists every builder problem
+    /// before anything starts; the other variants report startup failures.
     pub fn build(mut self) -> Result<AppInstance, RuntimeError> {
+        self.check_configuration()?;
         let resolver = self.resolver.take().expect("build called twice");
 
         let Self {
@@ -478,6 +651,7 @@ impl App {
             sync_handlers,
             async_handlers,
             stream_handlers,
+            acl,
             profile_id,
             sandbox_mode,
             persist_session_cookies,
@@ -487,13 +661,14 @@ impl App {
             scheduler,
             delegates,
             renderer_delegates,
+            scheme_handlers,
             ..
         } = self;
 
         let rpc = RequestResponseSubsystem::new(sync_handlers, async_handlers);
         let event = EventSubsystem::new();
         let stream = StreamSubsystem::new(stream_handlers);
-        let router = Arc::new(IpcRouter::new(rpc, event, stream));
+        let router = Arc::new(IpcRouter::new(rpc, event, stream, acl));
 
         let ResolvedFrontend {
             asset_root,
@@ -513,6 +688,7 @@ impl App {
             scheduler,
             delegates,
             renderer_delegates,
+            scheme_handlers,
         };
 
         let instance = RuntimeBootstrap::start(spec, router)?;
@@ -522,7 +698,12 @@ impl App {
     }
 
     /// Starts the runtime in embedded mode.
+    ///
+    /// # Errors
+    ///
+    /// As [`App::build`].
     pub fn start_embedded(mut self) -> Result<AppInstance, RuntimeError> {
+        self.check_configuration()?;
         let resolver = self.resolver.take().expect("start_embedded called twice");
 
         let Self {
@@ -530,6 +711,7 @@ impl App {
             sync_handlers,
             async_handlers,
             stream_handlers,
+            acl,
             profile_id,
             sandbox_mode,
             persist_session_cookies,
@@ -539,13 +721,14 @@ impl App {
             scheduler,
             delegates,
             renderer_delegates,
+            scheme_handlers,
             ..
         } = self;
 
         let rpc = RequestResponseSubsystem::new(sync_handlers, async_handlers);
         let event = EventSubsystem::new();
         let stream = StreamSubsystem::new(stream_handlers);
-        let router = Arc::new(IpcRouter::new(rpc, event, stream));
+        let router = Arc::new(IpcRouter::new(rpc, event, stream, acl));
 
         let ResolvedFrontend {
             asset_root,
@@ -565,6 +748,7 @@ impl App {
             scheduler,
             delegates,
             renderer_delegates,
+            scheme_handlers,
         };
 
         let instance = RuntimeBootstrap::start_embedded(spec, router)?;
@@ -605,168 +789,199 @@ mod tests {
         Ok(vec![])
     }
 
-    #[test]
-    #[should_panic(expected = "registered twice")]
-    fn duplicate_json_command_panics() {
-        App::new("./dist")
-            .command("ping", json_noop)
-            .command("ping", json_noop);
+    fn async_noop(_: Value, r: Responder<Value>, _: &AppHandle) {
+        r.resolve(Ok(Value::Null));
+    }
+
+    struct NoopStream;
+
+    impl crate::ipc::StreamHandler for NoopStream {
+        fn on_chunk(&mut self, _: &[u8], _: &crate::ipc::StreamResponder) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    struct NoScheme;
+
+    impl SchemeHandler for NoScheme {
+        fn create(
+            &self,
+            _: Option<&mut Browser>,
+            _: Option<&mut Frame>,
+            _: Option<&mut Request>,
+        ) -> Option<ResourceHandler> {
+            None
+        }
+    }
+
+    fn duplicate(name: &str) -> Vec<ConfigError> {
+        vec![ConfigError::DuplicateHandler(name.to_owned())]
+    }
+
+    fn origin(text: &str) -> Origin {
+        Origin::parse(text).unwrap()
     }
 
     #[test]
-    #[should_panic(expected = "registered twice")]
-    fn duplicate_binary_command_panics() {
-        App::new("./dist")
-            .binary_command("upload", binary_noop)
-            .binary_command("upload", binary_noop);
+    fn every_handler_kind_shares_one_namespace() {
+        let cases = [
+            App::new("./dist")
+                .command("x", json_noop)
+                .command("x", json_noop),
+            App::new("./dist")
+                .binary_command("x", binary_noop)
+                .binary_command("x", binary_noop),
+            App::new("./dist")
+                .command("x", json_noop)
+                .binary_command("x", binary_noop),
+            App::new("./dist")
+                .binary_command("x", binary_noop)
+                .command("x", json_noop),
+            App::new("./dist")
+                .command("x", json_noop)
+                .async_command("x", async_noop),
+            App::new("./dist")
+                .async_command("x", async_noop)
+                .command("x", json_noop),
+            App::new("./dist")
+                .async_command("x", async_noop)
+                .binary_command("x", binary_noop),
+            App::new("./dist")
+                .stream("x", || NoopStream)
+                .stream("x", || NoopStream),
+            App::new("./dist")
+                .stream("x", || NoopStream)
+                .command("x", json_noop),
+            App::new("./dist")
+                .command("x", json_noop)
+                .stream("x", || NoopStream),
+            App::new("./dist")
+                .stream("x", || NoopStream)
+                .async_command("x", async_noop),
+        ];
+        for app in cases {
+            assert_eq!(app.problems, duplicate("x"));
+        }
     }
 
     #[test]
-    #[should_panic(expected = "registered twice")]
-    fn json_and_binary_names_cannot_collide() {
-        App::new("./dist")
-            .command("transfer", json_noop)
-            .binary_command("transfer", binary_noop);
+    fn build_reports_problems_before_starting_anything() {
+        let result = App::new("./dist")
+            .command("x", json_noop)
+            .command("x", json_noop)
+            .build();
+        match result {
+            Err(RuntimeError::InvalidConfiguration(problems)) => {
+                assert_eq!(problems, duplicate("x"))
+            }
+            Err(other) => panic!("expected a configuration error, got: {other}"),
+            Ok(_) => panic!("a misconfigured app must not start"),
+        }
     }
 
     #[test]
-    #[should_panic(expected = "registered twice")]
-    fn binary_and_json_names_cannot_collide() {
-        App::new("./dist")
-            .binary_command("transfer", binary_noop)
-            .command("transfer", json_noop);
+    fn scheme_names_are_validated() {
+        let app = App::new("./dist")
+            .register_scheme("app", NoScheme)
+            .register_scheme("1data", NoScheme)
+            .register_scheme("data", NoScheme)
+            .register_scheme("data", NoScheme);
+        assert!(matches!(
+            app.problems.as_slice(),
+            [
+                ConfigError::InvalidScheme { .. },
+                ConfigError::InvalidScheme { .. },
+                ConfigError::DuplicateScheme(name),
+            ] if name == "data"
+        ));
+        assert_eq!(app.scheme_handlers.len(), 1);
+    }
+
+    fn empty_filesystem() -> Filesystem {
+        Filesystem::builder()
+            .build()
+            .expect("an empty configuration always builds")
     }
 
     #[test]
-    #[should_panic(expected = "registered twice")]
-    fn duplicate_async_command_panics() {
-        App::new("./dist").command("go", json_noop).async_command(
-            "go",
-            |_: Value, r: Responder<Value>, _: &AppHandle| {
-                r.resolve(Ok(Value::Null));
-            },
+    fn filesystem_registers_every_fs_command() {
+        let app = App::new("./dist").filesystem(empty_filesystem());
+        for command in crate::capability::policy::FsCommand::ALL {
+            assert!(
+                app.async_handlers.contains_key(command.name()),
+                "{}",
+                command.name()
+            );
+        }
+        let bare = App::new("./dist");
+        assert!(
+            !bare
+                .async_handlers
+                .keys()
+                .any(|name| name.starts_with("fs."))
         );
     }
 
     #[test]
-    #[should_panic(expected = "registered twice")]
-    fn async_and_json_same_name_panics() {
-        App::new("./dist")
-            .async_command("task", |_: Value, r: Responder<Value>, _: &AppHandle| {
-                r.resolve(Ok(Value::Null));
-            })
-            .command("task", json_noop);
+    fn fs_names_clash_with_other_handlers_in_either_order() {
+        let after = App::new("./dist")
+            .filesystem(empty_filesystem())
+            .command("fs.read_file", json_noop);
+        assert_eq!(after.problems, duplicate("fs.read_file"));
+        let before = App::new("./dist")
+            .binary_command("fs.size", binary_noop)
+            .filesystem(empty_filesystem());
+        assert_eq!(before.problems, duplicate("fs.size"));
     }
 
     #[test]
-    #[should_panic(expected = "registered twice")]
-    fn async_and_binary_same_name_panics() {
-        App::new("./dist")
-            .async_command("upload", |_: Value, r: Responder<Value>, _: &AppHandle| {
-                r.resolve(Ok(Value::Null));
-            })
-            .binary_command("upload", binary_noop);
+    fn acl_rules_cannot_name_capability_commands() {
+        let permitted_after = App::new("./dist")
+            .filesystem(empty_filesystem())
+            .permit("fs.read_file", [origin("app://app")]);
+        assert_eq!(
+            permitted_after.problems,
+            vec![ConfigError::CapabilityCommand("fs.read_file".to_owned())]
+        );
+        let permitted_before = App::new("./dist")
+            .permit_all("fs.write_file")
+            .filesystem(empty_filesystem());
+        assert_eq!(
+            permitted_before.problems,
+            vec![ConfigError::CapabilityCommand("fs.write_file".to_owned())]
+        );
     }
 
     #[test]
-    #[should_panic(expected = "registered twice")]
-    fn stream_duplicate_panics() {
-        struct NoopStream;
-        impl crate::ipc::StreamHandler for NoopStream {
-            fn on_open(&mut self, _: &str, _: &crate::ipc::StreamResponder) -> Result<(), String> {
-                Ok(())
-            }
-            fn on_chunk(
-                &mut self,
-                _: &[u8],
-                _: &crate::ipc::StreamResponder,
-            ) -> Result<(), String> {
-                Ok(())
-            }
-            fn on_end(&mut self, _: &str, _: crate::ipc::StreamResponder) -> Result<(), String> {
-                Ok(())
-            }
-            fn on_error(&mut self, _: &str) {}
-        }
-        App::new("./dist")
-            .stream("data", || NoopStream)
-            .stream("data", || NoopStream);
+    fn the_opaque_origin_cannot_be_permitted() {
+        let app = App::new("./dist")
+            .permit("ping", [Origin::OPAQUE])
+            .permit_event("tick", [Origin::OPAQUE]);
+        assert_eq!(
+            app.problems,
+            vec![
+                ConfigError::OpaqueOrigin("ping".to_owned()),
+                ConfigError::OpaqueOrigin("tick".to_owned()),
+            ]
+        );
     }
 
     #[test]
-    #[should_panic(expected = "registered twice")]
-    fn stream_and_command_same_name_panics() {
-        struct NoopStream;
-        impl crate::ipc::StreamHandler for NoopStream {
-            fn on_open(&mut self, _: &str, _: &crate::ipc::StreamResponder) -> Result<(), String> {
-                Ok(())
-            }
-            fn on_chunk(
-                &mut self,
-                _: &[u8],
-                _: &crate::ipc::StreamResponder,
-            ) -> Result<(), String> {
-                Ok(())
-            }
-            fn on_end(&mut self, _: &str, _: crate::ipc::StreamResponder) -> Result<(), String> {
-                Ok(())
-            }
-            fn on_error(&mut self, _: &str) {}
-        }
-        App::new("./dist")
-            .stream("data", || NoopStream)
-            .command("data", json_noop);
-    }
-
-    #[test]
-    #[should_panic(expected = "registered twice")]
-    fn command_and_stream_same_name_panics() {
-        struct NoopStream;
-        impl crate::ipc::StreamHandler for NoopStream {
-            fn on_open(&mut self, _: &str, _: &crate::ipc::StreamResponder) -> Result<(), String> {
-                Ok(())
-            }
-            fn on_chunk(
-                &mut self,
-                _: &[u8],
-                _: &crate::ipc::StreamResponder,
-            ) -> Result<(), String> {
-                Ok(())
-            }
-            fn on_end(&mut self, _: &str, _: crate::ipc::StreamResponder) -> Result<(), String> {
-                Ok(())
-            }
-            fn on_error(&mut self, _: &str) {}
-        }
-        App::new("./dist")
-            .command("data", json_noop)
-            .stream("data", || NoopStream);
-    }
-
-    #[test]
-    #[should_panic(expected = "registered twice")]
-    fn stream_and_async_same_name_panics() {
-        struct NoopStream;
-        impl crate::ipc::StreamHandler for NoopStream {
-            fn on_open(&mut self, _: &str, _: &crate::ipc::StreamResponder) -> Result<(), String> {
-                Ok(())
-            }
-            fn on_chunk(
-                &mut self,
-                _: &[u8],
-                _: &crate::ipc::StreamResponder,
-            ) -> Result<(), String> {
-                Ok(())
-            }
-            fn on_end(&mut self, _: &str, _: crate::ipc::StreamResponder) -> Result<(), String> {
-                Ok(())
-            }
-            fn on_error(&mut self, _: &str) {}
-        }
-        App::new("./dist")
-            .stream("task", || NoopStream)
-            .async_command("task", |_: Value, r: Responder<Value>, _: &AppHandle| {
-                r.resolve(Ok(Value::Null));
-            });
+    fn event_rules_are_recorded_separately_from_commands() {
+        let app = App::new("./dist")
+            .permit_event("tick", [origin("app://app")])
+            .permit_event_all("public")
+            .deny_unlisted();
+        assert!(app.problems.is_empty());
+        assert!(app.acl.allows_event("tick", &origin("app://app")));
+        assert!(
+            !app.acl
+                .allows_event("tick", &origin("https://evil.example"))
+        );
+        assert!(
+            app.acl
+                .allows_event("public", &origin("https://evil.example"))
+        );
+        assert!(!app.acl.allows("tick", &origin("app://app")));
     }
 }
