@@ -77,45 +77,95 @@ fn main() -> ExitCode {
 
 #[cfg(target_os = "linux")]
 mod probe {
-    use std::path::Path;
+    use std::collections::HashMap;
 
-    /// Returns whether this app's renderer runs under seccomp-bpf, if one is
-    /// running.
+    /// A process's parent pid and command line.
+    type Process = (u32, String);
+
+    /// Returns whether this app's renderers run under seccomp-bpf, if any
+    /// renderer is running.
     ///
-    /// Matches on the command line: sandboxed renderers are not dumpable, so
-    /// their `/proc/<pid>/exe` link is unreadable.
+    /// Renderers are found among this process's descendants. Their program
+    /// name is unreliable and sandboxed ones are not dumpable; so
+    /// `/proc/<pid>/exe` is unreadable.
     pub fn renderer_sandboxed() -> Option<bool> {
-        let exe = std::env::current_exe().ok()?;
-        let exe_name = exe.file_name()?;
+        let processes: HashMap<u32, Process> = std::fs::read_dir("/proc")
+            .ok()?
+            .flatten()
+            .filter_map(|entry| entry.file_name().to_str()?.parse().ok())
+            .filter_map(|pid| Some((pid, (parent_of(pid)?, cmdline_of(pid)?))))
+            .collect();
 
-        for entry in std::fs::read_dir("/proc").ok()?.flatten() {
-            let dir = entry.path();
+        let me = std::process::id();
+        let mut found = None;
 
-            let Ok(cmdline) = std::fs::read(dir.join("cmdline")) else {
-                continue;
-            };
-
-            let mut args = cmdline.split(|b| *b == 0);
-
-            let program = args.next().and_then(|arg| std::str::from_utf8(arg).ok());
-            if program.and_then(|p| Path::new(p).file_name()) != Some(exe_name) {
+        for (&pid, (parent, cmdline)) in &processes {
+            if !descends_from(pid, me, &processes) || !is_renderer(cmdline, processes.get(parent)) {
                 continue;
             }
 
-            if !args.any(|arg| arg == b"--type=renderer") {
-                continue;
-            }
-
-            let Ok(status) = std::fs::read_to_string(dir.join("status")) else {
+            let Ok(status) = std::fs::read_to_string(format!("/proc/{pid}/status")) else {
                 continue;
             };
 
-            let seccomp = status.lines().find_map(|line| line.strip_prefix("Seccomp:"))?;
+            let Some(seccomp) = status.lines().find_map(|line| line.strip_prefix("Seccomp:")) else {
+                continue;
+            };
 
-            return Some(seccomp.trim() == "2");
+            if seccomp.trim() == "2" {
+                return Some(true);
+            }
+
+            found = Some(false);
         }
 
-        None
+        found
+    }
+
+    /// Returns whether a process is a renderer.
+    ///
+    /// Chrome retitles renderers `--type=renderer` but CEF's keep the command
+    /// line of the zygote they were forked from. The zygote marked
+    /// `--no-zygote-sandbox` serves helpers other than renderers.
+    fn is_renderer(cmdline: &str, parent: Option<&Process>) -> bool {
+        has_arg(cmdline, "--type=renderer")
+            || (has_arg(cmdline, "--type=zygote")
+                && !has_arg(cmdline, "--no-zygote-sandbox")
+                && parent.is_some_and(|(_, parent)| has_arg(parent, "--type=zygote")))
+    }
+
+    fn has_arg(cmdline: &str, arg: &str) -> bool {
+        cmdline.split_whitespace().any(|a| a == arg)
+    }
+
+    /// Reads a command line with arguments separated by spaces.
+    fn cmdline_of(pid: u32) -> Option<String> {
+        let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+
+        Some(String::from_utf8_lossy(&cmdline).replace('\0', " "))
+    }
+
+    /// Reads a process's parent pid from `/proc/<pid>/stat`.
+    fn parent_of(pid: u32) -> Option<u32> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+
+        // The command name may contain spaces; the fields after it are
+        // state, then parent pid
+        let fields = &stat[stat.rfind(')')? + 1..];
+
+        fields.split_whitespace().nth(1)?.parse().ok()
+    }
+
+    fn descends_from(mut pid: u32, ancestor: u32, processes: &HashMap<u32, Process>) -> bool {
+        for _ in 0..64 {
+            match processes.get(&pid) {
+                Some(&(parent, _)) if parent == ancestor => return true,
+                Some(&(parent, _)) if parent > 1 => pid = parent,
+                _ => return false,
+            }
+        }
+
+        false
     }
 }
 
