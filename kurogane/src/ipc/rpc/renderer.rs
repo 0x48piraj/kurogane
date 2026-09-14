@@ -1,7 +1,6 @@
 use cef::*;
 
 use crate::debug;
-use crate::ipc::browser_state::IpcError;
 use crate::ipc::envelope::*;
 use crate::ipc::renderer_state::renderer_state;
 use crate::ipc::utils::create_array_buffer_from_bytes;
@@ -57,13 +56,7 @@ fn resolve_binary(id: i32, payload: &[u8]) {
 
 fn on_reject(envelope: &Envelope, payload: &[u8]) -> bool {
     let id = envelope.correlation_id as i32;
-    let (error_code, error_msg) = if payload.len() >= 4 {
-        let code = i32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
-        let msg = String::from_utf8_lossy(&payload[4..]);
-        (code, msg)
-    } else {
-        (0, String::from_utf8_lossy(payload))
-    };
+    let (error_code, error_msg) = decode_error_payload(payload);
     resolve_cef_string(id, false, &CefString::from(error_msg.as_ref()), error_code);
     true
 }
@@ -89,11 +82,9 @@ pub fn resolve_cef_string(id: i32, success: bool, payload: &CefString, error_cod
                 let mut v = v8_value_create_string(Some(payload)).unwrap();
                 promise.resolve_promise(Some(&mut v));
             } else {
-                let reject_cef = CefString::from(
-                    IpcError::new(payload.to_string(), error_code)
-                        .to_string()
-                        .as_str(),
-                );
+                // The "{code}: {message}" form of IpcError's Display, which
+                // the bridge's toError parses.
+                let reject_cef = CefString::from(format!("{error_code}: {payload}").as_str());
                 promise.reject_promise(Some(&reject_cef));
             }
 

@@ -6,7 +6,7 @@
 use cef::*;
 
 use crate::debug;
-use crate::ipc::browser_state::IpcContext;
+use crate::ipc::browser_state::{ErrorCode, IpcContext};
 use crate::ipc::envelope::*;
 use crate::ipc::event::EventSubsystem;
 use crate::ipc::transport::message::build_message;
@@ -59,6 +59,8 @@ impl EventSubsystem {
                 id: envelope.correlation_id,
                 frame: frame.clone(),
                 browser_id,
+                frame_id: ctx.frame,
+                origin: ctx.origin,
             },
         );
 
@@ -79,16 +81,33 @@ impl EventSubsystem {
             }
         };
 
-        if let Some(browser_id) = ctx.browser_id {
-            self.remove_subscription(event_name, browser_id, envelope.correlation_id);
-            debug!(
-                "[Event Browser] unsubscribed '{}' browser={} id={}",
-                event_name,
-                browser_id.as_u32(),
-                envelope.correlation_id,
-            );
-        }
+        let removed = self.remove_subscription(event_name, envelope.correlation_id, &ctx);
+        debug!(
+            "[Event Browser] unsubscribe '{}' id={} removed={}",
+            event_name, envelope.correlation_id, removed,
+        );
         true
+    }
+
+    /// Tells the renderer that the subscription carried by `envelope` was
+    /// refused by the ACL, so its `onError` fires instead of silence.
+    pub(crate) fn refuse(frame: &Frame, envelope: &Envelope, message: &str) {
+        if frame.is_valid() == 0 {
+            return;
+        }
+        let reply = Envelope {
+            version: ENVELOPE_VERSION,
+            subsystem: SUB_EVENT,
+            opcode: EVENT_REFUSED,
+            flags: 0,
+            correlation_id: envelope.correlation_id,
+            payload_kind: PAYLOAD_BINARY,
+        };
+        let payload = encode_error_payload(ErrorCode::Acl.wire(), message);
+        match build_message("kurogane_event", &reply, &payload) {
+            Some(mut msg) => frame.send_process_message(ProcessId::RENDERER, Some(&mut msg)),
+            None => debug!("[Event Browser] failed to build refusal message"),
+        }
     }
 
     /// Broadcast an event to all subscribers of a given event name.

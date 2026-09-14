@@ -6,7 +6,11 @@
 //!
 //! The frame is stored alongside each handler so StreamResponders can be
 //! reconstructed on every callback, eliminating the need for handlers to
-//! store an Option<StreamResponder> themselves.
+//! store an `Option<StreamResponder>` themselves.
+//!
+//! Streams are keyed by the frame and origin that opened them plus the
+//! stream id, so a frame can only feed, end or cancel its own streams, and
+//! only while it shows the same origin.
 
 use cef::*;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -16,7 +20,7 @@ use crate::ipc::browser_state::IpcContext;
 use crate::ipc::envelope::{
     Envelope, STREAM_OPEN, STREAM_DATA, STREAM_END, STREAM_ERROR, STREAM_CANCEL, decode_cmd_payload,
 };
-use crate::ipc::stream::{StreamResponder, StreamSubsystem};
+use crate::ipc::stream::{StreamKey, StreamResponder, StreamSubsystem};
 
 impl StreamSubsystem {
     /// Handle a stream message arriving from the renderer (browser-side dispatch).
@@ -27,12 +31,13 @@ impl StreamSubsystem {
         payload: &[u8],
         ctx: IpcContext,
     ) -> bool {
+        let key = StreamKey::new(&ctx, envelope.correlation_id);
         match envelope.opcode {
-            STREAM_OPEN => self.on_open(frame, envelope, payload, ctx),
-            STREAM_DATA => self.on_data(envelope, payload),
-            STREAM_END => self.on_end(envelope, payload),
-            STREAM_ERROR => self.on_error(envelope, payload),
-            STREAM_CANCEL => self.on_cancel(envelope),
+            STREAM_OPEN => self.on_open(frame, key, payload, ctx),
+            STREAM_DATA => self.on_data(key, payload),
+            STREAM_END => self.on_end(key, payload),
+            STREAM_ERROR => self.on_error(key, payload),
+            STREAM_CANCEL => self.on_cancel(&key),
             _ => {
                 debug!("[Stream Browser] unknown opcode {}", envelope.opcode);
                 false
@@ -40,20 +45,13 @@ impl StreamSubsystem {
         }
     }
 
-    fn on_cancel(&self, envelope: &Envelope) -> bool {
-        let stream_id = envelope.correlation_id;
-        self.streams.lock().unwrap().remove(&stream_id);
+    fn on_cancel(&self, key: &StreamKey) -> bool {
+        self.streams.lock().unwrap().remove(key);
         true
     }
 
-    fn on_open(
-        &self,
-        frame: &mut Frame,
-        envelope: &Envelope,
-        payload: &[u8],
-        ctx: IpcContext,
-    ) -> bool {
-        let stream_id = envelope.correlation_id;
+    fn on_open(&self, frame: &mut Frame, key: StreamKey, payload: &[u8], ctx: IpcContext) -> bool {
+        let stream_id = key.id;
 
         let (handler_name, metadata_bytes) = match decode_cmd_payload(payload) {
             Some(v) => v,
@@ -103,7 +101,7 @@ impl StreamSubsystem {
                 // Retain the handler and frame for subsequent stream callbacks
                 {
                     let mut streams = self.streams.lock().unwrap();
-                    streams.insert(stream_id, (browser_id, handler, frame.clone()));
+                    streams.insert(key, (browser_id, handler, frame.clone()));
                 }
 
                 // Complete the open handshake by acknowledging success
@@ -128,10 +126,10 @@ impl StreamSubsystem {
         }
     }
 
-    fn on_data(&self, envelope: &Envelope, payload: &[u8]) -> bool {
-        let stream_id = envelope.correlation_id;
+    fn on_data(&self, key: StreamKey, payload: &[u8]) -> bool {
+        let stream_id = key.id;
 
-        let entry = self.streams.lock().unwrap().remove(&stream_id);
+        let entry = self.streams.lock().unwrap().remove(&key);
         let Some((browser_id, mut handler, frame)) = entry else {
             debug!("[Stream Browser] data for unknown stream {}", stream_id);
             return false;
@@ -146,7 +144,7 @@ impl StreamSubsystem {
                 self.streams
                     .lock()
                     .unwrap()
-                    .insert(stream_id, (browser_id, handler, frame));
+                    .insert(key, (browser_id, handler, frame));
             }
             Ok(Err(e)) => {
                 debug!("[Stream Browser] on_chunk error: {}", e);
@@ -161,12 +159,12 @@ impl StreamSubsystem {
         true
     }
 
-    fn on_end(&self, envelope: &Envelope, payload: &[u8]) -> bool {
-        let stream_id = envelope.correlation_id;
+    fn on_end(&self, key: StreamKey, payload: &[u8]) -> bool {
+        let stream_id = key.id;
         let result_str = String::from_utf8_lossy(payload).to_string();
 
         // Remove entry, take ownership of handler and frame
-        let entry = self.streams.lock().unwrap().remove(&stream_id);
+        let entry = self.streams.lock().unwrap().remove(&key);
         if let Some((_, mut handler, frame)) = entry {
             let responder = StreamResponder::new(frame, stream_id);
             let responder_clone = responder.clone();
@@ -193,11 +191,11 @@ impl StreamSubsystem {
         true
     }
 
-    fn on_error(&self, envelope: &Envelope, payload: &[u8]) -> bool {
-        let stream_id = envelope.correlation_id;
+    fn on_error(&self, key: StreamKey, payload: &[u8]) -> bool {
+        let stream_id = key.id;
         let err_msg = String::from_utf8_lossy(payload).to_string();
 
-        let entry = self.streams.lock().unwrap().remove(&stream_id);
+        let entry = self.streams.lock().unwrap().remove(&key);
         if let Some((_, mut handler, _)) = entry {
             handler.on_error(&err_msg);
         } else {

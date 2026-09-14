@@ -38,11 +38,20 @@ pub fn renderer_state() -> &'static Mutex<RendererState> {
     RENDERER_STATE.get_or_init(Default::default)
 }
 
+/// One `core.on()` subscription in the renderer.
+struct EventCallback {
+    id: i64,
+    context: V8Context,
+    callback: V8Value,
+    /// Called once if the browser refuses the subscription.
+    on_error: Option<V8Value>,
+}
+
 /// Registry of V8 callbacks registered via `core.on()`.
 pub struct EventCallbackRegistry {
     next_id: i64,
     // Callbacks registered per event name
-    callbacks: HashMap<String, Vec<(i64, V8Context, V8Value)>>,
+    callbacks: HashMap<String, Vec<EventCallback>>,
 }
 
 impl Default for EventCallbackRegistry {
@@ -60,20 +69,32 @@ impl EventCallbackRegistry {
     }
 
     /// Register a callback for an event and return its subscription id.
-    pub fn register(&mut self, event: &str, ctx: V8Context, callback: V8Value) -> i64 {
+    /// `on_error` is called instead if the browser refuses the subscription.
+    pub fn register(
+        &mut self,
+        event: &str,
+        ctx: V8Context,
+        callback: V8Value,
+        on_error: Option<V8Value>,
+    ) -> i64 {
         let id = self.next_id;
         self.next_id = self.next_id.checked_add(1).unwrap_or(1);
         self.callbacks
             .entry(event.to_string())
             .or_default()
-            .push((id, ctx, callback));
+            .push(EventCallback {
+                id,
+                context: ctx,
+                callback,
+                on_error,
+            });
         id
     }
 
     /// Look up the event name for a subscription id.
     pub fn get_event_name(&self, id: i64) -> Option<String> {
         for (event_name, entries) in &self.callbacks {
-            if entries.iter().any(|(sid, _, _)| *sid == id) {
+            if entries.iter().any(|entry| entry.id == id) {
                 return Some(event_name.clone());
             }
         }
@@ -82,14 +103,23 @@ impl EventCallbackRegistry {
 
     /// Unregister a callback by subscription id.
     pub fn unregister(&mut self, id: i64) -> bool {
-        for callbacks in self.callbacks.values_mut() {
-            let before = callbacks.len();
-            callbacks.retain(|(sid, _, _)| *sid != id);
-            if callbacks.len() != before {
-                return true;
-            }
+        self.remove(id).is_some()
+    }
+
+    /// Removes a subscription, returning its context and `onError` callback.
+    pub fn remove(&mut self, id: i64) -> Option<(V8Context, Option<V8Value>)> {
+        let (event, index) = self.callbacks.iter().find_map(|(event, entries)| {
+            entries
+                .iter()
+                .position(|entry| entry.id == id)
+                .map(|index| (event.clone(), index))
+        })?;
+        let entries = self.callbacks.get_mut(&event)?;
+        let removed = entries.remove(index);
+        if entries.is_empty() {
+            self.callbacks.remove(&event);
         }
-        false
+        Some((removed.context, removed.on_error))
     }
 
     /// Collect the callbacks registered for an event without invoking them.
@@ -99,7 +129,7 @@ impl EventCallbackRegistry {
         match self.callbacks.get(event) {
             Some(entries) => entries
                 .iter()
-                .map(|(_, ctx, cb)| (ctx.clone(), cb.clone()))
+                .map(|entry| (entry.context.clone(), entry.callback.clone()))
                 .collect(),
             None => Vec::new(),
         }
@@ -108,7 +138,7 @@ impl EventCallbackRegistry {
     pub fn clear_context(&mut self, ctx: &V8Context) {
         let mut target = ctx.clone();
         self.callbacks.retain(|_, callbacks| {
-            callbacks.retain(|(_, stored_ctx, _)| stored_ctx.is_same(Some(&mut target)) == 0);
+            callbacks.retain(|entry| entry.context.is_same(Some(&mut target)) == 0);
             !callbacks.is_empty()
         });
     }

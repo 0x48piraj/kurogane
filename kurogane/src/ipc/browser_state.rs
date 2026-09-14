@@ -1,39 +1,87 @@
 //! Browser-process IPC dispatch and transaction state.
 //!
-//! Defines the immutable command dispatcher used by the browser process
-//! and the runtime state required for active IPC transactions.
+//! Defines the error type handlers return and the context the browser
+//! process records for every message.
 
+use std::fmt;
+use std::num::NonZeroU16;
+
+use cef::{CefStringUtf16, Frame, ImplFrame};
+
+use crate::acl::Origin;
 use crate::browser_registry::BrowserId;
 
-pub type IpcResult = Result<String, String>;
+/// Classifies an [`IpcError`] by the numeric code exposed to the renderer.
+/// Runtime errors use the fixed codes `0` through `-8`; applications may use
+/// positive codes through [`ErrorCode::App`].
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ErrorCode {
+    /// A handler reported a failure (`0`, the default).
+    Handler,
+    /// The handler panicked (`-1`).
+    Panic,
+    /// The request or response could not be decoded or encoded (`-2`).
+    Buffer,
+    /// The handler dropped its responder without resolving (`-3`).
+    Dropped,
+    /// The ACL refused the calling origin (`-4`).
+    Acl,
+    /// No capability grant of the origin covers the operation (`-5`).
+    Capability,
+    /// The path is outside the granted roots, denied, or a link (`-6`).
+    PathDenied,
+    /// The path is malformed (`-7`).
+    PathInvalid,
+    /// The file exceeds the transfer limit (`-8`).
+    TooLarge,
+    /// An application-defined code, sent as is.
+    App(NonZeroU16),
+}
 
-/// A structured error with a numeric code and human-readable message.
+impl ErrorCode {
+    /// The numeric code the renderer receives.
+    pub fn wire(self) -> i32 {
+        match self {
+            ErrorCode::Handler => 0,
+            ErrorCode::Panic => -1,
+            ErrorCode::Buffer => -2,
+            ErrorCode::Dropped => -3,
+            ErrorCode::Acl => -4,
+            ErrorCode::Capability => -5,
+            ErrorCode::PathDenied => -6,
+            ErrorCode::PathInvalid => -7,
+            ErrorCode::TooLarge => -8,
+            ErrorCode::App(code) => i32::from(code.get()),
+        }
+    }
+}
+
+/// A structured error with a numeric [`ErrorCode`] and human-readable message.
 ///
-/// Displays as "{code}: {message}", used as the serialized error format.
+/// Displays as `"{code}: {message}"`, the format the renderer parses into an
+/// `Error` with a numeric `.code`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IpcError {
-    pub message: String,
-    pub code: i32,
+    message: String,
+    code: ErrorCode,
 }
 
 impl IpcError {
-    /// Code used for handler-reported errors (default)
-    pub const CODE_HANDLER: i32 = 0;
-    /// Code used when a handler panics
-    pub const CODE_PANIC: i32 = -1;
-    /// Code used for buffer/serialization failures
-    pub const CODE_BUFFER: i32 = -2;
-    /// Code used when a responder is dropped without resolving
-    pub const CODE_DROPPED: i32 = -3;
+    /// A handler failure ([`ErrorCode::Handler`]).
+    pub fn new(message: impl Into<String>) -> Self {
+        Self::with_code(message, ErrorCode::Handler)
+    }
 
-    pub fn new(message: impl Into<String>, code: i32) -> Self {
+    /// A failure of class `code`.
+    pub fn with_code(message: impl Into<String>, code: ErrorCode) -> Self {
         Self {
             message: message.into(),
             code,
         }
     }
 
-    pub fn code(&self) -> i32 {
+    pub fn code(&self) -> ErrorCode {
         self.code
     }
 
@@ -42,9 +90,9 @@ impl IpcError {
     }
 }
 
-impl std::fmt::Display for IpcError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.code, self.message)
+impl fmt::Display for IpcError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.code.wire(), self.message)
     }
 }
 
@@ -52,26 +100,49 @@ impl std::error::Error for IpcError {}
 
 impl From<String> for IpcError {
     fn from(message: String) -> Self {
-        Self::new(message, Self::CODE_HANDLER)
+        Self::new(message)
     }
 }
 
 impl From<&str> for IpcError {
     fn from(message: &str) -> Self {
-        Self::new(message.to_string(), Self::CODE_HANDLER)
+        Self::new(message)
     }
 }
 
 impl From<serde_json::Error> for IpcError {
     fn from(e: serde_json::Error) -> Self {
-        Self::new(e.to_string(), Self::CODE_BUFFER)
+        Self::with_code(e.to_string(), ErrorCode::Buffer)
+    }
+}
+
+/// Identifies the frame a message came from (CEF's frame identifier).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FrameId(String);
+
+impl FrameId {
+    #[cfg(test)]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// The identifier of a CEF frame.
+    pub fn of(frame: &Frame) -> Self {
+        let id: CefStringUtf16 = (&frame.identifier()).into();
+        Self(id.to_string())
     }
 }
 
 /// Contextual information for an IPC dispatch call.
 pub struct IpcContext {
     pub browser_id: Option<BrowserId>,
-    pub frame_id: Option<String>,
+    /// The frame that sent the message. Follow-up messages (cancel, stream
+    /// data, unsubscribe) are only honored from the frame and origin that
+    /// opened what they refer to.
+    pub frame: FrameId,
+    /// The origin of that frame, computed in the browser process from the
+    /// frame URL (never from the payload). Opaque when the frame has no host.
+    pub origin: Origin,
 }
 
 #[cfg(test)]
@@ -79,95 +150,53 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ipc_error_display_format() {
-        let err = IpcError::new("handler panicked", -1);
-        assert_eq!(format!("{err}"), "-1: handler panicked");
-    }
-
-    #[test]
-    fn ipc_error_display_zero_code() {
-        let err = IpcError::new("invalid JSON: unexpected token", 0);
-        assert_eq!(format!("{err}"), "0: invalid JSON: unexpected token");
-    }
-
-    #[test]
-    fn ipc_error_display_negative_code() {
-        let err = IpcError::new("handler dropped responder without resolving", -3);
+    fn displays_the_wire_code_and_the_message() {
+        assert_eq!(IpcError::new("boom").to_string(), "0: boom");
         assert_eq!(
-            format!("{err}"),
-            "-3: handler dropped responder without resolving"
+            IpcError::with_code("handler panicked", ErrorCode::Panic).to_string(),
+            "-1: handler panicked"
         );
+        let custom = ErrorCode::App(NonZeroU16::new(42).unwrap());
+        assert_eq!(
+            IpcError::with_code("custom", custom).to_string(),
+            "42: custom"
+        );
+        assert_eq!(IpcError::new("").to_string(), "0: ");
     }
 
     #[test]
-    fn ipc_error_display_large_positive_code() {
-        let err = IpcError::new("custom error", i32::MAX);
-        assert_eq!(format!("{err}"), format!("{}: custom error", i32::MAX));
+    fn runtime_classes_keep_their_wire_codes() {
+        let classes = [
+            (ErrorCode::Handler, 0),
+            (ErrorCode::Panic, -1),
+            (ErrorCode::Buffer, -2),
+            (ErrorCode::Dropped, -3),
+            (ErrorCode::Acl, -4),
+            (ErrorCode::Capability, -5),
+            (ErrorCode::PathDenied, -6),
+            (ErrorCode::PathInvalid, -7),
+            (ErrorCode::TooLarge, -8),
+        ];
+        for (code, wire) in classes {
+            assert_eq!(code.wire(), wire, "{code:?}");
+        }
+        assert_eq!(ErrorCode::App(NonZeroU16::MAX).wire(), 65535);
     }
 
     #[test]
-    fn ipc_error_display_empty_message() {
-        let err = IpcError::new("", -1);
-        assert_eq!(format!("{err}"), "-1: ");
+    fn conversions_pick_the_right_class() {
+        let from_string: IpcError = "boom".to_string().into();
+        let from_str: IpcError = "boom".into();
+        assert_eq!(from_string.code(), ErrorCode::Handler);
+        assert_eq!(from_str.message(), "boom");
+        let json: IpcError = serde_json::from_str::<i32>("nope").unwrap_err().into();
+        assert_eq!(json.code(), ErrorCode::Buffer);
+        assert!(!json.message().is_empty());
     }
 
     #[test]
-    fn ipc_error_new_stores_fields() {
-        let err = IpcError::new("test message", 42);
-        assert_eq!(err.message, "test message");
-        assert_eq!(err.code, 42);
-    }
-
-    #[test]
-    fn ipc_error_clone() {
-        let err = IpcError::new("clone me", -7);
-        let cloned = err.clone();
-        assert_eq!(cloned.message, "clone me");
-        assert_eq!(cloned.code, -7);
-    }
-
-    #[test]
-    fn ipc_error_debug_format() {
-        let err = IpcError::new("debug test", 5);
-        let debug = format!("{:?}", err);
-        assert!(debug.contains("debug test"));
-        assert!(debug.contains("5"));
-    }
-
-    #[test]
-    fn ipc_error_code_constants() {
-        assert_eq!(IpcError::CODE_HANDLER, 0);
-        assert_eq!(IpcError::CODE_PANIC, -1);
-        assert_eq!(IpcError::CODE_BUFFER, -2);
-        assert_eq!(IpcError::CODE_DROPPED, -3);
-    }
-
-    #[test]
-    fn ipc_error_from_string() {
-        let err: IpcError = "boom".to_string().into();
-        assert_eq!(err.code(), IpcError::CODE_HANDLER);
-        assert_eq!(err.message(), "boom");
-    }
-
-    #[test]
-    fn ipc_error_from_str() {
-        let err: IpcError = "boom".into();
-        assert_eq!(err.code(), IpcError::CODE_HANDLER);
-        assert_eq!(err.message(), "boom");
-    }
-
-    #[test]
-    fn ipc_error_from_serde_json() {
-        let inner = serde_json::from_str::<i32>("nope").unwrap_err();
-        let err: IpcError = inner.into();
-        assert_eq!(err.code(), IpcError::CODE_BUFFER);
-        assert!(!err.message().is_empty());
-    }
-
-    #[test]
-    fn ipc_error_is_std_error() {
-        let err = IpcError::new("boom", -7);
-        let source = std::error::Error::source(&err);
-        assert!(source.is_none());
+    fn is_a_std_error_without_a_source() {
+        let err = IpcError::new("boom");
+        assert!(std::error::Error::source(&err).is_none());
     }
 }

@@ -2,13 +2,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::debug;
-use crate::ipc::browser_state::IpcError;
+use crate::ipc::browser_state::{ErrorCode, IpcError};
 
 type Callback<T> = Box<dyn FnOnce(Result<T, IpcError>) + Send>;
 
 /// Single-use callback for async request/response IPC.
 ///
-/// If dropped without calling [`resolve`], the promise is automatically
+/// If dropped without calling [`resolve`](Responder::resolve), the promise is automatically
 /// rejected ensuring every pending request eventually settles.
 pub struct Responder<T> {
     callback: Mutex<Option<Callback<T>>>,
@@ -23,8 +23,8 @@ impl<T: 'static> Responder<T> {
         }
     }
 
-    /// Create a responder that shares a cancellation flag with a
-    /// [`PendingEntry`](crate::ipc::pending::PendingEntry).
+    /// Creates a responder controlled by the shared `cancelled` flag.
+    /// Once it is set, [`resolve`](Self::resolve) sends nothing.
     pub fn with_abort(callback: Callback<T>, cancelled: Arc<AtomicBool>) -> Self {
         Self {
             callback: Mutex::new(Some(callback)),
@@ -88,9 +88,9 @@ impl<T: 'static> Responder<T> {
 impl<T> Drop for Responder<T> {
     fn drop(&mut self) {
         if let Some(cb) = self.callback.lock().unwrap().take() {
-            cb(Err(IpcError::new(
+            cb(Err(IpcError::with_code(
                 "handler dropped responder without resolving",
-                IpcError::CODE_DROPPED,
+                ErrorCode::Dropped,
             )));
         }
     }
@@ -133,10 +133,11 @@ mod tests {
     #[test]
     fn resolve_with_error_forwards_code() {
         let (responder, call_count, results) = recording_responder();
-        responder.resolve(Err(IpcError::new("something failed", -42)));
+        let code = ErrorCode::App(std::num::NonZeroU16::new(42).unwrap());
+        responder.resolve(Err(IpcError::with_code("something failed", code)));
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
         let r = results.lock().unwrap();
-        assert_eq!(r[0].as_ref().unwrap_err().code(), -42);
+        assert_eq!(r[0].as_ref().unwrap_err().code(), code);
     }
 
     // Once resolved, subsequent resolve calls are ignored
@@ -154,7 +155,7 @@ mod tests {
     #[test]
     fn resolve_error_then_ok_is_noop() {
         let (responder, call_count, _) = recording_responder();
-        responder.resolve(Err(IpcError::new("first", -1)));
+        responder.resolve(Err(IpcError::new("first")));
         responder.resolve(Ok(999));
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
@@ -168,7 +169,7 @@ mod tests {
         let r = results.lock().unwrap();
         let err = r[0].as_ref().unwrap_err();
         assert!(err.message().contains("dropped"));
-        assert_eq!(err.code(), IpcError::CODE_DROPPED);
+        assert_eq!(err.code(), ErrorCode::Dropped);
     }
 
     // Dropping a resolved responder does not invoke the callback again
@@ -315,13 +316,14 @@ mod tests {
             res.lock().unwrap().push(result);
         }));
 
+        let code = ErrorCode::App(std::num::NonZeroU16::new(10).unwrap());
         let responder: Responder<i32> =
-            responder.map(|_v: i32| Err(IpcError::new("mapping failed", -10)));
+            responder.map(move |_v: i32| Err(IpcError::with_code("mapping failed", code)));
 
         responder.resolve(Ok(42));
 
         let r = results.lock().unwrap();
-        assert_eq!(r[0].as_ref().unwrap_err().code(), -10);
+        assert_eq!(r[0].as_ref().unwrap_err().code(), code);
     }
 
     // Mapping preserves the cancellation state of the original responder
@@ -339,10 +341,8 @@ mod tests {
             flag.clone(),
         );
 
-        let responder: Responder<String> = responder.map(|v: String| {
-            v.parse::<i32>()
-                .map_err(|e| IpcError::new(e.to_string(), -1))
-        });
+        let responder: Responder<String> =
+            responder.map(|v: String| v.parse::<i32>().map_err(|e| IpcError::new(e.to_string())));
 
         flag.store(true, Ordering::SeqCst);
 
@@ -357,10 +357,8 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(false));
         let inner: Responder<i32> = Responder::with_abort(Box::new(|_| {}), flag.clone());
 
-        let mapped: Responder<String> = inner.map(|v: String| {
-            v.parse::<i32>()
-                .map_err(|e| IpcError::new(e.to_string(), -1))
-        });
+        let mapped: Responder<String> =
+            inner.map(|v: String| v.parse::<i32>().map_err(|e| IpcError::new(e.to_string())));
 
         assert!(!mapped.is_cancelled());
         flag.store(true, Ordering::SeqCst);

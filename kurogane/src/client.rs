@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use crate::runtime::RuntimeServices;
 use crate::browser_registry::{BrowserRegistry, BrowserType};
 use crate::window_registry::WindowRegistry;
-use crate::ipc::IpcRouter;
+use crate::ipc::{FrameId, IpcRouter};
 
 //
 // LifeSpanHandler
@@ -96,11 +96,13 @@ wrap_load_handler! {
             frame: Option<&mut Frame>,
             _transition_type: TransitionType,
         ) {
-            if let Some(f) = frame {
-                let u: CefString = (&f.url()).into();
-                debug!("[LoadHandler] START {}", u.to_string());
-            }
-            self.router.clear_for_frame();
+            let Some(frame) = frame else {
+                return;
+            };
+            let u: CefString = (&frame.url()).into();
+            debug!("[LoadHandler] START {}", u.to_string());
+            // Reset state when the frame loads a new document
+            self.router.clear_for_frame(&FrameId::of(frame));
         }
 
         fn on_load_end(

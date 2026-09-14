@@ -8,13 +8,21 @@ use std::sync::Mutex;
 
 use cef::{Frame, ImplFrame};
 
+use crate::acl::Origin;
 use crate::browser_registry::BrowserId;
+use crate::ipc::{FrameId, IpcContext};
 
 /// Browser-side event subscription.
 pub struct EventSubscription {
     pub id: u32,
     pub frame: Frame,
     pub browser_id: BrowserId,
+    /// The frame that subscribed. Subscription ids are allocated per
+    /// renderer process, so only this frame can unsubscribe.
+    pub frame_id: FrameId,
+    /// The origin the frame showed when it subscribed; a later document in
+    /// the same frame cannot unsubscribe it.
+    pub origin: Origin,
 }
 
 pub mod browser;
@@ -32,10 +40,26 @@ impl EventSubsystem {
         }
     }
 
+    /// Removes the subscriptions of `frame`, which is starting a new
+    /// document.
+    ///
+    /// Returns the number of subscriptions removed.
+    pub fn clear_frame(&self, frame: &FrameId) -> usize {
+        let mut subs = self.subscriptions.lock().unwrap();
+        let mut total = 0;
+        subs.retain(|_, v| {
+            let before = v.len();
+            v.retain(|s| s.frame_id != *frame);
+            total += before - v.len();
+            !v.is_empty()
+        });
+        total
+    }
+
     /// Removes all subscriptions whose frame is no longer valid.
     ///
     /// Returns the number of subscriptions removed.
-    pub fn clear_for_frame(&self) -> usize {
+    pub fn clear_invalid_frames(&self) -> usize {
         let mut subs = self.subscriptions.lock().unwrap();
         let mut total = 0;
         subs.retain(|_, v| {
@@ -70,14 +94,20 @@ impl EventSubsystem {
         total
     }
 
-    /// Removes a single subscription by id, returning true if found.
-    pub fn remove_subscription(&self, event_name: &str, browser_id: BrowserId, id: u32) -> bool {
+    /// Removes subscription `id` of `event_name` if the frame and origin of
+    /// `ctx` made it, returning true if found.
+    pub fn remove_subscription(&self, event_name: &str, id: u32, ctx: &IpcContext) -> bool {
         let mut subs = self.subscriptions.lock().unwrap();
         let Some(entries) = subs.get_mut(event_name) else {
             return false;
         };
         let before = entries.len();
-        entries.retain(|s| !(s.browser_id == browser_id && s.id == id));
+        entries.retain(|s| {
+            let owner = Some(s.browser_id) == ctx.browser_id
+                && s.frame_id == ctx.frame
+                && s.origin == ctx.origin;
+            !(owner && s.id == id)
+        });
         let removed = before - entries.len();
         if entries.is_empty() {
             subs.remove(event_name);

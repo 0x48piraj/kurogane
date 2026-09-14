@@ -38,6 +38,9 @@ pub const RPC_CANCEL: u8 = 3;
 pub const EVENT_SUBSCRIBE: u8 = 0;
 pub const EVENT_UNSUBSCRIBE: u8 = 1;
 pub const EVENT_EMIT: u8 = 2;
+/// ACL refusal for a subscription. The id is the correlation id and the
+/// payload is an error payload ([`encode_error_payload`]).
+pub const EVENT_REFUSED: u8 = 3;
 
 /// Stream protocol opcodes.
 pub const STREAM_OPEN: u8 = 0;
@@ -48,6 +51,7 @@ pub const STREAM_CANCEL: u8 = 4;
 
 pub const STREAM_BROWSER_DATA: u8 = 5;
 pub const STREAM_BROWSER_END: u8 = 6;
+/// An error payload ([`encode_error_payload`]).
 pub const STREAM_BROWSER_ERROR: u8 = 7;
 
 /// Payload encoding identifiers.
@@ -134,6 +138,24 @@ pub fn decode_cmd_payload(payload: &[u8]) -> Option<(&str, &[u8])> {
     }
     let cmd = std::str::from_utf8(&payload[2..2 + cmd_len]).ok()?;
     Some((cmd, &payload[2 + cmd_len..]))
+}
+
+/// Encodes an error payload: `[code: i32 LE][message: UTF-8]`. Used by RPC
+/// rejections, stream errors and refused subscriptions alike.
+pub fn encode_error_payload(code: i32, message: &str) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(4 + message.len());
+    payload.extend_from_slice(&code.to_le_bytes());
+    payload.extend_from_slice(message.as_bytes());
+    payload
+}
+
+/// Decodes an error payload. A payload too short to hold a code is all
+/// message, with code `0`.
+pub fn decode_error_payload(payload: &[u8]) -> (i32, std::borrow::Cow<'_, str>) {
+    match payload.split_first_chunk::<4>() {
+        Some((code, message)) => (i32::from_le_bytes(*code), String::from_utf8_lossy(message)),
+        None => (0, String::from_utf8_lossy(payload)),
+    }
 }
 
 #[cfg(test)]
@@ -728,5 +750,37 @@ mod property_tests {
             let buf = vec![0u8; len];
             prop_assert!(decode_cmd_payload(&buf).is_none());
         }
+
+        // Property: an encoded error payload decodes to the same code and message.
+        #[test]
+        fn prop_error_payload_roundtrip(code in i32::MIN..=i32::MAX, message in ".{0,200}") {
+            let payload = encode_error_payload(code, &message);
+            let (decoded_code, decoded_message) = decode_error_payload(&payload);
+            prop_assert_eq!(decoded_code, code);
+            prop_assert_eq!(decoded_message.as_ref(), message.as_str());
+        }
+    }
+}
+
+#[cfg(test)]
+mod error_payload_tests {
+    use super::*;
+
+    #[test]
+    fn short_payloads_are_all_message() {
+        assert_eq!(
+            decode_error_payload(b"oops"),
+            (i32::from_le_bytes(*b"oops"), "".into())
+        );
+        assert_eq!(decode_error_payload(b"no"), (0, "no".into()));
+        assert_eq!(decode_error_payload(b""), (0, "".into()));
+    }
+
+    #[test]
+    fn codes_are_little_endian() {
+        assert_eq!(
+            &encode_error_payload(-4, "x")[..],
+            &[0xFC, 0xFF, 0xFF, 0xFF, b'x']
+        );
     }
 }

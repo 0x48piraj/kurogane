@@ -13,11 +13,41 @@ use crate::ipc::renderer_state::renderer_state;
 pub fn handle_event_renderer(_frame: &mut Frame, envelope: &Envelope, payload: &[u8]) -> bool {
     match envelope.opcode {
         EVENT_EMIT => on_emit(payload),
+        EVENT_REFUSED => on_refused(envelope, payload),
         _ => {
             debug!("[Event Renderer] unknown opcode {}", envelope.opcode);
             false
         }
     }
+}
+
+/// The browser refused a subscription: remove it and call its `onError`
+/// with `"{code}: {message}"`, the form the bridge's `toError` parses.
+fn on_refused(envelope: &Envelope, payload: &[u8]) -> bool {
+    let (code, message) = decode_error_payload(payload);
+    let removed = renderer_state()
+        .lock()
+        .unwrap()
+        .events
+        .remove(i64::from(envelope.correlation_id));
+    debug!(
+        "[Event Renderer] subscription {} refused: {}",
+        envelope.correlation_id, message
+    );
+
+    // The lock is released: the callback may call core.on() or core.off().
+    let Some((context, Some(on_error))) = removed else {
+        return true;
+    };
+    if context.enter() == 0 {
+        return true;
+    }
+    let text = v8_value_create_string(Some(&CefString::from(
+        format!("{code}: {message}").as_str(),
+    )));
+    on_error.execute_function(None, Some(&[text]));
+    context.exit();
+    true
 }
 
 fn on_emit(payload: &[u8]) -> bool {

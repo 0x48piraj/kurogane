@@ -8,7 +8,6 @@ use cef::*;
 use crate::debug;
 use crate::ipc::envelope::*;
 use crate::ipc::renderer_state::renderer_state;
-use crate::ipc::browser_state::IpcError;
 use crate::ipc::utils::create_array_buffer_from_bytes;
 
 /// Handle a stream message arriving from the browser (renderer-side dispatch).
@@ -126,7 +125,7 @@ fn on_end(envelope: &Envelope, payload: &[u8]) -> bool {
 fn on_error(envelope: &Envelope, payload: &[u8]) -> bool {
     let stream_id = envelope.correlation_id as i32;
 
-    let err_str = String::from_utf8_lossy(payload);
+    let (code, err_str) = decode_error_payload(payload);
 
     // Check if there's a pending open() promise for this id -> open failed
     let entry = renderer_state().lock().unwrap().promises.take(stream_id);
@@ -134,7 +133,8 @@ fn on_error(envelope: &Envelope, payload: &[u8]) -> bool {
         if context.enter() == 0 {
             return false;
         }
-        let msg = CefString::from(IpcError::new(err_str.as_ref(), -1).to_string().as_str());
+        // "{code}: {message}", the form the bridge's toError parses.
+        let msg = CefString::from(format!("{code}: {err_str}").as_str());
         promise.reject_promise(Some(&msg));
         context.exit();
         return true;

@@ -22,14 +22,14 @@ fn main() {
 
             let a = payload["a"]
                 .as_f64()
-                .ok_or_else(|| IpcError::new("Missing or invalid 'a'", 0))?;
+                .ok_or_else(|| IpcError::new("Missing or invalid 'a'"))?;
 
             let b = payload["b"]
                 .as_f64()
-                .ok_or_else(|| IpcError::new("Missing or invalid 'b'", 0))?;
+                .ok_or_else(|| IpcError::new("Missing or invalid 'b'"))?;
 
             if b == 0.0 {
-                return Err(IpcError::new("Division by zero", 0));
+                return Err(IpcError::new("Division by zero"));
             }
 
             Ok(json!(a / b))
@@ -45,7 +45,7 @@ fn main() {
                     "version": "1.0.0"
                 })),
                 "data.txt" => Ok(json!("Sample file contents")),
-                _ => Err(IpcError::new(format!("File not found: {}", file), 0)),
+                _ => Err(IpcError::new(format!("File not found: {}", file))),
             }
         })
         // Slow operation: demonstrates blocking behavior

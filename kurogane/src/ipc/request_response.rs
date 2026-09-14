@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use cef::*;
 
 use crate::debug;
-use crate::ipc::browser_state::{IpcContext, IpcError};
+use crate::ipc::browser_state::{ErrorCode, IpcContext, IpcError};
 use crate::ipc::envelope::*;
-use crate::ipc::pending::{PendingEntry, PendingMap};
+use crate::ipc::pending::{PendingEntry, PendingKey, PendingMap};
 use crate::ipc::transport::message::build_message;
 use crate::ipc::responder::Responder;
 
@@ -16,6 +16,8 @@ pub type AsyncHandler = Box<dyn Fn(&[u8], BinaryResponder, IpcContext) + Send + 
 pub type BinaryResponder = Responder<Vec<u8>>;
 
 /// Unified request/response subsystem handling both JSON and Binary IPC.
+///
+/// Access control happens before dispatch, in the router.
 pub struct RequestResponseSubsystem {
     pub sync_handlers: HashMap<String, SyncHandler>,
     pub async_handlers: HashMap<String, AsyncHandler>,
@@ -38,10 +40,6 @@ impl RequestResponseSubsystem {
         self.async_handlers.contains_key(command)
     }
 
-    pub fn is_sync(&self, command: &str) -> bool {
-        self.sync_handlers.contains_key(command)
-    }
-
     /// Handle a request/response message arriving from the renderer (browser-side dispatch).
     pub fn handle_browser(
         &self,
@@ -52,8 +50,8 @@ impl RequestResponseSubsystem {
         pending_clone: PendingMap,
     ) -> bool {
         match envelope.opcode {
-            0 => self.on_invoke(frame, envelope, payload, ctx, pending_clone),
-            3 => self.on_cancel(envelope, payload, ctx),
+            RPC_INVOKE => self.on_invoke(frame, envelope, payload, ctx, pending_clone),
+            RPC_CANCEL => self.on_cancel(envelope, ctx),
             _ => {
                 debug!(
                     "[RequestResponse Browser] unknown opcode {}",
@@ -62,6 +60,16 @@ impl RequestResponseSubsystem {
                 false
             }
         }
+    }
+
+    /// Rejects the invocation with `error`.
+    pub(crate) fn reject(frame: &Frame, envelope: &Envelope, error: IpcError) {
+        send_response(
+            frame,
+            envelope.payload_kind,
+            envelope.correlation_id,
+            Err(error),
+        );
     }
 
     fn on_invoke(
@@ -86,11 +94,12 @@ impl RequestResponseSubsystem {
 
         if self.is_async(cmd) {
             let aborted = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let browser_id = ctx.browser_id;
-            if let Some(bid) = browser_id {
+            let key = ctx
+                .browser_id
+                .map(|bid| PendingKey::new(bid, ctx.frame.clone(), ctx.origin.clone(), id));
+            if let Some(key) = &key {
                 pending_clone.insert(
-                    bid,
-                    id,
+                    key.clone(),
                     PendingEntry {
                         aborted: aborted.clone(),
                     },
@@ -103,8 +112,8 @@ impl RequestResponseSubsystem {
                     let pending = pending_clone.clone();
                     let payload_kind = envelope.payload_kind;
                     move |result| {
-                        if let Some(bid) = browser_id {
-                            pending.remove(bid, id);
+                        if let Some(key) = &key {
+                            pending.remove(key);
                         }
                         send_response(&frame, payload_kind, correlation_id, result);
                     }
@@ -118,7 +127,7 @@ impl RequestResponseSubsystem {
 
             let response = match result {
                 Ok(res) => res,
-                Err(_) => Err(IpcError::new("handler panicked", IpcError::CODE_PANIC)),
+                Err(_) => Err(IpcError::with_code("handler panicked", ErrorCode::Panic)),
             };
 
             send_response(frame, envelope.payload_kind, correlation_id, response);
@@ -127,10 +136,12 @@ impl RequestResponseSubsystem {
         true
     }
 
-    fn on_cancel(&self, envelope: &Envelope, _payload: &[u8], ctx: IpcContext) -> bool {
-        let id = envelope.correlation_id as i32;
+    /// Only the frame that sent a request, still showing the same origin, can
+    /// cancel it; the pending entry is keyed by both.
+    fn on_cancel(&self, envelope: &Envelope, ctx: IpcContext) -> bool {
         if let Some(bid) = ctx.browser_id {
-            self.pending.cancel(bid, id);
+            let key = PendingKey::new(bid, ctx.frame, ctx.origin, envelope.correlation_id as i32);
+            self.pending.cancel(&key);
         }
         true
     }
@@ -138,10 +149,7 @@ impl RequestResponseSubsystem {
     fn dispatch(&self, command: &str, data: &[u8], ctx: IpcContext) -> Result<Vec<u8>, IpcError> {
         match self.sync_handlers.get(command) {
             Some(h) => h(data, ctx),
-            None => Err(IpcError::new(
-                format!("unknown command '{command}'"),
-                IpcError::CODE_HANDLER,
-            )),
+            None => Err(IpcError::new(format!("unknown command '{command}'"))),
         }
     }
 
@@ -174,13 +182,10 @@ fn send_response(
 
     let (opcode, data) = match result {
         Ok(bytes) => (RPC_RESOLVE, bytes),
-        Err(err) => {
-            let msg = err.message();
-            let mut payload = Vec::with_capacity(4 + msg.len());
-            payload.extend_from_slice(&err.code().to_le_bytes());
-            payload.extend_from_slice(msg.as_bytes());
-            (RPC_REJECT, payload)
-        }
+        Err(err) => (
+            RPC_REJECT,
+            encode_error_payload(err.code().wire(), err.message()),
+        ),
     };
 
     let envelope = Envelope {

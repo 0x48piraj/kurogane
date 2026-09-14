@@ -17,13 +17,18 @@ pub(crate) mod browser;
 pub(crate) mod renderer;
 pub(crate) mod handle_cell;
 
-// Public exports for the rest of the application
-pub use browser::handle_ipc_message;
-pub use renderer::IpcRenderProcessHandler;
-pub use browser_state::{IpcResult, IpcError, IpcContext};
-pub use router::IpcRouter;
-pub use request_response::{RequestResponseSubsystem, SyncHandler, AsyncHandler, BinaryResponder};
+// Public API: the types handlers see.
+pub use browser_state::{ErrorCode, IpcError};
+pub use request_response::BinaryResponder;
 pub use responder::Responder;
-pub use event::EventSubsystem;
-pub use stream::{StreamSubsystem, StreamHandler, StreamFactory, StreamResponder};
-pub use handle_cell::AppCell;
+pub use stream::{StreamHandler, StreamResponder};
+
+// Runtime wiring, crate-internal.
+pub(crate) use browser::handle_ipc_message;
+pub(crate) use renderer::IpcRenderProcessHandler;
+pub(crate) use browser_state::{FrameId, IpcContext};
+pub(crate) use router::IpcRouter;
+pub(crate) use request_response::{RequestResponseSubsystem, SyncHandler, AsyncHandler};
+pub(crate) use event::EventSubsystem;
+pub(crate) use stream::{StreamSubsystem, StreamFactory};
+pub(crate) use handle_cell::AppCell;

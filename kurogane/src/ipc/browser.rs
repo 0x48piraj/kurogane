@@ -8,7 +8,7 @@ use cef::*;
 
 use crate::browser_registry::BrowserId;
 use crate::debug;
-use crate::ipc::browser_state::IpcContext;
+use crate::ipc::browser_state::{FrameId, IpcContext};
 use crate::ipc::transport::message::extract_message;
 use crate::ipc::router::IpcRouter;
 
@@ -36,12 +36,12 @@ pub fn handle_ipc_message(
 
     let (envelope, payload) = received.as_envelope_payload();
 
+    let frame_url: CefString = (&frame.url()).into();
+
     let ctx = IpcContext {
         browser_id,
-        frame_id: Some({
-            let id: CefStringUtf16 = (&frame.identifier()).into();
-            id.to_string()
-        }),
+        frame: FrameId::of(frame),
+        origin: crate::acl::Origin::from_url(&frame_url.to_string()),
     };
 
     router.route_browser(frame, &envelope, payload, ctx)

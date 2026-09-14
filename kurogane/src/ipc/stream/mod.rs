@@ -10,8 +10,10 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use cef::*;
 
+use crate::acl::Origin;
 use crate::browser_registry::BrowserId;
 use crate::ipc::envelope::*;
+use crate::ipc::{ErrorCode, FrameId, IpcContext};
 use crate::ipc::transport::message::build_message;
 
 /// Responder for sending data back to the renderer from the browser-side stream handler.
@@ -69,6 +71,11 @@ impl StreamResponder {
 
     /// Signal an error to the renderer for this stream.
     pub fn error(&self, msg: &str) -> Result<(), String> {
+        self.error_with_code(msg, ErrorCode::Handler)
+    }
+
+    /// Signal an error of class `code`: the renderer rejects with that code.
+    pub(crate) fn error_with_code(&self, msg: &str, code: ErrorCode) -> Result<(), String> {
         if self.frame.is_valid() == 0 {
             return Err("frame destroyed".into());
         }
@@ -78,10 +85,10 @@ impl StreamResponder {
             opcode: STREAM_BROWSER_ERROR,
             flags: 0,
             correlation_id: self.stream_id,
-            payload_kind: PAYLOAD_STRING,
+            payload_kind: PAYLOAD_BINARY,
         };
-        let payload = msg.as_bytes();
-        let mut msg = build_message("kurogane_stream", &envelope, payload)
+        let payload = encode_error_payload(code.wire(), msg);
+        let mut msg = build_message("kurogane_stream", &envelope, &payload)
             .ok_or_else(|| "failed to build STREAM_BROWSER_ERROR message".to_string())?;
         self.frame
             .send_process_message(ProcessId::RENDERER, Some(&mut msg));
@@ -130,13 +137,35 @@ pub mod renderer;
 
 type StreamEntry = (BrowserId, Box<dyn StreamHandler>, Frame);
 
+/// A stream's identity: the frame and origin that opened it plus its stream
+/// id. Stream ids are allocated per renderer process, so the frame keeps two
+/// frames' streams apart, and the origin keeps a later document in the same
+/// frame away from a stream an earlier one opened. Only a message from the
+/// opening frame, still showing the same origin, can feed, end or cancel one.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct StreamKey {
+    frame: FrameId,
+    origin: Origin,
+    id: u32,
+}
+
+impl StreamKey {
+    pub(crate) fn new(ctx: &IpcContext, id: u32) -> Self {
+        Self {
+            frame: ctx.frame.clone(),
+            origin: ctx.origin.clone(),
+            id,
+        }
+    }
+}
+
 /// Browser-side stream manager.
 pub struct StreamSubsystem {
     pub factories: HashMap<String, StreamFactory>,
-    /// Per-stream handler instances, keyed by stream_id.
+    /// Per-stream handler instances, keyed by opening frame and stream id.
     /// Stores the frame alongside each handler so responders can be
     /// reconstructed on every callback instead of stored by the handler.
-    pub streams: Mutex<HashMap<u32, StreamEntry>>,
+    pub streams: Mutex<HashMap<StreamKey, StreamEntry>>,
 }
 
 impl StreamSubsystem {
@@ -147,8 +176,16 @@ impl StreamSubsystem {
         }
     }
 
+    /// Remove the streams of `frame`, which is starting a new document.
+    pub fn clear_frame(&self, frame: &FrameId) -> usize {
+        let mut streams = self.streams.lock().unwrap();
+        let before = streams.len();
+        streams.retain(|key, _| key.frame != *frame);
+        before - streams.len()
+    }
+
     /// Remove all streams whose frame is no longer valid.
-    pub fn clear_for_frame(&self) -> usize {
+    pub fn clear_invalid_frames(&self) -> usize {
         let mut streams = self.streams.lock().unwrap();
         let before = streams.len();
         streams.retain(|_, (_, _, frame)| frame.is_valid() != 0);

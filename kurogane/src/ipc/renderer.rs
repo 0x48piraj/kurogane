@@ -687,7 +687,7 @@ wrap_v8_handler! {
                 Some(a) if a.len() >= 2 => a,
                 _ => {
                     if let Some(exc) = exception {
-                        *exc = CefString::from("on(eventName, callback) requires two arguments");
+                        *exc = CefString::from("on(eventName, callback[, onError]) requires two arguments");
                     }
                     return 0;
                 }
@@ -714,6 +714,16 @@ wrap_v8_handler! {
                 }
             };
 
+            // Optional callback invoked when the subscription is refused
+            let on_error = match args.get(2) {
+                Some(Some(v)) if v.is_function() != 0 => Some(v.clone()),
+                Some(Some(v)) if v.is_undefined() == 0 && v.is_null() == 0 => {
+                    if let Some(exc) = exception { *exc = CefString::from("third argument must be a function"); }
+                    return 0;
+                }
+                _ => None,
+            };
+
             let context = match v8_context_get_current_context() {
                 Some(ctx) => ctx,
                 None => {
@@ -731,6 +741,7 @@ wrap_v8_handler! {
                 &event_name,
                 context.clone(),
                 callback.clone(),
+                on_error,
             );
 
             let Some(payload) = encode_cmd_payload(&event_name, &[]) else {
