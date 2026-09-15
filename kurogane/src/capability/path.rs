@@ -68,6 +68,65 @@ pub(crate) fn fold(component: &OsStr) -> Vec<u8> {
     component.as_encoded_bytes().to_vec()
 }
 
+/// Every character whose fold is `folded`, `folded` itself included, so a
+/// pattern written against raw characters (a glob class range) can be
+/// matched against folded names.
+#[cfg(windows)]
+pub(crate) fn unfold(folded: char) -> impl Iterator<Item = char> {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+
+    /// Simple uppercase, inverted: every character mapping to each target.
+    static INVERSE: OnceLock<HashMap<char, Vec<char>>> = OnceLock::new();
+    let inverse = INVERSE.get_or_init(|| {
+        let mut inverse: HashMap<char, Vec<char>> = HashMap::new();
+        for c in (0..=0x10_FFFF).filter_map(char::from_u32) {
+            let mut upper = c.to_uppercase();
+            if let (Some(u), None) = (upper.next(), upper.next())
+                && u != c
+            {
+                inverse.entry(u).or_default().push(c);
+            }
+        }
+        inverse
+    });
+    std::iter::once(folded).chain(inverse.get(&folded).into_iter().flatten().copied())
+}
+
+/// On macOS a character may fold to several (`É` to `e` + U+0301), so every
+/// character whose fold *starts with* `folded` is included: a class naming
+/// `É` then matches the `e` it decomposes to, and the combining mark after
+/// it is absorbed by the glob matcher. Over-matching only denies more.
+#[cfg(target_os = "macos")]
+pub(crate) fn unfold(folded: char) -> impl Iterator<Item = char> {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+
+    static INVERSE: OnceLock<HashMap<char, Vec<char>>> = OnceLock::new();
+    let inverse = INVERSE.get_or_init(|| {
+        let mut inverse: HashMap<char, Vec<char>> = HashMap::new();
+        let mut buf = [0; 4];
+        for c in (0..=0x10_FFFF).filter_map(char::from_u32) {
+            let bytes = fold(OsStr::new(c.encode_utf8(&mut buf)));
+            let first = std::str::from_utf8(&bytes)
+                .ok()
+                .and_then(|s| s.chars().next());
+            if let Some(first) = first
+                && (first != c || bytes.len() != c.len_utf8())
+            {
+                inverse.entry(first).or_default().push(c);
+            }
+        }
+        inverse
+    });
+    std::iter::once(folded).chain(inverse.get(&folded).into_iter().flatten().copied())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub(crate) fn unfold(folded: char) -> impl Iterator<Item = char> {
+    std::iter::once(folded)
+}
+
 /// One validated path component: not empty, not `.`/`..`, no separator, no
 /// NUL. On Windows it is also a name Win32 neither rewrites nor reserves; no
 /// `<>:"|?*` or control characters (`:` would address an alternate data
