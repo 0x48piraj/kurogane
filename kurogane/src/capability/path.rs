@@ -274,6 +274,13 @@ fn volume_key(prefix: Prefix<'_>, trusted: bool) -> Option<Key> {
     Some(Key::of(OsStr::new(&text)))
 }
 
+/// The most components a single request may resolve to. Beyond this a
+/// request is rejected before it reaches the scope matcher whose evaluation
+/// is super-linear in path depth and runs on the single filesystem worker.
+/// No legitimate path is anywhere near this deep; the cap bounds both the
+/// matcher's cost and the per-name allocations one request can force.
+pub(crate) const MAX_COMPONENTS: usize = 1024;
+
 /// A renderer-supplied path after lexical normalization.
 #[derive(Debug)]
 pub(crate) enum Request {
@@ -314,7 +321,12 @@ pub(crate) fn parse_request(path: &Path) -> Result<Request, FsError> {
                     return Err(FsError::PathDenied(Denial::OutsideRoots));
                 }
             }
-            Component::Normal(s) => names.push(Name::parse(s).map_err(FsError::InvalidPath)?),
+            Component::Normal(s) => {
+                if names.len() >= MAX_COMPONENTS {
+                    return Err(FsError::InvalidPath("path has too many components"));
+                }
+                names.push(Name::parse(s).map_err(FsError::InvalidPath)?);
+            }
         }
     }
 
@@ -386,6 +398,16 @@ mod tests {
         let sibling = Location::parse(&std::env::temp_dir().join("notes-evil")).unwrap();
         assert_eq!(inside.strip(&base).map(<[Key]>::len), Some(1));
         assert!(sibling.strip(&base).is_none());
+    }
+
+    #[test]
+    fn too_many_components_are_rejected() {
+        // A request deeper than the cap is rejected before it reaches the
+        // scope matcher whose evaluation is super-linear in depth
+        let over = vec!["a"; MAX_COMPONENTS + 1].join("/");
+        assert!(invalid(&over));
+        let at = vec!["a"; MAX_COMPONENTS].join("/");
+        assert!(parse_request(Path::new(&at)).is_ok());
     }
 
     #[cfg(windows)]
