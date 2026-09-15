@@ -20,7 +20,7 @@ use std::io;
 use std::mem::MaybeUninit;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -59,13 +59,21 @@ pub(super) fn open_root(path: &Path) -> io::Result<File> {
 
 pub(super) fn location(file: &File) -> io::Result<PathBuf> {
     let path = std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))?;
-    // An object unlinked since it was opened reports a " (deleted)" suffix
-    Ok(
-        match path.as_os_str().as_bytes().strip_suffix(b" (deleted)") {
-            Some(stripped) => PathBuf::from(OsStr::from_bytes(stripped)),
-            None => path,
-        },
-    )
+    // The kernel appends " (deleted)" to the last name of an object unlinked
+    // since it was opened. Such an object has no location: fail closed. A
+    // live object whose name really ends that way is itself at that path.
+    if path.as_os_str().as_bytes().ends_with(b" (deleted)") {
+        let object = file.metadata()?;
+        let named = std::fs::symlink_metadata(&path)
+            .is_ok_and(|entry| entry.dev() == object.dev() && entry.ino() == object.ino());
+        if !named {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "the object was removed after it was opened",
+            ));
+        }
+    }
+    Ok(path)
 }
 
 pub(super) fn open_file(root: &File, rel: &RelPath) -> Result<File, FsError> {
@@ -512,6 +520,26 @@ mod tests {
             walk(&root, &rel("dir_link/data.txt"), libc::O_RDONLY),
             Err(FsError::PathDenied(Denial::ObjectLocation))
         ));
+    }
+
+    #[test]
+    fn deleted_objects_fail_closed() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("gone.txt"), b"x").unwrap();
+        std::fs::write(d.path().join("kept (deleted)"), b"y").unwrap();
+        let root = open_root(d.path()).unwrap();
+        let gone = open_file(&root, &rel("gone.txt")).unwrap();
+        std::fs::remove_file(d.path().join("gone.txt")).unwrap();
+        assert!(
+            location(&gone).is_err(),
+            "a removed object reported a location"
+        );
+        let kept = open_file(&root, &rel("kept (deleted)")).unwrap();
+        assert_eq!(
+            location(&kept).unwrap().file_name().unwrap(),
+            "kept (deleted)",
+            "a live name ending in \" (deleted)\" is reported verbatim"
+        );
     }
 
     #[test]
