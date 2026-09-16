@@ -167,22 +167,29 @@ wrap_client! {
                 return 0;
             }
 
-            let browser = browser.unwrap();
-            let frame = frame.unwrap();
-            let msg = message.unwrap();
-
-            // Resolve browser identity from the registry
-            let browser_id = {
-                let reg = self.services.browser_registry.lock().unwrap();
-                reg.find_id_by_browser(browser)
+            let (Some(browser), Some(frame), Some(msg)) = (browser, frame, message) else {
+                debug!("[IPC Browser] message without a browser, frame or body");
+                return 0;
             };
 
-            // Delegate to IPC dispatcher with browser context
-            if crate::ipc::handle_ipc_message(browser, frame, msg, &self.services.router, browser_id) {
-                return 1;
+            // Renderer-controlled bytes drive everything below; a panic must
+            // not unwind across this CEF callback and abort the process
+            let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                // Resolve browser identity from the registry
+                let browser_id = {
+                    let reg = self.services.browser_registry.lock().unwrap();
+                    reg.find_id_by_browser(browser)
+                };
+                crate::ipc::handle_ipc_message(browser, frame, msg, &self.services.router, browser_id)
+            }));
+            match handled {
+                Ok(true) => 1,
+                Ok(false) => 0,
+                Err(_) => {
+                    debug!("[IPC Browser] dispatch panicked; message dropped");
+                    1
+                }
             }
-
-            0
         }
     }
 }

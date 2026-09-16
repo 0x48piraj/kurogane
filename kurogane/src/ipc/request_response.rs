@@ -161,7 +161,14 @@ impl RequestResponseSubsystem {
         ctx: IpcContext,
     ) {
         if let Some(handler) = self.async_handlers.get(command) {
-            handler(data, responder, ctx);
+            // A panicking handler drops its responder, which rejects the
+            // request; unwinding must not cross the CEF callback
+            if catch_unwind(AssertUnwindSafe(|| handler(data, responder, ctx))).is_err() {
+                debug!(
+                    "[RequestResponse Browser] async handler '{}' panicked",
+                    command
+                );
+            }
         }
     }
 }

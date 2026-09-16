@@ -398,7 +398,13 @@ wrap_render_process_handler! {
             };
 
             let (envelope, payload) = received.as_envelope_payload();
-            router::route_renderer(frame, &envelope, payload);
+            // A panic must not unwind across this CEF callback
+            let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                router::route_renderer(frame, &envelope, payload);
+            }));
+            if routed.is_err() {
+                debug!("[IPC Renderer] dispatch panicked; message dropped");
+            }
             1
         }
 

@@ -21,8 +21,11 @@ pub enum ReceivedMessage {
         envelope: Envelope,
         payload: Vec<u8>,
     },
-    /// Shared-memory-backed message data.
-    Shm(SharedBinary),
+    /// Message data backed by shared memory with a validated envelope.
+    Shm {
+        envelope: Envelope,
+        binary: SharedBinary,
+    },
 }
 
 impl ReceivedMessage {
@@ -30,14 +33,16 @@ impl ReceivedMessage {
     pub fn as_envelope_payload(&self) -> (Envelope, &[u8]) {
         match self {
             Self::Inline { envelope, payload } => (*envelope, payload.as_slice()),
-            Self::Shm(b) => {
-                let data = b.data();
-                let (envelope, payload) =
-                    parse_envelope(data).expect("SHM message should always have a valid envelope");
-                (envelope, payload)
-            }
+            Self::Shm { envelope, binary } => (*envelope, &binary.data()[ENVELOPE_SIZE..]),
         }
     }
+}
+
+/// Returns the envelope if `data` contains a complete envelope.
+///
+/// The data may have been written by another process and is not trusted.
+fn shm_envelope(data: &[u8]) -> Option<Envelope> {
+    parse_envelope(data).map(|(envelope, _)| envelope)
 }
 
 /// Builds a ProcessMessage from an envelope and payload.
@@ -131,7 +136,9 @@ pub fn extract_message(message: &ProcessMessage) -> Option<ReceivedMessage> {
         && region.is_valid() != 0
         && region.size() >= ENVELOPE_SIZE
     {
-        return Some(ReceivedMessage::Shm(Arc::new(ShmBinary::new(region, 0))));
+        let binary: SharedBinary = Arc::new(ShmBinary::new(region, 0));
+        let envelope = shm_envelope(binary.data())?;
+        return Some(ReceivedMessage::Shm { envelope, binary });
     }
 
     // Inline path: read from ListValue fields
@@ -161,4 +168,36 @@ pub fn extract_message(message: &ProcessMessage) -> Option<ReceivedMessage> {
     };
 
     Some(ReceivedMessage::Inline { envelope, payload })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn envelope() -> Envelope {
+        Envelope {
+            version: ENVELOPE_VERSION,
+            subsystem: 1,
+            opcode: 2,
+            flags: 0,
+            correlation_id: 7,
+            payload_kind: 0,
+        }
+    }
+
+    #[test]
+    fn decode_shm_rejects_wrong_version() {
+        let mut region = encode_envelope_bytes(&envelope()).to_vec();
+        region.extend_from_slice(b"payload");
+        assert_eq!(shm_envelope(&region).map(|e| e.correlation_id), Some(7));
+        for version in [0, ENVELOPE_VERSION.wrapping_add(1), 0xFF] {
+            region[0] = version;
+            assert!(
+                shm_envelope(&region).is_none(),
+                "version {version} was accepted"
+            );
+        }
+        assert!(shm_envelope(&region[..ENVELOPE_SIZE - 1]).is_none());
+        assert!(shm_envelope(&[]).is_none());
+    }
 }
