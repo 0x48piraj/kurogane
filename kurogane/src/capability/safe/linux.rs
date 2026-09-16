@@ -76,6 +76,10 @@ pub(super) fn location(file: &File) -> io::Result<PathBuf> {
     Ok(path)
 }
 
+pub(super) fn link_count(file: &File) -> io::Result<u64> {
+    Ok(file.metadata()?.nlink())
+}
+
 pub(super) fn open_file(root: &File, rel: &RelPath) -> Result<File, FsError> {
     let fd = lookup(
         root,

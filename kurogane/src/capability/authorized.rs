@@ -51,6 +51,7 @@ pub struct Filesystem {
     scopes: Vec<Scope>,
     grants: Vec<Grant>,
     max_file_size: u64,
+    allow_hard_links: bool,
 }
 
 struct Grant {
@@ -73,6 +74,7 @@ pub struct FilesystemBuilder {
     scopes: Vec<(String, ScopeBuilder)>,
     grants: Vec<(Origin, ScopeId, FsAccess)>,
     max_file_size: u64,
+    allow_hard_links: bool,
 }
 
 impl FilesystemBuilder {
@@ -84,7 +86,21 @@ impl FilesystemBuilder {
             scopes: Vec::new(),
             grants: Vec::new(),
             max_file_size: Filesystem::DEFAULT_MAX_FILE_SIZE,
+            allow_hard_links: false,
         }
+    }
+
+    /// Permits regular files that have other names (hard links). By default
+    /// such a file is refused (`PATH_DENIED`) by every operation that reads,
+    /// writes, copies or measures its contents; its other names may lie
+    /// outside every root or under a deny rule, and no platform can tell the
+    /// location re-check which. Enable only when the roots hold multiply
+    /// linked files by design (a pnpm store, a local `git clone`) and nobody
+    /// untrusted can create links in them. Listing, removing and renaming a
+    /// link's name are unaffected either way.
+    pub fn allow_hard_links(&mut self, allow: bool) -> &mut Self {
+        self.allow_hard_links = allow;
+        self
     }
 
     /// Caps the bytes `read_file` returns and `write_file` accepts
@@ -154,6 +170,7 @@ impl FilesystemBuilder {
             scopes,
             grants,
             max_file_size: self.max_file_size,
+            allow_hard_links: self.allow_hard_links,
         })
     }
 }
@@ -184,6 +201,7 @@ impl Filesystem {
         (!grants.is_empty()).then_some(AuthorizedFs {
             grants,
             max_file_size: self.max_file_size,
+            allow_hard_links: self.allow_hard_links,
         })
     }
 }
@@ -194,6 +212,7 @@ impl Filesystem {
 pub struct AuthorizedFs<'a> {
     grants: Vec<(&'a Scope, FsAccess)>,
     max_file_size: u64,
+    allow_hard_links: bool,
 }
 
 /// A request resolved against one root. Not an authority by itself.
@@ -223,6 +242,7 @@ impl<'a> AuthorizedFs<'a> {
         let target = self.resolve(FsAccess::READ, path)?;
         let file = target.root.safe().open_file(&target.rel)?;
         self.verify(target.root, &file)?;
+        self.single_link(&file)?;
         let limit = self.max_file_size;
         if file.metadata()?.len() > limit {
             return Err(FsError::TooLarge { limit });
@@ -325,6 +345,7 @@ impl<'a> AuthorizedFs<'a> {
         let source = self.resolve(FsAccess::READ, from)?;
         let mut input = source.root.safe().open_file(&source.rel)?;
         self.verify(source.root, &input)?;
+        self.single_link(&input)?;
 
         let destination = self.resolve(FsAccess::CREATE, to)?;
         let (parent, leaf) = destination.split()?;
@@ -361,6 +382,7 @@ impl<'a> AuthorizedFs<'a> {
         let target = self.resolve(FsAccess::METADATA, path)?;
         let file = target.root.safe().probe(&target.rel)?;
         self.verify(target.root, &file)?;
+        self.single_link(&file)?;
         Ok(file.metadata()?.len())
     }
 
@@ -375,6 +397,7 @@ impl<'a> AuthorizedFs<'a> {
         let file = dir.create_file(leaf, Create::Existing)?;
         // Verified before the first byte changes: truncation comes after
         self.verify(target.root, &file)?;
+        self.single_link(&file)?;
         file.set_len(0)?;
         Ok(file)
     }
@@ -928,6 +951,46 @@ mod tests {
             denial(auth.write_file(&data.join("a.txt"), b"x")),
             Denial::OutsideRoots
         );
+    }
+
+    #[test]
+    fn multiply_linked_files_are_refused() {
+        let (tmp, notes, fs) = fixture(FsAccess::ALL);
+        let outside = tmp.path().join("outside.txt");
+        std::fs::write(&outside, b"outside").unwrap();
+        std::fs::hard_link(&outside, notes.join("linked.txt")).unwrap();
+        let auth = fs.authorize(&origin()).unwrap();
+        let linked = notes.join("linked.txt");
+        assert_eq!(denial(auth.read_file(&linked)), Denial::ObjectLocation);
+        assert_eq!(denial(auth.size(&linked)), Denial::ObjectLocation);
+        assert_eq!(
+            denial(auth.write_file(&linked, b"x")),
+            Denial::ObjectLocation
+        );
+        assert_eq!(
+            denial(auth.copy_file(&linked, &notes.join("c.txt"))),
+            Denial::ObjectLocation
+        );
+        assert_eq!(
+            std::fs::read(&outside).unwrap(),
+            b"outside",
+            "never truncated"
+        );
+        // The name itself is an ordinary entry
+        assert!(auth.exists(&linked).unwrap());
+        auth.remove_file(&linked).unwrap();
+
+        let mut builder = Filesystem::builder();
+        let scope = builder.scope("notes", |s| {
+            s.allow_directory_recursive(&notes);
+        });
+        builder
+            .grant(origin(), scope, FsAccess::ALL)
+            .allow_hard_links(true);
+        let allowing = builder.build().unwrap();
+        std::fs::hard_link(&outside, notes.join("linked.txt")).unwrap();
+        let auth = allowing.authorize(&origin()).unwrap();
+        assert_eq!(auth.read_file(&linked).unwrap(), b"outside");
     }
 
     #[cfg(windows)]

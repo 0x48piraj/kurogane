@@ -185,3 +185,8 @@ impl Entry<'_> {
 pub(crate) fn location(file: &File) -> io::Result<PathBuf> {
     sys::location(file)
 }
+
+/// How many names (hard links) the opened object has.
+pub(crate) fn link_count(file: &File) -> io::Result<u64> {
+    sys::link_count(file)
+}

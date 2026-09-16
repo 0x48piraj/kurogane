@@ -1,8 +1,10 @@
-//! Backend for platforms without a safe-open implementation (macOS).
+//! Backend for platforms with no safe-open implementation.
 //!
-//! Every operation fails closed. The macOS candidate is `openat` with
-//! `O_NOFOLLOW_ANY` (macOS 11+) which maps directly onto the "never traverse
-//! a link" contract.
+//! Linux, Windows and macOS each have a real backend; this fallback covers
+//! every other target. Every operation fails closed, and building a
+//! `Filesystem` with any root returns `FsConfigError::Root` (the root cannot
+//! be opened), so no `fs.*` access is ever granted where the boundary cannot
+//! be enforced.
 
 use std::fs::File;
 use std::io;
@@ -27,6 +29,10 @@ pub(super) fn open_root(_path: &Path) -> io::Result<File> {
 }
 
 pub(super) fn location(_file: &File) -> io::Result<PathBuf> {
+    Err(unsupported())
+}
+
+pub(super) fn link_count(_file: &File) -> io::Result<u64> {
     Err(unsupported())
 }
 

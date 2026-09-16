@@ -47,10 +47,10 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO, FILE_DISPOSITION_INFO_EX,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_ID_BOTH_DIR_INFO,
     FILE_INFO_BY_HANDLE_CLASS, FILE_LIST_DIRECTORY, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE, FileDispositionInfo,
-    FileDispositionInfoEx, FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo,
-    GetFileInformationByHandleEx, GetFinalPathNameByHandleW, SYNCHRONIZE,
-    SetFileInformationByHandle, VOLUME_NAME_DOS,
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FILE_TRAVERSE,
+    FileDispositionInfo, FileDispositionInfoEx, FileIdBothDirectoryInfo,
+    FileIdBothDirectoryRestartInfo, FileStandardInfo, GetFileInformationByHandleEx,
+    GetFinalPathNameByHandleW, SYNCHRONIZE, SetFileInformationByHandle, VOLUME_NAME_DOS,
 };
 use windows_sys::Win32::System::IO::{IO_STATUS_BLOCK, IO_STATUS_BLOCK_0};
 
@@ -106,6 +106,21 @@ pub(super) fn location(file: &File) -> io::Result<PathBuf> {
         // Too small; `len` is the size needed, terminator included
         buf.resize(len, 0);
     }
+}
+
+pub(super) fn link_count(file: &File) -> io::Result<u64> {
+    // SAFETY: an all-zero FILE_STANDARD_INFO is a valid value (integers and
+    // `false`)
+    let mut info: FILE_STANDARD_INFO = unsafe { std::mem::zeroed() };
+    let size = u32::try_from(size_of::<FILE_STANDARD_INFO>()).expect("a small structure");
+    // SAFETY: `info` is writable for `size` bytes and the handle is open
+    let ok = unsafe {
+        GetFileInformationByHandleEx(raw(file), FileStandardInfo, (&raw mut info).cast(), size)
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(u64::from(info.NumberOfLinks))
 }
 
 pub(super) fn open_file(root: &File, rel: &RelPath) -> Result<File, FsError> {
@@ -172,10 +187,12 @@ pub(super) fn create_file(dir: &File, leaf: &Name, mode: Create) -> Result<File,
         Create::New => FILE_CREATE,
         Create::Existing => FILE_OPEN,
     };
+    // READ_ATTRIBUTES lets the authorization layer measure the object
+    // (link count, kind) before the first byte changes
     nt_open(
         dir,
         &wide_name(leaf),
-        FILE_GENERIC_WRITE,
+        FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES,
         disposition,
         FILE_NON_DIRECTORY_FILE,
     )
