@@ -22,7 +22,7 @@ use crate::capability::safe::SafeRoot;
 
 mod glob;
 
-use glob::Glob;
+pub(crate) use glob::{Glob, Residual};
 
 /// How deep beneath its root an allow root reaches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -215,6 +215,52 @@ impl Root {
             return false;
         };
         self.deny.iter().any(|rule| rule.covers(rel))
+    }
+
+    /// Whether this root's extent reaches `location`.
+    pub(crate) fn reaches(&self, location: &Location) -> bool {
+        location
+            .strip(&self.canonical)
+            .is_some_and(|rel| self.extent.admits(rel.len()))
+    }
+
+    /// Whether this root reaches every descendant of `location`.
+    pub(crate) fn reaches_beneath(&self, location: &Location) -> bool {
+        self.extent == Extent::Subtree && location.strip(&self.canonical).is_some()
+    }
+
+    /// The deny subtrees lying strictly beneath `location`, each as the
+    /// suffix that remains below it: what a move of `location` carries.
+    pub(crate) fn enclosed_denies<'a>(&'a self, location: &Location) -> Vec<&'a [Key]> {
+        let Some(rel) = location.strip(&self.canonical) else {
+            return Vec::new();
+        };
+        self.deny
+            .iter()
+            .filter_map(|rule| match rule {
+                DenyRule::Subtree(prefix)
+                    if prefix.len() > rel.len() && prefix.starts_with(rel) =>
+                {
+                    Some(&prefix[rel.len()..])
+                }
+                DenyRule::Subtree(_) | DenyRule::Glob(_) => None,
+            })
+            .collect()
+    }
+
+    /// Each deny glob of this root with what it still requires beneath
+    /// `location`; nothing when `location` is not under this root.
+    pub(crate) fn glob_residuals(&self, location: &Location) -> Vec<(&Glob, Residual)> {
+        let Some(rel) = location.strip(&self.canonical) else {
+            return Vec::new();
+        };
+        self.deny
+            .iter()
+            .filter_map(|rule| match rule {
+                DenyRule::Glob(glob) => Some((glob, glob.residual(rel))),
+                DenyRule::Subtree(_) => None,
+            })
+            .collect()
     }
 }
 

@@ -60,6 +60,16 @@ impl FsAccess {
     pub const fn union(self, other: FsAccess) -> FsAccess {
         FsAccess(self.0 | other.0)
     }
+
+    /// The capabilities of `self` that `other` lacks.
+    pub(crate) const fn without(self, other: FsAccess) -> FsAccess {
+        FsAccess(self.0 & !other.0)
+    }
+
+    /// Whether no capability is set.
+    pub(crate) const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
 }
 
 impl BitOr for FsAccess {

@@ -325,8 +325,14 @@ impl<'a> AuthorizedFs<'a> {
         let destination_dir = destination.root.safe().open_dir(&destination_parent)?;
 
         let entry = source_dir.entry(source_leaf)?;
-        self.verify_location(source.root, &entry.location()?)?;
-        self.verify_child(destination.root, &destination_dir, destination_leaf)?;
+        let from_location = self.locate(source.root, &entry.location()?)?;
+        let to_location =
+            self.verify_child(destination.root, &destination_dir, destination_leaf)?;
+        let tree = entry.kind() == EntryKind::Dir;
+        if tree {
+            self.move_keeps_denials(&from_location, &to_location)?;
+        }
+        self.move_keeps_access(&from_location, &to_location, tree)?;
         // An existing destination (possibly reached through an alias such as
         // an 8.3 name) is judged by its real location before it is replaced
         match destination_dir.entry(destination_leaf) {
@@ -503,19 +509,111 @@ impl<'a> AuthorizedFs<'a> {
             .any(|root| root.denies(location))
     }
 
+    /// Every root of every scope the origin holds.
+    fn roots(&self) -> impl Iterator<Item = &'a Root> + '_ {
+        self.grants.iter().flat_map(|(scope, _)| scope.roots())
+    }
+
+    /// Moving a directory from `from` to `to` must keep every deny rule over
+    /// what it contains. A `deny_path` below `from` must still be denied at
+    /// its new location (denial is inherited by descendants, so this is
+    /// exact). A glob still live below `from` must be at least as live below
+    /// `to`, compared by value across every root, so a move between roots
+    /// sharing the same glob stays allowed.
+    fn move_keeps_denials(&self, from: &Location, to: &Location) -> Result<(), FsError> {
+        let refused = || FsError::PathDenied(Denial::DenyRule);
+        for root in self.roots() {
+            for suffix in root.enclosed_denies(from) {
+                if !self.denied(&to.join(suffix)) {
+                    return Err(refused());
+                }
+            }
+            for (glob, residual) in root.glob_residuals(from) {
+                // `Covered` means `from` itself is denied, refused earlier
+                let Residual::Live(needed) = residual else {
+                    continue;
+                };
+                let kept = self
+                    .roots()
+                    .flat_map(|root| root.glob_residuals(to))
+                    .filter(|(other, _)| *other == glob)
+                    .fold(0, |kept, (_, residual)| match residual {
+                        Residual::Covered => u64::MAX,
+                        Residual::Live(live) => kept | live,
+                    });
+                if needed & !kept != 0 {
+                    return Err(refused());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A move may not grant the origin more over the moved object than it
+    /// held at the source: no capability at `to` it lacked at `from`, and for
+    /// a directory none reaching its contents that did not reach them before
+    /// (a non-recursive root hides grandchildren a recursive one would show).
+    fn move_keeps_access(&self, from: &Location, to: &Location, tree: bool) -> Result<(), FsError> {
+        let mut gained = self.access_at(to).without(self.access_at(from));
+        if tree {
+            gained |= self.access_beneath(to).without(self.access_beneath(from));
+        }
+        if gained.is_empty() {
+            Ok(())
+        } else {
+            Err(FsError::PathDenied(Denial::ObjectLocation))
+        }
+    }
+
+    /// The capabilities of the grants whose roots reach `location`.
+    fn access_at(&self, location: &Location) -> FsAccess {
+        self.grants
+            .iter()
+            .filter(|(scope, _)| scope.roots().iter().any(|root| root.reaches(location)))
+            .fold(FsAccess::NONE, |all, (_, access)| all | *access)
+    }
+
+    /// The capabilities of the grants that reach every descendant of `location`.
+    fn access_beneath(&self, location: &Location) -> FsAccess {
+        self.grants
+            .iter()
+            .filter(|(scope, _)| {
+                scope
+                    .roots()
+                    .iter()
+                    .any(|root| root.reaches_beneath(location))
+            })
+            .fold(FsAccess::NONE, |all, (_, access)| all | *access)
+    }
+
+    /// Refuses a regular file that has other names, unless the configuration
+    /// allows hard links: its other names may lie outside every root or under
+    /// a deny rule, and the location re-check only sees the name used here.
+    /// Directories are exempt; their link counts count subdirectories.
+    fn single_link(&self, file: &File) -> Result<(), FsError> {
+        if self.allow_hard_links || !file.metadata()?.is_file() {
+            return Ok(());
+        }
+        if safe::link_count(file)? > 1 {
+            return Err(FsError::PathDenied(Denial::ObjectLocation));
+        }
+        Ok(())
+    }
+
     /// Rule 5 for an opened object.
     fn verify(&self, anchor: &Root, object: &File) -> Result<(), FsError> {
         self.locate(anchor, &safe::location(object)?).map(drop)
     }
 
-    /// Rule 5 for a new entry; its parent's real location plus its name.
-    fn verify_child(&self, anchor: &Root, dir: &Dir, leaf: &Name) -> Result<(), FsError> {
+    /// Rule 5 for a new entry; its parent's real location plus its name,
+    /// which is returned.
+    fn verify_child(&self, anchor: &Root, dir: &Dir, leaf: &Name) -> Result<Location, FsError> {
         let parent = self.locate(anchor, &safe::location(dir.as_file())?)?;
         let child = parent.join([leaf.key()]);
         if self.denied(&child) {
             return Err(FsError::PathDenied(Denial::ObjectLocation));
         }
-        Ok(())
+        Ok(child)
     }
 
     fn verify_location(&self, anchor: &Root, reported: &Path) -> Result<(), FsError> {
@@ -951,6 +1049,121 @@ mod tests {
             denial(auth.write_file(&data.join("a.txt"), b"x")),
             Denial::OutsideRoots
         );
+    }
+
+    #[test]
+    fn renaming_a_directory_that_encloses_a_deny_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        std::fs::create_dir_all(root.join("vault/inner")).unwrap();
+        std::fs::write(root.join("vault/inner/secret.txt"), b"top secret").unwrap();
+        let mut builder = Filesystem::builder();
+        let scope = builder.scope("root", |s| {
+            s.allow_directory_recursive(&root);
+            s.deny_path(root.join("vault/inner"));
+        });
+        builder.grant(origin(), scope, FsAccess::ALL);
+        let fs = builder.build().unwrap();
+        let auth = fs.authorize(&origin()).unwrap();
+
+        // `vault/` is allowed and renameable, but it encloses the denied
+        // `vault/inner/`, whose deny rule is anchored by a fixed prefix.
+        let moved = root.join("relocated");
+        assert_eq!(
+            denial(auth.rename_file(&root.join("vault"), &moved)),
+            Denial::DenyRule
+        );
+        assert!(
+            !moved.exists(),
+            "the enclosing directory must not have moved"
+        );
+        assert!(root.join("vault/inner/secret.txt").exists());
+        assert_eq!(
+            denial(auth.read_file(&root.join("vault/inner/secret.txt"))),
+            Denial::DenyRule
+        );
+
+        // A directory that encloses no deny still renames normally.
+        std::fs::create_dir(root.join("plain")).unwrap();
+        auth.rename_file(&root.join("plain"), &root.join("plain2"))
+            .unwrap();
+        assert!(root.join("plain2").exists());
+    }
+
+    #[test]
+    fn renaming_a_directory_cannot_escape_a_glob_deny() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        std::fs::create_dir_all(root.join("vault")).unwrap();
+        std::fs::create_dir_all(root.join("p/secrets")).unwrap();
+        std::fs::write(root.join("vault/a.key"), b"k").unwrap();
+        std::fs::write(root.join("p/secrets/tls.pem"), b"p").unwrap();
+        let mut builder = Filesystem::builder();
+        let scope = builder.scope("root", |s| {
+            s.allow_directory_recursive(&root);
+            s.deny_glob("vault/*.key");
+            s.deny_glob("**/secrets/*.pem");
+        });
+        builder.grant(origin(), scope, FsAccess::ALL);
+        let fs = builder.build().unwrap();
+        let auth = fs.authorize(&origin()).unwrap();
+
+        // Each rule depends on a directory's name; renaming it would free
+        // the files beneath
+        assert_eq!(
+            denial(auth.rename_file(&root.join("vault"), &root.join("x"))),
+            Denial::DenyRule
+        );
+        assert_eq!(
+            denial(auth.rename_file(&root.join("p/secrets"), &root.join("p/open"))),
+            Denial::DenyRule
+        );
+        // Moving the enclosing directory keeps `**/secrets/*.pem` in force
+        auth.rename_file(&root.join("p"), &root.join("q")).unwrap();
+        assert_eq!(
+            denial(auth.read_file(&root.join("q/secrets/tls.pem"))),
+            Denial::DenyRule
+        );
+    }
+
+    #[test]
+    fn renames_cannot_gain_access() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (x, y) = (tmp.path().join("x"), tmp.path().join("y"));
+        std::fs::create_dir_all(x.join("d/deep")).unwrap();
+        std::fs::create_dir(&y).unwrap();
+        std::fs::write(x.join("f.txt"), b"f").unwrap();
+        std::fs::write(x.join("d/deep/g.txt"), b"g").unwrap();
+        let mut builder = Filesystem::builder();
+        let sx = builder.scope("x", |s| {
+            s.allow_directory(&x);
+        });
+        let sy = builder.scope("y", |s| {
+            s.allow_directory_recursive(&y);
+        });
+        builder.grant(origin(), sx, FsAccess::RENAME).grant(
+            origin(),
+            sy,
+            FsAccess::RENAME | FsAccess::READ,
+        );
+        let fs = builder.build().unwrap();
+        let auth = fs.authorize(&origin()).unwrap();
+
+        // READ over `y` is not READ over what `x` holds
+        assert_eq!(
+            denial(auth.rename_file(&x.join("f.txt"), &y.join("f.txt"))),
+            Denial::ObjectLocation
+        );
+        // Nor may a directory carry `x`'s hidden grandchildren into reach
+        assert_eq!(
+            denial(auth.rename_file(&x.join("d"), &y.join("d"))),
+            Denial::ObjectLocation
+        );
+        assert!(x.join("f.txt").exists() && x.join("d/deep/g.txt").exists());
+        // Losing access is fine
+        std::fs::write(y.join("h.txt"), b"h").unwrap();
+        auth.rename_file(&y.join("h.txt"), &x.join("h.txt"))
+            .unwrap();
     }
 
     #[test]
