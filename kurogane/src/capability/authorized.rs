@@ -637,7 +637,7 @@ impl<'a> AuthorizedFs<'a> {
     }
 }
 
-#[cfg(all(test, any(target_os = "linux", windows)))]
+#[cfg(all(test, any(target_os = "linux", windows, target_os = "macos")))]
 mod tests {
     use super::*;
     use std::path::PathBuf;
@@ -1222,6 +1222,41 @@ mod tests {
         std::fs::hard_link(&outside, notes.join("linked.txt")).unwrap();
         let auth = allowing.authorize(&origin()).unwrap();
         assert_eq!(auth.read_file(&linked).unwrap(), b"outside");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_case_and_normalization_variants_hit_deny_rules() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        std::fs::create_dir_all(root.join("Secrets")).unwrap();
+        std::fs::write(root.join("Secrets/key.txt"), b"k").unwrap();
+        std::fs::write(root.join("caf\u{e9}.txt"), b"c").unwrap();
+        let mut builder = Filesystem::builder();
+        let scope = builder.scope("root", |s| {
+            s.allow_directory_recursive(&root);
+            s.deny_path(root.join("Secrets"));
+            s.deny_glob("**/caf\u{e9}.txt");
+        });
+        builder.grant(origin(), scope, FsAccess::ALL);
+        let fs = builder.build().unwrap();
+        let auth = fs.authorize(&origin()).unwrap();
+        // The default volumes fold case and normalization; so do the keys,
+        // whatever the kernel reports for the opened object
+        for variant in [
+            root.join("SECRETS/key.txt"),
+            root.join("secrets/KEY.TXT"),
+            root.join("cafe\u{301}.txt"),
+            root.join("CAF\u{c9}.TXT"),
+            root.join("sec\u{200c}rets/key.txt"),
+        ] {
+            assert_eq!(
+                denial(auth.read_file(&variant)),
+                Denial::DenyRule,
+                "{}",
+                variant.display()
+            );
+        }
     }
 
     #[cfg(windows)]

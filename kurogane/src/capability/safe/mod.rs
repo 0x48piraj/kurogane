@@ -18,8 +18,10 @@
 //! This module determines how objects are opened; origins, grants and deny
 //! rules are enforced by the authorization layer.
 //!
-//! Backends are provided for Linux (`openat2`, with `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`)
-//! and Windows (`NtCreateFile` relative to a directory handle with `OBJ_DONT_REPARSE`).
+//! Backends are provided for Linux (`openat2`, with `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`),
+//! Windows (`NtCreateFile` relative to a directory handle with `OBJ_DONT_REPARSE`)
+//! and macOS (`openat` beneath the root fd with `O_NOFOLLOW_ANY`, with
+//! `fcntl(F_GETPATH)` locations).
 //!
 //! Other platforms fail closed.
 
@@ -41,9 +43,14 @@ mod windows;
 #[cfg(windows)]
 use windows as sys;
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos as sys;
+
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 mod unsupported;
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 use unsupported as sys;
 
 /// How [`Dir::create_file`] treats its leaf.

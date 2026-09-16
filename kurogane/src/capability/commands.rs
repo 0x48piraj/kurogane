@@ -258,7 +258,31 @@ mod tests {
         assert_eq!(binary_path(b"\xff").unwrap_err().code(), ErrorCode::Buffer);
     }
 
-    #[cfg(any(target_os = "linux", windows))]
+    #[test]
+    fn the_budget_bounds_bytes_and_per_origin_requests() {
+        let budget = Arc::new(Budget::for_limit(0));
+        let a = Origin::parse("app://a").unwrap();
+        let b = Origin::parse("app://b").unwrap();
+        assert!(
+            budget.acquire(&a, budget.capacity + 1).is_none(),
+            "over the byte budget"
+        );
+        let held: Vec<_> = (0..ORIGIN_IN_FLIGHT)
+            .map(|_| budget.acquire(&a, 1).unwrap())
+            .collect();
+        assert!(budget.acquire(&a, 1).is_none(), "over the per-origin cap");
+        assert!(
+            budget.acquire(&b, 1).is_some(),
+            "another origin is unaffected"
+        );
+        drop(held);
+        assert!(
+            budget.acquire(&a, 1).is_some(),
+            "permits return their share"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     mod with_backend {
         use super::super::*;
         use super::frame;
@@ -288,24 +312,35 @@ mod tests {
                 browser_id: None,
                 frame: FrameId::new("test-frame"),
                 origin: Origin::from_url(origin),
+                url_origin: Origin::from_url(origin),
             }
         }
 
-        /// Sends `request` to the handler for `command` and waits for the answer.
+        /// Sends `request` to the handler for `command`; returns the answer
+        /// and the name of the thread that produced it.
+        fn send_on(
+            handlers: &[(FsCommand, AsyncHandler)],
+            command: FsCommand,
+            origin: &str,
+            request: &[u8],
+        ) -> (Option<String>, Result<Vec<u8>, IpcError>) {
+            let (_, handler) = handlers.iter().find(|(c, _)| *c == command).unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let responder = BinaryResponder::new(Box::new(move |r| {
+                let _ = tx.send((std::thread::current().name().map(str::to_owned), r));
+            }));
+            handler(request, responder, ctx(origin));
+            rx.recv_timeout(Duration::from_secs(10))
+                .expect("handler resolved")
+        }
+
         fn send(
             handlers: &[(FsCommand, AsyncHandler)],
             command: FsCommand,
             origin: &str,
             request: &[u8],
         ) -> Result<Vec<u8>, IpcError> {
-            let (_, handler) = handlers.iter().find(|(c, _)| *c == command).unwrap();
-            let (tx, rx) = std::sync::mpsc::channel();
-            let responder = BinaryResponder::new(Box::new(move |r| {
-                let _ = tx.send(r);
-            }));
-            handler(request, responder, ctx(origin));
-            rx.recv_timeout(Duration::from_secs(10))
-                .expect("handler resolved")
+            send_on(handlers, command, origin, request).1
         }
 
         fn send_json(
@@ -386,6 +421,56 @@ mod tests {
                 let err = send(&handlers, FsCommand::ReadFile, origin, request).unwrap_err();
                 assert_eq!(err.code(), code, "{origin} {request:?}");
             }
+        }
+
+        #[test]
+        fn ungranted_origins_are_refused_before_queueing() {
+            let (_tmp, notes, handlers) = notes(FsAccess::READ);
+            let big = frame("big.bin", &vec![0; 1 << 20]);
+            // No grant at all, and a grant without the command's bit
+            for (origin, command, request) in [
+                ("https://attacker.example", FsCommand::WriteFile, &big[..]),
+                (
+                    "https://attacker.example",
+                    FsCommand::ReadFile,
+                    &b"note.txt"[..],
+                ),
+                ("app://notes", FsCommand::WriteFile, &big[..]),
+            ] {
+                let (thread, result) = send_on(&handlers, command, origin, request);
+                assert_eq!(result.unwrap_err().code(), ErrorCode::Capability);
+                assert_ne!(
+                    thread.as_deref(),
+                    Some("kurogane-fs"),
+                    "{origin} was queued"
+                );
+            }
+            assert!(!notes.join("big.bin").exists());
+        }
+
+        #[test]
+        fn oversized_writes_are_refused_before_queueing() {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut builder = Filesystem::builder();
+            let scope = builder.scope("data", |s| {
+                s.allow_directory(tmp.path());
+            });
+            builder
+                .grant(Origin::parse("app://notes").unwrap(), scope, FsAccess::ALL)
+                .max_file_size(4);
+            let handlers: Vec<_> = handlers(builder.build().unwrap()).collect();
+            let (thread, result) = send_on(
+                &handlers,
+                FsCommand::WriteFile,
+                "app://notes",
+                &frame("new.txt", b"12345"),
+            );
+            assert_eq!(result.unwrap_err().code(), ErrorCode::TooLarge);
+            assert_ne!(thread.as_deref(), Some("kurogane-fs"));
+            let long = vec![b'a'; MAX_PATH_BYTES + 1];
+            let (_, result) = send_on(&handlers, FsCommand::ReadFile, "app://notes", &long);
+            assert_eq!(result.unwrap_err().code(), ErrorCode::Buffer);
+            assert!(!tmp.path().join("new.txt").exists());
         }
 
         #[test]

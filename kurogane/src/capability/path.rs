@@ -3,9 +3,11 @@
 //! - [`Name`]: one validated component. Only names parse; nothing downstream
 //!   re-validates strings.
 //! - [`RelPath`]: a validated path beneath an allow root (empty = the root).
-//! - [`Key`]: the comparison form of a component. Case-folded on Windows,
-//!   whose filesystems are case-insensitive; raw bytes elsewhere. Folding can
-//!   only make a deny rule match more, never less.
+//! - [`Key`]: the comparison form of a component. Case-folded on Windows;
+//!   case-, normalization- and ignorable-folded on macOS; raw bytes on Linux.
+//!   Each fold identifies at least the names the platform's filesystems treat
+//!   as one, so folding can only make a deny rule match more, never less.
+//!   Kernel paths are always built from raw names, never from keys.
 //! - [`Location`]: an absolute path as keys, used to compare roots, requests
 //!   and kernel-reported object locations.
 //!
@@ -63,7 +65,35 @@ pub(crate) fn fold(component: &OsStr) -> Vec<u8> {
     out
 }
 
-#[cfg(not(windows))]
+/// APFS and HFS+ volumes are case- and normalization-insensitive by default,
+/// and HFS+ also ignores a few invisible code points. The fold is a canonical
+/// caseless match (NFD, then upper and lower case, then NFD) with those code
+/// points removed: two spellings the filesystem treats as one name always
+/// fold equal, so the deny check never depends on how `F_GETPATH` spells a
+/// name. Names that are not UTF-8 (which APFS rejects) stay as they are.
+#[cfg(target_os = "macos")]
+pub(crate) fn fold(component: &OsStr) -> Vec<u8> {
+    use unicode_normalization::UnicodeNormalization;
+
+    let Some(text) = component.to_str() else {
+        return component.as_encoded_bytes().to_vec();
+    };
+    text.nfd()
+        .flat_map(char::to_uppercase)
+        .flat_map(char::to_lowercase)
+        .filter(|&c| !hfs_ignorable(c))
+        .nfd()
+        .collect::<String>()
+        .into_bytes()
+}
+
+/// Code points HFS+ ignores when comparing names.
+#[cfg(target_os = "macos")]
+fn hfs_ignorable(c: char) -> bool {
+    matches!(c, '\u{200C}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{206A}'..='\u{206F}' | '\u{FEFF}')
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub(crate) fn fold(component: &OsStr) -> Vec<u8> {
     component.as_encoded_bytes().to_vec()
 }
@@ -551,9 +581,25 @@ mod tests {
         assert_eq!(a, b);
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     #[test]
-    fn unix_keys_are_case_sensitive() {
+    fn linux_keys_are_case_sensitive() {
         assert_ne!(Key::of(OsStr::new("Secret")), Key::of(OsStr::new("SECRET")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_keys_fold_case_normalization_and_ignorables() {
+        let key = |s: &str| Key::of(OsStr::new(s));
+        assert_eq!(key("Secret"), key("SECRET"));
+        assert_eq!(key("caf\u{e9}"), key("cafe\u{301}"), "NFC and NFD");
+        assert_eq!(
+            key("CAF\u{c9}"),
+            key("cafe\u{301}"),
+            "case and normalization"
+        );
+        assert_eq!(key("sec\u{200c}ret"), key("secret"), "HFS+ ignorable");
+        assert_eq!(key("stra\u{df}e"), key("STRASSE"), "full case folding");
+        assert_ne!(key("secret"), key("secrets"));
     }
 }

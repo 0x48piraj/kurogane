@@ -30,14 +30,15 @@
 mod authorized;
 pub(crate) mod commands;
 mod error;
-mod path;
+// The `app://` asset scheme validates each URL segment as a Name
+pub(crate) mod path;
 pub(crate) mod policy;
 mod safe;
 mod scope;
 
-#[cfg(all(test, any(target_os = "linux", windows)))]
+#[cfg(all(test, any(target_os = "linux", windows, target_os = "macos")))]
 mod audit;
-#[cfg(all(test, any(target_os = "linux", windows)))]
+#[cfg(all(test, any(target_os = "linux", windows, target_os = "macos")))]
 mod test_support;
 
 pub use authorized::{AuthorizedFs, Filesystem, FilesystemBuilder, ScopeId};

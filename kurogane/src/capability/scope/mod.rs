@@ -281,7 +281,7 @@ fn deny_location(path: &Path) -> Option<Location> {
     }
 }
 
-#[cfg(all(test, any(target_os = "linux", windows)))]
+#[cfg(all(test, any(target_os = "linux", windows, target_os = "macos")))]
 mod tests {
     use super::*;
 
