@@ -1045,22 +1045,21 @@ mod tests {
         let fs = builder.build().unwrap();
         let auth = fs.authorize(&origin()).unwrap();
         let alias = data.join(&short);
-        assert_eq!(denial(auth.read_file(&alias)), Denial::ObjectLocation);
-        assert_eq!(
-            denial(auth.write_file(&alias, b"x")),
-            Denial::ObjectLocation
-        );
-        assert_eq!(denial(auth.remove_file(&alias)), Denial::ObjectLocation);
-        assert_eq!(
-            denial(auth.rename_file(&alias, &data.join("free.txt"))),
-            Denial::ObjectLocation
-        );
+        let absent = data.join("QZQZQZ~7.JSO");
+        let invalid = |r: Result<_, FsError>| matches!(r, Err(FsError::InvalidPath(_)));
+        // Short-name shapes are refused before the filesystem is consulted,
+        // so the answer cannot depend on whether a denied file stands behind
+        for target in [&alias, &absent] {
+            assert!(invalid(auth.read_file(target).map(drop)));
+            assert!(invalid(auth.exists(target).map(drop)));
+            assert!(invalid(auth.write_file(target, b"x")));
+            assert!(invalid(auth.remove_file(target)));
+            assert!(invalid(auth.rename_file(target, &data.join("free.txt"))));
+        }
         std::fs::write(data.join("plain.txt"), b"p").unwrap();
-        assert_eq!(
-            denial(auth.rename_file(&data.join("plain.txt"), &alias)),
-            Denial::ObjectLocation
-        );
+        assert!(invalid(auth.rename_file(&data.join("plain.txt"), &alias)));
         assert_eq!(std::fs::read(&long).unwrap(), b"{}");
+        assert!(!absent.exists());
     }
 
     #[cfg(windows)]

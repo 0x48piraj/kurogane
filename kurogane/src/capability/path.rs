@@ -190,7 +190,31 @@ fn windows_name_rules(raw: &OsStr) -> Result<(), &'static str> {
     if is_device_name(raw) {
         return Err("path component is a reserved device name");
     }
+    if has_short_name_shape(&raw.to_string_lossy()) {
+        return Err("path component has the shape of an 8.3 short name");
+    }
     Ok(())
+}
+
+/// `SETTIN~1.JSO`, `PROGRA~1`, `AB12~10.TXT`: a base of 1 to 8 characters
+/// ending in `~` and digits, and an optional extension of 1 to 3. NTFS
+/// generates such aliases for long names; opening one reaches the long name,
+/// so whether a denied file stands behind an alias would show in the answer.
+/// Refusing the shape outright answers the same whatever is on disk.
+#[cfg(windows)]
+fn has_short_name_shape(name: &str) -> bool {
+    let (base, extension) = match name.rsplit_once('.') {
+        Some((base, extension)) => (base, Some(extension)),
+        None => (name, None),
+    };
+    if base.is_empty() || base.contains('.') || base.chars().count() > 8 {
+        return false;
+    }
+    if extension.is_some_and(|e| e.is_empty() || e.chars().count() > 3) {
+        return false;
+    }
+    base.rsplit_once('~')
+        .is_some_and(|(_, digits)| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// `CON`, `nul.txt`, `COM1 .log`: the part before the first dot, trailing
@@ -490,6 +514,31 @@ mod tests {
         }
         assert!(!invalid(r"C:\data\console.txt"));
         assert!(!invalid(r"C:\data\COM10"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_rejects_short_name_shapes() {
+        for path in [
+            r"C:\data\SETTIN~1.JSO",
+            r"C:\data\progra~1",
+            r"C:\data\AB12~10.TXT",
+            r"C:\data\x~1.t",
+            r"C:\PROGRA~1\data\x.txt",
+        ] {
+            assert!(invalid(path), "{path} must be rejected");
+        }
+        for path in [
+            r"C:\data\~$doc.docx",
+            r"C:\data\~WRL0001.tmp",
+            r"C:\data\file.txt~",
+            r"C:\data\name~1.docx",
+            r"C:\data\long-name~1.txt",
+            r"C:\data\a~b.txt",
+            r"C:\data\a.b~1",
+        ] {
+            assert!(!invalid(path), "{path} is not a short-name shape");
+        }
     }
 
     #[cfg(windows)]
