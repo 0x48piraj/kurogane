@@ -87,7 +87,15 @@ impl<T: 'static> Responder<T> {
 
 impl<T> Drop for Responder<T> {
     fn drop(&mut self) {
-        if let Some(cb) = self.callback.lock().unwrap().take() {
+        let callback = self
+            .callback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        // The requester is gone, so there is no response to deliver
+        if let Some(cb) = callback
+            && !self.cancelled.load(Ordering::SeqCst)
+        {
             cb(Err(IpcError::with_code(
                 "handler dropped responder without resolving",
                 ErrorCode::Dropped,
@@ -276,6 +284,24 @@ mod tests {
         responder.resolve(Ok(99));
         assert_eq!(call_count.load(Ordering::SeqCst), 0);
         assert!(results.lock().unwrap().is_empty());
+    }
+
+    // Dropping a cancelled responder sends nothing: no rejection reaches a
+    // page that cancelled, or a document that replaced the requester
+    #[test]
+    fn dropping_a_cancelled_responder_sends_nothing() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let cc = call_count.clone();
+        let flag = Arc::new(AtomicBool::new(false));
+        let responder: Responder<i32> = Responder::with_abort(
+            Box::new(move |_| {
+                cc.fetch_add(1, Ordering::SeqCst);
+            }),
+            flag.clone(),
+        );
+        flag.store(true, Ordering::SeqCst);
+        drop(responder);
+        assert_eq!(call_count.load(Ordering::SeqCst), 0);
     }
 
     // Responder and pending RPC share the same cancellation state
