@@ -18,6 +18,7 @@
 //! minted by [`Filesystem::authorize`]. [`Scope`] defines the allowed roots
 //! and deny rules; [`SafeRoot`] and [`Dir`] provide kernel-confined access.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -28,7 +29,7 @@ use crate::capability::error::{Denial, FsConfigError, FsError};
 use crate::capability::path::{parse_request, Key, Location, Name, RelPath, Request};
 use crate::capability::policy::FsAccess;
 use crate::capability::safe::{self, Create, Dir, DirEntry, EntryKind};
-use crate::capability::scope::{Root, Scope, ScopeBuilder};
+use crate::capability::scope::{Residual, Root, Scope, ScopeBuilder};
 
 /// The filesystem capability configuration: named scopes and the grants that
 /// bind origins to them.
@@ -52,6 +53,8 @@ pub struct Filesystem {
     grants: Vec<Grant>,
     max_file_size: u64,
     allow_hard_links: bool,
+    /// Every capability each origin holds, across its grants.
+    access: HashMap<Origin, FsAccess>,
 }
 
 struct Grant {
@@ -166,11 +169,16 @@ impl FilesystemBuilder {
         for (name, scope) in self.scopes {
             scopes.push(scope.build(&name)?);
         }
+        let mut access: HashMap<Origin, FsAccess> = HashMap::new();
+        for grant in &grants {
+            *access.entry(grant.origin.clone()).or_default() |= grant.access;
+        }
         Ok(Filesystem {
             scopes,
             grants,
             max_file_size: self.max_file_size,
             allow_hard_links: self.allow_hard_links,
+            access,
         })
     }
 }
@@ -187,6 +195,17 @@ impl Filesystem {
 
     pub fn builder() -> FilesystemBuilder {
         FilesystemBuilder::new()
+    }
+
+    /// Every capability `origin` holds across its grants; `NONE` without one.
+    /// Lets a request be refused before it is copied or queued.
+    pub(crate) fn access_of(&self, origin: &Origin) -> FsAccess {
+        self.access.get(origin).copied().unwrap_or(FsAccess::NONE)
+    }
+
+    /// The transfer limit of [`FilesystemBuilder::max_file_size`].
+    pub(crate) fn max_file_size(&self) -> u64 {
+        self.max_file_size
     }
 
     /// Mints the typed authority for `origin`, or `None` when it holds no

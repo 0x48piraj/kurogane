@@ -143,6 +143,24 @@ impl FsCommand {
         FsCommand::RenameFile,
     ];
 
+    /// Whether an origin holding `access` could perform this command on some
+    /// path. A necessary condition only, checked before a request is queued;
+    /// the operation still authorizes its paths in full.
+    pub(crate) const fn admits(self, access: FsAccess) -> bool {
+        match self {
+            FsCommand::ReadFile => access.contains(FsAccess::READ),
+            FsCommand::WriteFile => {
+                access.contains(FsAccess::WRITE) || access.contains(FsAccess::CREATE)
+            }
+            FsCommand::ReadDir => access.contains(FsAccess::LIST),
+            FsCommand::Size | FsCommand::Exists => access.contains(FsAccess::METADATA),
+            FsCommand::CreateDir => access.contains(FsAccess::CREATE),
+            FsCommand::RemoveFile | FsCommand::RemoveDir => access.contains(FsAccess::DELETE),
+            FsCommand::CopyFile => access.contains(FsAccess::READ.union(FsAccess::CREATE)),
+            FsCommand::RenameFile => access.contains(FsAccess::RENAME),
+        }
+    }
+
     /// The IPC command name.
     pub(crate) const fn name(self) -> &'static str {
         match self {

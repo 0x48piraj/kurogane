@@ -8,6 +8,14 @@
 //! use, so file I/O does not block the CEF UI thread. Requests are processed
 //! in submission order; a full queue is rejected with "filesystem is busy".
 //!
+//! A request is admitted before its payload is copied or queued: an origin
+//! whose grants cannot perform the command gets [`ErrorCode::Capability`],
+//! a `write_file` over the transfer limit gets [`ErrorCode::TooLarge`] from
+//! its header alone, and an oversized path or request gets
+//! [`ErrorCode::Buffer`]. Admitted requests hold a share of a queued-bytes
+//! budget, and one origin may have at most [`ORIGIN_IN_FLIGHT`] operations
+//! queued or running, so no origin can occupy the worker for the others.
+//!
 //! File contents use the binary channel; all other data uses the string
 //! channel. `fs.read_file` takes a UTF-8 path and returns its contents.
 //! `fs.write_file` takes `[path length: u32 LE][path: UTF-8][contents]` and
@@ -20,10 +28,11 @@
 //! [`ErrorCode::Handler`] (0). Malformed JSON or binary frames return
 //! [`ErrorCode::Buffer`] (-2).
 
+use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, SyncSender, TrySendError};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -40,11 +49,22 @@ use crate::ipc::{AsyncHandler, BinaryResponder, ErrorCode, IpcError};
 /// How many operations may wait for the worker before new ones are refused.
 const QUEUE_DEPTH: usize = 64;
 
+/// Operations one origin may have queued or running at once.
+const ORIGIN_IN_FLIGHT: usize = 16;
+
+/// The longest path a request may carry, in bytes.
+const MAX_PATH_BYTES: usize = 32 * 1024;
+
+/// The largest request other than `write_file`, in bytes.
+const MAX_REQUEST_BYTES: usize = 64 * 1024;
+
 /// One handler per `fs.*` command, all feeding one worker.
 pub(crate) fn handlers(filesystem: Filesystem) -> impl Iterator<Item = (FsCommand, AsyncHandler)> {
+    let budget = Arc::new(Budget::for_limit(filesystem.max_file_size()));
     let worker = Arc::new(Worker {
         filesystem: Arc::new(filesystem),
         queue: OnceLock::new(),
+        budget,
     });
     FsCommand::ALL
         .into_iter()
@@ -53,26 +73,37 @@ pub(crate) fn handlers(filesystem: Filesystem) -> impl Iterator<Item = (FsComman
 
 fn handler(worker: Arc<Worker>, command: FsCommand) -> AsyncHandler {
     Box::new(move |data, responder, ctx| {
+        // Refused requests are answered here, before anything is copied
+        let permit = match worker.admit(command, data, &ctx.origin) {
+            Ok(permit) => permit,
+            Err(refusal) => return responder.resolve(Err(refusal)),
+        };
         worker.submit(Job {
             command,
             data: data.to_vec(),
             origin: ctx.origin,
             responder,
+            _permit: permit,
         });
     })
 }
 
 /// One queued operation. Plain data, so a refused job still reaches its
-/// responder.
+/// responder; its permit returns its share of the budget when dropped.
 struct Job {
     command: FsCommand,
     data: Vec<u8>,
     origin: Origin,
     responder: BinaryResponder,
+    _permit: Permit,
 }
 
 impl Job {
     fn run(self, filesystem: &Filesystem) {
+        // Cancelled by the page or by navigation while queued: nobody waits
+        if self.responder.is_cancelled() {
+            return;
+        }
         let result = match filesystem.authorize(&self.origin) {
             Some(auth) => run(&auth, self.command, &self.data),
             None => Err(FsError::CapabilityDenied.into()),
@@ -85,9 +116,49 @@ struct Worker {
     filesystem: Arc<Filesystem>,
     /// `None` when the thread could not be spawned; jobs then run inline
     queue: OnceLock<Option<SyncSender<Job>>>,
+    budget: Arc<Budget>,
 }
 
 impl Worker {
+    /// Decides from the origin's grants and the request's size alone whether
+    /// the request may be queued.
+    fn admit(&self, command: FsCommand, data: &[u8], origin: &Origin) -> Result<Permit, IpcError> {
+        if !command.admits(self.filesystem.access_of(origin)) {
+            return Err(FsError::CapabilityDenied.into());
+        }
+        match command {
+            FsCommand::WriteFile => {
+                let (path, contents) = write_frame(data)?;
+                if path.as_os_str().len() > MAX_PATH_BYTES {
+                    return Err(IpcError::with_code(
+                        "the path is too long",
+                        ErrorCode::Buffer,
+                    ));
+                }
+                let limit = self.filesystem.max_file_size();
+                if u64::try_from(contents.len()).map_or(true, |len| len > limit) {
+                    return Err(FsError::TooLarge { limit }.into());
+                }
+            }
+            FsCommand::ReadFile if data.len() > MAX_PATH_BYTES => {
+                return Err(IpcError::with_code(
+                    "the path is too long",
+                    ErrorCode::Buffer,
+                ));
+            }
+            _ if data.len() > MAX_REQUEST_BYTES => {
+                return Err(IpcError::with_code(
+                    "the request is too large",
+                    ErrorCode::Buffer,
+                ));
+            }
+            _ => {}
+        }
+        self.budget
+            .acquire(origin, data.len())
+            .ok_or_else(|| IpcError::new("filesystem is busy"))
+    }
+
     fn submit(&self, job: Job) {
         let Some(queue) = self.queue.get_or_init(|| self.spawn()) else {
             job.run(&self.filesystem);
@@ -118,6 +189,76 @@ impl Worker {
             Err(e) => {
                 debug!("[fs] cannot spawn the worker thread ({e}); running operations inline");
                 None
+            }
+        }
+    }
+}
+
+/// Bounds what queued requests may hold: their payload bytes in total, and
+/// how many one origin may have queued or running.
+struct Budget {
+    capacity: usize,
+    state: Mutex<BudgetState>,
+}
+
+#[derive(Default)]
+struct BudgetState {
+    used: usize,
+    in_flight: HashMap<Origin, usize>,
+}
+
+impl Budget {
+    /// Room for two maximal transfers plus small requests.
+    fn for_limit(max_file_size: u64) -> Budget {
+        let capacity = max_file_size
+            .saturating_mul(2)
+            .saturating_add(1 << 20)
+            .min(usize::MAX as u64) as usize;
+        Budget {
+            capacity,
+            state: Mutex::new(BudgetState::default()),
+        }
+    }
+
+    fn acquire(self: &Arc<Self>, origin: &Origin, bytes: usize) -> Option<Permit> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let used = state
+            .used
+            .checked_add(bytes)
+            .filter(|&used| used <= self.capacity)?;
+        let count = state.in_flight.entry(origin.clone()).or_default();
+        if *count >= ORIGIN_IN_FLIGHT {
+            return None;
+        }
+        *count += 1;
+        state.used = used;
+        Some(Permit {
+            budget: Arc::clone(self),
+            origin: origin.clone(),
+            bytes,
+        })
+    }
+}
+
+/// A request's share of the [`Budget`], returned when the request ends.
+struct Permit {
+    budget: Arc<Budget>,
+    origin: Origin,
+    bytes: usize,
+}
+
+impl Drop for Permit {
+    fn drop(&mut self) {
+        let mut state = self
+            .budget
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        state.used -= self.bytes;
+        if let Some(count) = state.in_flight.get_mut(&self.origin) {
+            *count -= 1;
+            if *count == 0 {
+                state.in_flight.remove(&self.origin);
             }
         }
     }
