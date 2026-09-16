@@ -1,21 +1,25 @@
 //! Renderer-side stream subsystem dispatch.
 //!
-//! Handles STREAM_BROWSER_DATA, STREAM_BROWSER_END, STREAM_BROWSER_ERROR
-//! from the browser. Dispatches to V8 callbacks registered via core.onStreamData/End/Error.
+//! Handles stream data, end, and error messages from the browser.
+//! Messages are delivered only to streams opened by the addressed frame,
+//! using the callbacks bound when the stream was opened.
 
 use cef::*;
 
 use crate::debug;
 use crate::ipc::envelope::*;
-use crate::ipc::renderer_state::renderer_state;
+use crate::ipc::renderer_state::state;
 use crate::ipc::utils::create_array_buffer_from_bytes;
+use crate::ipc::FrameId;
 
 /// Handle a stream message arriving from the browser (renderer-side dispatch).
-pub fn handle_stream_renderer(_frame: &mut Frame, envelope: &Envelope, payload: &[u8]) -> bool {
+pub fn handle_stream_renderer(frame: &mut Frame, envelope: &Envelope, payload: &[u8]) -> bool {
+    let addressed = FrameId::of(frame);
+    let id = envelope.correlation_id as i32;
     match envelope.opcode {
-        STREAM_BROWSER_DATA => on_data(envelope, payload),
-        STREAM_BROWSER_END => on_end(envelope, payload),
-        STREAM_BROWSER_ERROR => on_error(envelope, payload),
+        STREAM_BROWSER_DATA => on_data(id, &addressed, payload),
+        STREAM_BROWSER_END => on_end(id, &addressed, payload),
+        STREAM_BROWSER_ERROR => on_error(id, &addressed, payload),
         _ => {
             debug!("[Stream Renderer] unknown opcode {}", envelope.opcode);
             false
@@ -23,155 +27,88 @@ pub fn handle_stream_renderer(_frame: &mut Frame, envelope: &Envelope, payload: 
     }
 }
 
-fn on_data(envelope: &Envelope, payload: &[u8]) -> bool {
-    let stream_id = envelope.correlation_id as i32;
-
-    let entry = {
-        renderer_state()
-            .lock()
-            .unwrap()
-            .streams
-            .collect_data(stream_id)
+fn on_data(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
+    let target = state().stream_data(id, addressed);
+    let Some((context, callback)) = target else {
+        debug!(
+            "[Stream Renderer] data for unknown or foreign stream {}",
+            id
+        );
+        return true;
     };
-
-    match entry {
-        None => {
-            debug!(
-                "[Stream Renderer] no data callback for stream_id={}",
-                stream_id
-            );
-            true
-        }
-        Some((context, callback)) => {
-            if context.enter() == 0 {
-                debug!(
-                    "[Stream Renderer] failed to enter V8 context for stream_id={}",
-                    stream_id
-                );
-                return true;
-            }
-
-            match create_array_buffer_from_bytes(payload) {
-                Some(buf) => {
-                    let args: [Option<V8Value>; 1] = [Some(buf)];
-                    callback.execute_function(None, Some(&args));
-                }
-                None => {
-                    debug!(
-                        "[Stream Renderer] failed to create ArrayBuffer for stream_id={}",
-                        stream_id
-                    );
-                }
-            }
-
-            context.exit();
-            true
-        }
+    if context.enter() == 0 {
+        return true;
     }
+    match create_array_buffer_from_bytes(payload) {
+        Some(buffer) => {
+            callback.execute_function(None, Some(&[Some(buffer)]));
+        }
+        None => debug!(
+            "[Stream Renderer] failed to create ArrayBuffer for stream {}",
+            id
+        ),
+    }
+    context.exit();
+    true
 }
 
-fn on_end(envelope: &Envelope, payload: &[u8]) -> bool {
-    let stream_id = envelope.correlation_id as i32;
-
-    // Resolve the pending open() promise before treating END as a stream completion event
-    let entry = renderer_state().lock().unwrap().promises.take(stream_id);
-    if let Some((context, promise, _)) = entry {
+/// `STREAM_BROWSER_END` acknowledges an open, or ends an open stream.
+fn on_end(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
+    let opened = state().stream_opened(id, addressed);
+    if let Some((context, promise)) = opened {
         if context.enter() == 0 {
-            return false;
+            return true;
         }
-        let mut stream_v8 = v8_value_create_uint(stream_id as u32).unwrap();
-        promise.resolve_promise(Some(&mut stream_v8));
+        let mut value = v8_value_create_uint(id as u32);
+        promise.resolve_promise(value.as_mut());
         context.exit();
         return true;
     }
 
-    // No pending open() promise; treat this as a normal stream completion
-    let entry = {
-        let mut state = renderer_state().lock().unwrap();
-        let cb = state.streams.take_end(stream_id);
-        state.streams.clear_stream(stream_id);
-        cb
+    let ended = state().stream_end(id, addressed);
+    let Some((context, callback)) = ended else {
+        debug!("[Stream Renderer] end for unknown or foreign stream {}", id);
+        return true;
     };
-
-    match entry {
-        None => {
-            debug!(
-                "[Stream Renderer] no end callback for stream_id={}",
-                stream_id
-            );
-            true
-        }
-        Some((context, callback)) => {
-            if context.enter() == 0 {
-                debug!(
-                    "[Stream Renderer] failed to enter V8 context for stream_id={}",
-                    stream_id
-                );
-                return true;
-            }
-
-            let result_str = String::from_utf8_lossy(payload);
-            let payload_v8 =
-                v8_value_create_string(Some(&CefString::from(result_str.as_ref()))).unwrap();
-            let args: [Option<V8Value>; 1] = [Some(payload_v8)];
-            callback.execute_function(None, Some(&args));
-
-            context.exit();
-            true
-        }
+    if context.enter() == 0 {
+        return true;
     }
+    let text = String::from_utf8_lossy(payload);
+    let value = v8_value_create_string(Some(&CefString::from(text.as_ref())));
+    callback.execute_function(None, Some(&[value]));
+    context.exit();
+    true
 }
 
-fn on_error(envelope: &Envelope, payload: &[u8]) -> bool {
-    let stream_id = envelope.correlation_id as i32;
+/// `STREAM_BROWSER_ERROR` fails an open, or fails an open stream.
+fn on_error(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
+    let (code, message) = decode_error_payload(payload);
 
-    let (code, err_str) = decode_error_payload(payload);
-
-    // Check if there's a pending open() promise for this id -> open failed
-    let entry = renderer_state().lock().unwrap().promises.take(stream_id);
-    if let Some((context, promise, _)) = entry {
+    let failed = state().stream_open_failed(id, addressed);
+    if let Some((context, promise)) = failed {
         if context.enter() == 0 {
-            return false;
+            return true;
         }
-        // "{code}: {message}", the form the bridge's toError parses.
-        let msg = CefString::from(format!("{code}: {err_str}").as_str());
-        promise.reject_promise(Some(&msg));
+        // "{code}: {message}", the form the bridge's toError parses
+        let text = CefString::from(format!("{code}: {message}").as_str());
+        promise.reject_promise(Some(&text));
         context.exit();
         return true;
     }
 
-    // Otherwise it's a mid-stream error -> existing onError callback path
-    let entry = {
-        let mut state = renderer_state().lock().unwrap();
-        let cb = state.streams.take_error(stream_id);
-        state.streams.clear_stream(stream_id);
-        cb
+    let errored = state().stream_error(id, addressed);
+    let Some((context, callback)) = errored else {
+        debug!(
+            "[Stream Renderer] error for unknown or foreign stream {}",
+            id
+        );
+        return true;
     };
-
-    match entry {
-        None => {
-            debug!(
-                "[Stream Renderer] no error callback for stream_id={}",
-                stream_id
-            );
-            true
-        }
-        Some((context, callback)) => {
-            if context.enter() == 0 {
-                debug!(
-                    "[Stream Renderer] failed to enter V8 context for stream_id={}",
-                    stream_id
-                );
-                return true;
-            }
-
-            let payload_v8 =
-                v8_value_create_string(Some(&CefString::from(err_str.as_ref()))).unwrap();
-            let args: [Option<V8Value>; 1] = [Some(payload_v8)];
-            callback.execute_function(None, Some(&args));
-
-            context.exit();
-            true
-        }
+    if context.enter() == 0 {
+        return true;
     }
+    let value = v8_value_create_string(Some(&CefString::from(message.as_ref())));
+    callback.execute_function(None, Some(&[value]));
+    context.exit();
+    true
 }

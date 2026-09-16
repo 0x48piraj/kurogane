@@ -61,6 +61,7 @@ impl EventSubsystem {
                 browser_id,
                 frame_id: ctx.frame,
                 origin: ctx.origin,
+                url_origin: ctx.url_origin,
             },
         );
 
@@ -111,23 +112,19 @@ impl EventSubsystem {
     }
 
     /// Broadcast an event to all subscribers of a given event name.
+    ///
+    /// Each subscription gets its own message, addressed by its id, so the
+    /// renderer runs exactly the callback of that subscription (which the ACL
+    /// admitted) and nothing else in the process. A subscription whose frame
+    /// now shows another document receives nothing.
     pub fn broadcast(&self, cmd: &str, data: &[u8]) {
-        let envelope = Envelope {
-            version: ENVELOPE_VERSION,
-            subsystem: SUB_EVENT,
-            opcode: EVENT_EMIT,
-            flags: 0,
-            correlation_id: 0,
-            payload_kind: PAYLOAD_JSON,
-        };
-
         let Some(payload) = encode_cmd_payload(cmd, data) else {
             debug!("[Event Browser] event name exceeds the protocol length limit");
             return;
         };
 
-        let Some(mut msg) = build_message("kurogane_event", &envelope, &payload) else {
-            debug!("[Event Browser] failed to build broadcast message");
+        let subs = self.subscriptions.lock().unwrap();
+        let Some(entries) = subs.get(cmd) else {
             return;
         };
 

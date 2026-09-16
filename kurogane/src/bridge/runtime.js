@@ -152,30 +152,12 @@
      * a convenient interface for reading and writing stream data.
      *
      * @param {number} id - the native stream identifier
+     * @param {object} sink - the callbacks openStream bound to the stream
      */
     class Stream {
-        constructor(id) {
+        constructor(id, sink) {
             this._id = id;
-            this._dataCb = null;
-            this._endCb = null;
-            this._errorCb = null;
-            this._buffer = []; // holds chunks arriving before onData is registered
-
-            window.core.onStreamData(id, (data) => {
-                if (this._dataCb) {
-                    this._dataCb(data);
-                } else {
-                    this._buffer.push(data);
-                }
-            });
-
-            window.core.onStreamEnd(id, (result) => {
-                if (this._endCb) this._endCb(result);
-            });
-
-            window.core.onStreamError(id, (msg) => {
-                if (this._errorCb) this._errorCb(msg);
-            });
+            this._sink = sink;
         }
 
         /**
@@ -191,9 +173,9 @@
             if (typeof callback !== 'function') {
                 throw new TypeError('Stream.onData: callback must be a function');
             }
-            this._dataCb = callback;
+            this._sink.data = callback;
             // Drain any chunks that arrived before onData was registered
-            const buffered = this._buffer.splice(0);
+            const buffered = this._sink.buffer.splice(0);
             for (const chunk of buffered) callback(chunk);
         }
 
@@ -208,7 +190,8 @@
             if (typeof callback !== 'function') {
                 throw new TypeError('Stream.onEnd: callback must be a function');
             }
-            this._endCb = callback;
+            this._sink.end = callback;
+            if (this._sink.ended) callback(this._sink.ended.result);
         }
 
         /**
@@ -222,7 +205,8 @@
             if (typeof callback !== 'function') {
                 throw new TypeError('Stream.onError: callback must be a function');
             }
-            this._errorCb = callback;
+            this._sink.error = callback;
+            if (this._sink.failed) callback(this._sink.failed.message);
         }
 
         /**
@@ -257,11 +241,14 @@
         }
     }
 
+
     /**
      * Open a stream to the browser process.
      *
-     * Resolves with a Stream object that provides methods for
-     * reading data, writing data and handling completion.
+     * Resolves with a Stream object for reading data and handling completion.
+     * The callbacks are bound to the stream when it is opened, so only the
+     * owning frame can receive its messages. Data received before the page
+     * installs its callbacks is buffered.
      *
      * A refused open rejects with an Error carrying a numeric .code
      * (-4 when the handler is not permitted for this origin).
@@ -271,13 +258,20 @@
      * @returns {Promise<Stream>}
      */
     async function openStream(handlerName, metadata) {
+        const sink = { data: null, end: null, error: null, buffer: [], ended: null, failed: null };
         let id;
         try {
-            id = await window.core.openStream(handlerName, metadata || '');
+            id = await window.core.openStream(
+                handlerName,
+                metadata || '',
+                (data) => { if (sink.data) sink.data(data); else sink.buffer.push(data); },
+                (result) => { sink.ended = { result }; if (sink.end) sink.end(result); },
+                (message) => { sink.failed = { message }; if (sink.error) sink.error(message); },
+            );
         } catch (e) {
             throw toError(e);
         }
-        return new Stream(id);
+        return new Stream(id, sink);
     }
 
     /**

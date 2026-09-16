@@ -10,10 +10,9 @@ use crate::debug;
 use crate::ipc::envelope::*;
 use crate::ipc::transport::message::{build_message, build_message_parts, extract_message};
 use crate::ipc::router;
-use crate::ipc::renderer_state::{
-    register_promise, cancel_promise, clear_context_promises, clear_context_events,
-    clear_context_streams, renderer_state,
-};
+use crate::ipc::renderer_registry::StreamSink;
+use crate::ipc::renderer_state::state;
+use crate::ipc::FrameId;
 use crate::bridge;
 
 //
@@ -117,11 +116,25 @@ wrap_render_process_handler! {
             frame: Option<&mut Frame>,
             context: Option<&mut V8Context>,
         ) {
-            let context = context.unwrap();
-            let frame = frame.unwrap();
+            let (Some(context), Some(frame)) = (context, frame) else {
+                return;
+            };
+            let Some(global) = context.global() else {
+                return;
+            };
+            let Some(mut core) = v8_value_create_object(None, None) else {
+                return;
+            };
 
-            let global = context.global().unwrap();
-            let mut core = v8_value_create_object(None, None).unwrap();
+            // Read before any page script runs: the document's own view of
+            // its origin. A sandboxed document's (iframe `sandbox`, CSP
+            // `sandbox`) is "null", whatever its URL; its messages then act
+            // for the opaque origin. Unreadable counts as opaque.
+            let opaque = !matches!(
+                global.value_bykey(Some(&CefString::from("origin"))),
+                Some(origin) if origin.is_string() != 0 && v8_to_string(&origin) != "null"
+            );
+            state().context_created(context.clone(), FrameId::of(frame), opaque);
 
             // Invoke handler (accepts string or ArrayBuffer payload)
             let mut handler = IpcInvokeHandler::new();
@@ -211,43 +224,6 @@ wrap_render_process_handler! {
                 V8Propertyattribute::default(),
             );
 
-            // Stream callback registration handlers
-            let mut on_stream_data_handler = IpcOnStreamDataHandler::new();
-            let mut on_stream_data = v8_value_create_function(
-                Some(&CefString::from("onStreamData")),
-                Some(&mut on_stream_data_handler),
-            ).unwrap();
-
-            core.set_value_bykey(
-                Some(&CefString::from("onStreamData")),
-                Some(&mut on_stream_data),
-                V8Propertyattribute::default(),
-            );
-
-            let mut on_stream_end_handler = IpcOnStreamEndHandler::new();
-            let mut on_stream_end = v8_value_create_function(
-                Some(&CefString::from("onStreamEnd")),
-                Some(&mut on_stream_end_handler),
-            ).unwrap();
-
-            core.set_value_bykey(
-                Some(&CefString::from("onStreamEnd")),
-                Some(&mut on_stream_end),
-                V8Propertyattribute::default(),
-            );
-
-            let mut on_stream_error_handler = IpcOnStreamErrorHandler::new();
-            let mut on_stream_error = v8_value_create_function(
-                Some(&CefString::from("onStreamError")),
-                Some(&mut on_stream_error_handler),
-            ).unwrap();
-
-            core.set_value_bykey(
-                Some(&CefString::from("onStreamError")),
-                Some(&mut on_stream_error),
-                V8Propertyattribute::default(),
-            );
-
             global.set_value_bykey(
                 Some(&CefString::from("core")),
                 Some(&mut core),
@@ -283,9 +259,7 @@ wrap_render_process_handler! {
             }
 
             if let Some(ctx) = context {
-                clear_context_promises(ctx);
-                clear_context_events(ctx);
-                clear_context_streams(ctx);
+                state().context_released(ctx);
             }
         }
 
@@ -493,9 +467,19 @@ wrap_v8_handler! {
                 return 0;
             };
 
-            let promise = v8_value_create_promise().unwrap();
+            let Some(promise) = v8_value_create_promise() else {
+                if let Some(exc) = exception { *exc = CefString::from("invoke: cannot create a promise"); }
+                return 0;
+            };
             let promise_for_retval = promise.clone();
-            let id = register_promise(context.clone(), promise.clone(), SUB_RPC);
+            let (id, flags) = {
+                let mut state = state();
+                (state.register_rpc(&context, promise.clone()), state.flags_for(&context))
+            };
+            let Some(id) = id else {
+                if let Some(exc) = exception { *exc = CefString::from("invoke: this context is not connected"); }
+                return 0;
+            };
 
             // Expose the id on the promise for JS-side cancellation
             let id_key = CefString::from("__kurogane_id");
@@ -517,7 +501,7 @@ wrap_v8_handler! {
                     if let Some(exc) = exception {
                         *exc = CefString::from("ArrayBuffer has null data");
                     }
-                    renderer_state().lock().unwrap().promises.take(id);
+                    state().forget(id);
                     return 0;
                 }
 
@@ -527,7 +511,7 @@ wrap_v8_handler! {
                         version: ENVELOPE_VERSION,
                         subsystem: SUB_RPC,
                         opcode: RPC_INVOKE,
-                        flags: 0,
+                        flags,
                         correlation_id: id as u32,
                         payload_kind: PAYLOAD_BINARY,
                     };
@@ -536,16 +520,9 @@ wrap_v8_handler! {
                         frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
                     } else {
                         build_failed = true;
-                        if let Some(ctx) = v8_context_get_current_context() {
-                            if ctx.enter() == 0 {
-                                renderer_state().lock().unwrap().promises.take(id);
-                                return;
-                            }
-                            let reject_msg = CefString::from("-1: Failed to build IPC message");
-                            promise.reject_promise(Some(&reject_msg));
-                            ctx.exit();
-                        }
-                        renderer_state().lock().unwrap().promises.take(id);
+                        state().forget(id);
+                        let reject_msg = CefString::from("-1: Failed to build IPC message");
+                        promise.reject_promise(Some(&reject_msg));
                     }
                 });
 
@@ -563,7 +540,7 @@ wrap_v8_handler! {
                     version: ENVELOPE_VERSION,
                     subsystem: SUB_RPC,
                     opcode: RPC_INVOKE,
-                    flags: 0,
+                    flags,
                     correlation_id: id as u32,
                     payload_kind: PAYLOAD_STRING,
                 };
@@ -573,14 +550,9 @@ wrap_v8_handler! {
                 if let Some(mut msg) = build_message_parts("kurogane_rpc", &envelope, &[&cmd_header, payload_bytes]) {
                     frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
                 } else {
-                    if context.enter() == 0 {
-                        renderer_state().lock().unwrap().promises.take(id);
-                        return 0;
-                    }
+                    state().forget(id);
                     let reject_msg = CefString::from("-1: Failed to build IPC message");
                     promise.reject_promise(Some(&reject_msg));
-                    context.exit();
-                    renderer_state().lock().unwrap().promises.take(id);
                     if let Some(ret) = retval { *ret = Some(promise_for_retval); }
                     return 1;
                 }
@@ -631,41 +603,47 @@ wrap_v8_handler! {
                 }
             };
 
-            if let Some((ctx, promise, sub)) = cancel_promise(id) {
-                let opcode = match sub {
-                    SUB_RPC => RPC_CANCEL,
-                    SUB_STREAM => STREAM_CANCEL,
-                    _ => RPC_CANCEL,
-                };
+            let Some(context) = v8_context_get_current_context() else {
+                if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
+                return 1;
+            };
+            // Only the context that made a request can cancel it
+            let (cancelled, flags) = {
+                let mut state = state();
+                (state.cancel(id, &context), state.flags_for(&context))
+            };
+            let Some((owner, promise, sub)) = cancelled else {
+                if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
+                return 1;
+            };
 
-                let envelope = Envelope {
-                    version: ENVELOPE_VERSION,
-                    subsystem: sub,
-                    opcode,
-                    flags: 0,
-                    correlation_id: id as u32,
-                    payload_kind: PAYLOAD_EMPTY,
-                };
+            let opcode = match sub {
+                SUB_STREAM => STREAM_CANCEL,
+                _ => RPC_CANCEL,
+            };
+            let envelope = Envelope {
+                version: ENVELOPE_VERSION,
+                subsystem: sub,
+                opcode,
+                flags,
+                correlation_id: id as u32,
+                payload_kind: PAYLOAD_EMPTY,
+            };
+            if let Some(frame) = context.frame()
+                && let Some(mut msg) = build_message("kurogane_rpc", &envelope, &[])
+            {
+                frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+            }
 
-                if let Some(context) = v8_context_get_current_context()
-                    && let Some(frame) = context.frame()
-                    && let Some(mut msg) = build_message("kurogane_rpc", &envelope, &[])
-                {
-                    frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
-                }
-
-                if ctx.enter() == 0 {
-                    eprintln!("[IPC] cancel: failed to enter V8 context for promise id={}", id);
-                    return 1;
-                }
-                let reject_msg = CefString::from("0: Canceled");
-                promise.reject_promise(Some(&reject_msg));
-                ctx.exit();
-                if let Some(ret) = retval {
-                    *ret = v8_value_create_bool(1);
-                }
-            } else if let Some(ret) = retval {
-                *ret = v8_value_create_bool(0);
+            if owner.enter() == 0 {
+                debug!("[IPC Renderer] cancel: failed to enter V8 context for id={}", id);
+                return 1;
+            }
+            let reject_msg = CefString::from("0: Canceled");
+            promise.reject_promise(Some(&reject_msg));
+            owner.exit();
+            if let Some(ret) = retval {
+                *ret = v8_value_create_bool(1);
             }
 
             1
@@ -743,20 +721,22 @@ wrap_v8_handler! {
                 return 0;
             };
 
-            let id = renderer_state().lock().unwrap().events.register(
-                &event_name,
-                context.clone(),
-                callback.clone(),
-                on_error,
-            );
-
             let Some(payload) = encode_cmd_payload(&event_name, &[]) else {
                 if let Some(exc) = exception {
                     *exc = CefString::from(
                         "on: event name exceeds the 65535-byte protocol limit",
                     );
                 }
-                renderer_state().lock().unwrap().events.unregister(id);
+                return 0;
+            };
+
+            let (id, flags) = {
+                let mut state = state();
+                let id = state.subscribe(&context, event_name.clone(), callback.clone(), on_error);
+                (id, state.flags_for(&context))
+            };
+            let Some(id) = id else {
+                if let Some(exc) = exception { *exc = CefString::from("on: this context is not connected"); }
                 return 0;
             };
 
@@ -765,7 +745,7 @@ wrap_v8_handler! {
                     version: ENVELOPE_VERSION,
                     subsystem: SUB_EVENT,
                     opcode: EVENT_SUBSCRIBE,
-                    flags: 0,
+                    flags,
                     correlation_id: id as u32,
                     payload_kind: PAYLOAD_EMPTY,
                 };
@@ -814,7 +794,7 @@ wrap_v8_handler! {
             };
 
             let id = match args.first() {
-                Some(Some(v)) if v.is_int() != 0 || v.is_uint() != 0 => v.int_value() as i64,
+                Some(Some(v)) if v.is_int() != 0 || v.is_uint() != 0 => v.int_value(),
                 _ => {
                     if let Some(exc) = exception { *exc = CefString::from("off: id must be an integer"); }
                     return 0;
@@ -829,13 +809,12 @@ wrap_v8_handler! {
                 }
             };
 
-            let (event_name, was_valid) = {
-                let mut state = renderer_state().lock().unwrap();
-                let name = state.events.get_event_name(id);
-                let removed = state.events.unregister(id);
-
-                (name, removed)
+            // Only the context that subscribed can unsubscribe
+            let (event_name, flags) = {
+                let mut state = state();
+                (state.unsubscribe(id, &context), state.flags_for(&context))
             };
+            let was_valid = event_name.is_some();
 
             if let Some(event_name) = event_name
                 && let Some(frame) = context.frame()
@@ -845,7 +824,7 @@ wrap_v8_handler! {
                     version: ENVELOPE_VERSION,
                     subsystem: SUB_EVENT,
                     opcode: EVENT_UNSUBSCRIBE,
-                    flags: 0,
+                    flags,
                     correlation_id: id as u32,
                     payload_kind: PAYLOAD_EMPTY,
                 };
@@ -904,6 +883,19 @@ wrap_v8_handler! {
                 _ => String::new(),
             };
 
+            // The stream's callbacks are bound here, atomically with the open,
+            // so no other frame can ever attach to this stream
+            let function = |i: usize| match args.get(i) {
+                Some(Some(v)) if v.is_function() != 0 => Some(v.clone()),
+                _ => None,
+            };
+            let (Some(data), Some(end), Some(error)) = (function(2), function(3), function(4)) else {
+                if let Some(exc) = exception {
+                    *exc = CefString::from("openStream(name, metadata, onData, onEnd, onError) needs three callbacks");
+                }
+                return 0;
+            };
+
             let context = match v8_context_get_current_context() {
                 Some(ctx) => ctx,
                 None => {
@@ -917,8 +909,19 @@ wrap_v8_handler! {
                 return 0;
             };
 
-            let promise = v8_value_create_promise().unwrap();
-            let stream_id = register_promise(context.clone(), promise.clone(), SUB_STREAM);
+            let Some(promise) = v8_value_create_promise() else {
+                if let Some(exc) = exception { *exc = CefString::from("openStream: cannot create a promise"); }
+                return 0;
+            };
+            let (stream_id, flags) = {
+                let mut state = state();
+                let sink = StreamSink { data, end, error };
+                (state.register_stream_open(&context, promise.clone(), sink), state.flags_for(&context))
+            };
+            let Some(stream_id) = stream_id else {
+                if let Some(exc) = exception { *exc = CefString::from("openStream: this context is not connected"); }
+                return 0;
+            };
 
             debug!("[IPC Renderer] openStream '{}' stream_id={}", handler_name, stream_id);
 
@@ -926,15 +929,23 @@ wrap_v8_handler! {
                 version: ENVELOPE_VERSION,
                 subsystem: SUB_STREAM,
                 opcode: STREAM_OPEN,
-                flags: 0,
+                flags,
                 correlation_id: stream_id as u32,
                 payload_kind: PAYLOAD_STRING,
             };
 
-            if let Some(payload) = encode_cmd_payload(&handler_name, metadata.as_bytes())
+            let sent = if let Some(payload) = encode_cmd_payload(&handler_name, metadata.as_bytes())
                 && let Some(mut msg) = build_message("kurogane_stream", &envelope, &payload)
             {
                 frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+                true
+            } else {
+                false
+            };
+            if !sent {
+                state().forget(stream_id);
+                let reject_msg = CefString::from("-1: Failed to build IPC message");
+                promise.reject_promise(Some(&reject_msg));
             }
 
             // The promise represents completion of the open request, not message delivery
@@ -1010,12 +1021,21 @@ wrap_v8_handler! {
                 return 0;
             };
 
+            let (owned, flags) = {
+                let state = state();
+                (state.owns_stream(stream_id, &context), state.flags_for(&context))
+            };
+            if !owned {
+                if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
+                return 1;
+            }
+
             with_array_buffer(ptr as *const u8, len, |data| {
                 let envelope = Envelope {
                     version: ENVELOPE_VERSION,
                     subsystem: SUB_STREAM,
                     opcode: STREAM_DATA,
-                    flags: 0,
+                    flags,
                     correlation_id: stream_id as u32,
                     payload_kind: PAYLOAD_BINARY,
                 };
@@ -1084,13 +1104,22 @@ wrap_v8_handler! {
                 return 0;
             };
 
+            let (owned, flags) = {
+                let state = state();
+                (state.owns_stream(stream_id, &context), state.flags_for(&context))
+            };
+            if !owned {
+                if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
+                return 1;
+            }
+
             let payload = result.as_bytes();
 
             let envelope = Envelope {
                 version: ENVELOPE_VERSION,
                 subsystem: SUB_STREAM,
                 opcode: STREAM_END,
-                flags: 0,
+                flags,
                 correlation_id: stream_id as u32,
                 payload_kind: PAYLOAD_STRING,
             };
@@ -1103,222 +1132,6 @@ wrap_v8_handler! {
                 *ret = v8_value_create_uint(1);
             }
 
-            1
-        }
-    }
-}
-
-//
-// Stream data callback handler
-//
-
-wrap_v8_handler! {
-    pub struct IpcOnStreamDataHandler;
-
-    impl V8Handler {
-        fn execute(
-            &self,
-            _name: Option<&CefString>,
-            _object: Option<&mut V8Value>,
-            arguments: Option<&[Option<V8Value>]>,
-            retval: Option<&mut Option<V8Value>>,
-            exception: Option<&mut CefString>,
-        ) -> i32 {
-            let args = match arguments {
-                Some(a) if a.len() >= 2 => a,
-                _ => {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("onStreamData(streamId, callback) requires two arguments");
-                    }
-                    return 0;
-                }
-            };
-
-            let stream_id = match args.first() {
-                Some(Some(v)) if v.is_int() != 0 || v.is_uint() != 0 => v.int_value(),
-                _ => {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("onStreamData: streamId must be an integer");
-                    }
-                    return 0;
-                }
-            };
-
-            let callback = match args.get(1) {
-                Some(Some(v)) if v.is_function() != 0 => v,
-                _ => {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("onStreamData: second argument must be a function");
-                    }
-                    return 0;
-                }
-            };
-
-            let context = match v8_context_get_current_context() {
-                Some(ctx) => ctx,
-                None => {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("onStreamData: no active renderer context");
-                    }
-                    return 0;
-                }
-            };
-
-            renderer_state().lock().unwrap().streams.register_data(
-                stream_id,
-                context.clone(),
-                callback.clone(),
-            );
-
-            debug!("[IPC Renderer] onStreamData stream_id={}", stream_id);
-
-            if let Some(ret) = retval {
-                *ret = v8_value_create_uint(1);
-            }
-            1
-        }
-    }
-}
-
-//
-// Stream end callback handler
-//
-
-wrap_v8_handler! {
-    pub struct IpcOnStreamEndHandler;
-
-    impl V8Handler {
-        fn execute(
-            &self,
-            _name: Option<&CefString>,
-            _object: Option<&mut V8Value>,
-            arguments: Option<&[Option<V8Value>]>,
-            retval: Option<&mut Option<V8Value>>,
-            exception: Option<&mut CefString>,
-        ) -> i32 {
-            let args = match arguments {
-                Some(a) if a.len() >= 2 => a,
-                _ => {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("onStreamEnd(streamId, callback) requires two arguments");
-                    }
-                    return 0;
-                }
-            };
-
-            let stream_id = match args.first() {
-                Some(Some(v)) if v.is_int() != 0 || v.is_uint() != 0 => v.int_value(),
-                _ => {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("onStreamEnd: streamId must be an integer");
-                    }
-                    return 0;
-                }
-            };
-
-            let callback = match args.get(1) {
-                Some(Some(v)) if v.is_function() != 0 => v,
-                _ => {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("onStreamEnd: second argument must be a function");
-                    }
-                    return 0;
-                }
-            };
-
-            let context = match v8_context_get_current_context() {
-                Some(ctx) => ctx,
-                None => {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("onStreamEnd: no active renderer context");
-                    }
-                    return 0;
-                }
-            };
-
-            renderer_state().lock().unwrap().streams.register_end(
-                stream_id,
-                context.clone(),
-                callback.clone(),
-            );
-
-            debug!("[IPC Renderer] onStreamEnd stream_id={}", stream_id);
-
-            if let Some(ret) = retval {
-                *ret = v8_value_create_uint(1);
-            }
-            1
-        }
-    }
-}
-
-//
-// Stream error callback handler
-//
-
-wrap_v8_handler! {
-    pub struct IpcOnStreamErrorHandler;
-
-    impl V8Handler {
-        fn execute(
-            &self,
-            _name: Option<&CefString>,
-            _object: Option<&mut V8Value>,
-            arguments: Option<&[Option<V8Value>]>,
-            retval: Option<&mut Option<V8Value>>,
-            exception: Option<&mut CefString>,
-        ) -> i32 {
-            let args = match arguments {
-                Some(a) if a.len() >= 2 => a,
-                _ => {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("onStreamError(streamId, callback) requires two arguments");
-                    }
-                    return 0;
-                }
-            };
-
-            let stream_id = match args.first() {
-                Some(Some(v)) if v.is_int() != 0 || v.is_uint() != 0 => v.int_value(),
-                _ => {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("onStreamError: streamId must be an integer");
-                    }
-                    return 0;
-                }
-            };
-
-            let callback = match args.get(1) {
-                Some(Some(v)) if v.is_function() != 0 => v,
-                _ => {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("onStreamError: second argument must be a function");
-                    }
-                    return 0;
-                }
-            };
-
-            let context = match v8_context_get_current_context() {
-                Some(ctx) => ctx,
-                None => {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("onStreamError: no active renderer context");
-                    }
-                    return 0;
-                }
-            };
-
-            renderer_state().lock().unwrap().streams.register_error(
-                stream_id,
-                context.clone(),
-                callback.clone(),
-            );
-
-            debug!("[IPC Renderer] onStreamError stream_id={}", stream_id);
-
-            if let Some(ret) = retval {
-                *ret = v8_value_create_uint(1);
-            }
             1
         }
     }

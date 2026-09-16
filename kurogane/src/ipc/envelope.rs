@@ -16,7 +16,15 @@ pub struct Envelope {
 /// Current wire protocol version.
 ///
 /// Peers reject messages with an unsupported version.
-pub const ENVELOPE_VERSION: u8 = 2;
+pub const ENVELOPE_VERSION: u8 = 3;
+
+/// Marks a message from a context with an opaque origin (a sandboxed frame).
+///
+/// An omitted flag cannot grant additional origin access.
+pub const FLAG_OPAQUE_CONTEXT: u8 = 0x01;
+
+/// Flags defined by this protocol version.
+pub const KNOWN_FLAGS: u8 = FLAG_OPAQUE_CONTEXT;
 
 /// Fixed-size envelope header (9 bytes).
 /// version (1) | subsystem (1) | opcode (1) | flags (1) | correlation_id (4 LE u32) | payload_kind (1)
@@ -37,6 +45,8 @@ pub const RPC_CANCEL: u8 = 3;
 /// Renderers subscribe to events. Browsers emit events to subscribed frames.
 pub const EVENT_SUBSCRIBE: u8 = 0;
 pub const EVENT_UNSUBSCRIBE: u8 = 1;
+/// One event for one subscription: the correlation id is the subscription
+/// id, and the payload is a command payload of the event name and data.
 pub const EVENT_EMIT: u8 = 2;
 /// ACL refusal for a subscription. The id is the correlation id and the
 /// payload is an error payload ([`encode_error_payload`]).

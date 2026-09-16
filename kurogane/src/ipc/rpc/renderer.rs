@@ -2,93 +2,53 @@ use cef::*;
 
 use crate::debug;
 use crate::ipc::envelope::*;
-use crate::ipc::renderer_state::renderer_state;
+use crate::ipc::renderer_state::state;
 use crate::ipc::utils::create_array_buffer_from_bytes;
+use crate::ipc::FrameId;
 
 /// Handle an RPC response arriving from the browser (renderer-side dispatch).
-pub fn handle_rpc_renderer(_frame: &mut Frame, envelope: &Envelope, payload: &[u8]) -> bool {
-    match envelope.opcode {
-        RPC_RESOLVE => on_resolve(envelope, payload),
-        RPC_REJECT => on_reject(envelope, payload),
-        _ => {
-            debug!("[RPC Renderer] unknown opcode {}", envelope.opcode);
-            false
-        }
+///
+/// Settles the promise only for the context that asked, in the frame the
+/// browser addressed; any other answer is dropped.
+pub fn handle_rpc_renderer(frame: &mut Frame, envelope: &Envelope, payload: &[u8]) -> bool {
+    if !matches!(envelope.opcode, RPC_RESOLVE | RPC_REJECT) {
+        debug!("[RPC Renderer] unknown opcode {}", envelope.opcode);
+        return false;
     }
-}
-
-fn on_resolve(envelope: &Envelope, payload: &[u8]) -> bool {
     let id = envelope.correlation_id as i32;
-    match envelope.payload_kind {
-        PAYLOAD_BINARY => resolve_binary(id, payload),
-        _ => {
-            let payload_str = String::from_utf8_lossy(payload);
-            resolve_cef_string(id, true, &CefString::from(payload_str.as_ref()), 0);
-        }
-    }
-    true
-}
-
-fn resolve_binary(id: i32, payload: &[u8]) {
-    let entry = { renderer_state().lock().unwrap().promises.take(id) };
-    let Some((context, promise, _)) = entry else {
-        eprintln!(
-            "[IPC WARNING] binary response for unknown promise id={} (likely page reload)",
-            id
-        );
-        return;
+    let settled = state().settle(id, &FrameId::of(frame));
+    // The lock is released before JavaScript runs
+    let Some((context, promise)) = settled else {
+        debug!("[RPC Renderer] answer for unknown or foreign id={}", id);
+        return true;
     };
     if context.enter() == 0 {
-        eprintln!(
-            "[IPC] failed to enter V8 context for binary promise id={}",
-            id
-        );
-        return;
+        debug!("[RPC Renderer] failed to enter V8 context for id={}", id);
+        return true;
     }
-    if let Some(mut buf) = create_array_buffer_from_bytes(payload) {
-        promise.resolve_promise(Some(&mut buf));
-    } else {
-        let reject_msg = CefString::from("-2: Failed to create ArrayBuffer");
-        promise.reject_promise(Some(&reject_msg));
+    match (envelope.opcode, envelope.payload_kind) {
+        (RPC_RESOLVE, PAYLOAD_BINARY) => match create_array_buffer_from_bytes(payload) {
+            Some(mut buffer) => {
+                promise.resolve_promise(Some(&mut buffer));
+            }
+            None => {
+                let message = CefString::from("-2: Failed to create ArrayBuffer");
+                promise.reject_promise(Some(&message));
+            }
+        },
+        (RPC_RESOLVE, _) => {
+            let text = String::from_utf8_lossy(payload);
+            let mut value = v8_value_create_string(Some(&CefString::from(text.as_ref())));
+            promise.resolve_promise(value.as_mut());
+        }
+        _ => {
+            // The "{code}: {message}" form of IpcError's Display, which the
+            // bridge's toError parses
+            let (code, message) = decode_error_payload(payload);
+            let text = CefString::from(format!("{code}: {message}").as_str());
+            promise.reject_promise(Some(&text));
+        }
     }
     context.exit();
-}
-
-fn on_reject(envelope: &Envelope, payload: &[u8]) -> bool {
-    let id = envelope.correlation_id as i32;
-    let (error_code, error_msg) = decode_error_payload(payload);
-    resolve_cef_string(id, false, &CefString::from(error_msg.as_ref()), error_code);
     true
-}
-
-/// Look up a registered promise by id and resolve or reject it via V8.
-pub fn resolve_cef_string(id: i32, success: bool, payload: &CefString, error_code: i32) {
-    let entry = { renderer_state().lock().unwrap().promises.take(id) };
-
-    match entry {
-        None => {
-            eprintln!(
-                "[IPC WARNING] response for unknown promise id={} (likely page reload)",
-                id
-            );
-        }
-        Some((context, promise, _subsystem)) => {
-            if context.enter() == 0 {
-                eprintln!("[IPC] failed to enter V8 context for promise id={}", id);
-                return;
-            }
-
-            if success {
-                let mut v = v8_value_create_string(Some(payload)).unwrap();
-                promise.resolve_promise(Some(&mut v));
-            } else {
-                // The "{code}: {message}" form of IpcError's Display, which
-                // the bridge's toError parses.
-                let reject_cef = CefString::from(format!("{error_code}: {payload}").as_str());
-                promise.reject_promise(Some(&reject_cef));
-            }
-
-            context.exit();
-        }
-    }
 }

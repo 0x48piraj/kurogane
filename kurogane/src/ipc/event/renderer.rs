@@ -1,19 +1,20 @@
 //! Renderer-side event dispatch.
 //!
-//! Receives event messages from the browser and invokes the registered V8
-//! callbacks for the corresponding event name.
+//! Events are delivered only to their addressed subscription and owning frame.
 
 use cef::*;
 
 use crate::debug;
 use crate::ipc::envelope::*;
-use crate::ipc::renderer_state::renderer_state;
+use crate::ipc::renderer_state::state;
+use crate::ipc::FrameId;
 
 /// Handle an event message arriving from the browser (renderer-side dispatch).
-pub fn handle_event_renderer(_frame: &mut Frame, envelope: &Envelope, payload: &[u8]) -> bool {
+pub fn handle_event_renderer(frame: &mut Frame, envelope: &Envelope, payload: &[u8]) -> bool {
+    let addressed = FrameId::of(frame);
     match envelope.opcode {
-        EVENT_EMIT => on_emit(payload),
-        EVENT_REFUSED => on_refused(envelope, payload),
+        EVENT_EMIT => on_emit(&addressed, envelope, payload),
+        EVENT_REFUSED => on_refused(&addressed, envelope, payload),
         _ => {
             debug!("[Event Renderer] unknown opcode {}", envelope.opcode);
             false
@@ -23,13 +24,9 @@ pub fn handle_event_renderer(_frame: &mut Frame, envelope: &Envelope, payload: &
 
 /// The browser refused a subscription: remove it and call its `onError`
 /// with `"{code}: {message}"`, the form the bridge's `toError` parses.
-fn on_refused(envelope: &Envelope, payload: &[u8]) -> bool {
+fn on_refused(addressed: &FrameId, envelope: &Envelope, payload: &[u8]) -> bool {
     let (code, message) = decode_error_payload(payload);
-    let removed = renderer_state()
-        .lock()
-        .unwrap()
-        .events
-        .remove(i64::from(envelope.correlation_id));
+    let removed = state().refused(envelope.correlation_id as i32, addressed);
     debug!(
         "[Event Renderer] subscription {} refused: {}",
         envelope.correlation_id, message
@@ -50,37 +47,27 @@ fn on_refused(envelope: &Envelope, payload: &[u8]) -> bool {
     true
 }
 
-fn on_emit(payload: &[u8]) -> bool {
-    let (event_name, data) = match decode_cmd_payload(payload) {
-        Some(v) => v,
-        None => {
-            debug!("[Event Renderer] invalid emit payload");
-            return false;
-        }
+fn on_emit(addressed: &FrameId, envelope: &Envelope, payload: &[u8]) -> bool {
+    let Some((event_name, data)) = decode_cmd_payload(payload) else {
+        debug!("[Event Renderer] invalid emit payload");
+        return false;
     };
 
-    let payload_str = String::from_utf8_lossy(data);
-
-    // Collect callbacks under lock, then release lock before JS invocation
-    // to prevent reentrant deadlock if a callback calls core.off() or core.on().
-    let to_call = {
-        let mut state = renderer_state().lock().unwrap();
-        state.events.collect_callbacks(event_name)
+    let target = state().event(envelope.correlation_id as i32, addressed);
+    // The lock is released before JavaScript runs: the callback may re-enter
+    let Some((context, callback)) = target else {
+        debug!(
+            "[Event Renderer] '{}' for unknown or foreign subscription {}",
+            event_name, envelope.correlation_id
+        );
+        return true;
     };
-    let count = to_call.len();
-    for (context, callback) in to_call {
-        if context.enter() == 0 {
-            continue;
-        }
-        let payload_v8 =
-            v8_value_create_string(Some(&CefString::from(payload_str.as_ref()))).unwrap();
-        let args: [Option<V8Value>; 1] = [Some(payload_v8)];
-        callback.execute_function(None, Some(&args));
-        context.exit();
+    if context.enter() == 0 {
+        return true;
     }
-
-    if count == 0 {
-        debug!("[Event Renderer] no callbacks for '{}'", event_name);
-    }
+    let text = String::from_utf8_lossy(data);
+    let value = v8_value_create_string(Some(&CefString::from(text.as_ref())));
+    callback.execute_function(None, Some(&[value]));
+    context.exit();
     true
 }
