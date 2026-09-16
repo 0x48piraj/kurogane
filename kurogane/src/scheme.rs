@@ -9,11 +9,17 @@
 //! What it guarantees:
 //! - No path traversal or root escape
 //! - No symlink-based escapes
-//! - No absolute path injection
-//! - No filesystem details leaked to clients
+//! - No absolute, drive-relative or rooted path injection
+//! - No filesystem details leaked to clients: every request that does not
+//!   name a file inside the root answers the same 404, whether the target is
+//!   missing, outside the root or malformed
 //!
 //! Design notes:
 //! - The asset root is the only allowed filesystem boundary
+//! - Each decoded path segment must be one name by the filesystem
+//!   capability's rules (no `.`/`..`, separator, NUL, `:`, device name or
+//!   8.3 short-name shape); nothing outside the root is ever consulted
+//! - Links inside the root that stay inside it keep working
 //! - Focused on safe, predictable asset access within the runtime
 
 use cef::*;
@@ -37,20 +43,23 @@ use crate::debug;
 pub enum ResolveError {
     /// The URL could not be parsed, or its scheme is not app
     InvalidUrl,
-    /// The resolved path escapes the asset root (path-traversal attempt)
+    /// The resolved path escapes the asset root (a link inside it pointing
+    /// out). Answers 404, like a missing file, so the client cannot tell.
     Forbidden(PathBuf),
-    /// The path is inside the root but the file does not exist
+    /// The path names no file inside the root: missing, or not a valid
+    /// sequence of names
     NotFound(PathBuf),
     /// An I/O error occurred after validation
     Io(std::io::Error),
 }
 
 impl ResolveError {
+    /// The status sent to the client. An escape and a miss are both 404: a
+    /// distinct answer would tell a page what exists outside the root.
     pub fn http_status(&self) -> i32 {
         match self {
             Self::InvalidUrl => 400,
-            Self::Forbidden(_) => 403,
-            Self::NotFound(_) => 404,
+            Self::Forbidden(_) | Self::NotFound(_) => 404,
             Self::Io(_) => 500,
         }
     }
@@ -58,8 +67,7 @@ impl ResolveError {
     pub fn http_repr(&self) -> &'static [u8] {
         match self {
             Self::InvalidUrl => b"400 Bad Request",
-            Self::Forbidden(_) => b"403 Forbidden",
-            Self::NotFound(_) => b"404 Not Found",
+            Self::Forbidden(_) | Self::NotFound(_) => b"404 Not Found",
             Self::Io(_) => b"500 Internal Server Error",
         }
     }
@@ -402,21 +410,24 @@ pub fn extract_rel_path(raw_url: &str) -> Result<String, ResolveError> {
 
 /// Resolves a request path relative to root and returns a canonical path
 /// inside the allowed filesystem boundary.
+///
+/// Each `/`-separated segment must be one valid name, so the request can
+/// neither climb (`..`) nor replace the root (`C:x`, `\x`, `\\server`) when
+/// joined; nothing outside the root is consulted to answer it. A link inside
+/// the root is followed only while it stays inside. Every failure is 404.
 pub fn safe_join(root: &CanonicalRoot, request: &str) -> Result<PathBuf, ResolveError> {
-    if Path::new(request).is_absolute() {
-        return Err(ResolveError::Forbidden(PathBuf::from(request)));
+    let mut joined = root.as_path().to_path_buf();
+    for segment in request.split('/') {
+        if crate::capability::path::Name::parse(std::ffi::OsStr::new(segment)).is_err() {
+            return Err(ResolveError::NotFound(PathBuf::from(request)));
+        }
+        joined.push(segment);
     }
 
-    let joined = root.as_path().join(request);
-
-    // Canonicalize and distinguish 404 (file missing) from 403 (path escapes root)
-    let canonical = joined.canonicalize().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            ResolveError::NotFound(joined)
-        } else {
-            ResolveError::Io(e)
-        }
-    })?;
+    // Any failure to resolve is a miss to the client
+    let canonical = joined
+        .canonicalize()
+        .map_err(|_| ResolveError::NotFound(joined))?;
 
     if !canonical.starts_with(root.as_path()) {
         return Err(ResolveError::Forbidden(canonical));
@@ -612,27 +623,50 @@ mod tests {
     }
 
     #[test]
-    fn safe_join_forbidden_for_traversal_to_existing_file() {
-        // Traversal escapes root to an existing file; must be rejected (403)
+    fn safe_join_never_consults_a_traversal_target() {
+        // An existing and a missing target outside the root answer alike
         let parent = tmp();
         let root_path = parent.path().join("assets");
         fs::create_dir(&root_path).unwrap();
         fs::write(parent.path().join("secret.txt"), b"secret").unwrap();
 
         let root = CanonicalRoot::new(root_path.as_path()).unwrap();
-        let err = safe_join(&root, "../secret.txt").unwrap_err();
-        assert!(matches!(err, ResolveError::Forbidden(_)));
-        assert_eq!(err.http_status(), 403);
+        for request in ["../secret.txt", "../no_such_file.txt"] {
+            let err = safe_join(&root, request).unwrap_err();
+            assert!(matches!(err, ResolveError::NotFound(_)), "{request}");
+            assert_eq!(err.http_status(), 404);
+        }
     }
 
     #[test]
-    fn safe_join_not_found_for_traversal_to_missing_file() {
-        // Traversal to non-existent target is indistinguishable from in-root miss without
-        // an exists() check (which would be TOCTOU).
-        let dir = tmp();
-        let root = CanonicalRoot::new(dir.path()).unwrap();
-        let err = safe_join(&root, "../no_such_file.txt").unwrap_err();
-        assert!(matches!(err, ResolveError::NotFound(_)));
+    fn every_rejected_request_is_a_uniform_404() {
+        let parent = tmp();
+        let root_path = parent.path().join("assets");
+        fs::create_dir(&root_path).unwrap();
+        fs::write(parent.path().join("secret.txt"), b"secret").unwrap();
+        fs::write(root_path.join("index.html"), b"ok").unwrap();
+        let root = CanonicalRoot::new(&root_path).unwrap();
+
+        let answer =
+            |url: &str| match extract_rel_path(url).and_then(|rel| resolve_asset(&root, &rel)) {
+                Ok(_) => 200,
+                Err(e) => e.http_status(),
+            };
+        assert_eq!(answer("app://app/index.html"), 200);
+        for url in [
+            "app://app/missing.html",
+            "app://app/%2e%2e/secret.txt",
+            "app://app/a%2F..%2F..%2Fsecret.txt",
+            "app://app/..%5Csecret.txt",
+            "app://app/%5Csecret.txt",
+            "app://app/%5C%5Clocalhost%5CC$%5Csecret.txt",
+            "app://app/C:secret.txt",
+            "app://app/C:%5Csecret.txt",
+            "app://app/sub//index.html",
+            "app://app/index.html%00.png",
+        ] {
+            assert_eq!(answer(url), 404, "{url}");
+        }
     }
 
     #[test]
@@ -683,7 +717,7 @@ mod tests {
         let err = safe_join(&root, "escape").unwrap_err();
 
         assert!(matches!(err, ResolveError::Forbidden(_)));
-        assert_eq!(err.http_status(), 403);
+        assert_eq!(err.http_status(), 404, "an escape answers like a miss");
     }
 
     // MIME detection tests
@@ -788,8 +822,12 @@ mod tests {
     #[test]
     fn error_http_status_codes() {
         assert_eq!(ResolveError::InvalidUrl.http_status(), 400);
-        assert_eq!(ResolveError::Forbidden(PathBuf::new()).http_status(), 403);
+        assert_eq!(ResolveError::Forbidden(PathBuf::new()).http_status(), 404);
         assert_eq!(ResolveError::NotFound(PathBuf::new()).http_status(), 404);
+        assert_eq!(
+            ResolveError::Forbidden(PathBuf::new()).http_repr(),
+            ResolveError::NotFound(PathBuf::new()).http_repr()
+        );
         let io_err = std::io::Error::other("disk on fire");
         assert_eq!(ResolveError::Io(io_err).http_status(), 500);
     }
