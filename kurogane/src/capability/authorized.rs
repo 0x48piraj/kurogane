@@ -316,6 +316,11 @@ impl<'a> AuthorizedFs<'a> {
 
     /// `fs.rename_file`: RENAME on source and destination, each authorized
     /// independently. An existing destination is replaced.
+    ///
+    /// Every rule is a function of where content lives, so a move is also
+    /// judged as a whole: it may not carry content out from under a deny rule
+    /// (`PATH_DENIED`), nor to a place where the origin holds more access over
+    /// it than it held at the source (`PATH_DENIED`).
     pub fn rename_file(&self, from: &Path, to: &Path) -> Result<(), FsError> {
         let source = self.resolve(FsAccess::RENAME, from)?;
         let destination = self.resolve(FsAccess::RENAME, to)?;
@@ -348,12 +353,13 @@ impl<'a> AuthorizedFs<'a> {
     /// `fs.copy_file`: READ on the source, CREATE on the destination. Never
     /// overwrites. Returns the number of bytes copied.
     pub fn copy_file(&self, from: &Path, to: &Path) -> Result<u64, FsError> {
+        // Both capabilities are checked before either path is opened
         let source = self.resolve(FsAccess::READ, from)?;
+        let destination = self.resolve(FsAccess::CREATE, to)?;
         let mut input = source.root.safe().open_file(&source.rel)?;
         self.verify(source.root, &input)?;
         self.single_link(&input)?;
 
-        let destination = self.resolve(FsAccess::CREATE, to)?;
         let (parent, leaf) = destination.split()?;
         let dir = destination.root.safe().open_dir(&parent)?;
         self.verify_child(destination.root, &dir, leaf)?;
@@ -843,6 +849,18 @@ mod tests {
         ));
         assert!(matches!(auth.exists(&note), Err(FsError::CapabilityDenied)));
         assert!(matches!(auth.size(&note), Err(FsError::CapabilityDenied)));
+    }
+
+    // Both paths' capabilities are checked before either is opened, so a
+    // missing CREATE is refused without touching the source
+    #[test]
+    fn copy_checks_both_capabilities_before_opening_anything() {
+        let (_tmp, notes, fs) = fixture(FsAccess::READ);
+        let auth = fs.authorize(&origin()).unwrap();
+        assert!(matches!(
+            auth.copy_file(&notes.join("absent.txt"), &notes.join("c")),
+            Err(FsError::CapabilityDenied)
+        ));
     }
 
     #[test]
