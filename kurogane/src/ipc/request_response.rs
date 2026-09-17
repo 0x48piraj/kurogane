@@ -4,8 +4,9 @@ use std::collections::HashMap;
 
 use cef::*;
 
+use crate::acl::Origin;
 use crate::debug;
-use crate::ipc::browser_state::{ErrorCode, IpcContext, IpcError};
+use crate::ipc::browser_state::{still_addressed, ErrorCode, IpcContext, IpcError};
 use crate::ipc::envelope::*;
 use crate::ipc::pending::{PendingEntry, PendingKey, PendingMap};
 use crate::ipc::transport::message::build_message;
@@ -62,13 +63,15 @@ impl RequestResponseSubsystem {
         }
     }
 
-    /// Rejects the invocation with `error`.
+    /// Rejects the invocation with `error`, while the message is being
+    /// handled (so the frame still shows its sender).
     pub(crate) fn reject(frame: &Frame, envelope: &Envelope, error: IpcError) {
         send_response(
             frame,
             envelope.payload_kind,
             envelope.correlation_id,
             Err(error),
+            None,
         );
     }
 
@@ -92,19 +95,16 @@ impl RequestResponseSubsystem {
         let correlation_id = envelope.correlation_id;
         debug!("[RequestResponse Browser] invoke '{}' id={}", cmd, id);
 
+        let url_origin = ctx.url_origin.clone();
         if self.is_async(cmd) {
             let aborted = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let key = ctx
-                .browser_id
-                .map(|bid| PendingKey::new(bid, ctx.frame.clone(), ctx.origin.clone(), id));
-            if let Some(key) = &key {
-                pending_clone.insert(
-                    key.clone(),
-                    PendingEntry {
-                        aborted: aborted.clone(),
-                    },
-                );
-            }
+            let key = PendingKey::new(ctx.browser_id, ctx.frame.clone(), ctx.origin.clone(), id);
+            pending_clone.insert(
+                key.clone(),
+                PendingEntry {
+                    aborted: aborted.clone(),
+                },
+            );
 
             let responder = BinaryResponder::with_abort(
                 Box::new({
@@ -112,10 +112,14 @@ impl RequestResponseSubsystem {
                     let pending = pending_clone.clone();
                     let payload_kind = envelope.payload_kind;
                     move |result| {
-                        if let Some(key) = &key {
-                            pending.remove(key);
-                        }
-                        send_response(&frame, payload_kind, correlation_id, result);
+                        pending.remove(&key);
+                        send_response(
+                            &frame,
+                            payload_kind,
+                            correlation_id,
+                            result,
+                            Some(&url_origin),
+                        );
                     }
                 }),
                 aborted,
@@ -130,7 +134,13 @@ impl RequestResponseSubsystem {
                 Err(_) => Err(IpcError::with_code("handler panicked", ErrorCode::Panic)),
             };
 
-            send_response(frame, envelope.payload_kind, correlation_id, response);
+            send_response(
+                frame,
+                envelope.payload_kind,
+                correlation_id,
+                response,
+                Some(&url_origin),
+            );
         }
 
         true
@@ -139,10 +149,13 @@ impl RequestResponseSubsystem {
     /// Only the frame that sent a request, still showing the same origin, can
     /// cancel it; the pending entry is keyed by both.
     fn on_cancel(&self, envelope: &Envelope, ctx: IpcContext) -> bool {
-        if let Some(bid) = ctx.browser_id {
-            let key = PendingKey::new(bid, ctx.frame, ctx.origin, envelope.correlation_id as i32);
-            self.pending.cancel(&key);
-        }
+        let key = PendingKey::new(
+            ctx.browser_id,
+            ctx.frame,
+            ctx.origin,
+            envelope.correlation_id as i32,
+        );
+        self.pending.cancel(&key);
         true
     }
 
@@ -173,11 +186,16 @@ impl RequestResponseSubsystem {
     }
 }
 
+/// Sends a response to `frame`.
+///
+/// When `url_origin` is set, the response is dropped if the frame has been
+/// destroyed or navigated to a different document.
 fn send_response(
     frame: &Frame,
     payload_kind: u8,
     correlation_id: u32,
     result: Result<Vec<u8>, IpcError>,
+    url_origin: Option<&Origin>,
 ) {
     if frame.is_valid() == 0 {
         debug!(
@@ -185,6 +203,16 @@ fn send_response(
             correlation_id
         );
         return;
+    }
+    if let Some(url_origin) = url_origin {
+        let url: CefString = (&frame.url()).into();
+        if !still_addressed(url_origin, &url.to_string()) {
+            debug!(
+                "[RequestResponse Browser] frame shows another document, dropping id={}",
+                correlation_id
+            );
+            return;
+        }
     }
 
     let (opcode, data) = match result {

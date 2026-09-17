@@ -7,32 +7,77 @@
 //! giving handlers natural per-stream mutable state.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use cef::*;
 
 use crate::acl::Origin;
 use crate::browser_registry::BrowserId;
+use crate::ipc::browser_state::still_addressed;
 use crate::ipc::envelope::*;
 use crate::ipc::{ErrorCode, FrameId, IpcContext};
 use crate::ipc::transport::message::build_message;
 
-/// Responder for sending data back to the renderer from the browser-side stream handler.
+/// Responder for sending data from a browser-side stream handler to the renderer.
+///
+/// The responder is bound to its stream and stops sending when the stream is
+/// closed or its document is replaced.
 #[derive(Clone)]
 pub struct StreamResponder {
     frame: Frame,
     stream_id: u32,
+    /// URL origin of the document that opened the stream. Responses are sent only
+    /// while the frame still shows that origin.
+    url_origin: Option<Origin>,
+    /// Shared stream state.
+    closed: Arc<AtomicBool>,
 }
 
 impl StreamResponder {
     pub fn new(frame: Frame, stream_id: u32) -> Self {
-        Self { frame, stream_id }
+        Self {
+            frame,
+            stream_id,
+            url_origin: None,
+            closed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// A responder bound to a stream's document and lifetime.
+    pub(crate) fn bound(
+        frame: Frame,
+        stream_id: u32,
+        url_origin: Origin,
+        closed: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            frame,
+            stream_id,
+            url_origin: Some(url_origin),
+            closed,
+        }
+    }
+
+    /// Whether anything may still be sent to the stream's document.
+    fn deliverable(&self) -> Result<(), String> {
+        if self.frame.is_valid() == 0 {
+            return Err("frame destroyed".into());
+        }
+        if self.closed.load(Ordering::SeqCst) {
+            return Err("stream closed".into());
+        }
+        if let Some(url_origin) = &self.url_origin {
+            let url: CefString = (&self.frame.url()).into();
+            if !still_addressed(url_origin, &url.to_string()) {
+                return Err("the frame shows another document".into());
+            }
+        }
+        Ok(())
     }
 
     /// Send a data chunk to the renderer.
     pub fn send_data(&self, data: &[u8]) -> Result<(), String> {
-        if self.frame.is_valid() == 0 {
-            return Err("frame destroyed".into());
-        }
+        self.deliverable()?;
         let envelope = Envelope {
             version: ENVELOPE_VERSION,
             subsystem: SUB_STREAM,
@@ -50,9 +95,7 @@ impl StreamResponder {
 
     /// Signal that the browser is done sending data for this stream.
     pub fn end(&self, result: &str) -> Result<(), String> {
-        if self.frame.is_valid() == 0 {
-            return Err("frame destroyed".into());
-        }
+        self.deliverable()?;
         let envelope = Envelope {
             version: ENVELOPE_VERSION,
             subsystem: SUB_STREAM,
@@ -76,9 +119,7 @@ impl StreamResponder {
 
     /// Signal an error of class `code`: the renderer rejects with that code.
     pub(crate) fn error_with_code(&self, msg: &str, code: ErrorCode) -> Result<(), String> {
-        if self.frame.is_valid() == 0 {
-            return Err("frame destroyed".into());
-        }
+        self.deliverable()?;
         let envelope = Envelope {
             version: ENVELOPE_VERSION,
             subsystem: SUB_STREAM,
@@ -96,14 +137,11 @@ impl StreamResponder {
     }
 }
 
-/// Per-stream handler trait.
+/// Handles the lifecycle of a stream.
 ///
-/// Implement this trait to handle a stream's full lifecycle.
-/// The framework instantiates the handler via a factory closure
-/// when a stream opens and drops it when the stream ends or errors.
-///
-/// Each callback receives a StreamResponder so handlers can send data
-/// back to the renderer without storing the responder themselves.
+/// A handler is created when the stream opens and dropped when it ends or
+/// errors. The framework supplies a responder to callbacks that may send
+/// data back to the renderer.
 ///
 /// on_chunk borrows the responder (the stream continues).
 /// on_end takes ownership (the stream is consumed).
@@ -114,16 +152,16 @@ pub trait StreamHandler: Send + 'static {
         Ok(())
     }
 
-    /// Called for each data chunk from the renderer.
+    /// Called for each data chunk.
     fn on_chunk(&mut self, data: &[u8], responder: &StreamResponder) -> Result<(), String>;
 
-    /// Called when the renderer closes the stream normally.
+    /// Called when the stream closes normally.
     fn on_end(&mut self, result: &str, responder: StreamResponder) -> Result<(), String> {
         let _ = (result, responder);
         Ok(())
     }
 
-    /// Called if the stream errors.
+    /// Called when the stream errors.
     fn on_error(&mut self, message: &str) {
         let _ = message;
     }
@@ -135,13 +173,35 @@ pub type StreamFactory = Box<dyn Fn() -> Box<dyn StreamHandler> + Send + Sync>;
 pub mod browser;
 pub mod renderer;
 
-type StreamEntry = (BrowserId, Box<dyn StreamHandler>, Frame);
+/// An open stream and the document that owns it.
+pub(crate) struct StreamEntry {
+    browser_id: BrowserId,
+    handler: Box<dyn StreamHandler>,
+    frame: Frame,
+    url_origin: Origin,
+    closed: Arc<AtomicBool>,
+}
 
-/// A stream's identity: the frame and origin that opened it plus its stream
-/// id. Stream ids are allocated per renderer process, so the frame keeps two
-/// frames' streams apart, and the origin keeps a later document in the same
-/// frame away from a stream an earlier one opened. Only a message from the
-/// opening frame, still showing the same origin, can feed, end or cancel one.
+impl StreamEntry {
+    /// Returns a responder for this stream.
+    fn responder(&self, stream_id: u32) -> StreamResponder {
+        StreamResponder::bound(
+            self.frame.clone(),
+            stream_id,
+            self.url_origin.clone(),
+            self.closed.clone(),
+        )
+    }
+
+    /// Prevents further responses on this stream.
+    fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Identifies a stream by its opening frame, origin and id.
+///
+/// Only the opening frame, while showing the same origin, may use the stream.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct StreamKey {
     frame: FrameId,
@@ -163,9 +223,7 @@ impl StreamKey {
 pub struct StreamSubsystem {
     pub factories: HashMap<String, StreamFactory>,
     /// Per-stream handler instances, keyed by opening frame and stream id.
-    /// Stores the frame alongside each handler so responders can be
-    /// reconstructed on every callback instead of stored by the handler.
-    pub streams: Mutex<HashMap<StreamKey, StreamEntry>>,
+    pub(crate) streams: Mutex<HashMap<StreamKey, StreamEntry>>,
 }
 
 impl StreamSubsystem {
@@ -176,27 +234,32 @@ impl StreamSubsystem {
         }
     }
 
-    /// Remove the streams of `frame`, which is starting a new document.
-    pub fn clear_frame(&self, frame: &FrameId) -> usize {
+    /// Removes and closes the streams `remove` selects; returns how many.
+    fn close_where(&self, mut remove: impl FnMut(&StreamKey, &StreamEntry) -> bool) -> usize {
         let mut streams = self.streams.lock().unwrap();
         let before = streams.len();
-        streams.retain(|key, _| key.frame != *frame);
+        streams.retain(|key, entry| {
+            let gone = remove(key, entry);
+            if gone {
+                entry.close();
+            }
+            !gone
+        });
         before - streams.len()
+    }
+
+    /// Remove the streams of `frame`, which is starting a new document.
+    pub fn clear_frame(&self, frame: &FrameId) -> usize {
+        self.close_where(|key, _| key.frame == *frame)
     }
 
     /// Remove all streams whose frame is no longer valid.
     pub fn clear_invalid_frames(&self) -> usize {
-        let mut streams = self.streams.lock().unwrap();
-        let before = streams.len();
-        streams.retain(|_, (_, _, frame)| frame.is_valid() != 0);
-        before - streams.len()
+        self.close_where(|_, entry| entry.frame.is_valid() == 0)
     }
 
     /// Remove all streams for a given browser.
     pub fn clear_for_browser(&self, browser_id: BrowserId) -> usize {
-        let mut streams = self.streams.lock().unwrap();
-        let before = streams.len();
-        streams.retain(|_, (bid, _, _)| *bid != browser_id);
-        before - streams.len()
+        self.close_where(|_, entry| entry.browser_id == browser_id)
     }
 }

@@ -17,12 +17,16 @@ pub struct EventSubscription {
     pub id: u32,
     pub frame: Frame,
     pub browser_id: BrowserId,
-    /// The frame that subscribed. Subscription ids are allocated per
-    /// renderer process, so only this frame can unsubscribe.
+
+    /// Frame that created the subscription.
     pub frame_id: FrameId,
-    /// The origin the frame showed when it subscribed; a later document in
-    /// the same frame cannot unsubscribe it.
+
+    /// Origin authorized for the subscription.
     pub origin: Origin,
+
+    /// URL origin of the document that created the subscription. Events are
+    /// delivered only while the frame still shows this origin.
+    pub url_origin: Origin,
 }
 
 pub mod browser;

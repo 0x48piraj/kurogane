@@ -6,7 +6,7 @@
 use cef::*;
 
 use crate::debug;
-use crate::ipc::browser_state::{ErrorCode, IpcContext};
+use crate::ipc::browser_state::{still_addressed, ErrorCode, IpcContext};
 use crate::ipc::envelope::*;
 use crate::ipc::event::EventSubsystem;
 use crate::ipc::transport::message::build_message;
@@ -127,14 +127,27 @@ impl EventSubsystem {
         let Some(entries) = subs.get(cmd) else {
             return;
         };
-
-        let subs = self.subscriptions.lock().unwrap();
-        if let Some(entries) = subs.get(cmd) {
-            for sub in entries {
-                let frame = sub.frame.clone();
-                if frame.is_valid() != 0 {
-                    frame.send_process_message(ProcessId::RENDERER, Some(&mut msg));
-                }
+        for sub in entries {
+            let frame = sub.frame.clone();
+            if frame.is_valid() == 0 {
+                continue;
+            }
+            let url: CefString = (&frame.url()).into();
+            if !still_addressed(&sub.url_origin, &url.to_string()) {
+                continue;
+            }
+            let envelope = Envelope {
+                version: ENVELOPE_VERSION,
+                subsystem: SUB_EVENT,
+                opcode: EVENT_EMIT,
+                flags: 0,
+                correlation_id: sub.id,
+                payload_kind: PAYLOAD_JSON,
+            };
+            // A sent message belongs to CEF; build one per subscription
+            match build_message("kurogane_event", &envelope, &payload) {
+                Some(mut msg) => frame.send_process_message(ProcessId::RENDERER, Some(&mut msg)),
+                None => debug!("[Event Browser] failed to build an event message"),
             }
         }
     }

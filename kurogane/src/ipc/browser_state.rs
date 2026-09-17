@@ -10,6 +10,7 @@ use cef::{CefStringUtf16, Frame, ImplFrame};
 
 use crate::acl::Origin;
 use crate::browser_registry::BrowserId;
+use crate::ipc::envelope::FLAG_OPAQUE_CONTEXT;
 
 /// Classifies an [`IpcError`] by the numeric code exposed to the renderer.
 /// Runtime errors use the fixed codes `0` through `-8`; applications may use
@@ -133,21 +134,58 @@ impl FrameId {
     }
 }
 
-/// Contextual information for an IPC dispatch call.
+/// Context for an IPC dispatch.
 pub struct IpcContext {
     pub browser_id: Option<BrowserId>,
-    /// The frame that sent the message. Follow-up messages (cancel, stream
-    /// data, unsubscribe) are only honored from the frame and origin that
-    /// opened what they refer to.
+    /// Frame that sent the message.
     pub frame: FrameId,
-    /// The origin of that frame, computed in the browser process from the
-    /// frame URL (never from the payload). Opaque when the frame has no host.
+    /// Origin the message acts for.
     pub origin: Origin,
+    /// URL origin of the document when the message arrived.
+    pub url_origin: Origin,
+}
+
+/// Returns the origin a message acts for.
+///
+/// An opaque renderer context acts for the opaque origin ([`FLAG_OPAQUE_CONTEXT`]).
+pub(crate) fn effective_origin(url_origin: &Origin, flags: u8) -> Origin {
+    if flags & FLAG_OPAQUE_CONTEXT != 0 {
+        Origin::OPAQUE
+    } else {
+        url_origin.clone()
+    }
+}
+
+/// Returns whether `current_url` still has the origin addressed by the message.
+///
+/// A navigation to another origin makes the message no longer addressed.
+pub(crate) fn still_addressed(url_origin: &Origin, current_url: &str) -> bool {
+    Origin::from_url(current_url) == *url_origin
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_opaque_context_acts_for_the_opaque_origin() {
+        let app = Origin::parse("app://app").unwrap();
+        assert_eq!(effective_origin(&app, 0), app);
+        assert_eq!(effective_origin(&app, FLAG_OPAQUE_CONTEXT), Origin::OPAQUE);
+        assert_eq!(
+            effective_origin(&Origin::OPAQUE, 0),
+            Origin::OPAQUE,
+            "never raised"
+        );
+    }
+
+    #[test]
+    fn answers_follow_only_the_same_document_origin() {
+        let app = Origin::parse("app://app").unwrap();
+        assert!(still_addressed(&app, "app://app/page#x"));
+        assert!(!still_addressed(&app, "https://evil.example/"));
+        assert!(!still_addressed(&app, "about:blank"));
+    }
 
     #[test]
     fn displays_the_wire_code_and_the_message() {
