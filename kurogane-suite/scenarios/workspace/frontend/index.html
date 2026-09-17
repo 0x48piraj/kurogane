@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Kurogane FS Demo</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+            --bg: #fbfbfa; --panel: #f3f2ef; --line: #e2e0db; --sunk: #eceae6;
+            --ink: #22201c; --dim: #7a766e; --accent: #3b6ea5;
+            --bad: #c5221f; --good: #1d7a45;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #1b1a18; --panel: #232220; --line: #35332f; --sunk: #1f1e1c;
+                --ink: #e8e6e1; --dim: #97928a; --accent: #7aa9dd;
+                --bad: #ef6f6c; --good: #6bbf8a;
+            }
+        }
+        * { box-sizing: border-box; }
+        /* Our layout rules must not override the HTML hidden attribute */
+        [hidden] { display: none !important; }
+        html, body { height: 100%; margin: 0; }
+        body {
+            display: grid;
+            grid-template-columns: 230px minmax(0, 1fr) 240px;
+            grid-template-rows: auto minmax(0, 1fr) 156px;
+            grid-template-areas: "head head head" "tree main side" "log log log";
+            font: 13px/1.5 system-ui, sans-serif;
+            background: var(--bg); color: var(--ink);
+        }
+        h2 { margin: 0 0 8px; font-size: 10px; letter-spacing: .1em;
+             text-transform: uppercase; color: var(--dim); font-weight: 600; }
+        button { font: inherit; border: 1px solid var(--line); border-radius: 5px;
+                 background: var(--bg); color: var(--ink); padding: 4px 9px; cursor: pointer; }
+        button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+        button:disabled { opacity: .4; cursor: default; }
+        .mono { font-family: ui-monospace, Consolas, monospace; }
+
+        #head { grid-area: head; display: flex; align-items: center; gap: 14px;
+                padding: 10px 16px; border-bottom: 1px solid var(--line);
+                background: var(--panel); }
+        #brand { font-weight: 600; }
+        #brand small { color: var(--dim); font-weight: 400; margin-left: 8px; }
+        #crumb { color: var(--dim); font-family: ui-monospace, Consolas, monospace;
+                 font-size: 12px; overflow: hidden; text-overflow: ellipsis;
+                 white-space: nowrap; }
+        #reveal { margin-left: auto; flex: none; }
+
+        #treePane { grid-area: tree; display: flex; flex-direction: column;
+                    min-height: 0; background: var(--panel);
+                    border-right: 1px solid var(--line); }
+        #tree { flex: 1; overflow: auto; padding: 6px 4px; min-height: 0; }
+        .row { display: block; width: 100%; text-align: left; border: 0;
+               border-radius: 5px; background: none; padding: 4px 8px;
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .row:hover { background: rgba(127, 127, 127, .12); }
+        .row[aria-current="true"] { background: var(--accent); color: #fff; }
+        .row .mark { display: inline-block; width: 12px; color: var(--dim); }
+        .row[aria-current="true"] .mark { color: #fff; }
+        .row.dir { font-weight: 550; }
+        #treeFoot { border-top: 1px solid var(--line); padding: 7px; }
+        #ask { display: flex; padding-bottom: 7px; }
+        #askName { flex: 1; min-width: 0; font: inherit; padding: 4px 7px;
+                   border: 1px solid var(--accent); border-radius: 5px;
+                   background: var(--bg); color: var(--ink); }
+        #acts { display: flex; gap: 5px; flex-wrap: wrap; }
+
+        main { grid-area: main; display: flex; flex-direction: column;
+               min-width: 0; min-height: 0; }
+        #denial { border-bottom: 1px solid var(--line); padding: 14px 20px;
+                  background: var(--sunk); }
+        #denial h3 { margin: 0 0 10px; font-size: 11px; letter-spacing: .1em;
+                     color: var(--bad); }
+        #denial dl { margin: 0; display: grid; grid-template-columns: 76px 1fr;
+                     gap: 3px 10px; font-size: 12px; }
+        #denial dt { color: var(--dim); }
+        #denial dd { margin: 0; font-family: ui-monospace, Consolas, monospace; }
+        #denial p { margin: 10px 0 0; font-size: 12px; color: var(--dim);
+                    max-width: 58ch; }
+        #editor { flex: 1; width: 100%; padding: 18px 20px; border: 0; resize: none;
+                  font: 13px/1.7 ui-monospace, Consolas, monospace;
+                  background: var(--bg); color: var(--ink); }
+        #editor:focus { outline: none; }
+        #blank { flex: 1; display: grid; place-items: center; padding: 20px;
+                 text-align: center; color: var(--dim); }
+
+        #side { grid-area: side; overflow: auto; padding: 14px;
+                background: var(--panel); border-left: 1px solid var(--line); }
+        #side section + section { margin-top: 20px; }
+        .field { font-size: 11px; margin-bottom: 8px; }
+        .field b { display: block; color: var(--dim); font-weight: 400; }
+        .path { font-family: ui-monospace, Consolas, monospace; word-break: break-all; }
+        #denied { width: 100%; text-align: left; font-family: ui-monospace, Consolas, monospace;
+                  border-style: dashed; color: var(--bad); }
+        #denied:hover { border-color: var(--bad); color: var(--bad); }
+        .caps { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; padding: 0;
+                list-style: none; font-size: 10px; letter-spacing: .04em; }
+        .caps li { border: 1px solid var(--line); border-radius: 4px; padding: 2px 5px; }
+        .caps .yes { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, transparent); }
+        .caps .no { color: var(--dim); text-decoration: line-through; }
+        #ops { display: block; font-size: 11px; }
+        #ops li { border: 0; padding: 1px 0; }
+        #ops .no { text-decoration: none; }
+
+        #logPane { grid-area: log; display: flex; flex-direction: column;
+                   min-height: 0; border-top: 1px solid var(--line);
+                   background: var(--sunk); }
+        #logPane h2 { padding: 8px 16px 0; margin: 0; }
+        #log { flex: 1; overflow: auto; margin: 0; padding: 4px 16px 10px;
+               list-style: none; font-family: ui-monospace, Consolas, monospace;
+               font-size: 11.5px; min-height: 0; }
+        #log li { display: flex; gap: 5px; padding: 1.5px 0; }
+        #log .sign { flex: none; }
+        #log .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #log .cost { margin-left: auto; flex: none; color: var(--dim); }
+        #log .ok .sign { color: var(--good); }
+        #log .err { color: var(--bad); }
+        #log .err .cost { color: var(--bad); }
+        #log .host .sign { color: var(--accent); }
+    </style>
+</head>
+<body>
+
+<header id="head">
+    <span id="brand">Kurogane FS<small>Demo</small></span>
+    <span id="crumb"></span>
+    <button id="reveal">Open in system ↗</button>
+</header>
+
+<div id="treePane">
+    <div id="tree"></div>
+    <div id="treeFoot">
+        <form id="ask" hidden><input id="askName" autocomplete="off" spellcheck="false"></form>
+        <div id="acts">
+            <button id="newFile">New file</button>
+            <button id="newFolder">New folder</button>
+            <button id="rename" disabled>Rename</button>
+            <button id="delete" disabled>Delete</button>
+        </div>
+    </div>
+</div>
+
+<main>
+    <div id="denial" hidden>
+        <h3>ACCESS DENIED</h3>
+        <dl>
+            <dt>Operation</dt><dd id="dOp"></dd>
+            <dt>Path</dt><dd id="dPath"></dd>
+            <dt>Result</dt><dd id="dResult"></dd>
+            <dt>Reason</dt><dd id="dReason"></dd>
+        </dl>
+        <p id="dNote"></p>
+    </div>
+    <div id="blank">Select a file in the workspace.</div>
+    <textarea id="editor" spellcheck="false" hidden></textarea>
+</main>
+
+<div id="side">
+    <section>
+        <h2>Grant</h2>
+        <div class="field"><b>Root</b><span class="path" id="gRoot"></span></div>
+        <div class="field"><b>Capabilities</b></div>
+        <ul class="caps" id="gCaps"></ul>
+        <div class="field"><b>Denied</b></div>
+        <button id="denied" title="Read a file inside the denied subtree"></button>
+    </section>
+    <section>
+        <h2>Selection</h2>
+        <div class="field"><b>Path</b><span class="path" id="selPath">nothing selected</span></div>
+        <ul class="caps" id="ops"></ul>
+    </section>
+</div>
+
+<div id="logPane">
+    <h2>Operations</h2>
+    <ul id="log"></ul>
+</div>
+
+<script src="grant.js"></script>
+<script>
+(() => {
+    'use strict';
+
+    const fs = window.kurogane?.fs;
+    const GRANT = window.GRANT;
+    const $ = (id) => document.getElementById(id);
+    const ui = {
+        tree: $('tree'), crumb: $('crumb'), editor: $('editor'), blank: $('blank'),
+        denial: $('denial'), ask: $('ask'), askName: $('askName'), log: $('log'),
+    };
+
+    if (!fs || !GRANT) {
+        ui.blank.textContent = 'window.kurogane.fs or grant.js is missing.';
+        return;
+    }
+
+    const decoder = new TextDecoder();
+    let selected = null;      // path of the selected entry, relative to the root
+    let kind = null;          // 'file' | 'dir'
+    let cwd = '';             // directory new entries land in
+    let current = null;       // path of the file in the editor
+    let dirty = false;        // the editor holds unsaved edits
+    let timer = null;         // pending autosave
+    const expanded = new Set(['']);
+
+    // The wire codes the capability layer answers with (for demo)
+    // Anything else is ordinary I/O reported by the host
+    const VERDICT = {
+        '-5': ['Capability', 'the grant carries no such capability'],
+        '-6': ['PathDenied', 'outside the granted roots, denied by a rule, or a link'],
+        '-7': ['PathInvalid', 'the path is malformed'],
+        '-8': ['TooLarge', 'the file is over the transfer limit'],
+    };
+    const verdict = (e) => {
+        const named = VERDICT[e.code];
+        return named ? `${named[0]} (${e.code})` : `${e.message} (${e.code})`;
+    };
+
+    const join = (dir, name) => (dir ? `${dir}/${name}` : name);
+    const parent = (path) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
+
+    // The capabilities the layer defines (for demo)
+    const ALL_CAPS = ['READ', 'LIST', 'METADATA', 'WRITE', 'CREATE', 'DELETE', 'RENAME'];
+    const rootName = GRANT.root.split(/[\\/]/).filter(Boolean).pop();
+
+    // Activity
+    function note(state, what, cost) {
+        const li = document.createElement('li');
+        li.className = state;
+        const sign = document.createElement('span');
+        sign.className = 'sign';
+        sign.textContent = state === 'err' ? '[!]' : '[+]';
+        const label = document.createElement('span');
+        label.className = 'what';
+        label.textContent = what;
+        const right = document.createElement('span');
+        right.className = 'cost';
+        right.textContent = cost;
+        li.append(sign, label, right);
+        ui.log.prepend(li);
+        while (ui.log.children.length > 60) ui.log.lastElementChild.remove();
+    }
+
+    // Every fs.* call goes through here, times the round trip, writes the
+    // result to the activity strip and hands the refusal back to the caller
+    // with enough context for the denial panel
+    async function call(label, path, run) {
+        const started = performance.now();
+        try {
+            const value = await run();
+            note('ok', label, `${(performance.now() - started).toFixed(1)} ms`);
+            return value;
+        } catch (e) {
+            e.label = label;
+            e.path = path;
+            note('err', label, verdict(e));
+            throw e;
+        }
+    }
+
+    // Wraps one interaction. A capability refusal opens the denial panel;
+    // everything else has already been reported in the activity strip
+    const attempt = (run) => async (...args) => {
+        try {
+            await run(...args);
+        } catch (e) {
+            if (e.code === -5 || e.code === -6) deny(e);
+        }
+    };
+
+    function deny(e) {
+        const [name, why] = VERDICT[e.code] ?? ['Error', e.message];
+        $('dOp').textContent = `fs.${(e.label ?? '').split('(')[0]}`;
+        $('dPath').textContent = e.path ?? '—';
+        $('dResult').textContent = `${name} (${e.code})`;
+        $('dReason').textContent = why;
+        $('dNote').textContent = e.code === -6
+            ? 'The tree never showed this path: readDir omits denied entries, so the page '
+              + 'cannot see it and cannot list it. Naming it directly reaches the same '
+              + 'capability layer, which refuses it.'
+            : 'The origin holds a grant, but not this capability. The call is refused '
+              + 'before it reaches the filesystem.';
+        ui.denial.hidden = false;
+    }
+
+    // Tree
+    const order = (a, b) =>
+        (a.kind === 'dir') === (b.kind === 'dir')
+            ? a.name.localeCompare(b.name)
+            : a.kind === 'dir' ? -1 : 1;
+
+    // Built from readDir alone, one call per expanded directory. A denied
+    // subtree is not skipped here; it never arrives
+    async function walk(dir, depth, rows) {
+        const entries = await call(`readDir('${dir || '.'}')`, dir, () => fs.readDir(dir || '.'));
+        for (const entry of entries.sort(order)) {
+            const path = join(dir, entry.name);
+            const isDir = entry.kind === 'dir';
+            const row = document.createElement('button');
+            row.className = isDir ? 'row dir' : 'row';
+            row.style.paddingLeft = `${8 + depth * 13}px`;
+            row.dataset.path = path;
+            row.setAttribute('aria-current', String(path === selected));
+
+            const glyph = document.createElement('span');
+            glyph.className = 'mark';
+            glyph.textContent = isDir ? (expanded.has(path) ? '▾' : '▸') : '';
+            row.append(glyph, entry.name);
+            row.onclick = isDir ? () => toggle(path) : () => open(path);
+            rows.push(row);
+
+            if (isDir && expanded.has(path)) await walk(path, depth + 1, rows);
+        }
+    }
+
+    async function tree() {
+        const rows = [];
+        await walk('', 0, rows);
+        ui.tree.replaceChildren(...rows);
+    }
+
+    const toggle = attempt(async (path) => {
+        // "delete" reports whether it was there, so this is a toggle.
+        if (!expanded.delete(path)) expanded.add(path);
+        select(path, 'dir');
+        await tree();
+    });
+
+    // Selection
+    const OPS = [
+        ['Read', 'READ'], ['Write', 'WRITE'], ['Rename', 'RENAME'],
+        ['Delete', 'DELETE'], ['Size', 'METADATA'], ['Exists', 'METADATA'],
+    ];
+
+    function select(path, entryKind) {
+        selected = path;
+        kind = entryKind;
+        cwd = path === null ? '' : entryKind === 'dir' ? path : parent(path);
+        ui.crumb.textContent = [rootName, ...(path ? path.split('/') : [])].join(' / ');
+        $('rename').disabled = $('delete').disabled = path === null;
+        $('selPath').textContent = path ?? 'nothing selected';
+
+        // Which operations this selection allows, read off the grant itself
+        // rather than off what the UI happens to offer
+        $('ops').replaceChildren(...(path === null ? [] : OPS.map(([label, cap]) => {
+            const held = GRANT.held.includes(cap);
+            const li = document.createElement('li');
+            li.className = held ? 'yes' : 'no';
+            li.textContent = `${held ? '🗸' : '✕'} ${label}`;
+            li.title = `needs ${cap}`;
+            return li;
+        })));
+
+        for (const row of ui.tree.children) {
+            row.setAttribute('aria-current', String(row.dataset.path === path));
+        }
+    }
+
+    // Files
+    const open = attempt(async (path) => {
+        await save();
+        const bytes = await call(`readFile('${path}')`, path, () => fs.readFile(path));
+        current = path;
+        dirty = false;
+        ui.editor.value = decoder.decode(bytes);
+        ui.editor.hidden = false;
+        ui.blank.hidden = true;
+        ui.denial.hidden = true;
+        select(path, 'file');
+    });
+
+    // Autosave; one writeFile per pause in typing. Replacing an existing file
+    // needs WRITE; the first write of a new one is what needs CREATE
+    const save = attempt(async () => {
+        clearTimeout(timer);
+        if (!current || !dirty) return;
+        const path = current;
+        dirty = false;
+        await call(`writeFile('${path}')`, path, () => fs.writeFile(path, ui.editor.value));
+    });
+
+    const create = attempt(async (name) => {
+        const path = join(cwd, name);
+        await call(`writeFile('${path}')`, path, () => fs.writeFile(path, ''));
+        expanded.add(cwd);
+        await tree();
+        await open(path);
+    });
+
+    const createDir = attempt(async (name) => {
+        const path = join(cwd, name);
+        await call(`createDir('${path}')`, path, () => fs.createDir(path));
+        expanded.add(cwd);
+        expanded.add(path);
+        await tree();
+        select(path, 'dir');
+    });
+
+    const rename = attempt(async (name) => {
+        const from = selected;
+        const to = join(parent(from), name);
+        if (to === from) return;
+        await save();
+        await call(`renameFile('${from}', '${to}')`, from, () => fs.renameFile(from, to));
+        if (current === from) current = to;
+        if (expanded.delete(from)) expanded.add(to);
+        await tree();
+        select(to, kind);
+    });
+
+    // Directories and files are deleted by different calls and a directory
+    // has to be empty; a non-empty one comes back as an I/O refusal
+    const remove = attempt(async () => {
+        const path = selected;
+        const isDir = kind === 'dir';
+        clearTimeout(timer);
+        await call(
+            `${isDir ? 'removeDir' : 'removeFile'}('${path}')`, path,
+            () => (isDir ? fs.removeDir(path) : fs.removeFile(path)),
+        );
+        if (current === path) {
+            current = null;
+            dirty = false;
+            ui.editor.hidden = true;
+            ui.editor.value = '';
+            ui.blank.hidden = false;
+        }
+        expanded.delete(path);
+        await tree();
+        select(null, null);
+    });
+
+    // The denied subtree
+    const probe = attempt(async () => {
+        const path = GRANT.denied;
+        const entries = await call(`readDir('${path}')`, path, () => fs.readDir(path));
+        deny({ code: 0, label: `readDir('${path}')`, path });
+        $('dResult').textContent = 'LISTED — the grant is wrong';
+        $('dNote').textContent = `It came back with: ${entries.map((e) => e.name).join(', ')}`;
+    });
+
+    // Naming
+    // A one-field form instead of prompt(); no native dialog, Escape backs out
+    let asked = null;
+    function askFor(label, value, done) {
+        asked = done;
+        ui.ask.hidden = false;
+        ui.askName.placeholder = label;
+        ui.askName.value = value;
+        ui.askName.focus();
+        ui.askName.select();
+    }
+
+    ui.ask.onsubmit = (e) => {
+        e.preventDefault();
+        ui.ask.hidden = true;
+        const value = ui.askName.value.trim();
+        if (value) asked(value);
+    };
+    ui.askName.onkeydown = (e) => { if (e.key === 'Escape') ui.ask.hidden = true; };
+
+    // Wiring
+    ui.editor.oninput = () => {
+        dirty = true;
+        clearTimeout(timer);
+        timer = setTimeout(save, 400);
+    };
+    ui.editor.onblur = save;
+
+    $('newFile').onclick = () => askFor('name.txt', '', create);
+    $('newFolder').onclick = () => askFor('folder name', '', createDir);
+    $('rename').onclick = () => askFor('new name', selected.split('/').pop(), rename);
+    $('delete').onclick = remove;
+    $('denied').onclick = probe;
+
+    // Not a filesystem call; a host command, which is why it is logged apart
+    // The page cannot name a path for it; it always reveals the granted root
+    $('reveal').onclick = async () => {
+        try {
+            await window.kurogane.invoke('workspace.reveal', {});
+            note('host', 'workspace.reveal()', 'host command');
+        } catch (e) {
+            note('err', 'workspace.reveal()', e.message);
+        }
+    };
+
+    // Policy panel
+    $('gRoot').textContent = GRANT.root;
+    $('gRoot').title = GRANT.root;
+    $('denied').textContent = `${GRANT.denied}/`;
+    $('gCaps').replaceChildren(...ALL_CAPS.map((cap) => {
+        const held = GRANT.held.includes(cap);
+        const li = document.createElement('li');
+        li.className = held ? 'yes' : 'no';
+        li.textContent = cap;
+        li.title = held ? 'granted' : 'not granted: the origin cannot use it';
+        return li;
+    }));
+
+    attempt(async () => {
+        await tree();
+        await open('README.md');
+    })();
+})();
+</script>
+</body>
+</html>

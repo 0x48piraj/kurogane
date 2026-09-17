@@ -90,3 +90,7 @@ path = "scenarios/stream-benchmark/main.rs"
 [[example]]
 name = "sandbox-smoke"
 path = "scenarios/sandbox-smoke.rs"
+
+[[example]]
+name = "workspace"
+path = "scenarios/workspace/main.rs"
