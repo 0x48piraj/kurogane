@@ -18,7 +18,7 @@ authors = [
 repository = "https://github.com/0x48piraj/kurogane"
 
 [workspace.dependencies]
-cef = { git = "https://github.com/tauri-apps/cef-rs", rev = "c73f792f245d71ac1716448cdb7c165c8009e20c" }
+cef = { git = "https://github.com/tauri-apps/cef-rs", rev = "c73f792f245d71ac1716448cdb7c165c8009e20c", default-features = false }
 download-cef = "2.3"
 kurogane = { path = "kurogane" }
 kurogane-cli = { path = "kurogane-cli" }
