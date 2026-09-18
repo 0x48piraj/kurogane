@@ -1878,7 +1878,7 @@ dependencies = [
 
 [[package]]
 name = "kurogane"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "cef",
  "ctrlc",
@@ -1896,7 +1896,7 @@ dependencies = [
 
 [[package]]
 name = "kurogane-cli"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "cargo-generate",
@@ -1917,7 +1917,7 @@ dependencies = [
 
 [[package]]
 name = "kurogane-layout"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "dirs",
  "proptest",
@@ -1930,7 +1930,7 @@ dependencies = [
 
 [[package]]
 name = "kurogane-suite"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "cef",
  "git2",
