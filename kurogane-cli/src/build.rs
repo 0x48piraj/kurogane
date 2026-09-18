@@ -4,17 +4,18 @@
 //! binary without performing distribution packaging.
 
 use anyhow::Result;
-use std::process::Command;
 
+use crate::launch;
 use crate::tui;
 
 pub fn run() -> Result<()> {
     tui::section("Kurogane Build");
 
+    let cef = launch::ensure_cef_runtime()?;
+
     tui::step("Building release app...");
 
-    let status = Command::new("cargo")
-        .arg("build")
+    let status = launch::cargo_command(&cef, "build")?
         .arg("--release")
         .status()?;
 
