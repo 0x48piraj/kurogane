@@ -65,18 +65,29 @@ pub(crate) fn ensure_cef_runtime() -> Result<PathBuf> {
     }
 }
 
-/// Run Cargo with the Kurogane runtime environment.
-pub(crate) fn cargo_run(cef: &std::path::Path, cargo_args: &[OsString]) -> Result<ExitStatus> {
-    crate::platform::prepare_gpu_libraries(cef, cargo_args)?;
-
+/// Constructs a Cargo command with the CEF runtime configuration shared by
+/// Kurogane's build, run and bundle workflows.
+///
+/// All invocations using the same target directory must use the same
+/// `CEF_PATH` so `cef-dll-sys` can reuse its existing build artifacts.
+pub(crate) fn cargo_command(cef: &std::path::Path, subcommand: &str) -> Result<Command> {
     let mut cmd = Command::new("cargo");
-    cmd.arg("run");
+    cmd.arg(subcommand);
 
     // Skip cef-dll-sys's redundant runtime staging
     cmd.args(crate::platform::cef_build_script_override(cef)?);
 
-    cmd.args(cargo_args);
     cmd.env("CEF_PATH", cef);
+
+    Ok(cmd)
+}
+
+/// Run Cargo with the Kurogane runtime environment.
+pub(crate) fn cargo_run(cef: &std::path::Path, cargo_args: &[OsString]) -> Result<ExitStatus> {
+    crate::platform::prepare_gpu_libraries(cef, cargo_args)?;
+
+    let mut cmd = cargo_command(cef, "run")?;
+    cmd.args(cargo_args);
 
     // Configure platform-specific runtime loading for the launched process
     crate::platform::configure_runtime_env(&mut cmd, cef)?;
