@@ -219,14 +219,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
     tui::step("Building release...");
 
-    let mut cmd = Command::new("cargo");
-
-    cmd.arg("build");
-
-    // Skip cef-dll-sys's redundant runtime staging
-    cmd.args(crate::platform::cef_build_script_override(
-        cef.root.as_path(),
-    )?);
+    let mut cmd = crate::launch::cargo_command(cef.root.as_path(), "build")?;
 
     if debug {
         cmd.arg("--features").arg("kurogane/debug");

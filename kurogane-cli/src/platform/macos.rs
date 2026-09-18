@@ -25,7 +25,7 @@ pub(crate) fn link_gpu_libraries(cef: &Path, cargo_args: &[OsString]) -> Result<
 
     let mut installed = Vec::new();
 
-    for dir in super::probe::executable_dirs(cargo_args)? {
+    for dir in super::probe::executable_dirs(cef, cargo_args)? {
         for name in link_unbundled_angle_libraries(cef, &dir)? {
             if !installed.contains(&name) {
                 installed.push(name);

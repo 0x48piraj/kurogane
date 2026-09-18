@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
 use anyhow::Result;
 #[cfg(target_os = "macos")]
-use std::process::{Command, ExitStatus};
+use std::process::ExitStatus;
 
 /// Splits a `cargo run` argument vector at the first bare `--`.
 ///
@@ -72,11 +72,10 @@ pub(crate) fn parse_executable_dirs(stdout: &str) -> Vec<PathBuf> {
 ///
 /// The probe is a normal build, so the launch that follows is a cache hit.
 #[cfg(target_os = "macos")]
-pub(crate) fn executable_dirs(cargo_args: &[OsString]) -> Result<Vec<PathBuf>> {
+pub(crate) fn executable_dirs(cef: &Path, cargo_args: &[OsString]) -> Result<Vec<PathBuf>> {
     let (build_args, _) = split_cargo_args(cargo_args);
 
-    let output = Command::new("cargo")
-        .arg("build")
+    let output = crate::launch::cargo_command(cef, "build")?
         .args(strip_message_format(build_args))
         .arg("--message-format=json-render-diagnostics")
         .stderr(std::process::Stdio::inherit())
