@@ -10,7 +10,10 @@ use objc2::{
     rc::Retained,
     runtime::{AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject},
 };
-use objc2_app_kit::{NSApp, NSApplication, NSApplicationDelegate, NSApplicationTerminateReply};
+use objc2_app_kit::{
+    NSApp, NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
+    NSApplicationTerminateReply,
+};
 
 use crate::error::RuntimeError;
 use crate::platform::macos::application::SimpleApplication;
@@ -25,7 +28,8 @@ pub fn set_services(services: Arc<RuntimeServices>) {
 }
 
 /// Loads CEF and, in the browser process, installs the required
-/// `NSApplication` subclass.
+/// `NSApplication` subclass and makes an unbundled process a regular
+/// foreground app.
 ///
 /// Uses the runtime-resolved CEF root rather than the app-bundle-only loader
 /// path used by `cef::library_loader`.
@@ -58,9 +62,21 @@ pub fn init_ns_app(sandbox: crate::SandboxMode) -> Result<(), RuntimeError> {
         let _: Retained<AnyObject> = msg_send![SimpleApplication::class(), sharedApplication];
     }
 
-    assert!(NSApp(mtm).isKindOfClass(SimpleApplication::class()));
+    let app = NSApp(mtm);
+    assert!(app.isKindOfClass(SimpleApplication::class()));
+
+    promote_unbundled(&app);
 
     Ok(())
+}
+
+/// Ensures unbundled browser processes use a foreground activation policy.
+///
+/// Bundled applications retain the policy declared by their `Info.plist`.
+fn promote_unbundled(app: &NSApplication) {
+    if app.activationPolicy() == NSApplicationActivationPolicy::Prohibited {
+        app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+    }
 }
 
 /// Loads the Chromium Embedded Framework from the resolved CEF root.

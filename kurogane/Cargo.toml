@@ -43,6 +43,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSApplication",
     "NSEvent",
     "NSResponder",
+    "NSRunningApplication",
 ] }
 
 [features]
