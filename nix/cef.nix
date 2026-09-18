@@ -4,6 +4,7 @@
   fetchurl,
   cef-binary,
   cefVersion,
+  linkFarm,
   symlinkJoin,
   writeTextFile,
 }:
@@ -27,6 +28,15 @@ let
       "i686-windows" = "windows32";
     }
     .${stdenv.hostPlatform.system} or (throw "Unsupported platform: ${stdenv.hostPlatform.system}");
+
+  # Archive SHA-1 published in the CEF build index
+  sha1 =
+    {
+      "x86_64-linux" = "74a1186c566cbbac38c6b0f5298fc0bcfc1b9606";
+      "aarch64-linux" = "03e7a836ee73326280b8a3032e9741898133447e";
+      "aarch64-darwin" = "e73f7ce767420791b1965e15816a955d88cf1f9a";
+    }
+    .${stdenv.hostPlatform.system};
 
   cef =
     if stdenv.hostPlatform.isDarwin then
@@ -61,25 +71,40 @@ let
         };
       };
 
+  # Sources the libcef_dll_wrapper build needs
+  sources = linkFarm "cef-sources-${cefVersion}" (
+    lib.genAttrs [ "CMakeLists.txt" "cmake" "include" "libcef_dll" "CREDITS.html" ] (
+      name: "${cef}/${name}"
+    )
+  );
+
   archiveJson = writeTextFile {
     name = "cef-archive.json";
     destination = "/archive.json";
     text = builtins.toJSON {
       type = "minimal";
       name = "cef_binary_${cefVersion}+g${gitRevision}+chromium-${chromiumVersion}_${platform}_minimal.tar.bz2";
-      sha1 = lib.fakeHash;
+      inherit sha1;
     };
   };
 in
+# Mirrors the managed installation layout produced by download-cef
 symlinkJoin {
   name = "cef-with-archive-${cefVersion}";
 
   paths = [
-    cef
+    "${cef}/Release"
+  ]
+  ++ lib.optional (!stdenv.hostPlatform.isDarwin) "${cef}/Resources"
+  ++ [
+    sources
     archiveJson
   ];
 
-  postBuild = ''
-    ln -s "$out"/Release/* "$out"/Resources/* "$out"
-  '';
+  # Verifies the pinned archive against its declared SHA-1
+  passthru.tests.cef-archive-sha1 = fetchurl {
+    name = "cef-archive-sha1";
+    url = "file://${cef.src}";
+    inherit sha1;
+  };
 }
