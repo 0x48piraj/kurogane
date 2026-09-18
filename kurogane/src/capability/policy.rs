@@ -6,7 +6,7 @@
 //! Each [`FsCommand`] performs exactly one filesystem operation with the
 //! required capability enforced by `authorized.rs`:
 //!
-//! ```
+//! ```text
 //! fs.read_file    READ
 //! fs.write_file   WRITE (existing) | CREATE (new)
 //! fs.size         METADATA
