@@ -179,6 +179,7 @@
 
         checks = pkgs.lib.mergeAttrsList [
           testTemplates
+          cef.tests
         ];
       }
     );
