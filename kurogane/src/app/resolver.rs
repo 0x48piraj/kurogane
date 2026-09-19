@@ -343,7 +343,9 @@ mod property_tests {
         #[test]
         fn prop_file_path_is_invalid_root(name in "[a-z]{1,8}") {
             let dir = tempfile::tempdir().unwrap();
-            let file = dir.path().join(name);
+            // The prefix keeps the name off Windows' reserved device names (nul, con, aux, prn):
+            // writing to one succeeds without creating a file, and resolve reports it missing.
+            let file = dir.path().join(format!("f{name}"));
 
             std::fs::write(&file, b"data").unwrap();
 
