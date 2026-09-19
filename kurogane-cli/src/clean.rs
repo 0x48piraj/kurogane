@@ -72,14 +72,14 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
             tui::field("cef", "clean");
         }
 
-        // Project-local materialized CEF runtimes
+        // Kurogane's build output and materialized CEF runtimes
         let target_kurogane = std::path::PathBuf::from("target").join("kurogane");
 
         if target_kurogane.exists() {
             match fs::remove_dir_all(&target_kurogane) {
                 Ok(_) => tui::field("target/kurogane", "removed"),
                 Err(e) => {
-                    tui::warn(&format!("Failed to remove materialized runtimes: {}", e));
+                    tui::warn(&format!("Failed to remove Kurogane build output: {}", e));
                     tui::field("target/kurogane", "failed");
                     failed.push("target/kurogane");
                 }

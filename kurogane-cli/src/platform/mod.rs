@@ -41,16 +41,10 @@ pub(crate) fn configure_runtime_env(cmd: &mut Command, cef: &Path) -> Result<()>
     Ok(())
 }
 
-/// Cargo build-script override that suppresses `cef-dll-sys`'s runtime staging.
+/// Overrides `cef-dll-sys` runtime staging while preserving its linker configuration.
 ///
-/// On Linux / Windows the build script resolves CEF, copies its runtime next to
-/// the binaries (unused: Kurogane loads CEF from its own root) and emits link
-/// directives which the override reproduces. On Windows it also compiles
-/// `libcef_dll_wrapper` which nothing links: the bindings only call libcef's
-/// C API and `libcef.dll` exports all of it.
-///
-/// macOS keeps the build script; every CEF entry point resolves through the
-/// wrapper's library loader.
+/// Supported on Linux and Windows; macOS retains the build script for its
+/// wrapper-based CEF loading.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) fn cef_build_script_override(cef: &Path) -> Result<Vec<OsString>> {
     // Overrides require an exact target triple

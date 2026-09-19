@@ -29,6 +29,10 @@ pub fn run() -> Result<()> {
 
     tui::blank();
     tui::success("Build complete");
+    tui::field(
+        "output",
+        tui::format_path(&launch::target_dir()?.join("release")),
+    );
 
     Ok(())
 }

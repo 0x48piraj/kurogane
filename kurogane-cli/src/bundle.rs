@@ -241,7 +241,8 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("No root package"))?;
 
     let profile = if debug { "debug" } else { "release" };
-    let target_dir = metadata.target_directory.join(profile);
+    let kurogane_target = crate::launch::target_dir_in(metadata.target_directory.as_std_path());
+    let target_dir = kurogane_target.join(profile);
 
     // Find binary target
     let target = pkg
@@ -269,13 +270,9 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
         .map(|p| p.cef_version.clone())
         .unwrap_or_else(|| env!("KUROGANE_CEF_VERSION").to_string());
 
-    let runtime_dir = metadata
-        .target_directory
-        .join("kurogane")
-        .join("cef-runtime")
-        .join(&runtime_version);
+    let runtime_dir = kurogane_target.join("cef-runtime").join(&runtime_version);
 
-    let cef_runtime = materialize_cef_runtime(&cef.root, runtime_dir.as_std_path())?;
+    let cef_runtime = materialize_cef_runtime(&cef.root, &runtime_dir)?;
 
     // Configured paths are relative to the project root
     let project_root = metadata.workspace_root.as_std_path();
@@ -321,7 +318,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
                 .as_ref()
                 .map(|icon| anchor_path(project_root, icon)),
         },
-        executable: exe_path.into(),
+        executable: exe_path,
         frontend,
         cef_runtime,
         extra_resources,

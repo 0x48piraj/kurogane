@@ -11,7 +11,7 @@
 
 use anyhow::Result;
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
 use kurogane_layout::{cef_install_dir, validate_cef_runtime};
@@ -65,12 +65,25 @@ pub(crate) fn ensure_cef_runtime() -> Result<PathBuf> {
     }
 }
 
-/// Constructs a Cargo command with the CEF runtime configuration shared by
-/// Kurogane's build, run and bundle workflows.
+/// Returns Kurogane's directory under Cargo's target directory.
 ///
-/// All invocations using the same target directory must use the same
-/// `CEF_PATH` so `cef-dll-sys` can reuse its existing build artifacts.
-pub(crate) fn cargo_command(cef: &std::path::Path, subcommand: &str) -> Result<Command> {
+/// Kurogane configures `cef-dll-sys` differently from plain cargo,
+/// see [`crate::platform::cef_build_script_override`].
+pub(crate) fn target_dir_in(base: &Path) -> PathBuf {
+    base.join("kurogane")
+}
+
+/// Kurogane's target directory for the current project.
+pub(crate) fn target_dir() -> Result<PathBuf> {
+    let metadata = cargo_metadata::MetadataCommand::new().no_deps().exec()?;
+
+    Ok(target_dir_in(metadata.target_directory.as_std_path()))
+}
+
+/// Constructs a Cargo command with Kurogane's CEF build configuration.
+///
+/// Uses a shared target directory and `CEF_PATH` across build, run and bundle.
+pub(crate) fn cargo_command(cef: &Path, subcommand: &str) -> Result<Command> {
     let mut cmd = Command::new("cargo");
     cmd.arg(subcommand);
 
@@ -79,11 +92,13 @@ pub(crate) fn cargo_command(cef: &std::path::Path, subcommand: &str) -> Result<C
 
     cmd.env("CEF_PATH", cef);
 
+    cmd.env("CARGO_TARGET_DIR", target_dir()?);
+
     Ok(cmd)
 }
 
 /// Run Cargo with the Kurogane runtime environment.
-pub(crate) fn cargo_run(cef: &std::path::Path, cargo_args: &[OsString]) -> Result<ExitStatus> {
+pub(crate) fn cargo_run(cef: &Path, cargo_args: &[OsString]) -> Result<ExitStatus> {
     crate::platform::prepare_gpu_libraries(cef, cargo_args)?;
 
     let mut cmd = cargo_command(cef, "run")?;
