@@ -88,6 +88,22 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
             tui::field("target/kurogane", "clean");
         }
 
+        // Shared CEF wrapper builds, keyed to the runtimes removed above
+        let wrapper = cache_root().join("wrapper");
+
+        if wrapper.exists() {
+            match fs::remove_dir_all(&wrapper) {
+                Ok(_) => tui::field("wrapper", "removed"),
+                Err(e) => {
+                    tui::warn(&format!("Failed to remove CEF wrapper cache: {}", e));
+                    tui::field("wrapper", "failed");
+                    failed.push("wrapper");
+                }
+            }
+        } else {
+            tui::field("wrapper", "clean");
+        }
+
         // Build tools cache
         let tools = cache_root().join("tools");
 

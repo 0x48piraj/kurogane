@@ -7,7 +7,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::Command;
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 use anyhow::Context;
 
 #[cfg(target_os = "linux")]
@@ -16,6 +16,8 @@ mod linux;
 mod windows;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod wrapper;
 
 #[cfg(any(target_os = "macos", test))]
 mod probe;
@@ -43,8 +45,8 @@ pub(crate) fn configure_runtime_env(cmd: &mut Command, cef: &Path) -> Result<()>
 
 /// Overrides `cef-dll-sys` runtime staging while preserving its linker configuration.
 ///
-/// Supported on Linux and Windows; macOS retains the build script for its
-/// wrapper-based CEF loading.
+/// Linux and Windows skip the build script outright; macOS cannot and shares a
+/// prebuilt wrapper instead.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) fn cef_build_script_override(cef: &Path) -> Result<Vec<OsString>> {
     // Overrides require an exact target triple
@@ -58,16 +60,53 @@ pub(crate) fn cef_build_script_override(cef: &Path) -> Result<Vec<OsString>> {
         return Ok(Vec::new());
     }
 
-    Ok(override_config(&triple, root)
-        .into_iter()
-        .flat_map(|entry| [OsString::from("--config"), OsString::from(entry)])
-        .collect())
+    Ok(config_args(override_config(&triple, root)))
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+/// Returns Cargo configuration overrides for the shared macOS CEF wrapper.
+///
+/// Falls back to the default build script when the wrapper is unavailable.
+#[cfg(target_os = "macos")]
+pub(crate) fn cef_build_script_override(cef: &Path) -> Result<Vec<OsString>> {
+    // Overrides require an exact target triple
+    let triple = host_triple()?;
+
+    // The override requires UTF-8 paths
+    let Some(root) = cef.to_str() else {
+        return Ok(Vec::new());
+    };
+
+    let shared = match wrapper::ensure(cef) {
+        Ok(Some(dir)) => dir,
+        Ok(None) => return Ok(Vec::new()),
+
+        // Fall back to the build script
+        Err(err) => {
+            crate::tui::warn(&format!("Shared CEF wrapper unavailable: {err}"));
+            return Ok(Vec::new());
+        }
+    };
+
+    let Some(shared) = shared.to_str() else {
+        return Ok(Vec::new());
+    };
+
+    Ok(config_args(macos_override_config(&triple, root, shared)))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub(crate) fn cef_build_script_override(cef: &Path) -> Result<Vec<OsString>> {
     let _ = cef;
     Ok(Vec::new())
+}
+
+/// Flattens configuration entries into Cargo `--config` arguments.
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos", test))]
+fn config_args(entries: Vec<String>) -> Vec<OsString> {
+    entries
+        .into_iter()
+        .flat_map(|entry| [OsString::from("--config"), OsString::from(entry)])
+        .collect()
 }
 
 /// Builds Cargo configuration overrides for the CEF wrapper.
@@ -93,8 +132,30 @@ fn override_config(triple: &str, root: &str) -> Vec<String> {
     ]
 }
 
+/// Builds Cargo configuration for the shared macOS wrapper.
+#[cfg(any(target_os = "macos", test))]
+fn macos_override_config(triple: &str, root: &str, wrapper: &str) -> Vec<String> {
+    // Serialize the values as TOML to preserve platform-specific path syntax
+    let search = toml::Value::Array(vec![
+        format!("native={root}").into(),
+        format!("native={wrapper}").into(),
+    ]);
+    let link = toml::Value::Array(vec![
+        "framework=AppKit".into(),
+        "static=cef_dll_wrapper".into(),
+    ]);
+    let dir = toml::Value::from(root);
+
+    let key = format!("target.{triple}.cef_dll_wrapper");
+    vec![
+        format!("{key}.rustc-link-search={search}"),
+        format!("{key}.rustc-link-lib={link}"),
+        format!("{key}.CEF_DIR={dir}"),
+    ]
+}
+
 /// The triple Cargo builds for by default, as reported by the active toolchain.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 fn host_triple() -> Result<String> {
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
 
@@ -180,7 +241,7 @@ mod tests {
     #[test]
     fn windows_override_links_the_import_library() {
         let triple = "x86_64-pc-windows-msvc";
-        let root = r"C:\Users\me\AppData\Local\kurogane\cef\150.0.10";
+        let root = r"C:\Users\me\AppData\Local\kurogane\cef\1.2.3";
         let entries = override_config(triple, root);
 
         assert_eq!(
@@ -207,6 +268,60 @@ mod tests {
         assert_eq!(
             override_field(&override_config(triple, root)[2], triple, "CEF_DIR"),
             toml::Value::from(root)
+        );
+    }
+
+    #[test]
+    fn macos_override_links_the_shared_wrapper_archive() {
+        let triple = "aarch64-apple-darwin";
+        let root = "/opt/cef";
+        let wrapper = "/var/cache/kurogane/wrapper/dist";
+        let entries = macos_override_config(triple, root, wrapper);
+
+        assert_eq!(
+            override_field(&entries[0], triple, "rustc-link-search"),
+            toml::Value::Array(vec![
+                format!("native={root}").into(),
+                format!("native={wrapper}").into(),
+            ]),
+            "the shared archive is found alongside the CEF root"
+        );
+        assert_eq!(
+            override_field(&entries[1], triple, "rustc-link-lib"),
+            toml::Value::Array(vec![
+                "framework=AppKit".into(),
+                "static=cef_dll_wrapper".into(),
+            ]),
+            "macOS links the wrapper statically; the framework is loaded at runtime"
+        );
+        assert_eq!(
+            override_field(&entries[2], triple, "CEF_DIR"),
+            toml::Value::from(root)
+        );
+    }
+
+    #[test]
+    fn macos_override_never_links_libcef() {
+        let entries = macos_override_config("aarch64-apple-darwin", "/opt/cef", "/cache");
+
+        assert!(
+            !entries.iter().any(|entry| entry.contains("\"cef\"")),
+            "no libcef.dylib exists to link; CEF is dlopened by the wrapper's loader"
+        );
+    }
+
+    #[test]
+    fn every_configuration_entry_is_introduced_by_its_own_flag() {
+        let args = config_args(vec!["a.b=1".into(), "c.d=2".into()]);
+
+        assert_eq!(
+            args,
+            [
+                OsString::from("--config"),
+                OsString::from("a.b=1"),
+                OsString::from("--config"),
+                OsString::from("c.d=2"),
+            ]
         );
     }
 
