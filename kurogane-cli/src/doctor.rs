@@ -20,6 +20,14 @@ struct ToolCheck {
     hint: &'static str,
 }
 
+/// The tools a CEF build needs on the running host.
+///
+/// `cef-dll-sys` compiles `libcef_dll_wrapper` through CMake's Ninja generator
+/// on Windows and macOS. Its Linux branch only stages the runtime and emits
+/// link directives, so neither tool is involved there.
+///
+/// macOS needs both for Kurogane's own shared wrapper build as well,
+/// see [`crate::platform`].
 fn required_tools() -> Vec<ToolCheck> {
     if cfg!(windows) {
         vec![
@@ -51,20 +59,18 @@ fn required_tools() -> Vec<ToolCheck> {
                 cmd: "cmake",
                 hint: "Install CMake",
             },
+            ToolCheck {
+                name: "Ninja",
+                cmd: "ninja",
+                hint: "Install Ninja build system",
+            },
         ]
     } else {
-        vec![
-            ToolCheck {
-                name: "C compiler (cc)",
-                cmd: "cc",
-                hint: "Install build-essential or your distro's compiler toolchain",
-            },
-            ToolCheck {
-                name: "CMake",
-                cmd: "cmake",
-                hint: "Install CMake",
-            },
-        ]
+        vec![ToolCheck {
+            name: "C compiler (cc)",
+            cmd: "cc",
+            hint: "Install build-essential or your distro's compiler toolchain",
+        }]
     }
 }
 
