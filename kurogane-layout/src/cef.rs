@@ -556,9 +556,9 @@ mod tests {
 
     #[test]
     fn parses_official_archive_name() {
-        let name = "cef_binary_131.3.5+g6a8d2b7+chromium-131.0.6778.204_linux64_minimal.tar.bz2";
+        let name = "cef_binary_1.2.3+g6a8d2b7+chromium-131.0.6778.204_linux64_minimal.tar.bz2";
         let (cef, chromium, platform) = parse_archive_name(name).unwrap();
-        assert_eq!(cef, "131.3.5+g6a8d2b7");
+        assert_eq!(cef, "1.2.3+g6a8d2b7");
         assert_eq!(chromium.as_deref(), Some("131.0.6778.204"));
         assert_eq!(platform.as_deref(), Some("linux64"));
     }
@@ -566,20 +566,20 @@ mod tests {
     #[test]
     fn rejects_non_archive_names() {
         assert!(parse_archive_name("random.tar.bz2").is_none());
-        assert!(parse_archive_name("cef_binary_131.3.5_linux64_minimal.zip").is_none());
+        assert!(parse_archive_name("cef_binary_1.2.3_linux64_minimal.zip").is_none());
     }
 
     #[test]
     fn version_match_accepts_full_and_prefix() {
         let p = CefProvenance {
-            cef_version: "131.3.5+g6a8d2b7".into(),
+            cef_version: "1.2.3+g6a8d2b7".into(),
             chromium_version: None,
             platform: Some("linux64".into()),
             distribution: "minimal".into(),
             artifact: "x.tar.bz2".into(),
         };
-        assert!(p.matches_version("131.3.5"));
-        assert!(p.matches_version("131.3.5+g6a8d2b7"));
+        assert!(p.matches_version("1.2.3"));
+        assert!(p.matches_version("1.2.3+g6a8d2b7"));
         assert!(!p.matches_version("127.1.1"));
         assert!(!p.matches_version("131.3"));
     }
@@ -684,7 +684,7 @@ mod tests {
         )
         .unwrap();
         fs::write(
-            dist.join("cef_binary_150.0.10_linux64_minimal.tar.bz2"),
+            dist.join("cef_binary_1.2.3_linux64_minimal.tar.bz2"),
             "100MB of archive",
         )
         .unwrap();
@@ -695,7 +695,7 @@ mod tests {
         assert!(!dest.join("archive.json").exists());
         assert!(
             !dest
-                .join("cef_binary_150.0.10_linux64_minimal.tar.bz2")
+                .join("cef_binary_1.2.3_linux64_minimal.tar.bz2")
                 .exists()
         );
         assert!(
@@ -864,7 +864,7 @@ mod tests {
         crate::test_fixtures::cef_runtime(&fake); // looks like CEF but has no archive.json
 
         let err = resolve_cef(
-            "131.3.5",
+            "1.2.3",
             || Some(fake.to_string_lossy().into_owned()),
             |_| panic!("managed lookup must not run when override is set"),
         )
@@ -884,7 +884,7 @@ mod tests {
         .unwrap();
 
         let err = resolve_cef(
-            "131.3.5",
+            "1.2.3",
             || Some(fake.to_string_lossy().into_owned()),
             |_| panic!("managed lookup must not run when override is set"),
         )
@@ -899,7 +899,7 @@ mod tests {
         let fake = crate::test_fixtures::cef_runtime(&dir.path().join("dev-cef"));
         let platform = current_platform_name().unwrap_or("linux64");
         let archive_name = format!(
-            "cef_binary_131.3.5+g6a8d2b7+chromium-131.0.6778.204_{platform}_minimal.tar.bz2"
+            "cef_binary_1.2.3+g6a8d2b7+chromium-131.0.6778.204_{platform}_minimal.tar.bz2"
         );
         fs::write(
             fake.join("archive.json"),
@@ -908,7 +908,7 @@ mod tests {
         .unwrap();
 
         let resolved = resolve_cef(
-            "131.3.5",
+            "1.2.3",
             || Some(fake.to_string_lossy().into_owned()),
             |_| panic!("managed lookup must not run when override is set"),
         )
@@ -925,7 +925,7 @@ mod tests {
         let managed = crate::test_fixtures::cef_runtime(&dir.join("managed"));
         let platform = current_platform_name().unwrap_or("linux64");
         let archive_name = format!(
-            "cef_binary_131.3.5+g6a8d2b7+chromium-131.0.6778.204_{platform}_minimal.tar.bz2"
+            "cef_binary_1.2.3+g6a8d2b7+chromium-131.0.6778.204_{platform}_minimal.tar.bz2"
         );
         fs::write(
             managed.join("archive.json"),
@@ -940,7 +940,7 @@ mod tests {
         let dir = tmp();
         let managed = managed_provenance_fixture(dir.path());
 
-        let resolved = resolve_cef("131.3.5", || None, |_| Some(managed.clone())).unwrap();
+        let resolved = resolve_cef("1.2.3", || None, |_| Some(managed.clone())).unwrap();
 
         assert_eq!(resolved.source, CefSource::ManagedCache);
         assert_eq!(resolved.root, managed);
@@ -952,7 +952,7 @@ mod tests {
         let dir = tmp();
         let managed = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
 
-        let err = resolve_cef("131.3.5", || None, |_| Some(managed.clone())).unwrap_err();
+        let err = resolve_cef("1.2.3", || None, |_| Some(managed.clone())).unwrap_err();
 
         assert!(
             matches!(err, CefError::UnverifiableManaged(ref p) if p == &managed),
@@ -983,7 +983,7 @@ mod tests {
             "linux64"
         };
         let archive_name = format!(
-            "cef_binary_131.3.5+g6a8d2b7+chromium-131.0.6778.204_{wrong_platform}_minimal.tar.bz2"
+            "cef_binary_1.2.3+g6a8d2b7+chromium-131.0.6778.204_{wrong_platform}_minimal.tar.bz2"
         );
         fs::write(
             managed.join("archive.json"),
@@ -991,7 +991,7 @@ mod tests {
         )
         .unwrap();
 
-        let err = resolve_cef("131.3.5", || None, |_| Some(managed.clone())).unwrap_err();
+        let err = resolve_cef("1.2.3", || None, |_| Some(managed.clone())).unwrap_err();
 
         assert!(
             matches!(err, CefError::PlatformMismatch { .. }),
@@ -1006,7 +1006,7 @@ mod tests {
         let managed_root = managed_provenance_fixture(&dir.path().join("mgr"));
 
         let resolved = resolve_cef(
-            "131.3.5",
+            "1.2.3",
             || Some(override_root.to_string_lossy().into_owned()),
             |_| Some(managed_root.clone()),
         )
@@ -1023,7 +1023,7 @@ mod tests {
         let missing = dir.path().join("does-not-exist");
 
         let err = resolve_cef(
-            "131.3.5",
+            "1.2.3",
             || Some(missing.to_string_lossy().into_owned()),
             |_| Some(managed_root.clone()),
         )
