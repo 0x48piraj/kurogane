@@ -72,13 +72,17 @@
               systemd
             ];
 
-          nativeBuildInputs = with pkgs; [
-            rustc
-            cargo
-            pkg-config
-            cmake
-            ninja
-          ];
+          nativeBuildInputs =
+            with pkgs;
+            [
+              rustc
+              cargo
+              pkg-config
+            ]
+            ++ lib.optionals stdenv.hostPlatform.isDarwin [
+              cmake
+              ninja
+            ];
         };
 
         cef = pkgs.callPackage ./nix/cef.nix { inherit cefVersion; };
