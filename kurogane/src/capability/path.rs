@@ -4,9 +4,9 @@
 //!   re-validates strings.
 //! - [`RelPath`]: a validated path beneath an allow root (empty = the root).
 //! - [`Key`]: the comparison form of a component. Case-folded on Windows;
-//!   case-, normalization- and ignorable-folded on macOS; raw bytes on Linux.
-//!   Each fold identifies at least the names the platform's filesystems treat
-//!   as one, so folding can only make a deny rule match more, never less.
+//!   case-, normalization- and ignorable-folded on macOS and Linux. Each fold
+//!   identifies at least the names the platform's filesystems treat as one,
+//!   so folding can only make a deny rule match more, never less.
 //!   Kernel paths are always built from raw names, never from keys.
 //! - [`Location`]: an absolute path as keys, used to compare roots, requests
 //!   and kernel-reported object locations.
@@ -32,10 +32,10 @@ impl Key {
     }
 }
 
-/// Windows filesystems compare names through an upcase table built from
-/// Unicode simple uppercase mappings. A char whose uppercase is several chars
-/// (`ß` to `SS`) has no simple mapping and stays as is, like NTFS. Unpaired
-/// surrogates keep their WTF-8 encoding.
+/// Normalizes a Windows path component using NTFS simple uppercase folding semantics.
+///
+/// Characters without a 1:1 simple uppercase mapping (e.g., `ß`) remain unmodified.
+/// Unpaired surrogates are preserved as 3-byte WTF-8 sequences.
 #[cfg(windows)]
 pub(crate) fn fold(component: &OsStr) -> Vec<u8> {
     use std::os::windows::ffi::OsStrExt;
@@ -65,13 +65,19 @@ pub(crate) fn fold(component: &OsStr) -> Vec<u8> {
     out
 }
 
-/// APFS and HFS+ volumes are case- and normalization-insensitive by default,
-/// and HFS+ also ignores a few invisible code points. The fold is a canonical
-/// caseless match (NFD, then upper and lower case, then NFD) with those code
-/// points removed: two spellings the filesystem treats as one name always
-/// fold equal, so the deny check never depends on how `F_GETPATH` spells a
-/// name. Names that are not UTF-8 (which APFS rejects) stay as they are.
-#[cfg(target_os = "macos")]
+/// Folds a path component for filesystem name matching.
+///
+/// APFS and HFS+ are case- and normalization-insensitive by default. Linux
+/// casefolded directories have the same property. The fold uses NFD
+/// normalization, Unicode case conversion and removal of filesystem-ignored
+/// code points.
+///
+/// Names that the filesystem treats as equal fold to the same bytes. In a
+/// case-sensitive directory, the fold also makes names differing only in case
+/// compare equal.
+///
+/// Non-UTF-8 names are returned unchanged.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn fold(component: &OsStr) -> Vec<u8> {
     use unicode_normalization::UnicodeNormalization;
 
@@ -81,19 +87,39 @@ pub(crate) fn fold(component: &OsStr) -> Vec<u8> {
     text.nfd()
         .flat_map(char::to_uppercase)
         .flat_map(char::to_lowercase)
-        .filter(|&c| !hfs_ignorable(c))
+        .filter(|&c| !ignorable(c))
         .nfd()
         .collect::<String>()
         .into_bytes()
 }
 
-/// Code points HFS+ ignores when comparing names.
-#[cfg(target_os = "macos")]
-fn hfs_ignorable(c: char) -> bool {
-    matches!(c, '\u{200C}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{206A}'..='\u{206F}' | '\u{FEFF}')
+/// Returns `true` if `c` is a Unicode `Default_Ignorable_Code_Point` stripped during
+/// filename normalization on Linux casefold (`chattr +F`) and macOS (APFS/HFS+).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn ignorable(c: char) -> bool {
+    matches!(
+        c,
+        '\u{AD}'
+            | '\u{34F}'
+            | '\u{61C}'
+            | '\u{115F}'..='\u{1160}'
+            | '\u{17B4}'..='\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FEFF}'
+            | '\u{FFA0}'
+            | '\u{FFF0}'..='\u{FFF8}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0000}'..='\u{E0FFF}'
+    )
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub(crate) fn fold(component: &OsStr) -> Vec<u8> {
     component.as_encoded_bytes().to_vec()
 }
@@ -123,11 +149,12 @@ pub(crate) fn unfold(folded: char) -> impl Iterator<Item = char> {
     std::iter::once(folded).chain(inverse.get(&folded).into_iter().flatten().copied())
 }
 
-/// On macOS a character may fold to several (`É` to `e` + U+0301), so every
-/// character whose fold *starts with* `folded` is included: a class naming
-/// `É` then matches the `e` it decomposes to, and the combining mark after
-/// it is absorbed by the glob matcher. Over-matching only denies more.
-#[cfg(target_os = "macos")]
+/// Yields `folded` and all Unicode code points whose normalized fold begins with `folded`.
+///
+/// Inverts [`fold`] to map decomposed lead characters (e.g., `É` to `e` + U+0301) back to
+/// their source characters for path pattern matching. Matching lead characters is
+/// intentionally conservative; over-matching only denies more.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn unfold(folded: char) -> impl Iterator<Item = char> {
     use std::collections::HashMap;
     use std::sync::OnceLock;
@@ -152,7 +179,7 @@ pub(crate) fn unfold(folded: char) -> impl Iterator<Item = char> {
     std::iter::once(folded).chain(inverse.get(&folded).into_iter().flatten().copied())
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub(crate) fn unfold(folded: char) -> impl Iterator<Item = char> {
     std::iter::once(folded)
 }
@@ -581,15 +608,9 @@ mod tests {
         assert_eq!(a, b);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn linux_keys_are_case_sensitive() {
-        assert_ne!(Key::of(OsStr::new("Secret")), Key::of(OsStr::new("SECRET")));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn macos_keys_fold_case_normalization_and_ignorables() {
+    fn keys_fold_case_normalization_and_ignorables() {
         let key = |s: &str| Key::of(OsStr::new(s));
         assert_eq!(key("Secret"), key("SECRET"));
         assert_eq!(key("caf\u{e9}"), key("cafe\u{301}"), "NFC and NFD");
@@ -599,6 +620,12 @@ mod tests {
             "case and normalization"
         );
         assert_eq!(key("sec\u{200c}ret"), key("secret"), "HFS+ ignorable");
+        assert_eq!(key("se\u{ad}cret"), key("secret"), "casefold ignorable");
+        assert_eq!(
+            key("\u{2764}\u{fe0f}.txt"),
+            key("\u{2764}.txt"),
+            "variation selector"
+        );
         assert_eq!(key("stra\u{df}e"), key("STRASSE"), "full case folding");
         assert_ne!(key("secret"), key("secrets"));
     }

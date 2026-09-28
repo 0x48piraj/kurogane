@@ -11,12 +11,12 @@
 //! which `?`, `*` and negated classes match and no literal does.
 //!
 //! Case follows the platform: literals are compared through the same fold as
-//! [`Key`] values (case-insensitive on Windows); class ranges keep the
-//! characters the pattern names and match a folded name character through
-//! every character that folds to it. Patterns are relative to each allow
-//! root, use `/` as the separator on every platform and use `\` to escape the
-//! next character. A pattern matching a directory denies its entire subtree
-//! ([`Glob::covers`]).
+//! [`Key`] values (case-insensitive on Windows, macOS and Linux); class
+//! ranges keep the characters the pattern names and match a folded name
+//! character through every character that folds to it. Patterns are relative
+//! to each allow root, use `/` as the separator on every platform and use `\`
+//! to escape the next character. A pattern matching a directory denies its
+//! entire subtree ([`Glob::covers`]).
 //!
 //! Globs only ever deny, so wherever matching cannot be exact it errs toward
 //! matching more. Matching is a state-set simulation, linear in the path and
@@ -573,16 +573,9 @@ mod tests {
         assert!(!covers("caf?.txt", "cafee.txt"), "still one base character");
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn linux_matching_is_case_sensitive() {
-        assert!(!covers("secret", "SECRET"));
-        assert!(!covers("[a-c].txt", "B.txt"));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn macos_matching_folds_case_and_normalization() {
+    fn matching_folds_case_and_normalization() {
         assert!(covers("*.key", "SECRET.KEY"));
         assert!(
             covers("caf\u{e9}.txt", "CAFE\u{301}.TXT"),

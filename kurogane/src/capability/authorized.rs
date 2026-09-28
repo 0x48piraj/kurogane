@@ -1248,9 +1248,9 @@ mod tests {
         assert_eq!(auth.size(&linked).unwrap(), 7);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn macos_case_and_normalization_variants_hit_deny_rules() {
+    fn case_and_normalization_variants_hit_deny_rules() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("root");
         std::fs::create_dir_all(root.join("Secrets")).unwrap();
@@ -1265,14 +1265,16 @@ mod tests {
         builder.grant(origin(), scope, FsAccess::ALL);
         let fs = builder.build().unwrap();
         let auth = fs.authorize(&origin()).unwrap();
-        // The default volumes fold case and normalization; so do the keys,
-        // whatever the kernel reports for the opened object
+        // The default macOS volumes and casefolded Linux directories fold
+        // case, normalization and ignorables; so do the keys, whatever the
+        // kernel reports for the opened object
         for variant in [
             root.join("SECRETS/key.txt"),
             root.join("secrets/KEY.TXT"),
             root.join("cafe\u{301}.txt"),
             root.join("CAF\u{c9}.TXT"),
             root.join("sec\u{200c}rets/key.txt"),
+            root.join("se\u{ad}crets/key.txt"),
         ] {
             assert_eq!(
                 denial(auth.read_file(&variant)),
