@@ -7,11 +7,13 @@ use cef::*;
 use std::sync::Arc;
 use crate::app::ClientAppRendererDelegate;
 use crate::debug;
+use crate::ipc::browser_state::ErrorCode;
 use crate::ipc::envelope::*;
 use crate::ipc::transport::message::{build_message, build_message_parts, extract_message};
 use crate::ipc::router;
 use crate::ipc::renderer_registry::StreamSink;
 use crate::ipc::renderer_state::state;
+use crate::ipc::utils::rejection;
 use crate::ipc::FrameId;
 use crate::bridge;
 
@@ -126,6 +128,24 @@ wrap_render_process_handler! {
                 return;
             };
 
+            // A bridge missing a function is not installed at all
+            let functions = [
+                // Accepts a string or ArrayBuffer payload
+                ("invoke", IpcInvokeHandler::new()),
+                // Cancels a pending promise
+                ("cancel", IpcCancelHandler::new()),
+                ("on", IpcOnHandler::new()),
+                ("off", IpcOffHandler::new()),
+                ("openStream", IpcOpenStreamHandler::new()),
+                ("writeStream", IpcWriteStreamHandler::new()),
+                ("endStream", IpcEndStreamHandler::new()),
+            ];
+            for (name, handler) in functions {
+                if !set_function(&core, name, handler) {
+                    return;
+                }
+            }
+
             // Read before any page script runs: the document's own view of
             // its origin. A sandboxed document's (iframe `sandbox`, CSP
             // `sandbox`) is "null", whatever its URL; its messages then act
@@ -135,94 +155,6 @@ wrap_render_process_handler! {
                 Some(origin) if origin.is_string() != 0 && v8_to_string(&origin) != "null"
             );
             state().context_created(context.clone(), FrameId::of(frame), opaque);
-
-            // Invoke handler (accepts string or ArrayBuffer payload)
-            let mut handler = IpcInvokeHandler::new();
-            let mut invoke = v8_value_create_function(
-                Some(&CefString::from("invoke")),
-                Some(&mut handler),
-            ).unwrap();
-
-            core.set_value_bykey(
-                Some(&CefString::from("invoke")),
-                Some(&mut invoke),
-                V8Propertyattribute::default(),
-            );
-
-            // Cancel pending promise
-            let mut cancel_handler = IpcCancelHandler::new();
-            let mut cancel = v8_value_create_function(
-                Some(&CefString::from("cancel")),
-                Some(&mut cancel_handler),
-            ).unwrap();
-
-            core.set_value_bykey(
-                Some(&CefString::from("cancel")),
-                Some(&mut cancel),
-                V8Propertyattribute::default(),
-            );
-
-            // Event subscription (on/off)
-            let mut on_handler = IpcOnHandler::new();
-            let mut on = v8_value_create_function(
-                Some(&CefString::from("on")),
-                Some(&mut on_handler),
-            ).unwrap();
-
-            core.set_value_bykey(
-                Some(&CefString::from("on")),
-                Some(&mut on),
-                V8Propertyattribute::default(),
-            );
-
-            let mut off_handler = IpcOffHandler::new();
-            let mut off = v8_value_create_function(
-                Some(&CefString::from("off")),
-                Some(&mut off_handler),
-            ).unwrap();
-
-            core.set_value_bykey(
-                Some(&CefString::from("off")),
-                Some(&mut off),
-                V8Propertyattribute::default(),
-            );
-
-            // Stream handlers
-            let mut open_stream_handler = IpcOpenStreamHandler::new();
-            let mut open_stream = v8_value_create_function(
-                Some(&CefString::from("openStream")),
-                Some(&mut open_stream_handler),
-            ).unwrap();
-
-            core.set_value_bykey(
-                Some(&CefString::from("openStream")),
-                Some(&mut open_stream),
-                V8Propertyattribute::default(),
-            );
-
-            let mut write_stream_handler = IpcWriteStreamHandler::new();
-            let mut write_stream = v8_value_create_function(
-                Some(&CefString::from("writeStream")),
-                Some(&mut write_stream_handler),
-            ).unwrap();
-
-            core.set_value_bykey(
-                Some(&CefString::from("writeStream")),
-                Some(&mut write_stream),
-                V8Propertyattribute::default(),
-            );
-
-            let mut end_stream_handler = IpcEndStreamHandler::new();
-            let mut end_stream = v8_value_create_function(
-                Some(&CefString::from("endStream")),
-                Some(&mut end_stream_handler),
-            ).unwrap();
-
-            core.set_value_bykey(
-                Some(&CefString::from("endStream")),
-                Some(&mut end_stream),
-                V8Propertyattribute::default(),
-            );
 
             global.set_value_bykey(
                 Some(&CefString::from("core")),
@@ -297,7 +229,7 @@ wrap_render_process_handler! {
             frame: Option<&mut Frame>,
             node: Option<&mut Domnode>,
         ) {
-            if node.is_none() {
+            let Some(node_data) = node.as_ref() else {
                 let browser_ref = browser.as_deref();
                 let frame_ref = frame.as_deref();
 
@@ -305,9 +237,7 @@ wrap_render_process_handler! {
                     delegate.on_focused_node_changed(browser_ref, frame_ref, None);
                 }
                 return;
-            }
-
-            let node_data = node.as_ref().unwrap();
+            };
             let is_editable = node_data.is_editable() != 0;
             let is_form = node_data.is_form_control_element() != 0;
 
@@ -353,7 +283,7 @@ wrap_render_process_handler! {
             }
 
             if source_process != ProcessId::BROWSER { return 0; }
-            let msg = message.unwrap();
+            let Some(msg) = message else { return 0; };
 
             let name: CefString = (&msg.name()).into();
             if !name.to_string().starts_with("kurogane_") { return 0; }
@@ -396,6 +326,21 @@ wrap_render_process_handler! {
 //
 // Invoke handler (accepts string or ArrayBuffer payload)
 //
+
+/// Sets `handler` on `object` as the function `name`. Returns false when V8
+/// cannot create the function.
+fn set_function(object: &V8Value, name: &str, mut handler: V8Handler) -> bool {
+    let name = CefString::from(name);
+    let Some(mut function) = v8_value_create_function(Some(&name), Some(&mut handler)) else {
+        return false;
+    };
+    object.set_value_bykey(
+        Some(&name),
+        Some(&mut function),
+        V8Propertyattribute::default(),
+    );
+    true
+}
 
 wrap_v8_handler! {
     pub struct IpcInvokeHandler;
@@ -454,9 +399,9 @@ wrap_v8_handler! {
             };
 
             // Detect payload type from second argument
-            let is_binary = args.get(1)
+            let binary = args.get(1)
                 .and_then(|v| v.as_ref())
-                .is_some_and(|v| v.is_array_buffer() != 0);
+                .filter(|v| v.is_array_buffer() != 0);
 
             let Some(cmd_header) = encode_cmd_header(&cmd) else {
                 if let Some(exc) = exception {
@@ -483,17 +428,20 @@ wrap_v8_handler! {
 
             // Expose the id on the promise for JS-side cancellation
             let id_key = CefString::from("__kurogane_id");
-            let mut id_value = v8_value_create_int(id).unwrap();
+            let Some(mut id_value) = v8_value_create_int(id) else {
+                state().forget(id);
+                if let Some(exc) = exception { *exc = CefString::from("invoke: cannot create the call id"); }
+                return 0;
+            };
             promise_for_retval.set_value_bykey(
                 Some(&id_key),
                 Some(&mut id_value),
                 V8Propertyattribute::default(),
             );
 
-            debug!("[IPC Renderer] JS invoke: '{}' (id={}, binary={})", cmd, id, is_binary);
+            debug!("[IPC Renderer] JS invoke: '{}' (id={}, binary={})", cmd, id, binary.is_some());
 
-            if is_binary {
-                let buffer = args.get(1).unwrap().as_ref().unwrap();
+            if let Some(buffer) = binary {
                 let ptr = buffer.array_buffer_data();
                 let len = buffer.array_buffer_byte_length();
 
@@ -521,7 +469,7 @@ wrap_v8_handler! {
                     } else {
                         build_failed = true;
                         state().forget(id);
-                        let reject_msg = CefString::from("-1: Failed to build IPC message");
+                        let reject_msg = rejection(ErrorCode::Buffer.wire(), "Failed to build IPC message");
                         promise.reject_promise(Some(&reject_msg));
                     }
                 });
@@ -551,7 +499,7 @@ wrap_v8_handler! {
                     frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
                 } else {
                     state().forget(id);
-                    let reject_msg = CefString::from("-1: Failed to build IPC message");
+                    let reject_msg = rejection(ErrorCode::Buffer.wire(), "Failed to build IPC message");
                     promise.reject_promise(Some(&reject_msg));
                     if let Some(ret) = retval { *ret = Some(promise_for_retval); }
                     return 1;
@@ -639,7 +587,7 @@ wrap_v8_handler! {
                 debug!("[IPC Renderer] cancel: failed to enter V8 context for id={}", id);
                 return 1;
             }
-            let reject_msg = CefString::from("0: Canceled");
+            let reject_msg = rejection(ErrorCode::Handler.wire(), "Canceled");
             promise.reject_promise(Some(&reject_msg));
             owner.exit();
             if let Some(ret) = retval {
@@ -944,7 +892,7 @@ wrap_v8_handler! {
             };
             if !sent {
                 state().forget(stream_id);
-                let reject_msg = CefString::from("-1: Failed to build IPC message");
+                let reject_msg = rejection(ErrorCode::Buffer.wire(), "Failed to build IPC message");
                 promise.reject_promise(Some(&reject_msg));
             }
 

@@ -9,7 +9,7 @@ use cef::*;
 use crate::debug;
 use crate::ipc::envelope::*;
 use crate::ipc::renderer_state::state;
-use crate::ipc::utils::create_array_buffer_from_bytes;
+use crate::ipc::utils::{create_array_buffer_from_bytes, rejection};
 use crate::ipc::FrameId;
 
 /// Handle a stream message arriving from the browser (renderer-side dispatch).
@@ -89,8 +89,7 @@ fn on_error(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
         if context.enter() == 0 {
             return true;
         }
-        // "{code}: {message}", the form the bridge's toError parses
-        let text = CefString::from(format!("{code}: {message}").as_str());
+        let text = rejection(code, &message);
         promise.reject_promise(Some(&text));
         context.exit();
         return true;

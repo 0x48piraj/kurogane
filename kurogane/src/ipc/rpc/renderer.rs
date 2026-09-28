@@ -1,9 +1,10 @@
 use cef::*;
 
 use crate::debug;
+use crate::ipc::browser_state::ErrorCode;
 use crate::ipc::envelope::*;
 use crate::ipc::renderer_state::state;
-use crate::ipc::utils::create_array_buffer_from_bytes;
+use crate::ipc::utils::{create_array_buffer_from_bytes, rejection};
 use crate::ipc::FrameId;
 
 /// Handle an RPC response arriving from the browser (renderer-side dispatch).
@@ -32,7 +33,7 @@ pub fn handle_rpc_renderer(frame: &mut Frame, envelope: &Envelope, payload: &[u8
                 promise.resolve_promise(Some(&mut buffer));
             }
             None => {
-                let message = CefString::from("-2: Failed to create ArrayBuffer");
+                let message = rejection(ErrorCode::Buffer.wire(), "Failed to create ArrayBuffer");
                 promise.reject_promise(Some(&message));
             }
         },
@@ -42,10 +43,8 @@ pub fn handle_rpc_renderer(frame: &mut Frame, envelope: &Envelope, payload: &[u8
             promise.resolve_promise(value.as_mut());
         }
         _ => {
-            // The "{code}: {message}" form of IpcError's Display, which the
-            // bridge's toError parses
             let (code, message) = decode_error_payload(payload);
-            let text = CefString::from(format!("{code}: {message}").as_str());
+            let text = rejection(code, &message);
             promise.reject_promise(Some(&text));
         }
     }

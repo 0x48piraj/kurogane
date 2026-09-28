@@ -7,6 +7,7 @@ use cef::*;
 use crate::debug;
 use crate::ipc::envelope::*;
 use crate::ipc::renderer_state::state;
+use crate::ipc::utils::rejection;
 use crate::ipc::FrameId;
 
 /// Handle an event message arriving from the browser (renderer-side dispatch).
@@ -39,9 +40,7 @@ fn on_refused(addressed: &FrameId, envelope: &Envelope, payload: &[u8]) -> bool 
     if context.enter() == 0 {
         return true;
     }
-    let text = v8_value_create_string(Some(&CefString::from(
-        format!("{code}: {message}").as_str(),
-    )));
+    let text = v8_value_create_string(Some(&rejection(code, &message)));
     on_error.execute_function(None, Some(&[text]));
     context.exit();
     true

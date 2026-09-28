@@ -177,14 +177,11 @@ wrap_scheme_handler_factory! {
             request: Option<&mut Request>,
         ) -> Option<ResourceHandler> {
 
-            let request = request.unwrap();
+            let request = request?;
             let raw_url = CefString::from(&request.url()).to_string();
 
-            // Resolve relative to CWD
-            let root = self.root.clone();
-
             let (data, mime, status) = match extract_rel_path(&raw_url)
-                .and_then(|rel| resolve_asset(&root, &rel))
+                .and_then(|rel| resolve_asset(&self.root, &rel))
             {
                 Ok(asset) => {
                     debug!(
@@ -358,7 +355,9 @@ wrap_resource_handler! {
             response_length: Option<&mut i64>,
             _redirect_url: Option<&mut CefString>,
         ) {
-            let response = response.unwrap();
+            let Some(response) = response else {
+                return;
+            };
 
             let data_len = self.data.len() as i64;
 

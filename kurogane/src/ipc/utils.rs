@@ -1,5 +1,11 @@
 use cef::*;
 
+/// Formats a promise rejection as `"{code}: {message}"`, the form the
+/// bridge's `toError` parses into an `Error` with a numeric `.code`.
+pub fn rejection(code: i32, message: &str) -> CefString {
+    CefString::from(format!("{code}: {message}").as_str())
+}
+
 /// Create a V8 ArrayBuffer by copying bytes into a new backing store.
 ///
 /// The returned ArrayBuffer is independent of 'payload'. Empty payloads use
