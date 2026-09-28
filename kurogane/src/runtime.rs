@@ -12,7 +12,7 @@ use crate::window_registry::{WindowRegistry, WindowId, WindowMetadata};
 use crate::window::{KuroganeWindowDelegate, KuroganeBrowserViewDelegate};
 use kurogane_layout::{detect_cef_root_with_version, validate_cef_runtime, profile_dir};
 use crate::ipc::IpcRouter;
-use crate::spec::{RuntimeSpec, SandboxMode};
+use crate::spec::{RuntimeMode, RuntimeSpec, SandboxMode};
 use crate::debug;
 
 /// Public entry point for launching a CEF application.
@@ -238,20 +238,28 @@ pub(crate) fn close_all_browsers_and_windows(
 ) {
     // Close all browsers first; in Views mode this cascades to close their parent windows
     // Embedded mode has no Views windows
-    let browsers: Vec<Browser> = {
-        let reg = browser_registry.lock().unwrap();
-        reg.iter().map(|(_, s)| s.browser.clone()).collect()
-    };
-    for browser in browsers {
-        if let Some(host) = browser.host() {
-            debug!("closing browser cef_id={}", browser.identifier());
-            host.close_browser(false as i32);
-        }
-    }
+    close_browsers(browser_registry, false);
 
     // Close any remaining Views windows not closed by the browser cascade
     let wreg = window_registry.lock().unwrap();
     wreg.close_all_windows();
+}
+
+/// Asks every live browser to close.
+///
+/// CEF allows `BrowserHost` calls from any thread of the browser process.
+fn close_browsers(browser_registry: &Mutex<BrowserRegistry>, force: bool) {
+    let browsers: Vec<Browser> = {
+        let reg = browser_registry.lock().unwrap();
+        reg.iter().map(|(_, s)| s.browser.clone()).collect()
+    };
+
+    for browser in browsers {
+        if let Some(host) = browser.host() {
+            debug!("closing browser cef_id={}", browser.identifier());
+            host.close_browser(force as i32);
+        }
+    }
 }
 
 /// Returns whether this is the thread CEF's UI work must run on.
@@ -495,16 +503,7 @@ impl AppHandle {
 
     /// Close all live browser instances.
     pub fn close_all_browsers(&self, force: bool) {
-        let browsers: Vec<Browser> = {
-            let reg = self.services().browser_registry.lock().unwrap();
-            reg.iter().map(|(_, s)| s.browser.clone()).collect()
-        };
-        for browser in browsers {
-            debug!("calling close_browser on cef_id={}", browser.identifier());
-            if let Some(host) = browser.host() {
-                host.close_browser(force as i32);
-            }
-        }
+        close_browsers(&self.services().browser_registry, force);
     }
 
     /// Look up the window that hosts a given browser.
@@ -594,26 +593,19 @@ impl Drop for AppInstance {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn native_to_cef_window(handle: *mut std::ffi::c_void) -> cef_window_handle_t {
-    let result;
+    cef::sys::HWND(handle.cast())
+}
 
-    #[cfg(target_os = "windows")]
-    {
-        use cef::sys::HWND;
-        result = HWND(handle as *mut cef::sys::HWND__);
-    }
+#[cfg(target_os = "macos")]
+fn native_to_cef_window(handle: *mut std::ffi::c_void) -> cef_window_handle_t {
+    handle as cef_window_handle_t
+}
 
-    #[cfg(target_os = "macos")]
-    {
-        result = handle as cef_window_handle_t;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        result = handle as usize as cef_window_handle_t;
-    }
-
-    result
+#[cfg(target_os = "linux")]
+fn native_to_cef_window(handle: *mut std::ffi::c_void) -> cef_window_handle_t {
+    handle as usize as cef_window_handle_t
 }
 
 pub struct BrowserHandle {
@@ -633,18 +625,27 @@ impl BrowserHandle {
         );
     }
 
+    /// Returns the browser this handle names, while it is open.
+    #[track_caller]
+    fn browser(&self) -> Option<Browser> {
+        self.assert_ui_thread();
+        let reg = self.browser_registry.lock().unwrap();
+        reg.get(self.id).map(|s| s.browser.clone())
+    }
+
+    /// Returns the host of the browser this handle names, while it is open.
+    #[track_caller]
+    fn host(&self) -> Option<BrowserHost> {
+        self.browser()?.host()
+    }
+
     pub fn id(&self) -> BrowserId {
         self.assert_ui_thread();
         self.id
     }
 
     pub fn close(&self, force: bool) {
-        self.assert_ui_thread();
-        let browser = {
-            let reg = self.browser_registry.lock().unwrap();
-            reg.get(self.id).map(|s| s.browser.clone())
-        };
-        if let Some(b) = browser {
+        if let Some(b) = self.browser() {
             debug!(
                 "close browser cef_id={} is_loading={}",
                 b.identifier(),
@@ -657,43 +658,20 @@ impl BrowserHandle {
     }
 
     pub fn notify_resized(&self) {
-        self.assert_ui_thread();
-        let browser = {
-            let reg = self.browser_registry.lock().unwrap();
-            reg.get(self.id).map(|s| s.browser.clone())
-        };
-        if let Some(b) = browser
-            && let Some(h) = b.host()
-        {
+        if let Some(h) = self.host() {
             h.was_resized();
         }
     }
 
     pub fn notify_move_or_resize_started(&self) {
-        self.assert_ui_thread();
-        let browser = {
-            let reg = self.browser_registry.lock().unwrap();
-            reg.get(self.id).map(|s| s.browser.clone())
-        };
-        if let Some(b) = browser
-            && let Some(h) = b.host()
-        {
+        if let Some(h) = self.host() {
             h.notify_move_or_resize_started();
         }
     }
 
     /// Navigate the main frame to the given URL.
     pub fn navigate(&self, url: &str) {
-        self.assert_ui_thread();
-
-        let browser = {
-            let reg = self.browser_registry.lock().unwrap();
-            reg.get(self.id).map(|s| s.browser.clone())
-        };
-
-        if let Some(b) = browser
-            && let Some(frame) = b.main_frame()
-        {
+        if let Some(frame) = self.browser().and_then(|b| b.main_frame()) {
             let url = CefString::from(url);
             frame.load_url(Some(&url));
         }
@@ -701,90 +679,50 @@ impl BrowserHandle {
 
     /// Reload the current page.
     pub fn reload(&self) {
-        self.assert_ui_thread();
-        let browser = {
-            let reg = self.browser_registry.lock().unwrap();
-            reg.get(self.id).map(|s| s.browser.clone())
-        };
-        if let Some(b) = browser {
+        if let Some(b) = self.browser() {
             b.reload();
         }
     }
 
     /// Reload the current page, ignoring cached content.
     pub fn reload_ignore_cache(&self) {
-        self.assert_ui_thread();
-        let browser = {
-            let reg = self.browser_registry.lock().unwrap();
-            reg.get(self.id).map(|s| s.browser.clone())
-        };
-        if let Some(b) = browser {
+        if let Some(b) = self.browser() {
             b.reload_ignore_cache();
         }
     }
 
     /// Navigate back in history, if possible.
     pub fn go_back(&self) {
-        self.assert_ui_thread();
-        let browser = {
-            let reg = self.browser_registry.lock().unwrap();
-            reg.get(self.id).map(|s| s.browser.clone())
-        };
-        if let Some(b) = browser {
+        if let Some(b) = self.browser() {
             b.go_back();
         }
     }
 
     /// Navigate forward in history, if possible.
     pub fn go_forward(&self) {
-        self.assert_ui_thread();
-        let browser = {
-            let reg = self.browser_registry.lock().unwrap();
-            reg.get(self.id).map(|s| s.browser.clone())
-        };
-        if let Some(b) = browser {
+        if let Some(b) = self.browser() {
             b.go_forward();
         }
     }
 
     /// Returns true if the browser can go back.
     pub fn can_go_back(&self) -> bool {
-        self.assert_ui_thread();
-        let browser = {
-            let reg = self.browser_registry.lock().unwrap();
-            reg.get(self.id).map(|s| s.browser.clone())
-        };
-        browser.map(|b| b.can_go_back() != 0).unwrap_or(false)
+        self.browser().is_some_and(|b| b.can_go_back() != 0)
     }
 
     /// Returns true if the browser can go forward.
     pub fn can_go_forward(&self) -> bool {
-        self.assert_ui_thread();
-        let browser = {
-            let reg = self.browser_registry.lock().unwrap();
-            reg.get(self.id).map(|s| s.browser.clone())
-        };
-        browser.map(|b| b.can_go_forward() != 0).unwrap_or(false)
+        self.browser().is_some_and(|b| b.can_go_forward() != 0)
     }
 
     /// Returns true if the browser is currently loading.
     pub fn is_loading(&self) -> bool {
-        self.assert_ui_thread();
-        let browser = {
-            let reg = self.browser_registry.lock().unwrap();
-            reg.get(self.id).map(|s| s.browser.clone())
-        };
-        browser.map(|b| b.is_loading() != 0).unwrap_or(false)
+        self.browser().is_some_and(|b| b.is_loading() != 0)
     }
 
     /// Returns the current URL of the main frame.
     pub fn url(&self) -> String {
-        self.assert_ui_thread();
-        let browser = {
-            let reg = self.browser_registry.lock().unwrap();
-            reg.get(self.id).map(|s| s.browser.clone())
-        };
-        browser
+        self.browser()
             .and_then(|b| b.main_frame())
             .map(|f| {
                 let c: CefString = (&f.url()).into();
@@ -795,16 +733,7 @@ impl BrowserHandle {
 
     /// Execute JavaScript in the main frame.
     pub fn execute_javascript(&self, code: &str, script_url: &str, start_line: i32) {
-        self.assert_ui_thread();
-
-        let browser = {
-            let reg = self.browser_registry.lock().unwrap();
-            reg.get(self.id).map(|s| s.browser.clone())
-        };
-
-        if let Some(b) = browser
-            && let Some(frame) = b.main_frame()
-        {
+        if let Some(frame) = self.browser().and_then(|b| b.main_frame()) {
             let code = CefString::from(code);
             let script_url = CefString::from(script_url);
 
@@ -814,43 +743,21 @@ impl BrowserHandle {
 
     /// Open DevTools for this browser.
     pub fn show_devtools(&self) {
-        self.assert_ui_thread();
-        let browser = {
-            let reg = self.browser_registry.lock().unwrap();
-            reg.get(self.id).map(|s| s.browser.clone())
-        };
-        if let Some(b) = browser
-            && let Some(h) = b.host()
-        {
+        if let Some(h) = self.host() {
             h.show_dev_tools(None, None, None, None);
         }
     }
 
     /// Close DevTools if open.
     pub fn close_devtools(&self) {
-        self.assert_ui_thread();
-        let browser = {
-            let reg = self.browser_registry.lock().unwrap();
-            reg.get(self.id).map(|s| s.browser.clone())
-        };
-        if let Some(b) = browser
-            && let Some(h) = b.host()
-        {
+        if let Some(h) = self.host() {
             h.close_dev_tools();
         }
     }
 
     /// Returns true if DevTools is currently open for this browser.
     pub fn has_devtools(&self) -> bool {
-        self.assert_ui_thread();
-        let browser = {
-            let reg = self.browser_registry.lock().unwrap();
-            reg.get(self.id).map(|s| s.browser.clone())
-        };
-        browser
-            .and_then(|b| b.host())
-            .map(|h| h.has_dev_tools() != 0)
-            .unwrap_or(false)
+        self.host().is_some_and(|h| h.has_dev_tools() != 0)
     }
 }
 
@@ -970,20 +877,7 @@ impl AppInstance {
         run_message_loop();
 
         debug!("Message loop exited");
-
-        if self
-            .handle
-            .inner
-            .cef_shutdown_called
-            .swap(true, Ordering::SeqCst)
-        {
-            debug!("CEF shutdown already performed");
-            return Ok(());
-        }
-
-        debug!("Shutting down CEF");
-        shutdown();
-        debug!("CEF shutdown complete");
+        self.shutdown();
 
         Ok(())
     }
@@ -992,6 +886,9 @@ impl AppInstance {
     ///
     /// Sets the shutdown signal and calls cef::shutdown() on the UI thread.
     /// Safe to call multiple times. Subsequent calls are no-ops.
+    ///
+    /// Unlike [`AppHandle::shutdown`], which only asks the message loop to
+    /// exit, this shuts CEF itself down.
     pub fn shutdown(&self) {
         if self
             .handle
@@ -1019,8 +916,8 @@ impl AppInstance {
     /// 'parent' must be a valid platform window handle ('HWND' on Windows,
     /// 'NSView' on macOS, or the corresponding native handle on Linux)
     ///
-    /// The runtime must have been started with Runtime::start_embedded,
-    /// and Runtime::pump must continue to be called regularly for
+    /// The runtime must have been started with App::start_embedded,
+    /// and AppInstance::pump must continue to be called regularly for
     /// Chromium to process events.
     ///
     /// Returns true if browser creation succeeded.
@@ -1038,7 +935,7 @@ impl AppInstance {
     /// Same as create_child_browser but accepts RequestContextSettings to control
     /// the cache partition, cookie persistence and accept language for this browser.
     ///
-    /// The runtime must have been started with RuntimeBootstrap::start_embedded.
+    /// The runtime must have been started with App::start_embedded.
     pub fn create_child_browser_with_request_context(
         &self,
         parent: *mut std::ffi::c_void,
@@ -1114,11 +1011,7 @@ impl AppInstance {
 /// application owns window creation and lifecycle management.
 ///
 /// Returns the initialized runtime state on success.
-fn initialize_cef(
-    spec: RuntimeSpec,
-    router: Arc<IpcRouter>,
-    embedded_mode: bool,
-) -> Result<RuntimeState, RuntimeError> {
+fn initialize_cef(spec: RuntimeSpec, router: Arc<IpcRouter>) -> Result<RuntimeState, RuntimeError> {
     #[cfg(target_os = "macos")]
     crate::platform::macos::init_ns_app(spec.sandbox_mode)?;
 
@@ -1193,7 +1086,7 @@ fn initialize_cef(
 
     // Only install Ctrl+C handler if CEF Views owns the window (non-embedded mode)
     // In embedded mode the host application manages its own lifecycle
-    if !embedded_mode {
+    if spec.mode == RuntimeMode::Views {
         debug!("Installing shutdown handler");
         install_ctrlc_handler(
             services.browser_registry.clone(),
@@ -1209,11 +1102,14 @@ fn initialize_cef(
 
 impl RuntimeBootstrap {
     /// Initialize CEF and return an AppInstance without entering a message loop.
+    ///
+    /// In [`RuntimeMode::Embedded`] the host application owns window creation
+    /// and lifecycle, so CEF Views creates no window.
     pub(crate) fn start(
         spec: RuntimeSpec,
         router: Arc<IpcRouter>,
     ) -> Result<AppInstance, RuntimeError> {
-        let state = initialize_cef(spec, router, false)?;
+        let state = initialize_cef(spec, router)?;
         let handle = AppHandle {
             inner: Arc::new(AppHandleInner {
                 services: state.services,
@@ -1221,25 +1117,7 @@ impl RuntimeBootstrap {
                 cef_shutdown_called: AtomicBool::new(false),
             }),
         };
-        Ok(AppInstance {
-            handle,
-            _ui_thread: PhantomData,
-        })
-    }
 
-    /// Initialize CEF in embedded mode (no window created by CEF Views)
-    pub(crate) fn start_embedded(
-        spec: RuntimeSpec,
-        router: Arc<IpcRouter>,
-    ) -> Result<AppInstance, RuntimeError> {
-        let state = initialize_cef(spec, router, true)?;
-        let handle = AppHandle {
-            inner: Arc::new(AppHandleInner {
-                services: state.services,
-                ui_thread_id: state.ui_thread_id,
-                cef_shutdown_called: AtomicBool::new(false),
-            }),
-        };
         Ok(AppInstance {
             handle,
             _ui_thread: PhantomData,

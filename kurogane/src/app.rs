@@ -767,9 +767,23 @@ impl App {
     ///
     /// [`RuntimeError::InvalidConfiguration`] lists every builder problem
     /// before anything starts; the other variants report startup failures.
-    pub fn build(mut self) -> Result<AppInstance, RuntimeError> {
+    pub fn build(self) -> Result<AppInstance, RuntimeError> {
+        self.launch(RuntimeMode::Views)
+    }
+
+    /// Starts the runtime in embedded mode.
+    ///
+    /// # Errors
+    ///
+    /// As [`App::build`].
+    pub fn start_embedded(self) -> Result<AppInstance, RuntimeError> {
+        self.launch(RuntimeMode::Embedded)
+    }
+
+    /// Checks the configuration, then starts the runtime in `mode`.
+    fn launch(mut self, mode: RuntimeMode) -> Result<AppInstance, RuntimeError> {
         self.check_configuration()?;
-        let resolver = self.resolver.take().expect("build called twice");
+        let resolver = self.resolver.take().expect("an App starts only once");
 
         let Self {
             source,
@@ -802,7 +816,7 @@ impl App {
         } = resolver::resolve_for_process(&source)?;
 
         let spec = RuntimeSpec {
-            mode: RuntimeMode::Views,
+            mode,
             sandbox_mode,
             start_url,
             asset_root,
@@ -820,67 +834,6 @@ impl App {
 
         let instance = RuntimeBootstrap::start(spec, router)?;
         // Populated before the message loop starts
-        resolver.resolve(instance.handle().clone());
-        Ok(instance)
-    }
-
-    /// Starts the runtime in embedded mode.
-    ///
-    /// # Errors
-    ///
-    /// As [`App::build`].
-    pub fn start_embedded(mut self) -> Result<AppInstance, RuntimeError> {
-        self.check_configuration()?;
-        let resolver = self.resolver.take().expect("start_embedded called twice");
-
-        let Self {
-            source,
-            sync_handlers,
-            async_handlers,
-            stream_handlers,
-            acl,
-            profile_id,
-            sandbox_mode,
-            persist_session_cookies,
-            gpu_mode,
-            credential_storage,
-            chromium_flags,
-            scheduler,
-            on_second_instance,
-            delegates,
-            renderer_delegates,
-            scheme_handlers,
-            ..
-        } = self;
-
-        let rpc = RequestResponseSubsystem::new(sync_handlers, async_handlers);
-        let event = EventSubsystem::new();
-        let stream = StreamSubsystem::new(stream_handlers);
-        let router = Arc::new(IpcRouter::new(rpc, event, stream, acl));
-
-        let ResolvedFrontend {
-            asset_root,
-            start_url,
-        } = resolver::resolve_for_process(&source)?;
-
-        let spec = RuntimeSpec {
-            mode: RuntimeMode::Embedded,
-            sandbox_mode,
-            start_url,
-            asset_root,
-            profile_id,
-            persist_session_cookies,
-            gpu_mode,
-            credential_storage,
-            chromium_flags,
-            scheduler,
-            on_second_instance,
-            delegates,
-            renderer_delegates,
-            scheme_handlers,
-        };
-
-        let instance = RuntimeBootstrap::start_embedded(spec, router)?;
         resolver.resolve(instance.handle().clone());
         Ok(instance)
     }
