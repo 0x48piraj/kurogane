@@ -2,7 +2,7 @@
 
 #[derive(Debug)]
 pub(crate) struct RenderingEnvironment {
-    /// True when the GPU appears to be a virtual device (VirtualBox, VMware, QEMU etc.)
+    /// True when the GPU appears to be a virtual device
     pub virtualization: bool,
 }
 
@@ -18,14 +18,11 @@ impl RenderingEnvironment {
 fn detect_virtual_gpu() -> bool {
     #[cfg(target_os = "linux")]
     {
-        if let Ok(s) = std::fs::read_to_string("/proc/bus/pci/devices") {
-            // VirtualBox: 80ee, VMware: 15ad, QEMU/Virtio: 1af4, Red Hat VirtIO: 1b36
-            const VIRTUAL_VENDORS: &[&str] = &["80ee", "15ad", "1af4", "1b36"];
-            if VIRTUAL_VENDORS.iter().any(|v| s.contains(v)) {
-                return true;
-            }
-        }
-        false
+        // VirtualBox (80ee), VMware (15ad), QEMU/Virtio (1af4), Red Hat VirtIO (1b36)
+        const VIRTUAL_VENDORS: &[u16] = &[0x80ee, 0x15ad, 0x1af4, 0x1b36];
+        super::linux::pci_vendors()
+            .iter()
+            .any(|vendor| VIRTUAL_VENDORS.contains(vendor))
     }
 
     #[cfg(not(target_os = "linux"))]
