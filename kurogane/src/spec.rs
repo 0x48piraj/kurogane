@@ -1,4 +1,6 @@
-use crate::app::{ClientAppBrowserDelegate, ClientAppRendererDelegate, PumpScheduler};
+use crate::app::{
+    ClientAppBrowserDelegate, ClientAppRendererDelegate, PumpScheduler, SecondInstanceHandler,
+};
 use crate::chromium_flags::ChromiumFlag;
 use crate::fs::CanonicalRoot;
 use crate::credentials::CredentialStorage;
@@ -49,6 +51,7 @@ pub(crate) struct RuntimeSpec {
     pub credential_storage: CredentialStorage,
     pub chromium_flags: Vec<ChromiumFlag>,
     pub scheduler: Option<PumpScheduler>,
+    pub on_second_instance: Option<SecondInstanceHandler>,
     pub delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
     pub renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
     pub scheme_handlers: Vec<CustomScheme>,

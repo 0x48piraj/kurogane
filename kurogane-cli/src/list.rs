@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result, bail};
 use std::fs;
-use kurogane_layout::{cache_root, PROFILE_HASH_HEX_DIGITS};
+use kurogane_layout::cache_root;
 
 use crate::tui;
 
@@ -25,7 +25,7 @@ fn list_all() -> Result<()> {
     list_profiles()
 }
 
-/// Lists all cached Kurogane profiles.
+/// Lists all cached Kurogane profiles, one per application identity.
 fn list_profiles() -> Result<()> {
     tui::section("Kurogane Profiles");
 
@@ -36,51 +36,27 @@ fn list_profiles() -> Result<()> {
         return Ok(());
     }
 
-    let mut found = false;
-
-    // A profile directory is "<sanitized-app>-<16-hex-digit hash>"
-    let hash_width = PROFILE_HASH_HEX_DIGITS;
-    let min_profile_name = hash_width + 1; // at least one app character and the "-" separator
-
     let entries = fs::read_dir(&profiles_dir)
         .with_context(|| format!("failed to read directory {}", profiles_dir.display()))?;
 
+    let mut names = Vec::new();
+
     for entry in entries {
         let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
+        if entry.file_type()?.is_dir() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
         }
-
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-
-        if name.len() < min_profile_name {
-            tui::warn(&format!(
-                "Skipping unrecognized cache entry (name too short): {name}"
-            ));
-            continue;
-        }
-
-        let (app_with_separator, id) = name.split_at(name.len() - hash_width);
-
-        // Format: "<app>-<uid 16 hex>"
-        let app = match app_with_separator.strip_suffix('-') {
-            Some(a) if id.chars().all(|c| c.is_ascii_hexdigit()) => a,
-            _ => {
-                tui::warn(&format!(
-                    "Skipping unrecognized cache entry (malformed profile): {name}"
-                ));
-                continue;
-            }
-        };
-
-        println!("    {:<20} {}", app, id);
-
-        found = true;
     }
 
-    if !found {
+    if names.is_empty() {
         tui::info("No profiles found");
+        return Ok(());
+    }
+
+    names.sort();
+
+    for name in names {
+        println!("    {name}");
     }
 
     Ok(())

@@ -18,12 +18,17 @@ impl BrowserId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BrowserType {
     Main,
     Popup,
     DevTools,
     #[allow(dead_code)]
     Osr,
+    /// A browser Chromium opened on its own, such as a window restored from an
+    /// earlier session. It closes with the application rather than keeping
+    /// it running.
+    ChromeUi,
 }
 
 #[derive(Debug, Clone)]
@@ -59,16 +64,38 @@ impl BrowserRegistry {
         }
     }
 
-    pub fn register(
+    /// Registers `browser`, or returns its id if it is registered already.
+    ///
+    /// CEF reports a browser to more than one handler and does not promise
+    /// their order, so each registers it and the first one wins. The popup
+    /// path then refines it with [`Self::classify`].
+    pub fn ensure_registered(
         &mut self,
-        browser: Browser,
+        browser: &Browser,
         browser_type: BrowserType,
         parent_id: Option<BrowserId>,
     ) -> BrowserId {
-        self.register_with_context(browser, browser_type, parent_id, None)
+        match self.find_id_by_browser(browser) {
+            Some(id) => id,
+            None => self.insert(browser.clone(), browser_type, parent_id, None),
+        }
     }
 
-    pub fn register_with_context(
+    /// Sets the type of a registered browser and the browser that opened it.
+    pub fn classify(
+        &mut self,
+        id: BrowserId,
+        browser_type: BrowserType,
+        parent_id: Option<BrowserId>,
+    ) {
+        if let Some(state) = self.browsers.get_mut(&id) {
+            state.metadata.browser_type = browser_type;
+            state.metadata.parent_id = parent_id;
+            state.metadata.opener_id = parent_id;
+        }
+    }
+
+    fn insert(
         &mut self,
         browser: Browser,
         browser_type: BrowserType,
@@ -84,7 +111,7 @@ impl BrowserRegistry {
                 id,
                 browser_type,
                 parent_id,
-                opener_id: None,
+                opener_id: parent_id,
                 created_at: std::time::Instant::now(),
             },
             request_context,
@@ -114,6 +141,23 @@ impl BrowserRegistry {
         self.browsers.len()
     }
 
+    /// Returns whether any browser besides those Chromium opened on its own
+    /// is left.
+    pub fn has_app_browsers(&self) -> bool {
+        self.browsers
+            .values()
+            .any(|state| state.metadata.browser_type != BrowserType::ChromeUi)
+    }
+
+    /// The browsers Chromium opened on its own.
+    pub fn chrome_ui_browsers(&self) -> Vec<Browser> {
+        self.browsers
+            .values()
+            .filter(|state| state.metadata.browser_type == BrowserType::ChromeUi)
+            .map(|state| state.browser.clone())
+            .collect()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.browsers.is_empty()
     }
@@ -133,12 +177,6 @@ impl BrowserRegistry {
 
     pub fn find_id_by_browser(&self, browser: &Browser) -> Option<BrowserId> {
         self.find_id_by_cef_id(browser.identifier())
-    }
-
-    pub fn set_opener(&mut self, id: BrowserId, opener_id: Option<BrowserId>) {
-        if let Some(state) = self.browsers.get_mut(&id) {
-            state.metadata.opener_id = opener_id;
-        }
     }
 
     pub fn browser_parent(&self, id: BrowserId) -> Option<BrowserId> {

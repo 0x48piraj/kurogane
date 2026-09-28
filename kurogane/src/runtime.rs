@@ -6,7 +6,7 @@ use crate::cef_app::KuroganeApp;
 use crate::client::KuroganeClient;
 use crate::error::RuntimeError;
 use crate::ShutdownSignal;
-use crate::browser_registry::{BrowserRegistry, BrowserId, BrowserMetadata};
+use crate::browser_registry::{BrowserRegistry, BrowserId, BrowserMetadata, BrowserType};
 use crate::window_registry::{WindowRegistry, WindowId, WindowMetadata};
 use crate::window::{KuroganeWindowDelegate, KuroganeBrowserViewDelegate};
 use kurogane_layout::{detect_cef_root_with_version, validate_cef_runtime, profile_dir};
@@ -34,13 +34,9 @@ struct RuntimeLayout {
 fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeError> {
     debug!("Resolving runtime layout");
 
-    // Isolate the CEF cache per executable
-    // Reusing a profile across runs can trigger session restore leading to multiple on_context_initialized invocations
     let exe = std::env::current_exe().expect("failed to get current exe path");
 
-    let raw_name = profile_id.unwrap_or_else(|| "kurogane-app".to_string());
-
-    let cache_dir = profile_dir(&raw_name, &exe);
+    let cache_dir = profile_dir(&profile_name(profile_id, &exe));
     debug!("Cache dir: {}", cache_dir.display());
 
     std::fs::create_dir_all(&cache_dir).map_err(|e| RuntimeError::CacheUnavailable {
@@ -70,6 +66,29 @@ fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeEr
         #[cfg(not(target_os = "macos"))]
         locales_dir,
     })
+}
+
+/// Names the application's profile.
+///
+/// The name is the identity given to [`App::profile_id`](crate::App::profile_id),
+/// or else the executable's, which `kurogane run`, bundles and the sandbox
+/// bootstrap all share and which survives the application moving or being
+/// updated. CEF runs one instance per profile, so the name also decides which
+/// launches hand over to a running instance. Debug builds keep a profile of
+/// their own, so a development run never hands its launch to an installed copy.
+fn profile_name(profile_id: Option<String>, exe: &std::path::Path) -> String {
+    let id = profile_id
+        .or_else(|| {
+            exe.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "kurogane-app".to_owned());
+
+    if cfg!(debug_assertions) {
+        format!("{id}-dev")
+    } else {
+        id
+    }
 }
 
 fn build_settings(
@@ -827,12 +846,21 @@ impl AppInstance {
     pub fn create_window(&self, options: WindowOptions) -> Result<WindowId, RuntimeError> {
         let is_closing = Arc::new(AtomicBool::new(false));
 
-        let mut client =
-            KuroganeClient::new(self.handle.inner.services.clone(), is_closing.clone());
+        let mut client = KuroganeClient::new(
+            self.handle.inner.services.clone(),
+            is_closing.clone(),
+            BrowserType::Main,
+        );
+
+        let window_id = {
+            let mut reg = self.handle.inner.services.window_registry.lock().unwrap();
+            reg.allocate_id()
+        };
 
         let mut bv_delegate = KuroganeBrowserViewDelegate::new(
             self.handle.inner.services.browser_registry.clone(),
             self.handle.inner.services.window_registry.clone(),
+            window_id,
         );
 
         let url = CefString::from(options.url.as_str());
@@ -846,11 +874,6 @@ impl AppInstance {
             Some(&mut bv_delegate),
         )
         .ok_or(RuntimeError::BrowserCreationFailed)?;
-
-        let window_id = {
-            let mut reg = self.handle.inner.services.window_registry.lock().unwrap();
-            reg.allocate_id()
-        };
 
         let mut delegate = KuroganeWindowDelegate::new(
             window_id,
@@ -1004,7 +1027,11 @@ impl AppInstance {
         );
 
         let is_closing = Arc::new(AtomicBool::new(false));
-        let mut client = KuroganeClient::new(self.handle.inner.services.clone(), is_closing);
+        let mut client = KuroganeClient::new(
+            self.handle.inner.services.clone(),
+            is_closing,
+            BrowserType::Main,
+        );
 
         let mut rc = request_context;
         let browser = browser_host_create_browser_sync(
@@ -1136,7 +1163,7 @@ fn initialize_cef(
     crate::platform::macos::set_services(services.clone());
 
     // ONE app for ALL processes
-    let mut app: App = KuroganeApp::new(services.clone(), spec.clone());
+    let mut app: App = KuroganeApp::create(services.clone(), spec.clone());
 
     debug!("Executing subprocess dispatch");
     execute_subprocesses(&args, &mut app);
@@ -1161,6 +1188,16 @@ fn initialize_cef(
         std::ptr::null_mut(),
     ) != 1
     {
+        // CEF runs one instance per profile. A launch that finds this
+        // application running has handed it its command line and, like a
+        // helper process, has nothing left to do
+        let notified = sys::cef_resultcode_t::CEF_RESULT_CODE_NORMAL_EXIT_PROCESS_NOTIFIED as i32;
+
+        if get_exit_code() == notified {
+            debug!("Application already running; this launch was handed over to it");
+            std::process::exit(0);
+        }
+
         return Err(RuntimeError::CefInitializeFailed);
     }
 

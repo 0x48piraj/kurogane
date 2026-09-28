@@ -2,7 +2,6 @@
 
 use cef::*;
 use std::sync::Arc;
-use std::cell::RefCell;
 
 use crate::browser::KuroganeBrowserProcessHandler;
 use crate::ipc::IpcRenderProcessHandler;
@@ -16,8 +15,8 @@ use crate::sandbox::apply_sandbox_flags;
 
 wrap_app! {
     pub struct KuroganeApp {
-        services: Arc<RuntimeServices>,
         spec: RuntimeSpec,
+        browser_handler: BrowserProcessHandler,
     }
 
     impl App {
@@ -92,18 +91,19 @@ wrap_app! {
         }
 
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
-            Some(
-                KuroganeBrowserProcessHandler::new(
-                    self.services.clone(),
-                    self.spec.clone(),
-                    RefCell::new(Vec::new()),
-                    RefCell::new(None),
-                )
-            )
+            Some(self.browser_handler.clone())
         }
 
         fn render_process_handler(&self) -> Option<RenderProcessHandler> {
             Some(IpcRenderProcessHandler::new(self.spec.renderer_delegates.clone()))
         }
+    }
+}
+
+impl KuroganeApp {
+    /// Makes the application object every process of the application uses.
+    pub(crate) fn create(services: Arc<RuntimeServices>, spec: RuntimeSpec) -> App {
+        let browser_handler = KuroganeBrowserProcessHandler::create(services, spec.clone());
+        Self::new(spec, browser_handler)
     }
 }

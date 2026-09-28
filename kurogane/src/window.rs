@@ -46,7 +46,8 @@ wrap_window_delegate! {
 
         fn on_window_created(&self, window: Option<&mut Window>) {
             if let Some(window) = window {
-                // Register window first so on_after_created can find and link it
+                // Registered before the BrowserView is added, which creates
+                // its browser; on_browser_created links that browser here
                 let mut reg = self.registry.lock().unwrap();
                 reg.insert(
                     self.window_id,
@@ -106,11 +107,39 @@ wrap_browser_view_delegate! {
     pub struct KuroganeBrowserViewDelegate {
         registry: Arc<Mutex<BrowserRegistry>>,
         window_registry: Arc<Mutex<WindowRegistry>>,
+        // The window this delegate's BrowserView is shown in
+        window_id: WindowId,
     }
 
     impl ViewDelegate {}
 
     impl BrowserViewDelegate {
+        fn on_browser_created(
+            &self,
+            _browser_view: Option<&mut BrowserView>,
+            browser: Option<&mut Browser>,
+        ) {
+            // CEF hands popups their opener's delegate as well; each popup's
+            // window is made and linked in on_popup_browser_view_created
+            let Some(browser) = browser.filter(|browser| browser.is_popup() == 0) else {
+                return;
+            };
+
+            let browser_id = self
+                .registry
+                .lock()
+                .unwrap()
+                .ensure_registered(browser, BrowserType::Main, None);
+
+            if self.window_registry.lock().unwrap().link(self.window_id, browser_id) {
+                debug!(
+                    "[BrowserRegistry] linked browser {} to window {}",
+                    browser_id.as_u32(),
+                    self.window_id.as_u32()
+                );
+            }
+        }
+
         fn on_popup_browser_view_created(
             &self,
             browser_view: Option<&mut BrowserView>,
@@ -127,19 +156,16 @@ wrap_browser_view_delegate! {
                         reg.find_id_by_browser(&b)
                     });
 
-                // Register the popup browser before it hits on_after_created
+                // Classified here, where its kind and opener are known,
+                // whether or not on_after_created registered it first
                 let browser_type = if is_devtools != 0 { BrowserType::DevTools } else { BrowserType::Popup };
-                let browser_id = if let Some(browser) = pbv.browser() {
+                let browser_id = pbv.browser().map(|browser| {
                     let mut reg = self.registry.lock().unwrap();
-                    let id = reg.register(browser.clone(), browser_type, parent_id);
-                    if let Some(pid) = parent_id {
-                        reg.set_opener(id, Some(pid));
-                    }
+                    let id = reg.ensure_registered(&browser, browser_type, parent_id);
+                    reg.classify(id, browser_type, parent_id);
                     debug!("[BrowserViewDelegate] registered popup browser");
-                    Some(id)
-                } else {
-                    None
-                };
+                    id
+                });
 
                 // Create the popup window with a delegate that tracks the window
                 let bv_clone = pbv.clone();

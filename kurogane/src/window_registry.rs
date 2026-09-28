@@ -110,18 +110,16 @@ impl WindowRegistry {
         self.lookup.get(&browser_id).copied()
     }
 
-    /// Links the given browser_id to the first window that has no browser assigned.
-    /// Used to connect the main browser with the main window after on_after_created.
-    /// Returns the WindowId that was linked.
-    pub fn link_browser_to_unassigned_window(&mut self, browser_id: BrowserId) -> Option<WindowId> {
-        let wid = self
-            .windows
-            .iter()
-            .find(|(_, s)| s.browser_id.is_none())
-            .map(|(id, _)| *id)?;
-        self.windows.get_mut(&wid).unwrap().browser_id = Some(browser_id);
-        self.lookup.insert(browser_id, wid);
-        Some(wid)
+    /// Records that `browser_id` is the browser shown in window `id`.
+    ///
+    /// Returns false when no such window is registered.
+    pub fn link(&mut self, id: WindowId, browser_id: BrowserId) -> bool {
+        let Some(state) = self.windows.get_mut(&id) else {
+            return false;
+        };
+        state.browser_id = Some(browser_id);
+        self.lookup.insert(browser_id, id);
+        true
     }
 
     pub fn browser_for_window(&self, id: WindowId) -> Option<BrowserId> {

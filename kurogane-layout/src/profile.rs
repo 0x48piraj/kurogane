@@ -1,54 +1,23 @@
 //! Per-application runtime profile and cache paths.
 //!
-//! Profile directories are derived from the application identity and
-//! executable path so that separate applications or installations do
-//! not accidentally share runtime state.
+//! The profile directory is derived from the application's identity and
+//! remains stable across executable moves and updates.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::platform;
-
-/// Number of hex digits rendered for the per-exe identity hash in a
-/// profile directory name matching the width used by [`profile_dir`].
-pub const PROFILE_HASH_HEX_DIGITS: usize = 16;
 
 pub fn cache_root() -> PathBuf {
     platform::cache_dir().join("kurogane")
 }
 
-pub fn profile_dir(app_id: &str, exe: &Path) -> PathBuf {
-    // Isolate the CEF cache per executable
-    // Reusing a profile across runs can trigger session restore
-    // leading to multiple on_context_initialized invocations
-    let exe = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
-
-    let hash = fnv1a_64(&exe);
-
-    let app_id = sanitize_name(app_id);
-
-    // Formats the identity hash for use in the profile directory name
-    cache_root().join("profiles").join(format!(
-        "{app_id}-{hash:0width$x}",
-        width = PROFILE_HASH_HEX_DIGITS
-    ))
-}
-
-/// Computes a deterministic FNV-1a 64-bit digest of a filesystem path.
-/// Intended for identity stability, not cryptographic use.
-/// Callers choose how to render the digest.
-pub fn fnv1a_64(path: &Path) -> u64 {
-    let mut hash: u64 = 14695981039346656037;
-
-    for byte in path.to_string_lossy().as_bytes() {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(1099511628211);
-    }
-
-    hash
+/// Returns the profile directory of the application identified by `app_id`.
+pub fn profile_dir(app_id: &str) -> PathBuf {
+    cache_root().join("profiles").join(sanitize_name(app_id))
 }
 
 /// Sanitizes a user-provided name into a filesystem-safe identifier.
-/// Returns "default" when the input cannot be reduced to a valid name.
+/// Returns "kurogane-app" when the input cannot be reduced to a valid name.
 pub fn sanitize_name(name: &str) -> String {
     // Windows reserved names
     const WINDOWS_RESERVED: &[&str] = &[
@@ -131,40 +100,20 @@ mod property_tests {
     }
 
     #[test]
-    fn profile_dir_is_stable_for_same_inputs() {
-        let exe = Path::new("/some/path/app.exe");
+    fn profile_dir_is_named_after_the_application() {
+        let dir = profile_dir("my-app");
 
-        let a = profile_dir("my-app", exe);
-        let b = profile_dir("my-app", exe);
-
-        assert_eq!(a, b);
+        assert_eq!(dir.file_name().unwrap(), "my-app");
+        assert_eq!(dir.parent().unwrap(), cache_root().join("profiles"));
     }
 
     #[test]
-    fn fnv1a_64_matches_reference_digest() {
-        // Reference FNV-1a 64-bit value for this exact path string
-        assert_eq!(
-            fnv1a_64(Path::new("/some/path/app.exe")),
-            14_687_075_936_177_481_486u64
-        );
+    fn profile_dir_is_separate_per_application() {
+        assert_ne!(profile_dir("my-app"), profile_dir("other-app"));
     }
 
     #[test]
-    fn profile_dir_renders_hex_digest_without_padding_loss() {
-        let exe = Path::new("/some/path/app.exe");
-        let dir = profile_dir("my-app", exe);
-
-        let name = dir.file_name().unwrap().to_str().unwrap();
-
-        assert_eq!(name, format!("my-app-{:016x}", fnv1a_64(exe)));
-    }
-
-    #[test]
-    fn profile_dir_isolated_per_executable() {
-        let a = profile_dir("my-app", Path::new("/apps/a.exe"));
-
-        let b = profile_dir("my-app", Path::new("/apps/b.exe"));
-
-        assert_ne!(a, b);
+    fn profile_dir_sanitizes_the_identity() {
+        assert_eq!(profile_dir("a/b").file_name().unwrap(), "a_b");
     }
 }

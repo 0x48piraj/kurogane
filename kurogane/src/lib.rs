@@ -12,6 +12,7 @@ mod browser_registry;
 mod window_registry;
 mod window;
 mod client;
+mod chrome_commands;
 mod scheme;
 mod error;
 mod fs;
@@ -47,4 +48,6 @@ pub use shutdown::ShutdownSignal;
 
 // Re-export IPC types for public use
 pub use crate::ipc::{ErrorCode, IpcError, Responder};
-pub use app::{PumpRequest, PumpScheduler, ClientAppBrowserDelegate, ClientAppRendererDelegate};
+pub use app::{
+    PumpRequest, PumpScheduler, ClientAppBrowserDelegate, ClientAppRendererDelegate, SecondInstance,
+};

@@ -133,9 +133,55 @@ runtime.create_window(/* ... */)?;
 
 Each browser runs as a native top-level window.
 
+Only the application creates windows. Chrome's own window and tab commands (Ctrl+N, Ctrl+T, "Open link in new tab") do nothing in a Kurogane window.
+
 See:
 
 * [examples/multi_window.rs](../tests/multi-window.rs)
+
+## One instance per profile
+
+Your app keeps its settings and browsing data between launches. Starting the app again while it is already open brings the existing app window to the front instead of opening another one.
+
+This is useful for things like opening a file or link in an app that is already running. For example, a user might double-click a file, choose your app from **Open With**, click a `myapp://` link, or run:
+
+```text
+myapp notes.txt
+```
+
+In these cases, Kurogane sends the new launch to the copy that is already running. `App::on_second_instance` lets your app decide what to do with it.
+
+A common use is to open the file or link in the existing window:
+
+```rust
+App::new("dist")
+    .on_second_instance(|launch, app| {
+        for arg in launch.args() {
+            // Relative to where the new launch started.
+            let path = match launch.working_dir() {
+                Some(dir) => dir.join(arg),
+                None => arg.into(),
+            };
+
+            app.broadcast_json("open-file", &path);
+        }
+    })
+    .run_or_exit();
+```
+
+```javascript
+kurogane.on("open-file", (json) => openFile(JSON.parse(json)));
+```
+
+The hook is only about **another launch of the app**. Opening another window from your own code is separate; your app can create as many windows as it needs without going through `on_second_instance`.
+
+You do not have to handle a second launch. By default, starting the app again simply brings the existing windows to the front.
+
+`launch.switch("new-window")` can be used to check for a switch such as `--new-window`.
+
+On macOS, opening the app bundle while it is already running activates the existing app directly, without starting another process. The hook therefore runs for launches that actually start a new process, such as launching the executable from a terminal.
+
+Sometimes two copies really do need to run at the same time. Give each one a different profile with `App::profile_id`.
 
 ## Exposing Rust commands to JavaScript
 

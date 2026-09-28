@@ -28,7 +28,7 @@ pub use layout::{
     install_root, installed_cef_root,
 };
 pub use package::{PackageError, package_directory};
-pub use profile::{cache_root, profile_dir, PROFILE_HASH_HEX_DIGITS};
+pub use profile::{cache_root, profile_dir};
 #[cfg(target_os = "macos")]
 pub use platform::link_unbundled_angle_libraries;
 pub use signing::{

@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use crate::runtime::RuntimeServices;
 use crate::browser_registry::{BrowserRegistry, BrowserType};
-use crate::window_registry::WindowRegistry;
+use crate::chrome_commands::KuroganeCommandHandler;
 use crate::ipc::{FrameId, IpcRouter};
 
 //
@@ -15,32 +15,37 @@ use crate::ipc::{FrameId, IpcRouter};
 wrap_life_span_handler! {
     pub struct KuroganeLifeSpanHandler {
         browser_registry: Arc<Mutex<BrowserRegistry>>,
-        window_registry: Arc<Mutex<WindowRegistry>>,
         is_closing: Arc<AtomicBool>,
         router: Arc<IpcRouter>,
+        // What the browsers of this client are, popups aside
+        browser_type: BrowserType,
     }
 
     impl LifeSpanHandler {
         fn on_after_created(&self, browser: Option<&mut Browser>) {
-            if let Some(b) = browser {
-                debug!("on_after_created cef_id={}", b.identifier());
+            let Some(browser) = browser else {
+                return;
+            };
+            debug!("on_after_created cef_id={}", browser.identifier());
 
-                let mut reg = self.browser_registry.lock().unwrap();
+            let mut reg = self.browser_registry.lock().unwrap();
 
-                // Only register if not already registered
-                // Popups are registered by BrowserViewDelegate::on_popup_browser_view_created
-                if reg.find_id_by_browser(b).is_none() {
-                    let clone = b.clone();
-                    let id = reg.register(clone, BrowserType::Main, None);
-
-                    // Link this main browser to the main window
-                    // which was registered without a browser_id in on_window_created
-                    let mut wreg = self.window_registry.lock().unwrap();
-                    if let Some(wid) = wreg.link_browser_to_unassigned_window(id) {
-                        debug!("[BrowserRegistry] linked browser {} to window {}", id.as_u32(), wid.as_u32());
-                    }
+            // A popup shares its opener's client. The BrowserView delegate
+            // classifies a Views popup exactly; CEF does not promise which of
+            // the two sees it first, and the first registers it
+            let (browser_type, opener) = match self.browser_type {
+                // Whatever Chromium opens on its own stays that kind
+                BrowserType::ChromeUi => (BrowserType::ChromeUi, None),
+                _ if browser.is_popup() != 0 => {
+                    let opener = browser
+                        .host()
+                        .and_then(|host| reg.find_id_by_cef_id(host.opener_identifier()));
+                    (BrowserType::Popup, opener)
                 }
-            }
+                browser_type => (browser_type, None),
+            };
+
+            reg.ensure_registered(browser, browser_type, opener);
         }
 
         fn do_close(&self, _browser: Option<&mut Browser>) -> i32 {
@@ -52,31 +57,52 @@ wrap_life_span_handler! {
         }
 
         fn on_before_close(&self, browser: Option<&mut Browser>) {
-            debug!("on_before_close called");
-            if let Some(b) = browser {
-                debug!("on_before_close cef_id={}", b.identifier());
-                let browser_id = {
-                    let mut reg = self.browser_registry.lock().unwrap();
-                    if let Some(id) = reg.find_id_by_browser(b) {
-                        reg.unregister(id);
-                        debug!("Browser {} destroyed", id.as_u32());
-                        if reg.is_empty() {
-                            debug!("[BrowserRegistry] last browser removed, quitting message loop");
+            let Some(browser) = browser else {
+                return;
+            };
+            debug!("on_before_close cef_id={}", browser.identifier());
 
-                            // quit_message_loop() is only meaningful when CEF owns the main loop
-                            // In embedded mode the host event loop owns shutdown and this call is effectively a no-op
-                            // TODO: Move shutdown coordination behind a single runtime lifecycle abstraction instead of mixing quit_message_loop() and shutdown_signal
-
-                            quit_message_loop();
-                        }
-                        id
-                    } else {
-                        return;
-                    }
+            let (browser_id, stragglers) = {
+                let mut reg = self.browser_registry.lock().unwrap();
+                let Some(id) = reg.find_id_by_browser(browser) else {
+                    return;
                 };
-                // Cancel any pending async handlers for this browser
-                self.router.cancel_all_for_browser(browser_id);
+                let was_app_browser = reg
+                    .get(id)
+                    .is_some_and(|state| state.metadata.browser_type != BrowserType::ChromeUi);
+
+                reg.unregister(id);
+                debug!("Browser {} destroyed", id.as_u32());
+
+                if reg.is_empty() {
+                    debug!("[BrowserRegistry] last browser removed, quitting message loop");
+
+                    // quit_message_loop() is only meaningful when CEF owns the main loop
+                    // In embedded mode the host event loop owns shutdown and this call is effectively a no-op
+                    // TODO: Move shutdown coordination behind a single runtime lifecycle abstraction instead of mixing quit_message_loop() and shutdown_signal
+
+                    quit_message_loop();
+                }
+
+                // Windows Chromium opened on its own close with the
+                // application's last one rather than keep the process running
+                let stragglers = if was_app_browser && !reg.has_app_browsers() {
+                    reg.chrome_ui_browsers()
+                } else {
+                    Vec::new()
+                };
+
+                (id, stragglers)
+            };
+
+            for straggler in stragglers {
+                if let Some(host) = straggler.host() {
+                    host.close_browser(1);
+                }
             }
+
+            // Cancel any pending async handlers for this browser
+            self.router.cancel_all_for_browser(browser_id);
         }
     }
 }
@@ -139,9 +165,15 @@ wrap_client! {
     pub struct KuroganeClient {
         services: Arc<RuntimeServices>,
         is_closing: Arc<AtomicBool>,
+        // What the browsers of this client are, popups aside
+        browser_type: BrowserType,
     }
 
     impl Client {
+        fn command_handler(&self) -> Option<CommandHandler> {
+            Some(KuroganeCommandHandler::new())
+        }
+
         fn load_handler(&self) -> Option<LoadHandler> {
             Some(KuroganeLoadHandler::new(self.services.router.clone()))
         }
@@ -149,9 +181,9 @@ wrap_client! {
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
             Some(KuroganeLifeSpanHandler::new(
                 self.services.browser_registry.clone(),
-                self.services.window_registry.clone(),
                 self.is_closing.clone(),
                 self.services.router.clone(),
+                self.browser_type,
             ))
         }
 

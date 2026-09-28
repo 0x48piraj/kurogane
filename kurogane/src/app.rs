@@ -3,7 +3,7 @@
 //! This is the public developer entrypoint built on top of Runtime.
 //! This helps in the abstraction of asset resolution, environment overrides and command registration.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::sync::Arc;
 use serde_json::Value;
@@ -42,6 +42,68 @@ pub enum PumpRequest {
 /// CEF calls this whenever it wants AppInstance::pump to be called.
 /// The integrator decides how to honour the request via a winit proxy, a glib timeout, a Tokio task, or anything else.
 pub type PumpScheduler = Arc<dyn Fn(PumpRequest) + Send + Sync>;
+
+/// A launch of the application while another instance is already running.
+///
+/// Chromium allows one instance per profile. The new launch passes its
+/// arguments and working directory to the running instance and exits.
+///
+/// Passed to the closure given to [`App::on_second_instance`].
+#[derive(Debug, Clone)]
+pub struct SecondInstance {
+    args: Vec<String>,
+    switches: HashMap<String, String>,
+    working_dir: Option<PathBuf>,
+}
+
+impl SecondInstance {
+    /// Copies out the launch CEF handed over.
+    pub(crate) fn from_launch(command_line: &CommandLine, working_dir: Option<&CefString>) -> Self {
+        let mut args = CefStringList::new();
+        command_line.arguments(Some(&mut args));
+
+        let mut switches = CefStringMap::new();
+        command_line.switches(Some(&mut switches));
+
+        Self {
+            args: args.into_iter().collect(),
+            switches: switches.into_iter().collect(),
+            working_dir: working_dir
+                .map(|dir| dir.to_string())
+                .filter(|dir| !dir.is_empty())
+                .map(PathBuf::from),
+        }
+    }
+
+    /// Returns the launch arguments that are not switches.
+    ///
+    /// The arguments contain the files or links named by the launch, in order.
+    /// The program name is not included.
+    pub fn args(&self) -> &[String] {
+        &self.args
+    }
+
+    /// Returns the value of the `--name` switch.
+    ///
+    /// Returns an empty string when the switch has no value and `None` when the
+    /// switch was not present.
+    pub fn switch(&self, name: &str) -> Option<&str> {
+        // Chromium lowercases switch names on Windows, lookups included
+        #[cfg(target_os = "windows")]
+        let name = &name.to_ascii_lowercase();
+
+        self.switches.get(name).map(String::as_str)
+    }
+
+    /// The directory the launch was started in, which the relative paths
+    /// among its arguments are relative to.
+    pub fn working_dir(&self) -> Option<&Path> {
+        self.working_dir.as_deref()
+    }
+}
+
+/// What [`App::on_second_instance`] stores; the closure, with the handle bound.
+pub(crate) type SecondInstanceHandler = Arc<dyn Fn(&SecondInstance) + Send + Sync>;
 
 /// Describes where the frontend comes from
 pub(crate) enum Source {
@@ -197,6 +259,7 @@ pub struct App {
     credential_storage: CredentialStorage,
     chromium_flags: Vec<ChromiumFlag>,
     scheduler: Option<PumpScheduler>,
+    on_second_instance: Option<SecondInstanceHandler>,
     delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
     renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
     scheme_handlers: Vec<CustomScheme>,
@@ -234,6 +297,7 @@ impl App {
             credential_storage: CredentialStorage::System,
             chromium_flags: Vec::new(),
             scheduler: None,
+            on_second_instance: None,
             delegates: Vec::new(),
             renderer_delegates: Vec::new(),
             scheme_handlers: Vec::new(),
@@ -578,8 +642,36 @@ impl App {
         self
     }
 
+    /// Names the application's profile: its cookies, storage and caches.
+    ///
+    /// Defaults to the executable's name. CEF runs one instance per profile:
+    /// launching the application while it runs brings the running instance to
+    /// the front (see [`App::on_second_instance`]). Debug builds use a profile
+    /// of their own, named with a `-dev` suffix.
     pub fn profile_id(mut self, id: impl Into<String>) -> Self {
         self.profile_id = Some(id.into());
+        self
+    }
+
+    /// Runs `f` in the running application whenever it is launched again.
+    ///
+    /// CEF runs one instance per profile ([`App::profile_id`]). A launch that
+    /// finds the application running hands it its arguments and exits with
+    /// status 0, and the running application's windows come to the front.
+    /// `f` then receives the launch, for example to open a file or a link it
+    /// names.
+    ///
+    /// Runs on the UI thread. On macOS, opening the application's bundle while
+    /// it runs activates it without a second launch, so `f` runs only for
+    /// launches that start a process, such as running the executable directly.
+    ///
+    /// A later call replaces an earlier one.
+    pub fn on_second_instance<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&SecondInstance, &AppHandle) + Send + Sync + 'static,
+    {
+        let cell = self.cell.clone();
+        self.on_second_instance = Some(Arc::new(move |launch: &SecondInstance| f(launch, cell.get())));
         self
     }
 
@@ -659,6 +751,7 @@ impl App {
             credential_storage,
             chromium_flags,
             scheduler,
+            on_second_instance,
             delegates,
             renderer_delegates,
             scheme_handlers,
@@ -686,6 +779,7 @@ impl App {
             credential_storage,
             chromium_flags,
             scheduler,
+            on_second_instance,
             delegates,
             renderer_delegates,
             scheme_handlers,
@@ -719,6 +813,7 @@ impl App {
             credential_storage,
             chromium_flags,
             scheduler,
+            on_second_instance,
             delegates,
             renderer_delegates,
             scheme_handlers,
@@ -746,6 +841,7 @@ impl App {
             credential_storage,
             chromium_flags,
             scheduler,
+            on_second_instance,
             delegates,
             renderer_delegates,
             scheme_handlers,
@@ -791,6 +887,26 @@ mod tests {
 
     fn async_noop(_: Value, r: Responder<Value>, _: &AppHandle) {
         r.resolve(Ok(Value::Null));
+    }
+
+    #[test]
+    fn a_second_instance_reads_switches_as_chromium_parsed_them() {
+        let launch = SecondInstance {
+            args: vec!["notes.txt".to_owned()],
+            switches: HashMap::from([
+                ("new-window".to_owned(), String::new()),
+                ("theme".to_owned(), "dark".to_owned()),
+            ]),
+            working_dir: None,
+        };
+
+        assert_eq!(launch.switch("new-window"), Some(""));
+        assert_eq!(launch.switch("theme"), Some("dark"));
+        assert_eq!(launch.switch("notes.txt"), None);
+
+        // Chromium stores them lowercased on Windows, and looks them up so
+        #[cfg(target_os = "windows")]
+        assert_eq!(launch.switch("New-Window"), Some(""));
     }
 
     struct NoopStream;
