@@ -146,14 +146,20 @@ pub(super) fn entries(dir: &File) -> io::Result<Vec<DirEntry>> {
             libc::DT_LNK => continue,
             libc::DT_UNKNOWN => match stat_kind(dir.as_raw_fd(), &name) {
                 Ok(Some(kind)) => kind,
-                // A link, or an entry that vanished since it was listed
-                Ok(None) | Err(_) => continue,
+                // A link
+                Ok(None) => continue,
+                // An entry that vanished since it was listed
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
             },
             _ => EntryKind::Other,
         };
         // A mount point is a link to another filesystem: omitted like one
-        if !matches!(is_mount_root(dir.as_raw_fd(), &name), Ok(false)) {
-            continue;
+        match is_mount_root(dir.as_raw_fd(), &name) {
+            Ok(false) => {}
+            Ok(true) => continue,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
         }
         entries.push(DirEntry::new(
             OsStr::from_bytes(name.as_bytes()).to_owned(),

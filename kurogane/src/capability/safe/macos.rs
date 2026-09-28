@@ -43,7 +43,8 @@ use std::ffi::{CStr, CString, OsStr};
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::mem::MaybeUninit;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
+use std::ptr::NonNull;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -64,6 +65,35 @@ const O_NOFOLLOW_ANY: c_int = 0x2000_0000;
 /// An entry held for removal or renaming: its name within the parent fd.
 pub(crate) struct Entry {
     leaf: Name,
+}
+
+/// A directory stream from `fdopendir`, closed on drop.
+struct DirStream(NonNull<libc::DIR>);
+
+impl DirStream {
+    /// Opens a stream over a duplicate of `dir`, which stays open.
+    fn over(dir: &File) -> io::Result<Self> {
+        let fd = dir.as_fd().try_clone_to_owned()?.into_raw_fd();
+        // SAFETY: `fd` is an owned directory descriptor; on success the
+        // stream takes it over and closedir closes it
+        let stream = unsafe { libc::fdopendir(fd) };
+        match NonNull::new(stream) {
+            Some(stream) => Ok(Self(stream)),
+            None => {
+                let err = io::Error::last_os_error();
+                // SAFETY: fdopendir failed, so `fd` is still ours to close
+                drop(unsafe { OwnedFd::from_raw_fd(fd) });
+                Err(err)
+            }
+        }
+    }
+}
+
+impl Drop for DirStream {
+    fn drop(&mut self) {
+        // SAFETY: the stream is live and is closed exactly once, here
+        unsafe { libc::closedir(self.0.as_ptr()) };
+    }
 }
 
 pub(super) fn open_root(path: &Path) -> io::Result<File> {
@@ -188,32 +218,20 @@ pub(super) fn entries(dir: &File) -> io::Result<Vec<DirEntry>> {
     let mut out = Vec::new();
     // Entries on another device are volumes mounted here
     let here = device(dir.as_raw_fd())?;
-    // fdopendir consumes the fd it is given (closedir closes it), so hand it a
-    // dup and keep the caller's `dir` intact.
-    // SAFETY: `dir` is a live directory fd; dup returns a new owned fd or -1
-    let dup = unsafe { libc::dup(dir.as_raw_fd()) };
-    if dup < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: `dup` is a fresh fd we own
-    let owned = unsafe { OwnedFd::from_raw_fd(dup) };
-    // SAFETY: `owned` is a directory fd; fdopendir takes ownership on success
-    let stream = unsafe { libc::fdopendir(owned.as_raw_fd()) };
-    if stream.is_null() {
-        return Err(io::Error::last_os_error());
-    }
-    std::mem::forget(owned); // ownership moved into the DIR*, freed by closedir
+    let stream = DirStream::over(dir)?;
     loop {
-        // readdir sets errno to 0 then returns null at end; distinguish error
-        // from end by checking errno.
+        // readdir returns null both at the end and on error; only an error
+        // sets errno
         errno_set(0);
         // SAFETY: `stream` is a live DIR* from fdopendir
-        let entry = unsafe { libc::readdir(stream) };
+        let entry = unsafe { libc::readdir(stream.0.as_ptr()) };
         if entry.is_null() {
             let err = io::Error::last_os_error();
-            // SAFETY: `stream` is live and closed exactly once here
-            unsafe { libc::closedir(stream) };
-            return if errno_is_zero() { Ok(out) } else { Err(err) };
+            return if err.raw_os_error() == Some(0) {
+                Ok(out)
+            } else {
+                Err(err)
+            };
         }
         // SAFETY: readdir returned a live dirent valid until the next call
         let (name, d_type) = unsafe {
@@ -234,7 +252,11 @@ pub(super) fn entries(dir: &File) -> io::Result<Vec<DirEntry>> {
             // mounted volume's device
             libc::DT_DIR | libc::DT_UNKNOWN => match stat_entry(dir.as_raw_fd(), &c_bytes(&name)) {
                 Ok((dev, Some(kind))) if dev == here => kind,
-                _ => continue,
+                // A link, or a volume mounted here
+                Ok(_) => continue,
+                // An entry that vanished since it was listed
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
             },
             _ => EntryKind::Other,
         };
@@ -429,11 +451,6 @@ fn errno_set(value: c_int) {
     unsafe {
         *libc::__error() = value;
     }
-}
-
-fn errno_is_zero() -> bool {
-    // SAFETY: as above
-    unsafe { *libc::__error() == 0 }
 }
 
 #[cfg(test)]
