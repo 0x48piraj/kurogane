@@ -4,6 +4,7 @@
 //! the kernel allows it and otherwise falls back to the setuid `chrome-sandbox` helper.
 
 use std::ffi::{CStr, CString};
+use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -11,12 +12,17 @@ use std::path::{Path, PathBuf};
 use crate::chromium_flags::ChromiumFlags;
 use crate::error::RuntimeError;
 
-pub(crate) fn apply_sandbox_flags(flags: &mut ChromiumFlags) {
+pub(super) fn apply_disabled(flags: &mut ChromiumFlags) {
     flags.set("disable-setuid-sandbox");
 }
 
+/// Linux configures its sandbox through settings and switches alone.
+pub(super) fn sandbox_info() -> *mut u8 {
+    std::ptr::null_mut()
+}
+
 /// Confirms Chromium can sandbox its helpers on this machine.
-pub(crate) fn preflight(cef_root: &Path) -> Result<(), RuntimeError> {
+pub(super) fn preflight(cef_root: &Path) -> Result<(), RuntimeError> {
     if user_namespaces_available() {
         return Ok(());
     }
@@ -60,62 +66,80 @@ fn sandbox_helper_path(cef_root: &Path) -> PathBuf {
 /// namespaces never change: unshare, then map the current user, which is the
 /// step AppArmor's user-namespace restriction denies.
 fn user_namespaces_available() -> bool {
+    // SAFETY: `getuid` and `getgid` take no arguments and have no failure mode.
+    let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+
     // Formatted before fork; the child only makes async-signal-safe calls
-    let uid_map = format!("0 {} 1", unsafe { libc::getuid() });
-    let gid_map = format!("0 {} 1", unsafe { libc::getgid() });
+    let uid_map = format!("0 {uid} 1");
+    let gid_map = format!("0 {gid} 1");
 
-    unsafe {
-        let pid = libc::fork();
+    // SAFETY: `fork` requires no prior state. To satisfy POSIX multi-threading
+    // semantics, the resulting child process executes exclusively
+    // async-signal-safe routines with no allocations.
+    let pid = unsafe { libc::fork() };
 
-        if pid < 0 {
-            return false;
-        }
-
-        if pid == 0 {
-            let mapped =
-                libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWPID | libc::CLONE_NEWNET) == 0
-                    && write_proc(c"/proc/self/setgroups", b"deny")
-                    && write_proc(c"/proc/self/uid_map", uid_map.as_bytes())
-                    && write_proc(c"/proc/self/gid_map", gid_map.as_bytes());
-
-            libc::_exit(if mapped { 0 } else { 1 });
-        }
-
-        let mut status = 0;
-
-        // Retry when a signal interrupts the wait
-        let waited = loop {
-            let result = libc::waitpid(pid, &mut status, 0);
-
-            if result != -1 || std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
-                break result;
-            }
-        };
-
-        waited == pid && libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0
+    if pid < 0 {
+        return false;
     }
+
+    if pid == 0 {
+        // SAFETY: `libc::unshare` takes integer flags with no memory preconditions
+        // and is async-signal-safe. State mutations are strictly bounded to this child.
+        let mapped =
+            unsafe { libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWPID | libc::CLONE_NEWNET) }
+                == 0
+                && write_proc(c"/proc/self/setgroups", b"deny")
+                && write_proc(c"/proc/self/uid_map", uid_map.as_bytes())
+                && write_proc(c"/proc/self/gid_map", gid_map.as_bytes());
+
+        // SAFETY: `libc::_exit` is async-signal-safe. Immediate termination bypasses
+        // user-space destructors, preventing the child from corrupting shared parent state.
+        unsafe { libc::_exit(if mapped { 0 } else { 1 }) };
+    }
+
+    let mut status = 0;
+
+    // Retry when a signal interrupts the wait
+    let waited = loop {
+        // SAFETY: `pid` is a directly owned child process. `status` is a valid,
+        // stack-allocated integer whose memory strictly outlives the FFI call.
+        let result = unsafe { libc::waitpid(pid, &mut status, 0) };
+
+        if result != -1 || io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+            break result;
+        }
+    };
+
+    waited == pid && libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0
 }
 
 /// Writes `data` to a procfs file using only async-signal-safe calls.
-unsafe fn write_proc(path: &CStr, data: &[u8]) -> bool {
-    unsafe {
-        let fd = libc::open(path.as_ptr(), libc::O_WRONLY);
+fn write_proc(path: &CStr, data: &[u8]) -> bool {
+    // SAFETY: `path` is a valid, null-terminated C-string. `open` is async-signal-safe.
+    let fd = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY) };
 
-        if fd < 0 {
-            return false;
-        }
-
-        let written = libc::write(fd, data.as_ptr().cast(), data.len());
-        libc::close(fd);
-
-        written == data.len() as isize
+    if fd < 0 {
+        return false;
     }
+
+    // SAFETY: `fd` is a valid, open file descriptor. `data` pointer and length match
+    // exactly and the backing memory outlives the async-signal-safe `write` call.
+    let written = unsafe { libc::write(fd, data.as_ptr().cast(), data.len()) };
+
+    // SAFETY: `fd` is exclusively owned by this scope and closed exactly once.
+    unsafe { libc::close(fd) };
+
+    usize::try_from(written) == Ok(data.len())
 }
 
 /// Describes why the setuid helper is unusable, or `None` when it is usable.
 fn setuid_helper_problem(helper: &Path) -> Option<String> {
-    let Ok(meta) = std::fs::metadata(helper) else {
-        return Some(format!("{} is missing", helper.display()));
+    let meta = match std::fs::metadata(helper) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Some(format!("{} is missing", helper.display()));
+        }
+        Err(e) => return Some(format!("{} cannot be inspected: {e}", helper.display())),
     };
 
     let problem = if meta.uid() != 0 {
@@ -124,24 +148,37 @@ fn setuid_helper_problem(helper: &Path) -> Option<String> {
         "does not have the setuid bit"
     } else if meta.mode() & 0o111 == 0 {
         "is not executable"
-    } else if mounted_nosuid(helper) {
-        "is on a filesystem mounted nosuid"
     } else {
-        return None;
+        match mounted_nosuid(helper) {
+            Ok(false) => return None,
+            Ok(true) => "is on a filesystem mounted nosuid",
+            Err(e) => {
+                return Some(format!(
+                    "{}: its filesystem's mount flags cannot be read: {e}",
+                    helper.display()
+                ));
+            }
+        }
     };
 
     Some(format!("{} {problem}", helper.display()))
 }
 
 /// Returns whether the filesystem holding `path` ignores setuid bits.
-fn mounted_nosuid(path: &Path) -> bool {
-    let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
-        return false;
-    };
+fn mounted_nosuid(path: &Path) -> io::Result<bool> {
+    let path = CString::new(path.as_os_str().as_bytes())?;
 
+    // SAFETY: `libc::statvfs` is a Plain Old Data (POD) C-struct.
+    // All-zero byte initialization is a strictly valid memory representation.
     let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
 
-    unsafe { libc::statvfs(path.as_ptr(), &mut stat) == 0 && stat.f_flag & libc::ST_NOSUID != 0 }
+    // SAFETY: `path` is a valid, null-terminated C-string. `stat` is a valid,
+    // stack-allocated struct whose memory strictly outlives the FFI call.
+    if unsafe { libc::statvfs(path.as_ptr(), &mut stat) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    Ok(stat.f_flag & libc::ST_NOSUID != 0)
 }
 
 #[cfg(test)]

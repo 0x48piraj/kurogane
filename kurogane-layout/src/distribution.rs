@@ -12,6 +12,7 @@ use thiserror::Error;
 pub struct AppMetadata {
     pub name: String,
     pub version: String,
+    /// File name the executable is installed under, in every package format.
     pub exe_name: String,
     pub identifier: Option<String>,
     pub publisher: Option<String>,
@@ -36,11 +37,50 @@ pub struct ResolvedResource {
 #[derive(Debug, Clone)]
 pub struct ResolvedDistribution {
     pub metadata: AppMetadata,
-    pub executable: PathBuf,
+    /// The binary the user starts, installed as [`AppMetadata::exe_name`].
+    pub executable: Executable,
     pub frontend: Option<PathBuf>,
     /// Materialized CEF runtime.
     pub cef_runtime: PathBuf,
     pub extra_resources: Vec<ResolvedResource>,
+}
+
+/// The binary a distribution starts, and what it loads.
+#[derive(Debug, Clone)]
+pub enum Executable {
+    /// The application's own executable.
+    Application(PathBuf),
+
+    /// CEF's sandbox bootstrap, which loads the application from a library.
+    ///
+    /// Chromium's Windows sandbox is brokered by whichever process starts the
+    /// browser, and CEF keeps that broker in its bootstrap. The bootstrap is
+    /// installed under the application's name and finds the library beside
+    /// it under the same name, see [`crate::client_library_path`].
+    Bootstrap {
+        bootstrap: PathBuf,
+        library: PathBuf,
+    },
+}
+
+impl Executable {
+    /// Returns the binary installed as the application's executable.
+    pub fn binary(&self) -> &Path {
+        match self {
+            Executable::Application(binary)
+            | Executable::Bootstrap {
+                bootstrap: binary, ..
+            } => binary,
+        }
+    }
+
+    /// Returns the library the bootstrap loads, if the application is one.
+    pub fn library(&self) -> Option<&Path> {
+        match self {
+            Executable::Application(_) => None,
+            Executable::Bootstrap { library, .. } => Some(library),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -51,6 +91,15 @@ pub enum DistributionError {
 
     #[error("executable path is not a file: {0}")]
     ExecutableNotFile(PathBuf),
+
+    #[error("client library not found: {0}")]
+    MissingClientLibrary(PathBuf),
+
+    #[error("client library path is not a file: {0}")]
+    ClientLibraryNotFile(PathBuf),
+
+    #[error("the application has no executable name to install under")]
+    MissingExeName,
 
     #[error("frontend directory not found: {0}")]
     MissingFrontend(PathBuf),
@@ -80,16 +129,32 @@ pub enum DistributionError {
 impl ResolvedDistribution {
     /// Validates the resolved distribution.
     pub fn validate(&self) -> Result<(), DistributionError> {
-        if !self.executable.exists() {
-            return Err(DistributionError::MissingExecutable(
-                self.executable.clone(),
-            ));
+        let binary = self.executable.binary();
+
+        if !binary.exists() {
+            return Err(DistributionError::MissingExecutable(binary.to_path_buf()));
         }
 
-        if !self.executable.is_file() {
-            return Err(DistributionError::ExecutableNotFile(
-                self.executable.clone(),
-            ));
+        if !binary.is_file() {
+            return Err(DistributionError::ExecutableNotFile(binary.to_path_buf()));
+        }
+
+        if let Some(library) = self.executable.library() {
+            if !library.exists() {
+                return Err(DistributionError::MissingClientLibrary(
+                    library.to_path_buf(),
+                ));
+            }
+
+            if !library.is_file() {
+                return Err(DistributionError::ClientLibraryNotFile(
+                    library.to_path_buf(),
+                ));
+            }
+        }
+
+        if self.metadata.exe_name.is_empty() {
+            return Err(DistributionError::MissingExeName);
         }
 
         if let Some(frontend) = &self.frontend {
@@ -168,11 +233,12 @@ mod tests {
     fn missing_executable_is_rejected() {
         let dir = crate::test_fixtures::tmp_dir();
         let dist = crate::test_fixtures::sample_distribution(dir.path());
-        fs::remove_file(&dist.executable).unwrap();
+        let binary = dist.executable.binary();
+        fs::remove_file(binary).unwrap();
 
         let err = dist.validate().unwrap_err();
         assert!(
-            matches!(err, DistributionError::MissingExecutable(ref p) if p == &dist.executable),
+            matches!(err, DistributionError::MissingExecutable(ref p) if p == binary),
             "expected MissingExecutable, got: {err}"
         );
     }
@@ -181,14 +247,47 @@ mod tests {
     fn executable_is_directory_rejected() {
         let dir = crate::test_fixtures::tmp_dir();
         let dist = crate::test_fixtures::sample_distribution(dir.path());
-        fs::remove_file(&dist.executable).unwrap();
-        fs::create_dir(&dist.executable).unwrap();
+        fs::remove_file(dist.executable.binary()).unwrap();
+        fs::create_dir(dist.executable.binary()).unwrap();
 
         let err = dist.validate().unwrap_err();
         assert!(
             matches!(err, DistributionError::ExecutableNotFile(_)),
             "expected ExecutableNotFile, got: {err}"
         );
+    }
+
+    #[test]
+    fn an_executable_without_a_name_is_rejected() {
+        let dir = crate::test_fixtures::tmp_dir();
+        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        dist.metadata.exe_name.clear();
+
+        assert!(matches!(
+            dist.validate(),
+            Err(DistributionError::MissingExeName)
+        ));
+    }
+
+    #[test]
+    fn a_bootstrap_distribution_passes_validation() {
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sandboxed_distribution(dir.path());
+
+        assert!(dist.validate().is_ok());
+    }
+
+    #[test]
+    fn a_bootstrap_without_its_library_is_rejected() {
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sandboxed_distribution(dir.path());
+        let library = dist.executable.library().unwrap();
+        fs::remove_file(library).unwrap();
+
+        assert!(matches!(
+            dist.validate(),
+            Err(DistributionError::MissingClientLibrary(ref p)) if p == library
+        ));
     }
 
     #[test]
@@ -342,7 +441,7 @@ mod tests {
             executable: {
                 let e = dir.path().join("test");
                 fs::write(&e, "").unwrap();
-                e
+                Executable::Application(e)
             },
             frontend: None,
             cef_runtime: raw,
@@ -438,7 +537,13 @@ mod tests {
         let dir = crate::test_fixtures::tmp_dir();
         let dist = crate::test_fixtures::sample_distribution(dir.path());
 
-        let actual_filename = dist.executable.file_name().unwrap().to_str().unwrap();
+        let actual_filename = dist
+            .executable
+            .binary()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
 
         assert_eq!(
             dist.metadata.exe_name, actual_filename,

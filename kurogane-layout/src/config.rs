@@ -76,6 +76,12 @@ pub struct AppConfig {
     pub description: Option<String>,
     pub copyright: Option<String>,
     pub icon: Option<PathBuf>,
+    /// Whether the application enters Chromium's sandbox.
+    ///
+    /// When enabled, the CLI builds and starts the application with
+    /// platform-specific setup required by the sandbox. The runtime
+    /// policy is selected separately with `App::sandbox_mode`.
+    pub sandbox: bool,
 }
 
 impl AppConfig {
@@ -197,6 +203,7 @@ mod tests {
         let config = PackagingConfig::load(dir.path()).unwrap();
 
         assert_eq!(config.app.name, None);
+        assert!(!config.app.sandbox, "the sandbox is opt-in");
         assert!(config.bundle.resources.is_empty());
         assert!(config.windows.start_menu_shortcut);
         assert!(config.windows.desktop_shortcut);
@@ -231,6 +238,7 @@ publisher = "Example Corp"
 description = "A demo application"
 copyright = "(c) 2026 Example Corp"
 icon = "assets/icon.png"
+sandbox = true
 
 [[bundle.resources]]
 source = "assets/data"
@@ -288,6 +296,7 @@ custom-command = "signtool sign /fd sha256"
             config.app.icon.as_deref(),
             Some(Path::new("assets/icon.png"))
         );
+        assert!(config.app.sandbox);
 
         assert_eq!(config.bundle.resources.len(), 2);
         let resolved: Vec<_> = config

@@ -34,7 +34,8 @@ pub enum SandboxMode {
     ///   `chrome-sandbox` helper.
     /// - macOS: the app runs from a `.app` bundle, so each helper can enter
     ///   its seatbelt sandbox before loading CEF.
-    /// - Windows: not supported yet.
+    /// - Windows: the app is loaded by CEF's bootstrap executable, which
+    ///   brokers the sandbox. See [`sandbox_entry!`](crate::sandbox_entry).
     Chromium,
 }
 

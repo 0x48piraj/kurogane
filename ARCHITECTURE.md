@@ -99,6 +99,10 @@ Packaging follows the same split: each platform has its own bundle layout rather
 
 Linux and Windows need no application-level setup. Chromium is initialized directly.
 
+Windows uses a different launch model for Chromium's sandbox. The process that starts the browser acts as its broker and CEF provides a bootstrap executable for that role. A sandboxed application therefore runs through the bootstrap rather than starting its application executable directly.
+
+The rest of the process model stays the same. CEF helpers start through the same application entry point and the runtime passes the sandbox state from the bootstrap into CEF.
+
 macOS requires a little more setup. AppKit expects an `NSApplication` subclass conforming to Chromium's `CrAppProtocol` before any browser is created, so the runtime provides that integration, loads the framework from its absolute path and attaches the application delegate.
 
 Cocoa's default `terminate:` calls `exit()`, which bypasses the run loop Chromium relies on for orderly shutdown. Kurogane instead closes the browsers and lets the last browser close end the message loop.
@@ -137,7 +141,7 @@ flowchart LR
     class N note;
 ```
 
-* **Sandbox**: Process privilege isolation.
+* **Sandbox**: Process isolation from the host system. Each platform has requirements that the runtime checks before CEF starts. A requested sandbox either starts with those protections or the launch fails.
 * **GPU**: Backend selection (`GpuMode`) based on the detected environment.
 * **Credentials**: Whether cookies and passwords are stored in the platform credential store (`CredentialStorage`).
 

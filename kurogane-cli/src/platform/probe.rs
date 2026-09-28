@@ -3,45 +3,15 @@
 //! Cargo reports the executable path directly, avoiding
 //! assumptions about target and profile directories.
 
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
 use anyhow::Result;
 #[cfg(target_os = "macos")]
-use std::process::ExitStatus;
+use std::ffi::OsString;
 
-/// Splits a `cargo run` argument vector at the first bare `--`.
-///
-/// Everything to the left is Cargo's; everything to the right belongs to the
-/// application. Only the left half can be replayed against `cargo build`.
-pub(crate) fn split_cargo_args(args: &[OsString]) -> (&[OsString], &[OsString]) {
-    match args.iter().position(|arg| arg == "--") {
-        Some(index) => (&args[..index], &args[index + 1..]),
-        None => (args, &[]),
-    }
-}
-
-/// Strips any caller-supplied `--message-format` from probe arguments.
-///
-/// Cargo rejects multiple format flags and probes require JSON output to
-/// parse artifact locations internally.
-pub(crate) fn strip_message_format(args: &[OsString]) -> Vec<OsString> {
-    let mut args_iter = args.iter();
-    let mut kept = Vec::with_capacity(args.len());
-
-    while let Some(arg) = args_iter.next() {
-        let text = arg.to_string_lossy();
-
-        if text == "--message-format" {
-            let _ = args_iter.next();
-        } else if !text.starts_with("--message-format=") {
-            kept.push(arg.clone());
-        }
-    }
-
-    kept
-}
+#[cfg(target_os = "macos")]
+use crate::launch::{describe_status, split_cargo_args, strip_message_format};
 
 /// Extract executable directories from Cargo's JSON build output.
 ///
@@ -91,105 +61,12 @@ pub(crate) fn executable_dirs(cef: &Path, cargo_args: &[OsString]) -> Result<Vec
     )))
 }
 
-/// Renders an exit status for a human-readable message.
-#[cfg(target_os = "macos")]
-fn describe_status(status: &ExitStatus) -> String {
-    status
-        .code()
-        .map(|code| code.to_string())
-        .unwrap_or_else(|| "signal".into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn args(list: &[&str]) -> Vec<OsString> {
-        list.iter().map(OsString::from).collect()
-    }
-
-    fn names_of(args: &[OsString]) -> Vec<String> {
-        args.iter()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect()
-    }
-
     fn names(dirs: &[PathBuf]) -> Vec<String> {
         dirs.iter().map(|d| d.display().to_string()).collect()
-    }
-
-    #[test]
-    fn arguments_without_a_separator_all_belong_to_cargo() {
-        let all = args(&["--release", "--example", "foo"]);
-        let (cargo, app) = split_cargo_args(&all);
-
-        assert_eq!(names_of(cargo), vec!["--release", "--example", "foo"]);
-        assert!(app.is_empty());
-    }
-
-    #[test]
-    fn the_separator_hands_the_remainder_to_the_application() {
-        let all = args(&["--release", "--", "--example", "foo"]);
-        let (cargo, app) = split_cargo_args(&all);
-
-        assert_eq!(names_of(cargo), vec!["--release"]);
-        assert_eq!(
-            names_of(app),
-            vec!["--example", "foo"],
-            "application flags must not be replayed against cargo build"
-        );
-    }
-
-    #[test]
-    fn only_the_first_separator_splits() {
-        let all = args(&["--", "a", "--", "b"]);
-        let (cargo, app) = split_cargo_args(&all);
-
-        assert!(cargo.is_empty());
-        assert_eq!(names_of(app), vec!["a", "--", "b"]);
-    }
-
-    #[test]
-    fn a_leading_separator_leaves_cargo_nothing() {
-        let all = args(&["--", "--release"]);
-        let (cargo, _) = split_cargo_args(&all);
-
-        assert!(
-            cargo.is_empty(),
-            "`--release` after `--` is the application's, not cargo's"
-        );
-    }
-
-    #[test]
-    fn message_format_is_stripped_in_both_spellings() {
-        assert_eq!(
-            names_of(&strip_message_format(&args(&[
-                "--release",
-                "--message-format",
-                "human",
-                "--example",
-                "foo"
-            ]))),
-            vec!["--release", "--example", "foo"]
-        );
-
-        assert_eq!(
-            names_of(&strip_message_format(&args(&[
-                "--message-format=short",
-                "--release"
-            ]))),
-            vec!["--release"]
-        );
-    }
-
-    #[test]
-    fn stripping_leaves_unrelated_arguments_untouched() {
-        let original = args(&["--features", "a,b", "--target", "wasm32-unknown-unknown"]);
-
-        assert_eq!(
-            names_of(&strip_message_format(&original)),
-            names_of(&original)
-        );
     }
 
     #[test]

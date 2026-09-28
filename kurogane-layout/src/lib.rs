@@ -1,3 +1,4 @@
+mod bootstrap;
 mod cef;
 mod config;
 mod discover;
@@ -12,6 +13,7 @@ mod signing;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_fixtures;
 
+pub use bootstrap::{Bootstrap, client_library_path, stage_runtime};
 pub use bundle::{BundleError, BundleLayout};
 pub use cef::{
     materialize_cef_runtime, read_provenance, resolve_cef_for_bundle, validate_cef_runtime,
@@ -22,11 +24,15 @@ pub use config::{
     anchor_path, AppConfig, BundleConfig, ConfigError, LinuxPackagingConfig, PackagingConfig,
     ResourceConfig, SigningFileConfig, WindowsPackagingConfig, CONFIG_FILE_NAME,
 };
-pub use distribution::{AppMetadata, DistributionError, ResolvedDistribution, ResolvedResource};
+pub use distribution::{
+    AppMetadata, DistributionError, Executable, ResolvedDistribution, ResolvedResource,
+};
 pub use layout::{
     bundled_cef_root, bundled_helper_path, bundled_resource_root, cef_install_dir, copy_dir,
-    install_root, installed_cef_root,
+    install_root, installed_cef_root, link_dir,
 };
+#[cfg(target_os = "macos")]
+pub use layout::bundled_helper_path_for;
 pub use package::{PackageError, package_directory};
 pub use profile::{cache_root, profile_dir};
 #[cfg(target_os = "macos")]

@@ -21,7 +21,7 @@ pub fn run(cargo_args: Vec<OsString>) -> Result<()> {
     }
 
     let cef = launch::ensure_cef_runtime()?;
-    let status = launch::cargo_run(&cef, &cargo_args)?;
+    let status = launch::run_app(&cef, &cargo_args)?;
 
     launch::exit_with(status)
 }

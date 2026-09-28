@@ -16,6 +16,9 @@ pub enum RuntimeError {
     CefNotInstalled,
     InvalidCefInstallation(String),
 
+    /// The path to the running executable could not be determined.
+    ExecutableUnavailable(std::io::Error),
+
     CacheUnavailable {
         path: PathBuf,
         source: std::io::Error,
@@ -121,6 +124,17 @@ impl Display for RuntimeError {
                 reason
             ),
 
+            RuntimeError::ExecutableUnavailable(source) => write!(
+                f,
+                concat!(
+                    "Unable to locate the running executable.\n\n",
+                    "OS error:\n",
+                    "  {}\n\n",
+                    "Kurogane finds its Chromium runtime and profile cache from the executable's path."
+                ),
+                source
+            ),
+
             RuntimeError::CacheUnavailable { path, source } => write!(
                 f,
                 concat!(
@@ -182,6 +196,8 @@ impl std::error::Error for RuntimeError {
         match self {
             RuntimeError::AssetRootUnavailable { source, .. }
             | RuntimeError::CacheUnavailable { source, .. } => Some(source),
+
+            RuntimeError::ExecutableUnavailable(source) => Some(source),
 
             RuntimeError::InvalidAssetRoot(_)
             | RuntimeError::InvalidFrontendUrl(_)

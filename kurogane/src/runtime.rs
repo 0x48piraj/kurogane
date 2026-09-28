@@ -24,11 +24,10 @@ use crate::debug;
 pub(crate) struct RuntimeBootstrap;
 
 struct RuntimeLayout {
-    exe: std::path::PathBuf,
     cef_root: std::path::PathBuf,
     cache_dir: std::path::PathBuf,
-    #[cfg(not(target_os = "macos"))]
-    locales_dir: std::path::PathBuf,
+    /// The executable CEF starts helper processes from, when it is named.
+    subprocess: Option<std::path::PathBuf>,
 }
 
 fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeError> {
@@ -56,15 +55,10 @@ fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeEr
 
     debug!("CEF root: {}", cef_root.display());
 
-    #[cfg(not(target_os = "macos"))]
-    let locales_dir = cef_root.join("locales");
-
     Ok(RuntimeLayout {
-        exe,
         cef_root,
         cache_dir,
-        #[cfg(not(target_os = "macos"))]
-        locales_dir,
+        subprocess: subprocess_path(&exe),
     })
 }
 
@@ -91,6 +85,32 @@ fn profile_name(profile_id: Option<String>, exe: &std::path::Path) -> String {
     }
 }
 
+/// Returns the executable CEF should start helper processes from.
+///
+/// Windows names none. CEF reads any value there as "the helpers are a
+/// separate executable", which its Windows sandbox does not support, and
+/// turns the sandbox off without saying so. Helpers relaunch this executable
+/// either way, which is what the setting would have named.
+#[cfg(target_os = "windows")]
+fn subprocess_path(_exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    None
+}
+
+/// Returns the executable CEF should start helper processes from.
+#[cfg(target_os = "linux")]
+fn subprocess_path(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    Some(exe.to_path_buf())
+}
+
+/// Returns the executable CEF should start helper processes from: the
+/// bundle's helper app, or this executable when running unbundled.
+#[cfg(target_os = "macos")]
+fn subprocess_path(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let helper = kurogane_layout::bundled_helper_path_for(exe);
+
+    Some(helper.unwrap_or_else(|| exe.to_path_buf()))
+}
+
 fn build_settings(
     layout: &RuntimeLayout,
     persist_session_cookies: bool,
@@ -99,59 +119,40 @@ fn build_settings(
 ) -> Settings {
     // Use a persistent profile instead of CEF's default incognito mode
     // This enables cookies, storage APIs and service workers
+    let mut settings = Settings {
+        external_message_pump: external_message_pump.into(),
+        cache_path: cef_path(&layout.cache_dir),
+        root_cache_path: cef_path(&layout.cache_dir),
+        persist_session_cookies: persist_session_cookies.into(),
+        no_sandbox: crate::sandbox::cef_no_sandbox(sandbox),
+        ..Default::default()
+    };
 
-    #[cfg(not(target_os = "macos"))]
-    let exe_str = layout.exe.to_string_lossy();
-    #[cfg(not(target_os = "macos"))]
-    let cef_root_str = layout.cef_root.to_string_lossy();
-
-    let no_sandbox = crate::sandbox::cef_no_sandbox(sandbox);
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        Settings {
-            browser_subprocess_path: CefString::from(exe_str.as_ref()),
-            resources_dir_path: CefString::from(cef_root_str.as_ref()),
-            external_message_pump: external_message_pump as i32,
-            locales_dir_path: CefString::from(layout.locales_dir.to_string_lossy().as_ref()),
-            cache_path: CefString::from(layout.cache_dir.to_string_lossy().as_ref()),
-            root_cache_path: CefString::from(layout.cache_dir.to_string_lossy().as_ref()),
-            persist_session_cookies: if persist_session_cookies { 1 } else { 0 },
-            no_sandbox,
-            ..Default::default()
-        }
+    if let Some(subprocess) = &layout.subprocess {
+        debug!("Browser subprocess path: {}", subprocess.display());
+        settings.browser_subprocess_path = cef_path(subprocess);
     }
 
+    // CEF resolves resources, locales and V8 snapshots from the framework bundle
     #[cfg(target_os = "macos")]
     {
-        // Fall back to the main executable for unbundled
-        let subprocess = kurogane_layout::bundled_helper_path()
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| layout.exe.clone());
-
-        debug!("Browser subprocess path: {}", subprocess.display());
-
-        let subprocess_str = subprocess.to_string_lossy();
-
-        // CEF resolves resources, locales and V8 snapshots from the framework bundle
-        let mut s = Settings {
-            browser_subprocess_path: CefString::from(subprocess_str.as_ref()),
-            external_message_pump: external_message_pump as i32,
-            cache_path: CefString::from(layout.cache_dir.to_string_lossy().as_ref()),
-            root_cache_path: CefString::from(layout.cache_dir.to_string_lossy().as_ref()),
-            persist_session_cookies: if persist_session_cookies { 1 } else { 0 },
-            no_sandbox,
-            ..Default::default()
-        };
-
         let framework = layout
             .cef_root
             .join("Chromium Embedded Framework.framework");
-        s.framework_dir_path = CefString::from(framework.to_string_lossy().as_ref());
-
-        s
+        settings.framework_dir_path = cef_path(&framework);
     }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        settings.resources_dir_path = cef_path(&layout.cef_root);
+        settings.locales_dir_path = cef_path(&layout.cef_root.join("locales"));
+    }
+
+    settings
+}
+
+fn cef_path(path: &std::path::Path) -> CefString {
+    CefString::from(path.to_string_lossy().as_ref())
 }
 
 /// Returns whether this process is Chromium's browser process rather than
@@ -182,11 +183,11 @@ where
         .any(|arg| arg.as_ref().to_string_lossy().starts_with("--type="))
 }
 
-fn execute_subprocesses(args: &Args, app: &mut App) {
+fn execute_subprocesses(args: &Args, app: &mut App, sandbox_info: *mut u8) {
     debug!("Dispatching CEF process selection");
 
     // CEF internally determines process role here
-    let exit_code = execute_process(Some(args.as_main_args()), Some(app), std::ptr::null_mut());
+    let exit_code = execute_process(Some(args.as_main_args()), Some(app), sandbox_info);
 
     // This was a subprocess and should exit now
     if exit_code >= 0 {
@@ -1142,6 +1143,8 @@ fn initialize_cef(
     #[cfg(target_os = "macos")]
     crate::platform::macos::init_ns_app(spec.sandbox_mode)?;
 
+    // The first call fixes the CEF API version for the whole process; the
+    // Windows sandbox check compares hashes under this version later
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
 
     debug!("Runtime initializing");
@@ -1165,8 +1168,11 @@ fn initialize_cef(
     // ONE app for ALL processes
     let mut app: App = KuroganeApp::create(services.clone(), spec.clone());
 
+    // The same value has to reach both CEF entry points
+    let sandbox_info = crate::sandbox::cef_sandbox_info(spec.sandbox_mode);
+
     debug!("Executing subprocess dispatch");
-    execute_subprocesses(&args, &mut app);
+    execute_subprocesses(&args, &mut app, sandbox_info);
 
     let layout = resolve_layout(spec.profile_id)?;
     crate::sandbox::preflight(spec.sandbox_mode, &layout.cef_root)?;
@@ -1185,7 +1191,7 @@ fn initialize_cef(
         Some(args.as_main_args()),
         Some(&settings),
         Some(&mut app),
-        std::ptr::null_mut(),
+        sandbox_info,
     ) != 1
     {
         // CEF runs one instance per profile. A launch that finds this
@@ -1259,6 +1265,42 @@ impl RuntimeBootstrap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn windows_names_no_subprocess_executable() {
+        // CEF reads any browser_subprocess_path on Windows as "the helpers are
+        // a separate executable", which its sandbox does not support, and
+        // turns the sandbox off without reporting it. Helpers relaunch this
+        // executable regardless, so the setting buys nothing and costs the
+        // sandbox.
+        assert_eq!(
+            subprocess_path(std::path::Path::new(r"C:\app\myapp.exe")),
+            None,
+            "naming a subprocess executable silently disables the Windows sandbox"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_names_its_own_executable() {
+        // Linux has no such rule, and the helpers are this same binary
+        assert_eq!(
+            subprocess_path(std::path::Path::new("/app/myapp")),
+            Some(std::path::PathBuf::from("/app/myapp"))
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn unbundled_macos_names_its_own_executable() {
+        // Outside an app bundle there are no helper apps, so helpers are this
+        // same binary, as on Linux
+        assert_eq!(
+            subprocess_path(std::path::Path::new("/app/myapp")),
+            Some(std::path::PathBuf::from("/app/myapp"))
+        );
+    }
 
     #[test]
     fn the_launched_process_is_the_browser_process() {

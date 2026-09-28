@@ -46,6 +46,13 @@ pub use app::App;
 pub use resources::resource_dir;
 pub use shutdown::ShutdownSignal;
 
+/// What Kurogane's macros expand to. Not a public API.
+#[doc(hidden)]
+pub mod __private {
+    #[cfg(target_os = "windows")]
+    pub use crate::sandbox::windows::enter;
+}
+
 // Re-export IPC types for public use
 pub use crate::ipc::{ErrorCode, IpcError, Responder};
 pub use app::{

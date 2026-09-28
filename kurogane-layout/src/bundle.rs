@@ -8,9 +8,14 @@
 //! `runtime/cef`, matching the executable's `$ORIGIN/cef` RPATH and runtime
 //! discovery path.
 //!
-//! Linux bundles retain `chrome-sandbox` as part of the CEF runtime even though
-//! Kurogane currently disables CEF's sandbox. This keeps the bundle compatible
-//! with a future sandbox policy change without requiring a packaging change.
+//! Linux bundles include `chrome-sandbox` with the CEF runtime.
+//! Used by `SandboxMode::Chromium` when unprivileged user namespaces are unavailable.
+//!
+//! The executable is installed under the application's name
+//! ([`AppMetadata::exe_name`](crate::AppMetadata::exe_name)), whatever the
+//! built file is called. A sandboxed Windows application is CEF's bootstrap
+//! under that name, with the application's library beside it; see
+//! [`Executable`](crate::Executable).
 
 use std::ffi::OsStr;
 use std::fs;
@@ -21,7 +26,9 @@ use thiserror::Error;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt;
 
-use crate::{ResolvedDistribution, layout::copy_dir};
+use crate::cef::is_runtime_artifact;
+use crate::layout::{copy_dir, copy_dir_filtered};
+use crate::ResolvedDistribution;
 
 /// Errors raised while materializing or verifying a canonical bundle.
 #[derive(Debug, Error)]
@@ -30,11 +37,14 @@ pub enum BundleError {
     #[error("frontend directory missing: {0}")]
     MissingFrontend(PathBuf),
 
-    #[error("executable path has no file name: {0}")]
-    InvalidExecutablePath(PathBuf),
+    #[error("the application has no executable name to install under")]
+    MissingExeName,
 
     #[error("bundle executable missing at {0}")]
     MissingExecutable(PathBuf),
+
+    #[error("bundle client library missing at {0}")]
+    MissingClientLibrary(PathBuf),
 
     #[error("content/index.html missing at {0}")]
     MissingContentIndex(PathBuf),
@@ -92,6 +102,14 @@ impl BundleLayout {
         self.root.clone()
     }
 
+    /// Path of the library a bootstrap installed as `exe_name` loads.
+    ///
+    /// CEF looks it up beside the bootstrap, under the bootstrap's own name,
+    /// so it is never on a search path and never shared between applications.
+    pub fn client_library_path(&self, exe_name: &OsStr) -> PathBuf {
+        crate::client_library_path(&self.executable_path(exe_name))
+    }
+
     pub fn content_dir(&self) -> PathBuf {
         self.root.join("content")
     }
@@ -125,8 +143,10 @@ impl BundleLayout {
     }
 
     /// Installs a materialized CEF runtime into the bundle.
+    ///
+    /// Only runtime artifacts are included.
     pub fn install_cef(&self, src: &Path) -> Result<(), BundleError> {
-        copy_dir(src, &self.cef_dir())?;
+        copy_dir_filtered(src, &self.cef_dir(), &is_runtime_artifact)?;
         Ok(())
     }
 
@@ -174,12 +194,13 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
     pub fn materialize(&self, dist: &ResolvedDistribution) -> Result<(), BundleError> {
         self.prepare()?;
 
-        let exe_name = dist
-            .executable
-            .file_name()
-            .ok_or_else(|| BundleError::InvalidExecutablePath(dist.executable.clone()))?;
+        let exe_name = exe_name(dist)?;
 
-        fs::copy(&dist.executable, self.executable_path(exe_name))?;
+        fs::copy(dist.executable.binary(), self.executable_path(exe_name))?;
+
+        if let Some(library) = dist.executable.library() {
+            fs::copy(library, self.client_library_path(exe_name))?;
+        }
 
         #[cfg(target_os = "linux")]
         self.write_launcher(exe_name)?;
@@ -205,12 +226,22 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
         Ok(())
     }
 
-    /// Verifies that the bundle contains a valid executable, content and CEF runtime.
-    pub fn verify(&self, exe_name: &OsStr) -> Result<(), BundleError> {
+    /// Verifies that the bundle contains the application, its client library
+    /// when required and a complete CEF runtime.
+    pub fn verify(&self, dist: &ResolvedDistribution) -> Result<(), BundleError> {
+        let exe_name = exe_name(dist)?;
         let exe = self.executable_path(exe_name);
 
         if !exe.exists() {
             return Err(BundleError::MissingExecutable(exe));
+        }
+
+        if dist.executable.library().is_some() {
+            let library = self.client_library_path(exe_name);
+
+            if !library.exists() {
+                return Err(BundleError::MissingClientLibrary(library));
+            }
         }
 
         if self.content_dir().exists() {
@@ -224,6 +255,14 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
         crate::cef::validate_cef_runtime(&self.cef_dir())?;
 
         Ok(())
+    }
+}
+
+/// Returns the file name the executable is installed under.
+fn exe_name(dist: &ResolvedDistribution) -> Result<&OsStr, BundleError> {
+    match dist.metadata.exe_name.as_str() {
+        "" => Err(BundleError::MissingExeName),
+        name => Ok(OsStr::new(name)),
     }
 }
 
@@ -401,6 +440,104 @@ mod tests {
     }
 
     #[test]
+    fn the_executable_is_installed_under_the_application_s_name() {
+        let dir = crate::test_fixtures::tmp_dir();
+        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        dist.metadata.exe_name = "renamed".to_string();
+
+        let layout = BundleLayout::new(dir.path().join("out"));
+        layout.materialize(&dist).unwrap();
+
+        assert!(
+            layout.executable_path(OsStr::new("renamed")).is_file(),
+            "every package format starts the executable by this name"
+        );
+        assert!(layout.verify(&dist).is_ok());
+    }
+
+    #[test]
+    fn an_executable_without_a_name_is_refused() {
+        let dir = crate::test_fixtures::tmp_dir();
+        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        dist.metadata.exe_name.clear();
+
+        let layout = BundleLayout::new(dir.path().join("out"));
+
+        assert!(matches!(
+            layout.materialize(&dist),
+            Err(BundleError::MissingExeName)
+        ));
+    }
+
+    #[test]
+    fn a_sandboxed_bundle_installs_the_bootstrap_and_its_library() {
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sandboxed_distribution(dir.path());
+        let layout = BundleLayout::new(dir.path().join("out"));
+
+        layout.materialize(&dist).unwrap();
+
+        let exe = layout.executable_path(OsStr::new("myapp.exe"));
+        assert!(
+            exe.is_file(),
+            "CEF's bootstrap takes the application's name"
+        );
+        assert!(
+            !layout.executable_path(OsStr::new("bootstrap.exe")).exists(),
+            "and never reaches the bundle under CEF's name"
+        );
+        assert!(
+            exe.with_file_name("myapp.dll").is_file(),
+            "CEF loads the library beside the bootstrap, under its name"
+        );
+        assert!(layout.verify(&dist).is_ok());
+    }
+
+    #[test]
+    fn a_sandboxed_bundle_without_its_library_fails_verification() {
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sandboxed_distribution(dir.path());
+        let layout = BundleLayout::new(dir.path().join("out"));
+
+        layout.materialize(&dist).unwrap();
+        fs::remove_file(layout.client_library_path(OsStr::new("myapp.exe"))).unwrap();
+
+        assert!(matches!(
+            layout.verify(&dist),
+            Err(BundleError::MissingClientLibrary(_))
+        ));
+    }
+
+    #[test]
+    fn cef_s_bootstraps_do_not_reach_the_bundle() {
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
+
+        // As a runtime materialized by an older Kurogane still carries them
+        for name in ["bootstrap.exe", "bootstrapc.exe", "libcef.lib"] {
+            fs::write(dist.cef_runtime.join(name), "build artifact").unwrap();
+        }
+
+        let layout = BundleLayout::new(dir.path().join("out"));
+        layout.materialize(&dist).unwrap();
+
+        for name in ["bootstrap.exe", "bootstrapc.exe", "libcef.lib"] {
+            assert!(
+                !layout.cef_dir().join(name).exists(),
+                "{name} is not loaded at runtime"
+            );
+        }
+
+        // The runtime itself still arrives intact
+        assert!(
+            layout
+                .cef_dir()
+                .join(crate::cef::cef_binary_name())
+                .is_file()
+        );
+    }
+
+    #[test]
     fn verify_passes_with_valid_bundle() {
         let dir = crate::test_fixtures::tmp_dir();
         let dist = crate::test_fixtures::sample_distribution(dir.path());
@@ -408,7 +545,7 @@ mod tests {
         let layout = BundleLayout::new(&out);
 
         layout.materialize(&dist).unwrap();
-        assert!(layout.verify(test_exe_name()).is_ok());
+        assert!(layout.verify(&dist).is_ok());
     }
 
     #[test]
@@ -422,12 +559,12 @@ mod tests {
         layout.materialize(&dist).unwrap();
 
         assert!(
-            layout.verify(test_exe_name()).is_ok(),
+            layout.verify(&dist).is_ok(),
             "verify should pass when content/ does not exist"
         );
 
         fs::create_dir(layout.content_dir()).unwrap();
-        let result = layout.verify(test_exe_name());
+        let result = layout.verify(&dist);
         assert!(
             result.is_err(),
             "verify should fail when content/ exists without index.html"
@@ -437,6 +574,7 @@ mod tests {
     #[test]
     fn verify_fails_without_executable() {
         let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("out");
         let layout = BundleLayout::new(&out);
         fs::create_dir_all(layout.content_dir()).unwrap();
@@ -444,7 +582,7 @@ mod tests {
 
         crate::test_fixtures::cef_runtime(&layout.cef_dir());
 
-        let result = layout.verify(test_exe_name());
+        let result = layout.verify(&dist);
         assert!(
             result.is_err(),
             "verify should fail when executable is missing"
@@ -463,7 +601,7 @@ mod tests {
         fs::remove_file(layout.cef_dir().join(crate::cef::cef_binary_name())).unwrap();
 
         assert!(
-            layout.verify(test_exe_name()).is_err(),
+            layout.verify(&dist).is_err(),
             "verify should fail when the CEF runtime is incomplete"
         );
     }
@@ -473,7 +611,13 @@ mod tests {
         let dir = crate::test_fixtures::tmp_dir();
         let dist = crate::test_fixtures::sample_distribution(dir.path());
 
-        let actual_filename = dist.executable.file_name().unwrap().to_str().unwrap();
+        let actual_filename = dist
+            .executable
+            .binary()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
 
         assert_eq!(
             dist.metadata.exe_name, actual_filename,

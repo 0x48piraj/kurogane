@@ -11,6 +11,7 @@ mod install;
 mod dev;
 mod launch;
 mod run;
+mod sandbox;
 mod build;
 mod bundle;
 mod new;

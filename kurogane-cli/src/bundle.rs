@@ -5,12 +5,16 @@
 //! optional signing.
 
 use anyhow::{Result, bail};
+use std::env::consts::EXE_SUFFIX;
+use std::ffi::OsString;
 use std::process::Command;
-use cargo_metadata::{MetadataCommand, TargetKind};
+use cargo_metadata::{MetadataCommand, Package, TargetKind};
 use kurogane_layout::{
-    AppMetadata, PackagingConfig, ResolvedDistribution, SignConfig, anchor_path,
-    materialize_cef_runtime, resolve_cef_for_bundle,
+    AppConfig, AppMetadata, Executable, PackagingConfig, ResolvedDistribution, SignConfig,
+    anchor_path, materialize_cef_runtime, resolve_cef_for_bundle,
 };
+
+use crate::launch::find_target;
 #[cfg(not(target_os = "macos"))]
 use kurogane_layout::{package_directory, sign_tree, verify_tree};
 
@@ -188,7 +192,53 @@ fn resolve_sign_config(
     Ok(Some(resolved))
 }
 
-/// Build the application in the requested profile.
+/// Builds the application in the requested profile.
+///
+/// Returns what the bundle starts and the name it is installed under.
+fn build_executable(
+    cef: &std::path::Path,
+    pkg: &Package,
+    app: &AppConfig,
+    debug: bool,
+    target_dir: &std::path::Path,
+) -> Result<(Executable, String)> {
+    let profile: &[&str] = if debug {
+        &["--features", "kurogane/debug"]
+    } else {
+        &["--release"]
+    };
+
+    if crate::sandbox::uses_bootstrap(app) {
+        // The bootstrap is CEF's; only the application's library is built
+        let profile: Vec<OsString> = profile.iter().map(OsString::from).collect();
+        let library = crate::sandbox::build_library(cef, pkg, &profile)?;
+        let exe_name = format!("{}{EXE_SUFFIX}", crate::sandbox::app_name(pkg)?);
+
+        return Ok((crate::sandbox::bundled(cef, library)?, exe_name));
+    }
+
+    let status = crate::launch::cargo_command(cef, "build")?
+        .args(profile)
+        .status()?;
+
+    if !status.success() {
+        bail!("Build failed");
+    }
+
+    let target = find_target(pkg, TargetKind::Bin)
+        .ok_or_else(|| anyhow::anyhow!("No binary target found"))?;
+
+    let exe_name = format!("{}{EXE_SUFFIX}", target.name);
+    let executable = target_dir.join(&exe_name);
+
+    if !executable.exists() {
+        bail!("Executable not found: {}", executable.display());
+    }
+
+    Ok((Executable::Application(executable), exe_name))
+}
+
+/// Build the application in the requested profile and package it.
 pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     tui::section("Kurogane Bundle");
 
@@ -217,25 +267,6 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
         }
     }
 
-    tui::step("Building release...");
-
-    let mut cmd = crate::launch::cargo_command(cef.root.as_path(), "build")?;
-
-    if debug {
-        cmd.arg("--features").arg("kurogane/debug");
-    } else {
-        cmd.arg("--release");
-    }
-
-    let status = cmd.status()?;
-
-    if !status.success() {
-        bail!("Release build failed");
-    }
-
-    // Resolve distribution contents
-    tui::step("Resolving distribution...");
-
     let pkg = metadata
         .root_package()
         .ok_or_else(|| anyhow::anyhow!("No root package"))?;
@@ -244,24 +275,13 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     let kurogane_target = crate::launch::target_dir_in(metadata.target_directory.as_std_path());
     let target_dir = kurogane_target.join(profile);
 
-    // Find binary target
-    let target = pkg
-        .targets
-        .iter()
-        .find(|t| t.kind.contains(&TargetKind::Bin))
-        .ok_or_else(|| anyhow::anyhow!("No binary target found"))?;
+    tui::step(&format!("Building {profile}..."));
 
-    let exe_name = if cfg!(target_os = "windows") {
-        format!("{}.exe", target.name)
-    } else {
-        target.name.clone()
-    };
+    let (executable, exe_name) =
+        build_executable(&cef.root, pkg, &packaging_config.app, debug, &target_dir)?;
 
-    let exe_path = target_dir.join(&exe_name);
-
-    if !exe_path.exists() {
-        bail!("Executable not found: {:?}", exe_path);
-    }
+    // Resolve distribution contents
+    tui::step("Resolving distribution...");
 
     // Materialize the runnable runtime
     let runtime_version = cef
@@ -318,7 +338,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
                 .as_ref()
                 .map(|icon| anchor_path(project_root, icon)),
         },
-        executable: exe_path,
+        executable,
         frontend,
         cef_runtime,
         extra_resources,
@@ -327,7 +347,11 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     dist.validate()
         .map_err(|e| anyhow::anyhow!("distribution validation failed: {e}"))?;
 
-    tui::field("binary", tui::format_path(&dist.executable));
+    tui::field("binary", tui::format_path(dist.executable.binary()));
+
+    if let Some(library) = dist.executable.library() {
+        tui::field("library", tui::format_path(library));
+    }
     tui::field("format", format!("{format:?}"));
 
     // Package the distribution

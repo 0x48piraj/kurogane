@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::layout::copy_dir;
+use crate::bootstrap::Bootstrap;
+use crate::layout::copy_dir_filtered;
 
 /// The source of a resolved CEF distribution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -316,17 +317,34 @@ fn verify_provenanced_version_and_platform(
 }
 
 /// Development-only artifacts.
+///
+/// Headers, CMake files and the import library used to build against CEF.
 const DEV_ARTIFACTS: &[&str] = &[
     "include",
     "cmake",
     "libcef_dll",
     "CMakeLists.txt",
     "CREDITS.html",
+    "libcef.lib",
 ];
 
 /// Download-cache residue.
 fn is_download_cache_artifact(name: &str) -> bool {
     name == "archive.json" || name.ends_with(".tar.bz2")
+}
+
+/// Returns whether a file in a CEF distribution is part of the runtime.
+///
+/// Excludes development artifacts, download-cache files and CEF's own
+/// sandbox bootstraps. Names are compared without regard to ASCII case.
+pub(crate) fn is_runtime_artifact(name: &str) -> bool {
+    let is = |excluded: &str| excluded.eq_ignore_ascii_case(name);
+
+    !DEV_ARTIFACTS.iter().any(|artifact| is(artifact))
+        && !Bootstrap::ALL
+            .iter()
+            .any(|bootstrap| is(bootstrap.file_name()))
+        && !is_download_cache_artifact(name)
 }
 
 pub(crate) fn cef_binary_name() -> &'static str {
@@ -382,30 +400,11 @@ pub fn materialize_cef_runtime(
 
     if release.is_dir() && resources.is_dir() {
         // Raw official distribution
-        copy_dir(&release, destination)?;
-        merge_copy_dir(&resources, destination)?;
+        copy_dir_filtered(&release, destination, &is_runtime_artifact)?;
+        copy_dir_filtered(&resources, destination, &is_runtime_artifact)?;
     } else if distribution_root.join(cef_binary_name()).exists() {
         // Already-flattened distribution
-        fs::create_dir_all(destination)?;
-
-        for entry in fs::read_dir(distribution_root)? {
-            let entry = entry?;
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-
-            if DEV_ARTIFACTS.iter().any(|d| d == &name_str) || is_download_cache_artifact(&name_str)
-            {
-                continue;
-            }
-
-            let path = entry.path();
-            let dest = destination.join(&name);
-            if path.is_dir() {
-                copy_dir(&path, &dest)?;
-            } else {
-                fs::copy(&path, &dest)?;
-            }
-        }
+        copy_dir_filtered(distribution_root, destination, &is_runtime_artifact)?;
     } else {
         return Err(CefError::InvalidDistribution {
             root: distribution_root.to_path_buf(),
@@ -418,24 +417,6 @@ pub fn materialize_cef_runtime(
 
     validate_cef_runtime(destination)?;
     Ok(destination.to_path_buf())
-}
-
-fn merge_copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(dst)?;
-
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let dest = dst.join(entry.file_name());
-        let path = entry.path();
-
-        if path.is_dir() {
-            copy_dir(&path, &dest)?;
-        } else {
-            fs::copy(&path, &dest)?;
-        }
-    }
-
-    Ok(())
 }
 
 /// V8 snapshot file names across CEF versions.
@@ -675,6 +656,50 @@ mod tests {
     }
 
     #[test]
+    fn distributions_leave_the_bootstraps_and_import_library_behind() {
+        let dir = tmp();
+        let dist = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
+        for name in ["bootstrap.exe", "bootstrapc.exe", "libcef.lib"] {
+            fs::write(dist.join(name), "build artifact").unwrap();
+        }
+
+        let dest = dir.path().join("runtime");
+        materialize_cef_runtime(&dist, &dest).unwrap();
+
+        for name in ["bootstrap.exe", "bootstrapc.exe", "libcef.lib"] {
+            assert!(!dest.join(name).exists(), "{name} is not loaded at runtime");
+        }
+        assert!(dest.join(cef_binary_name()).exists());
+    }
+
+    #[test]
+    fn runtime_artifacts_are_told_apart_by_name() {
+        for name in ["libcef.dll", "chrome_elf.dll", "icudtl.dat", "locales"] {
+            assert!(is_runtime_artifact(name), "{name} is loaded at runtime");
+        }
+
+        for name in [
+            "bootstrap.exe",
+            "bootstrapc.exe",
+            "libcef.lib",
+            "include",
+            "CMakeLists.txt",
+            "archive.json",
+        ] {
+            assert!(
+                !is_runtime_artifact(name),
+                "{name} is not loaded at runtime"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_artifacts_ignore_case_like_windows_does() {
+        assert!(!is_runtime_artifact("Bootstrap.exe"));
+        assert!(!is_runtime_artifact("LIBCEF.LIB"));
+    }
+
+    #[test]
     fn flat_distribution_strips_download_cache_residue() {
         let dir = tmp();
         let dist = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
@@ -898,9 +923,8 @@ mod tests {
         let dir = tmp();
         let fake = crate::test_fixtures::cef_runtime(&dir.path().join("dev-cef"));
         let platform = current_platform_name().unwrap_or("linux64");
-        let archive_name = format!(
-            "cef_binary_1.2.3+g6a8d2b7+chromium-131.0.6778.204_{platform}_minimal.tar.bz2"
-        );
+        let archive_name =
+            format!("cef_binary_1.2.3+g6a8d2b7+chromium-131.0.6778.204_{platform}_minimal.tar.bz2");
         fs::write(
             fake.join("archive.json"),
             serde_json::json!({ "type": "minimal", "name": archive_name, "sha1": "x" }).to_string(),
@@ -924,9 +948,8 @@ mod tests {
     fn managed_provenance_fixture(dir: &Path) -> PathBuf {
         let managed = crate::test_fixtures::cef_runtime(&dir.join("managed"));
         let platform = current_platform_name().unwrap_or("linux64");
-        let archive_name = format!(
-            "cef_binary_1.2.3+g6a8d2b7+chromium-131.0.6778.204_{platform}_minimal.tar.bz2"
-        );
+        let archive_name =
+            format!("cef_binary_1.2.3+g6a8d2b7+chromium-131.0.6778.204_{platform}_minimal.tar.bz2");
         fs::write(
             managed.join("archive.json"),
             serde_json::json!({ "type": "minimal", "name": archive_name, "sha1": "x" }).to_string(),

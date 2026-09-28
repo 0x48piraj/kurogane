@@ -10,7 +10,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use kurogane_layout::{AppMetadata, SignConfig, copy_dir, sign_app_bundle, validate_cef_runtime};
+use kurogane_layout::{
+    AppMetadata, Executable, SignConfig, copy_dir, sign_app_bundle, validate_cef_runtime,
+};
 
 use crate::tui;
 
@@ -301,11 +303,15 @@ pub fn build(
     let exe_name = dist.metadata.exe_name.clone();
     let exe_dest = macos_dir(&app_dir).join(&exe_name);
 
-    // Main executable
-    fs::copy(&dist.executable, &exe_dest).with_context(|| {
+    // Main executable; CEF's sandbox bootstrap is a Windows shape
+    let Executable::Application(executable) = &dist.executable else {
+        bail!("a macOS app bundle starts the application itself, not CEF's Windows bootstrap");
+    };
+
+    fs::copy(executable, &exe_dest).with_context(|| {
         format!(
             "failed to copy {} to {}",
-            dist.executable.display(),
+            executable.display(),
             exe_dest.display()
         )
     })?;
@@ -413,7 +419,7 @@ const CEF_ENTITLEMENTS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kurogane_layout::{AppMetadata, ResolvedDistribution, ResolvedResource};
+    use kurogane_layout::{AppMetadata, Executable, ResolvedDistribution, ResolvedResource};
 
     fn sample_metadata() -> AppMetadata {
         AppMetadata {
@@ -455,7 +461,7 @@ mod tests {
 
         let dist = ResolvedDistribution {
             metadata: sample_metadata(),
-            executable: exe,
+            executable: Executable::Application(exe),
             frontend: None,
             cef_runtime: cef,
             extra_resources: Vec::new(),
@@ -493,7 +499,7 @@ mod tests {
 
         let dist = ResolvedDistribution {
             metadata: sample_metadata(),
-            executable: exe,
+            executable: Executable::Application(exe),
             frontend: None,
             cef_runtime: cef,
             extra_resources: Vec::new(),
@@ -549,7 +555,7 @@ mod tests {
 
         let dist = ResolvedDistribution {
             metadata: sample_metadata(),
-            executable: exe,
+            executable: Executable::Application(exe),
             frontend: None,
             cef_runtime: cef,
             extra_resources: Vec::new(),
@@ -574,7 +580,7 @@ mod tests {
 
         let dist = ResolvedDistribution {
             metadata: sample_metadata(),
-            executable: exe,
+            executable: Executable::Application(exe),
             frontend: Some(frontend),
             cef_runtime: cef,
             extra_resources: Vec::new(),
@@ -612,7 +618,7 @@ mod tests {
 
         let dist = ResolvedDistribution {
             metadata: sample_metadata(),
-            executable: exe,
+            executable: Executable::Application(exe),
             frontend: None,
             cef_runtime: cef,
             extra_resources: Vec::new(),
@@ -721,7 +727,7 @@ mod tests {
 
         let dist = ResolvedDistribution {
             metadata: sample_metadata(),
-            executable: exe,
+            executable: Executable::Application(exe),
             frontend: None,
             cef_runtime: cef,
             extra_resources: vec![ResolvedResource {

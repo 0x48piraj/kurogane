@@ -2,8 +2,12 @@
 //!
 //! [`SandboxMode`] controls the sandbox policy for the Chromium process tree.
 //! The selected policy is reflected in CEF configuration, platform-specific
-//! switches and startup validation; a requested sandbox is never silently
-//! ignored when it cannot be enforced.
+//! switches and startup validation; a requested sandbox either starts or
+//! returns an error.
+//!
+//! - `apply_disabled` adds the switches that turn its sandbox off.
+//! - `preflight` checks that the sandbox is available before CEF starts.
+//! - `sandbox_info` returns the state CEF's entry points take, or null.
 
 use std::path::Path;
 
@@ -11,14 +15,25 @@ use crate::chromium_flags::ChromiumFlags;
 use crate::error::RuntimeError;
 use crate::spec::SandboxMode;
 
+mod entry;
+
 #[cfg(target_os = "linux")]
 mod linux;
 
 #[cfg(target_os = "windows")]
-mod windows;
+pub(crate) mod windows;
 
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
+
+#[cfg(target_os = "linux")]
+use linux as platform;
+
+#[cfg(target_os = "windows")]
+use windows as platform;
+
+#[cfg(target_os = "macos")]
+use macos as platform;
 
 /// Chromium switches that turn off all or part of the sandbox.
 const SANDBOX_DISABLING_SWITCHES: [&str; 3] = [
@@ -35,22 +50,23 @@ pub(crate) fn cef_no_sandbox(mode: SandboxMode) -> i32 {
     }
 }
 
+/// Returns the sandbox state to pass to CEF's process entry points.
+///
+/// The same value must reach both `execute_process` and `initialize`.
+pub(crate) fn cef_sandbox_info(mode: SandboxMode) -> *mut u8 {
+    match mode {
+        SandboxMode::Disabled => std::ptr::null_mut(),
+        SandboxMode::Chromium => platform::sandbox_info(),
+    }
+}
+
 /// Applies the platform sandbox switches for the policy.
 ///
 /// [`SandboxMode::Chromium`] adds no switches so the sandbox runs under
 /// Chromium's own defaults.
 pub(crate) fn apply_sandbox_flags(flags: &mut ChromiumFlags, mode: SandboxMode) {
     match mode {
-        SandboxMode::Disabled => {
-            #[cfg(target_os = "linux")]
-            linux::apply_sandbox_flags(flags);
-
-            #[cfg(target_os = "windows")]
-            windows::apply_sandbox_flags(flags);
-
-            #[cfg(target_os = "macos")]
-            macos::apply_sandbox_flags(flags);
-        }
+        SandboxMode::Disabled => platform::apply_disabled(flags),
         SandboxMode::Chromium => {}
     }
 }
@@ -75,23 +91,8 @@ pub(crate) fn sandbox_overrides(flags: &ChromiumFlags, mode: SandboxMode) -> Vec
 pub(crate) fn preflight(mode: SandboxMode, cef_root: &Path) -> Result<(), RuntimeError> {
     match mode {
         SandboxMode::Disabled => Ok(()),
-        SandboxMode::Chromium => chromium_preflight(cef_root),
+        SandboxMode::Chromium => platform::preflight(cef_root),
     }
-}
-
-#[cfg(target_os = "linux")]
-fn chromium_preflight(cef_root: &Path) -> Result<(), RuntimeError> {
-    linux::preflight(cef_root)
-}
-
-#[cfg(target_os = "macos")]
-fn chromium_preflight(_cef_root: &Path) -> Result<(), RuntimeError> {
-    macos::preflight()
-}
-
-#[cfg(target_os = "windows")]
-fn chromium_preflight(_cef_root: &Path) -> Result<(), RuntimeError> {
-    windows::preflight()
 }
 
 #[cfg(test)]
@@ -113,7 +114,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn disabled_policy_adds_disabling_switches() {
         let mut flags = ChromiumFlags::default();
         apply_sandbox_flags(&mut flags, SandboxMode::Disabled);
@@ -146,10 +146,22 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "windows")]
-    fn chromium_policy_is_rejected_on_windows() {
+    fn chromium_policy_needs_the_bootstrap_on_windows() {
+        // The test binary is not loaded by CEF's bootstrap
         assert!(matches!(
             preflight(SandboxMode::Chromium, Path::new(".")),
             Err(RuntimeError::SandboxUnsupported { .. })
         ));
+    }
+
+    #[test]
+    fn a_disabled_sandbox_passes_no_sandbox_state() {
+        assert!(cef_sandbox_info(SandboxMode::Disabled).is_null());
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn only_windows_passes_sandbox_state() {
+        assert!(cef_sandbox_info(SandboxMode::Chromium).is_null());
     }
 }

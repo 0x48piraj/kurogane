@@ -20,10 +20,7 @@ pub fn run() -> Result<()> {
         .status()?;
 
     if !status.success() {
-        let code = status
-            .code()
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "signal".into());
+        let code = launch::describe_status(&status);
         anyhow::bail!("Build failed (exit code: {code})");
     }
 

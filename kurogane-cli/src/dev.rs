@@ -13,7 +13,7 @@ pub fn run() -> Result<()> {
     tui::section("Kurogane Dev");
 
     let cef = launch::ensure_cef_runtime()?;
-    let status = launch::cargo_run(&cef, &[])?;
+    let status = launch::run_app(&cef, &[])?;
 
     launch::exit_with(status)
 }

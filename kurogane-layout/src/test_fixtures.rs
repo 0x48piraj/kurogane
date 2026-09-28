@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{AppMetadata, ResolvedDistribution, ResolvedResource};
+use crate::{AppMetadata, Executable, ResolvedDistribution, ResolvedResource};
 use tempfile::TempDir;
 
 /// Creates a temporary directory for a test.
@@ -116,7 +116,7 @@ pub fn sample_distribution(dir: &Path) -> ResolvedDistribution {
             exe_name: exe_name.to_string(),
             ..Default::default()
         },
-        executable: exe,
+        executable: Executable::Application(exe),
         frontend: Some(frontend),
         cef_runtime: cef,
         extra_resources: vec![ResolvedResource {
@@ -124,6 +124,23 @@ pub fn sample_distribution(dir: &Path) -> ResolvedDistribution {
             destination,
         }],
     }
+}
+
+/// Creates a distribution shaped like a sandboxed Windows application:
+/// CEF's bootstrap under the application's name, loading its library.
+pub fn sandboxed_distribution(dir: &Path) -> ResolvedDistribution {
+    let mut dist = sample_distribution(dir);
+
+    let bootstrap = dir.join("bootstrap.exe");
+    write(&bootstrap, "bootstrap");
+
+    let library = dir.join("myapp_lib.dll");
+    write(&library, "application");
+
+    dist.metadata.exe_name = "myapp.exe".to_string();
+    dist.executable = Executable::Bootstrap { bootstrap, library };
+
+    dist
 }
 
 fn write(path: impl AsRef<Path>, contents: &str) {

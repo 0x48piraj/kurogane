@@ -25,12 +25,7 @@ pub fn package_directory(
 ) -> Result<PathBuf, PackageError> {
     let layout = BundleLayout::new(output_dir);
     layout.materialize(dist)?;
-
-    let exe_name = dist
-        .executable
-        .file_name()
-        .ok_or_else(|| crate::BundleError::InvalidExecutablePath(dist.executable.clone()))?;
-    layout.verify(exe_name)?;
+    layout.verify(dist)?;
 
     Ok(layout.root().to_path_buf())
 }
@@ -136,7 +131,7 @@ mod tests {
     fn package_directory_rejects_invalid_distribution() {
         let dir = crate::test_fixtures::tmp_dir();
         let mut dist = crate::test_fixtures::sample_distribution(dir.path());
-        dist.executable = dir.path().join("nonexistent");
+        dist.executable = crate::Executable::Application(dir.path().join("nonexistent"));
 
         let out = dir.path().join("dist");
         let result = package_directory(&dist, &out);
