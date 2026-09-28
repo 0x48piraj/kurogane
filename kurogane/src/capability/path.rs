@@ -497,7 +497,7 @@ mod tests {
     #[test]
     fn empty_and_nul_are_invalid() {
         assert!(invalid(""));
-        let nul = unsafe { OsString::from_encoded_bytes_unchecked(b"a\0b".to_vec()) };
+        let nul = OsString::from("a\0b");
         assert!(matches!(
             parse_request(&PathBuf::from(nul)),
             Err(FsError::InvalidPath(_))

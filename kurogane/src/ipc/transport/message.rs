@@ -113,6 +113,11 @@ fn build_shm_parts(name: &str, envelope: &Envelope, parts: &[&[u8]]) -> Option<P
         return None;
     }
 
+    // SAFETY: `builder.memory()` remains valid and writable for `total_size`
+    // bytes throughout `builder`'s lifetime. Total written bytes (`ENVELOPE_SIZE`
+    // plus payload parts) equal `total_size` keeping all offsets strictly in bounds.
+    // Sources are distinct Rust buffers outside the newly mapped region, satisfying
+    // `copy_nonoverlapping`.
     unsafe {
         let ptr = builder.memory() as *mut u8;
         let env_bytes = encode_envelope_bytes(envelope);

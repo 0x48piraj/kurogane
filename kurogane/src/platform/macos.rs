@@ -58,6 +58,10 @@ pub fn init_ns_app(sandbox: crate::SandboxMode) -> Result<(), RuntimeError> {
 
     let mtm = MainThreadMarker::new().expect("init_ns_app must run on the main thread");
 
+    // SAFETY: `+sharedApplication` is a valid zero-arg class method on
+    // `SimpleApplication` (an `NSApplication` subclass). Main-thread
+    // invocation is verified above, and `Retained` safely manages
+    // ownership of the returned instance.
     unsafe {
         let _: Retained<AnyObject> = msg_send![SimpleApplication::class(), sharedApplication];
     }
@@ -93,6 +97,8 @@ fn load_framework() -> Result<(), RuntimeError> {
     let framework = CString::new(framework.as_os_str().as_bytes())
         .map_err(|_| RuntimeError::InvalidCefInstallation("invalid framework path".into()))?;
 
+    // SAFETY: `framework` is a valid, NUL-terminated C string that outlives the call.
+    // Executed prior to any other CEF invocations, satisfying CEF's pre-initialization requirement.
     let loaded = unsafe { cef::sys::cef_load_library(framework.as_ptr()) };
     if loaded != 1 {
         return Err(RuntimeError::InvalidCefInstallation(
@@ -159,6 +165,9 @@ define_class! {
 impl SimpleAppDelegate {
     fn new(mtm: MainThreadMarker) -> Retained<Self> {
         let this = SimpleAppDelegate::alloc(mtm).set_ivars(());
+        // SAFETY: `this` is a freshly allocated instance with initialized ivars.
+        // Invoking `-init` via `super` correctly executes `NSObject`'s
+        // zero-arg designated initializer.
         unsafe { msg_send![super(this), init] }
     }
 }

@@ -94,3 +94,6 @@ path = "scenarios/sandbox-smoke.rs"
 [[example]]
 name = "workspace"
 path = "scenarios/workspace/main.rs"
+
+[lints]
+workspace = true

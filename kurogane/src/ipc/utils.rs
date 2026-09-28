@@ -16,6 +16,9 @@ pub fn create_array_buffer_from_bytes(payload: &[u8]) -> Option<V8Value> {
         return None;
     }
 
+    // SAFETY: `store.data()` is valid and writable for `payload.len()`
+    // bytes throughout `store`'s lifetime. The fresh CEF allocation is
+    // distinct from `payload`, satisfying `copy_nonoverlapping`.
     unsafe {
         std::ptr::copy_nonoverlapping(payload.as_ptr(), store.data() as *mut u8, payload.len());
     }
