@@ -489,8 +489,12 @@ fn openat2_supported() -> bool {
             drop(unsafe { OwnedFd::from_raw_fd(rc as RawFd) });
             return true;
         }
-        // Any error other than ENOSYS means the syscall exists
-        io::Error::last_os_error().raw_os_error() != Some(libc::ENOSYS)
+        // Any other error means the syscall exists. A seccomp filter that does
+        // not know it answers EPERM and would refuse every later call too
+        !matches!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(libc::ENOSYS | libc::EPERM)
+        )
     })
 }
 
