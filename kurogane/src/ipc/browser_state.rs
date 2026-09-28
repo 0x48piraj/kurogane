@@ -1,4 +1,4 @@
-//! Browser-process IPC dispatch and transaction state.
+//! Browser-process IPC errors and message context.
 //!
 //! Defines the error type handlers return and the context the browser
 //! process records for every message.

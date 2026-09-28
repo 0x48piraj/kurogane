@@ -48,10 +48,9 @@ impl RequestResponseSubsystem {
         envelope: &Envelope,
         payload: &[u8],
         ctx: IpcContext,
-        pending_clone: PendingMap,
     ) -> bool {
         match envelope.opcode {
-            RPC_INVOKE => self.on_invoke(frame, envelope, payload, ctx, pending_clone),
+            RPC_INVOKE => self.on_invoke(frame, envelope, payload, ctx),
             RPC_CANCEL => self.on_cancel(envelope, ctx),
             _ => {
                 debug!(
@@ -81,7 +80,6 @@ impl RequestResponseSubsystem {
         envelope: &Envelope,
         payload: &[u8],
         ctx: IpcContext,
-        pending_clone: PendingMap,
     ) -> bool {
         let (cmd, data) = match decode_cmd_payload(payload) {
             Some(v) => v,
@@ -99,7 +97,7 @@ impl RequestResponseSubsystem {
         if self.is_async(cmd) {
             let aborted = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let key = PendingKey::new(ctx.browser_id, ctx.frame.clone(), ctx.origin.clone(), id);
-            pending_clone.insert(
+            self.pending.insert(
                 key.clone(),
                 PendingEntry {
                     aborted: aborted.clone(),
@@ -109,7 +107,7 @@ impl RequestResponseSubsystem {
             let responder = BinaryResponder::with_abort(
                 Box::new({
                     let frame = frame.clone();
-                    let pending = pending_clone.clone();
+                    let pending = self.pending.clone();
                     let payload_kind = envelope.payload_kind;
                     move |result| {
                         pending.remove(&key);
@@ -189,7 +187,9 @@ impl RequestResponseSubsystem {
 /// Sends a response to `frame`.
 ///
 /// When `url_origin` is set, the response is dropped if the frame has been
-/// destroyed or navigated to a different document.
+/// destroyed or now shows a document of another origin. A navigation within
+/// the origin aborts the request instead
+/// ([`IpcRouter::clear_for_frame`](crate::ipc::router::IpcRouter::clear_for_frame)).
 fn send_response(
     frame: &Frame,
     payload_kind: u8,

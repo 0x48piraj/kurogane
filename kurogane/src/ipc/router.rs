@@ -60,7 +60,7 @@ fn verdict<'p>(
 /// Standalone renderer-side dispatcher.
 ///
 /// Routes a decoded envelope + payload to the appropriate subsystem handler.
-/// Does NOT require an IpcRouter instance so it works in both browser and renderer processes.
+/// Needs no [`IpcRouter`] which exists only in the browser process.
 pub fn route_renderer(frame: &mut Frame, envelope: &Envelope, payload: &[u8]) -> bool {
     match envelope.subsystem {
         SUB_RPC => crate::ipc::rpc::renderer::handle_rpc_renderer(frame, envelope, payload),
@@ -102,13 +102,9 @@ impl IpcRouter {
             return true;
         }
         match envelope.subsystem {
-            SUB_RPC => self.request_response.handle_browser(
-                frame,
-                envelope,
-                payload,
-                ctx,
-                self.request_response.pending.clone(),
-            ),
+            SUB_RPC => self
+                .request_response
+                .handle_browser(frame, envelope, payload, ctx),
             SUB_EVENT => self.event.handle_browser(frame, envelope, payload, ctx),
             SUB_STREAM => self.stream.handle_browser(frame, envelope, payload, ctx),
             _ => {

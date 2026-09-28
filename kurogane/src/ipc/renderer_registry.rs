@@ -308,7 +308,9 @@ impl<C: ContextHandle, V: Clone> Registry<C, V> {
     }
 }
 
-/// Returns a starting id derived from the renderer process id.
+/// Returns a process-specific starting ID.
+///
+/// Uses `RandomState` to randomize the starting point.
 fn random_start() -> i32 {
     use std::hash::{BuildHasher, RandomState};
     let seed = RandomState::new().hash_one(std::process::id());
