@@ -21,7 +21,7 @@ use crate::scheme::{CustomScheme, SchemeHandler, validate_scheme_name};
 use crate::chromium_flags::ChromiumFlag;
 use crate::credentials::CredentialStorage;
 use crate::gpu::GpuMode;
-use crate::capability::Filesystem;
+use crate::capability::{FilesystemBuilder, FsConfigError};
 use crate::acl::Origin;
 
 mod resolver;
@@ -266,6 +266,9 @@ pub struct App {
 
     /// Builder misuse, reported together by `build()` before anything starts.
     problems: Vec<ConfigError>,
+
+    /// A filesystem configuration its builder rejected, reported by `build()`.
+    filesystem_error: Option<FsConfigError>,
 }
 
 impl App {
@@ -302,6 +305,7 @@ impl App {
             renderer_delegates: Vec::new(),
             scheme_handlers: Vec::new(),
             problems: Vec::new(),
+            filesystem_error: None,
         }
     }
 
@@ -318,12 +322,15 @@ impl App {
 
     /// Fails with every recorded configuration problem.
     fn check_configuration(&mut self) -> Result<(), RuntimeError> {
-        if self.problems.is_empty() {
-            Ok(())
-        } else {
-            Err(RuntimeError::InvalidConfiguration(std::mem::take(
+        if !self.problems.is_empty() {
+            return Err(RuntimeError::InvalidConfiguration(std::mem::take(
                 &mut self.problems,
-            )))
+            )));
+        }
+
+        match self.filesystem_error.take() {
+            Some(error) => Err(RuntimeError::InvalidFilesystem(error)),
+            None => Ok(()),
         }
     }
 
@@ -339,8 +346,8 @@ impl App {
     /// open fails the stream.
     ///
     /// Naming a capability command such as `fs.read_file` (granted through
-    /// [`Filesystem`]) or the opaque origin is a configuration error, reported
-    /// by [`App::build`].
+    /// [`Filesystem`](crate::capability::Filesystem)) or the opaque origin is
+    /// a configuration error, reported by [`App::build`].
     pub fn permit(
         mut self,
         name: impl Into<String>,
@@ -406,7 +413,31 @@ impl App {
     ///
     /// A handler or ACL rule already using an `fs.*` name (including a second
     /// call to this method) is a configuration error, reported by [`App::build`].
-    pub fn filesystem(mut self, fs: Filesystem) -> Self {
+    ///
+    /// Takes the builder rather than a built
+    /// [`Filesystem`](crate::capability::Filesystem), because the roots are
+    /// opened here in the browser process only. Helper processes run this
+    /// same code but never serve `fs.*`, and a directory handle a helper
+    /// opened before entering Chromium's sandbox would stay usable inside it.
+    /// A configuration the builder rejects is reported by [`App::build`] as
+    /// [`RuntimeError::InvalidFilesystem`].
+    pub fn filesystem(self, fs: FilesystemBuilder) -> Self {
+        self.install_filesystem(fs, crate::runtime::is_browser_process())
+    }
+
+    fn install_filesystem(mut self, fs: FilesystemBuilder, browser_process: bool) -> Self {
+        if !browser_process {
+            return self;
+        }
+
+        let fs = match fs.build() {
+            Ok(fs) => fs,
+            Err(error) => {
+                self.filesystem_error = Some(error);
+                return self;
+            }
+        };
+
         for (command, handler) in crate::capability::commands::handlers(fs) {
             let name = command.name();
             self.guard_unique_name(name);
@@ -671,7 +702,9 @@ impl App {
         F: Fn(&SecondInstance, &AppHandle) + Send + Sync + 'static,
     {
         let cell = self.cell.clone();
-        self.on_second_instance = Some(Arc::new(move |launch: &SecondInstance| f(launch, cell.get())));
+        self.on_second_instance = Some(Arc::new(move |launch: &SecondInstance| {
+            f(launch, cell.get())
+        }));
         self
     }
 
@@ -1013,10 +1046,41 @@ mod tests {
         assert_eq!(app.scheme_handlers.len(), 1);
     }
 
-    fn empty_filesystem() -> Filesystem {
-        Filesystem::builder()
-            .build()
-            .expect("an empty configuration always builds")
+    fn empty_filesystem() -> FilesystemBuilder {
+        crate::capability::Filesystem::builder()
+    }
+
+    /// A configuration the builder rejects, whatever the machine.
+    fn rejected_filesystem() -> FilesystemBuilder {
+        let mut builder = crate::capability::Filesystem::builder();
+        let scope = builder.scope("data", |_| {});
+        builder.grant(Origin::OPAQUE, scope, crate::capability::FsAccess::READ);
+        builder
+    }
+
+    #[test]
+    fn a_rejected_filesystem_is_reported_before_starting_anything() {
+        let result = App::new("./dist").filesystem(rejected_filesystem()).build();
+
+        assert!(matches!(
+            result,
+            Err(RuntimeError::InvalidFilesystem(FsConfigError::OpaqueOrigin))
+        ));
+    }
+
+    #[test]
+    fn helper_processes_open_no_filesystem_roots() {
+        // The builder would fail if it were built, so a clean helper means
+        // nothing was opened; nor is anything registered to serve
+        let helper = App::new("./dist").install_filesystem(rejected_filesystem(), false);
+
+        assert!(helper.filesystem_error.is_none());
+        assert!(
+            !helper
+                .async_handlers
+                .keys()
+                .any(|name| name.starts_with("fs."))
+        );
     }
 
     #[test]

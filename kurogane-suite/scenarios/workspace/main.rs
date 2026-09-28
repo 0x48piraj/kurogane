@@ -61,7 +61,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Reveal the granted root, never a page-supplied path
     let reveal_root = root.clone();
     App::new(&dist)
-        .filesystem(builder.build()?)
+        .filesystem(builder)
         .command("workspace.reveal", move |_: Value, _: &AppHandle| {
             reveal(&reveal_root).map_err(|e| IpcError::new(format!("reveal failed: {e}")))?;
             Ok(Value::Null)

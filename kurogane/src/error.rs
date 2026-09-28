@@ -1,6 +1,8 @@
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 
+use crate::capability::FsConfigError;
+
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum RuntimeError {
@@ -40,6 +42,11 @@ pub enum RuntimeError {
     /// The [`App`](crate::App) builder was misconfigured. Every problem is
     /// listed; nothing was started.
     InvalidConfiguration(Vec<ConfigError>),
+
+    /// The filesystem configuration passed to
+    /// [`App::filesystem`](crate::App::filesystem) was rejected; nothing was
+    /// started.
+    InvalidFilesystem(FsConfigError),
 }
 
 impl Display for RuntimeError {
@@ -186,6 +193,11 @@ impl Display for RuntimeError {
                 }
                 f.write_str("\nNothing was started. Fix the builder calls above.")
             }
+
+            RuntimeError::InvalidFilesystem(error) => write!(
+                f,
+                "Invalid filesystem configuration:\n\n  {error}\n\nNothing was started."
+            ),
         }
     }
 }
@@ -198,6 +210,8 @@ impl std::error::Error for RuntimeError {
             | RuntimeError::CacheUnavailable { source, .. } => Some(source),
 
             RuntimeError::ExecutableUnavailable(source) => Some(source),
+
+            RuntimeError::InvalidFilesystem(error) => Some(error),
 
             RuntimeError::InvalidAssetRoot(_)
             | RuntimeError::InvalidFrontendUrl(_)
