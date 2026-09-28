@@ -5,6 +5,8 @@
 
 use anyhow::Result;
 use std::fs;
+use std::io;
+use std::path::Path;
 use kurogane_layout::cache_root;
 
 use crate::tui;
@@ -16,6 +18,9 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
 
     // Track failed removals for the final error
     let mut failed: Vec<&str> = Vec::new();
+
+    // Paths from the project metadata
+    let project = cargo_metadata::MetadataCommand::new().no_deps().exec();
 
     // Confirm destructive system-wide cleanup
     if nuclear && !confirmed {
@@ -58,67 +63,29 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
 
         // Global CEF installs
         let cef = kurogane_layout::install_root();
-
-        if cef.exists() {
-            match fs::remove_dir_all(&cef) {
-                Ok(_) => tui::field("cef", "removed"),
-                Err(e) => {
-                    tui::warn(&format!("Failed to remove CEF runtimes: {}", e));
-                    tui::field("cef", "failed");
-                    failed.push("cef");
-                }
-            }
-        } else {
-            tui::field("cef", "clean");
-        }
+        remove("cef", "CEF runtimes", &cef, &mut failed);
 
         // Kurogane's build output and materialized CEF runtimes
-        let target_kurogane = std::path::PathBuf::from("target").join("kurogane");
-
-        if target_kurogane.exists() {
-            match fs::remove_dir_all(&target_kurogane) {
-                Ok(_) => tui::field("target/kurogane", "removed"),
-                Err(e) => {
-                    tui::warn(&format!("Failed to remove Kurogane build output: {}", e));
-                    tui::field("target/kurogane", "failed");
-                    failed.push("target/kurogane");
-                }
+        match &project {
+            Ok(metadata) => {
+                let target = crate::launch::target_dir_in(metadata.target_directory.as_std_path());
+                remove(
+                    "target/kurogane",
+                    "Kurogane build output",
+                    &target,
+                    &mut failed,
+                );
             }
-        } else {
-            tui::field("target/kurogane", "clean");
+            Err(e) => tui::field("target/kurogane", format!("skipped: {e}")),
         }
 
         // Shared CEF wrapper builds, keyed to the runtimes removed above
         let wrapper = cache_root().join("wrapper");
-
-        if wrapper.exists() {
-            match fs::remove_dir_all(&wrapper) {
-                Ok(_) => tui::field("wrapper", "removed"),
-                Err(e) => {
-                    tui::warn(&format!("Failed to remove CEF wrapper cache: {}", e));
-                    tui::field("wrapper", "failed");
-                    failed.push("wrapper");
-                }
-            }
-        } else {
-            tui::field("wrapper", "clean");
-        }
+        remove("wrapper", "CEF wrapper cache", &wrapper, &mut failed);
 
         // Build tools cache
         let tools = cache_root().join("tools");
-
-        if tools.exists() {
-            match fs::remove_dir_all(&tools) {
-                Ok(_) => tui::field("tools", "removed"),
-                Err(e) => {
-                    tui::warn(&format!("Failed to remove build tools: {}", e));
-                    tui::field("tools", "failed");
-                    failed.push("tools");
-                }
-            }
-        } else {
-            tui::field("tools", "clean");
-        }
+        remove("tools", "build tools", &tools, &mut failed);
     }
 
     tui::blank();
@@ -126,19 +93,12 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
     tui::step("Cleaning build artifacts");
 
     // dist/
-    let dist = std::path::PathBuf::from("dist");
-
-    if dist.exists() {
-        match fs::remove_dir_all(&dist) {
-            Ok(_) => tui::field("dist", "removed"),
-            Err(e) => {
-                tui::warn(&format!("Failed to remove dist: {}", e));
-                tui::field("dist", "failed");
-                failed.push("dist");
-            }
+    match &project {
+        Ok(metadata) => {
+            let dist = metadata.workspace_root.as_std_path().join("dist");
+            remove("dist", "dist", &dist, &mut failed);
         }
-    } else {
-        tui::field("dist", "clean");
+        Err(e) => tui::field("dist", format!("skipped: {e}")),
     }
 
     tui::blank();
@@ -167,46 +127,13 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
     tui::step("Clearing runtime cache");
 
     // Templates
-    if let Some(templates) = templates.filter(|p| p.exists()) {
-        match fs::remove_dir_all(&templates) {
-            Ok(_) => tui::field("templates", "removed"),
-            Err(e) => {
-                tui::warn(&format!("Failed to remove template cache: {}", e));
-                tui::field("templates", "failed");
-                failed.push("templates");
-            }
-        }
-    } else {
-        tui::field("templates", "clean");
+    match templates {
+        Some(templates) => remove("templates", "template cache", &templates, &mut failed),
+        None => tui::field("templates", "clean"),
     }
 
-    // Profiles
-    if profiles.exists() {
-        match fs::remove_dir_all(&profiles) {
-            Ok(_) => tui::field("profiles", "removed"),
-            Err(e) => {
-                tui::warn(&format!("Failed to remove profiles: {}", e));
-                tui::field("profiles", "failed");
-                failed.push("profiles");
-            }
-        }
-    } else {
-        tui::field("profiles", "clean");
-    }
-
-    // Showcase
-    if showcase.exists() {
-        match fs::remove_dir_all(&showcase) {
-            Ok(_) => tui::field("showcase", "removed"),
-            Err(e) => {
-                tui::warn(&format!("Failed to remove showcase: {}", e));
-                tui::field("showcase", "failed");
-                failed.push("showcase");
-            }
-        }
-    } else {
-        tui::field("showcase", "clean");
-    }
+    remove("profiles", "profiles", &profiles, &mut failed);
+    remove("showcase", "showcase", &showcase, &mut failed);
 
     tui::blank();
 
@@ -224,4 +151,18 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
     }
 
     Ok(())
+}
+
+/// Removes the directory `path` and reports it under `label`, recording a
+/// failure in `failed`. An absent directory is already clean.
+fn remove(label: &'static str, what: &str, path: &Path, failed: &mut Vec<&'static str>) {
+    match fs::remove_dir_all(path) {
+        Ok(()) => tui::field(label, "removed"),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => tui::field(label, "clean"),
+        Err(e) => {
+            tui::warn(&format!("Failed to remove {what}: {e}"));
+            tui::field(label, "failed");
+            failed.push(label);
+        }
+    }
 }

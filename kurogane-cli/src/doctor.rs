@@ -249,24 +249,35 @@ pub fn run(json: bool) -> Result<()> {
     tui::section("Project");
 
     // Resolve workspace root
-    let workspace_root = MetadataCommand::new().exec().ok().map(|m| {
-        let root = m.workspace_root.into_std_path_buf();
-        tui::success("Cargo workspace detected");
-        tui::field("root", tui::format_path(&root));
-        root
-    });
+    let workspace_root = match MetadataCommand::new().no_deps().exec() {
+        Ok(metadata) => {
+            let root = metadata.workspace_root.into_std_path_buf();
+            tui::success("Cargo workspace detected");
+            tui::field("root", tui::format_path(&root));
+            Some(root)
+        }
+        Err(e) => {
+            tui::error("Not inside a Cargo workspace");
+            tui::field("cause", e);
+            fail += 1;
+            None
+        }
+    };
 
-    if workspace_root.is_none() {
-        tui::error("Not inside a Cargo workspace");
-        fail += 1;
-    }
-
-    // Check configured frontend from the resolved workspace root
-    let packaging_config = workspace_root.as_deref().and_then(|root| {
-        kurogane_layout::PackagingConfig::load(root)
-            .ok()
-            .map(|c| (root, c))
-    });
+    // Check configured frontend from the resolved workspace root. A missing
+    // kurogane.toml loads as the defaults
+    let packaging_config = match workspace_root.as_deref() {
+        None => None,
+        Some(root) => match kurogane_layout::PackagingConfig::load(root) {
+            Ok(config) => Some((root, config)),
+            Err(e) => {
+                tui::error("kurogane.toml could not be loaded");
+                tui::field("cause", e);
+                fail += 1;
+                None
+            }
+        },
+    };
 
     let check_frontend = |root: &std::path::Path, label: &str, path: &std::path::Path| -> bool {
         let anchored = kurogane_layout::anchor_path(root, path);
@@ -304,8 +315,6 @@ pub fn run(json: bool) -> Result<()> {
         if let Some(run) = &config.app.frontend_run {
             tui::field("frontend-run", run);
         }
-    } else {
-        tui::info("No kurogane.toml found");
     }
 
     tui::section("Summary");

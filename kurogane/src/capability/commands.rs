@@ -24,9 +24,9 @@
 //! `null`.
 //!
 //! [`FsError`] maps to [`ErrorCode::Capability`] (-5),
-//! [`ErrorCode::PathDenied`] (-6), [`ErrorCode::PathInvalid`] (-7) and
-//! [`ErrorCode::Handler`] (0). Malformed JSON or binary frames return
-//! [`ErrorCode::Buffer`] (-2).
+//! [`ErrorCode::PathDenied`] (-6), [`ErrorCode::PathInvalid`] (-7),
+//! [`ErrorCode::TooLarge`] (-8) and [`ErrorCode::Handler`] (0).
+//! Malformed JSON or binary frames return [`ErrorCode::Buffer`] (-2).
 
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};

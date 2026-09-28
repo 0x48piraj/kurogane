@@ -56,8 +56,9 @@ fn build(cef: &Path, dest: &Path) -> Result<()> {
     tui::step("Building CEF wrapper");
     tui::field("cache", tui::format_path(dest));
 
-    // Keep intermediate build artifacts out of the cache entry
-    let scratch = dest.join("build");
+    // Keep intermediate build artifacts out of the cache entry, and apart
+    // from another process building the same entry at the same time
+    let scratch = dest.join(format!("build-{}", std::process::id()));
 
     if scratch.exists() {
         std::fs::remove_dir_all(&scratch)

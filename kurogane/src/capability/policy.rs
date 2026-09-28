@@ -26,8 +26,8 @@ use std::ops::{BitOr, BitOrAssign};
 
 /// A set of operational filesystem capabilities.
 ///
-/// The default is [`FsAccess::NONE`]; native access is granted without
-/// restriction.
+/// The default is [`FsAccess::NONE`]. The bits limit what web content may do
+/// through `fs.*`; the application's own Rust code is not restricted by them.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub struct FsAccess(u8);
 

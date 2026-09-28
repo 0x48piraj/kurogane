@@ -82,7 +82,7 @@ pub(crate) fn cef_build_script_override(cef: &Path) -> Result<Vec<OsString>> {
 
         // Fall back to the build script
         Err(err) => {
-            crate::tui::warn(&format!("Shared CEF wrapper unavailable: {err}"));
+            crate::tui::warn(&format!("Shared CEF wrapper unavailable: {err:#}"));
             return Ok(Vec::new());
         }
     };
