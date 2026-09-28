@@ -83,13 +83,12 @@ fn promote_unbundled(app: &NSApplication) {
 fn load_framework() -> Result<(), RuntimeError> {
     // The library loader assumes an app-bundle layout
     // (<exe>/../Frameworks/...), which is unavailable in non-bundled dev runs
-    let detected = detect_cef_root_with_version(None).map_err(|_| RuntimeError::CefNotInstalled)?;
+    let detected = detect_cef_root_with_version(None).map_err(crate::runtime::cef_not_found)?;
 
-    let framework = detected
-        .root
-        .join(cef::sys::FRAMEWORK_PATH)
-        .canonicalize()
-        .map_err(|_| RuntimeError::CefNotInstalled)?;
+    let framework = detected.root.join(cef::sys::FRAMEWORK_PATH);
+    let framework = framework.canonicalize().map_err(|e| {
+        RuntimeError::InvalidCefInstallation(format!("{}: {e}", framework.display()))
+    })?;
 
     let framework = CString::new(framework.as_os_str().as_bytes())
         .map_err(|_| RuntimeError::InvalidCefInstallation("invalid framework path".into()))?;

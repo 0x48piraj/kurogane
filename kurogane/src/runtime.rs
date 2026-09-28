@@ -10,7 +10,7 @@ use crate::ShutdownSignal;
 use crate::browser_registry::{BrowserRegistry, BrowserId, BrowserMetadata, BrowserType};
 use crate::window_registry::{WindowRegistry, WindowId, WindowMetadata};
 use crate::window::{KuroganeWindowDelegate, KuroganeBrowserViewDelegate};
-use kurogane_layout::{detect_cef_root_with_version, validate_cef_runtime, profile_dir};
+use kurogane_layout::{DetectError, detect_cef_root_with_version, validate_cef_runtime, profile_dir};
 use crate::ipc::IpcRouter;
 use crate::spec::{RuntimeMode, RuntimeSpec, SandboxMode};
 use crate::debug;
@@ -34,7 +34,7 @@ struct RuntimeLayout {
 fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeError> {
     debug!("Resolving runtime layout");
 
-    let exe = std::env::current_exe().expect("failed to get current exe path");
+    let exe = std::env::current_exe().map_err(RuntimeError::ExecutableUnavailable)?;
 
     let cache_dir = profile_dir(&profile_name(profile_id, &exe));
     debug!("Cache dir: {}", cache_dir.display());
@@ -44,15 +44,14 @@ fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeEr
         source: e,
     })?;
 
-    let detected = detect_cef_root_with_version(None).map_err(|_| RuntimeError::CefNotInstalled)?;
+    let detected = detect_cef_root_with_version(None).map_err(cef_not_found)?;
 
     validate_cef_runtime(&detected.root)
         .map_err(|e| RuntimeError::InvalidCefInstallation(e.to_string()))?;
 
-    let cef_root = detected
-        .root
-        .canonicalize()
-        .map_err(|_| RuntimeError::CefNotInstalled)?;
+    let cef_root = detected.root.canonicalize().map_err(|e| {
+        RuntimeError::InvalidCefInstallation(format!("{}: {e}", detected.root.display()))
+    })?;
 
     debug!("CEF root: {}", cef_root.display());
 
@@ -83,6 +82,15 @@ fn profile_name(profile_id: Option<String>, exe: &std::path::Path) -> String {
         format!("{id}-dev")
     } else {
         id
+    }
+}
+
+/// Maps a failure to find the Chromium runtime onto what the user can act on.
+pub(crate) fn cef_not_found(error: DetectError) -> RuntimeError {
+    match error {
+        DetectError::CurrentExe(source) => RuntimeError::ExecutableUnavailable(source),
+        // Not found and whatever a newer layout crate adds, leaves no runtime
+        _ => RuntimeError::CefNotInstalled,
     }
 }
 
@@ -209,7 +217,7 @@ fn install_ctrlc_handler(
     // Prevent double-fire (dev hammers Ctrl+C twice)
     let quitting = Arc::new(AtomicBool::new(false));
 
-    ctrlc::set_handler({
+    let installed = ctrlc::set_handler({
         let quitting = quitting.clone();
         let browser_registry = browser_registry.clone();
         let window_registry = window_registry.clone();
@@ -228,8 +236,13 @@ fn install_ctrlc_handler(
             let mut task = CloseAllTask::new(browser_registry.clone(), window_registry.clone());
             post_task(ThreadId::UI, Some(&mut task));
         }
-    })
-    .expect("failed to install SIGINT handler");
+    });
+
+    // A host that installed its own handler keeps it; the app still closes
+    // normally, only not on Ctrl+C
+    if let Err(err) = installed {
+        eprintln!("kurogane: Ctrl+C will not close the app: {err}");
+    }
 }
 
 pub(crate) fn close_all_browsers_and_windows(
@@ -943,8 +956,10 @@ impl AppInstance {
         url: &str,
         rc_settings: &cef::RequestContextSettings,
     ) -> Option<BrowserHandle> {
-        let rc = cef::request_context_create_context(Some(rc_settings), None);
-        self.create_child_browser_impl(parent, bounds, url, rc)
+        // Without its own context the browser would share the global cookie
+        // and cache partition the caller asked to avoid
+        let rc = cef::request_context_create_context(Some(rc_settings), None)?;
+        self.create_child_browser_impl(parent, bounds, url, Some(rc))
     }
 
     fn create_child_browser_impl(
