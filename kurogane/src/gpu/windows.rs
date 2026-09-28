@@ -1,14 +1,14 @@
 //! Windows GPU flags configuration.
 
 use crate::chromium_flags::ChromiumFlags;
+use crate::spec::SandboxMode;
 
-pub(super) fn apply_hardware(flags: &mut ChromiumFlags) {
-    // Run GPU work inside the browser process rather than in a child.
-    //
-    // On Windows + NVIDIA, the sandboxed GPU subprocess cannot survive a D3D
-    // context reset (Chromium bug workaround: exit_on_context_lost).
-    // After 3 crashes Chromium falls back to software.
-    // Keeping GPU in-process avoids the subprocess entirely and
-    // gives stable hardware acceleration.
+pub(super) fn apply_hardware(flags: &mut ChromiumFlags, sandbox: SandboxMode) {
+    // Sandboxed Chromium uses a separate GPU process
+    if sandbox == SandboxMode::Chromium {
+        return;
+    }
+
+    // Avoid restarting the GPU process after device loss
     flags.set("in-process-gpu");
 }

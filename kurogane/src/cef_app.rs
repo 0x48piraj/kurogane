@@ -46,7 +46,7 @@ wrap_app! {
             }
 
             apply_sandbox_flags(&mut flags, self.spec.sandbox_mode);
-            apply_gpu_flags(&mut flags, self.spec.gpu_mode);
+            apply_gpu_flags(&mut flags, self.spec.gpu_mode, self.spec.sandbox_mode);
             apply_credential_flags(&mut flags, self.spec.credential_storage);
 
             // Apply user overrides
