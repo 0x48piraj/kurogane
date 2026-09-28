@@ -260,7 +260,7 @@ impl<'a> AuthorizedFs<'a> {
     pub fn read_file(&self, path: &Path) -> Result<Vec<u8>, FsError> {
         let target = self.resolve(FsAccess::READ, path)?;
         let file = target.root.safe().open_file(&target.rel)?;
-        self.verify(target.root, &file)?;
+        self.verify(target.root, &target.rel, &file)?;
         self.single_link(&file)?;
         let limit = self.max_file_size;
         if file.metadata()?.len() > limit {
@@ -376,7 +376,7 @@ impl<'a> AuthorizedFs<'a> {
         let source = self.resolve(FsAccess::READ, from)?;
         let destination = self.resolve(FsAccess::CREATE, to)?;
         let mut input = source.root.safe().open_file(&source.rel)?;
-        self.verify(source.root, &input)?;
+        self.verify(source.root, &source.rel, &input)?;
         self.single_link(&input)?;
 
         let (parent, leaf) = destination.split()?;
@@ -402,7 +402,7 @@ impl<'a> AuthorizedFs<'a> {
     pub fn exists(&self, path: &Path) -> Result<bool, FsError> {
         let target = self.resolve(FsAccess::METADATA, path)?;
         match target.root.safe().probe(&target.rel) {
-            Ok(file) => self.verify(target.root, &file).map(|()| true),
+            Ok(file) => self.verify(target.root, &target.rel, &file).map(|()| true),
             Err(FsError::Io(e)) if e.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(e),
         }
@@ -412,7 +412,7 @@ impl<'a> AuthorizedFs<'a> {
     pub fn size(&self, path: &Path) -> Result<u64, FsError> {
         let target = self.resolve(FsAccess::METADATA, path)?;
         let file = target.root.safe().probe(&target.rel)?;
-        self.verify(target.root, &file)?;
+        self.verify(target.root, &target.rel, &file)?;
         self.single_link(&file)?;
         Ok(file.metadata()?.len())
     }
@@ -427,7 +427,7 @@ impl<'a> AuthorizedFs<'a> {
         let dir = target.root.safe().open_dir(&parent)?;
         let file = dir.create_file(leaf, Create::Existing)?;
         // Verified before the first byte changes: truncation comes after
-        self.verify(target.root, &file)?;
+        self.verify(target.root, &target.rel, &file)?;
         self.single_link(&file)?;
         file.set_len(0)?;
         Ok(file)
@@ -625,9 +625,10 @@ impl<'a> AuthorizedFs<'a> {
         Ok(())
     }
 
-    /// Rule 5 for an opened object.
-    fn verify(&self, anchor: &Root, object: &File) -> Result<(), FsError> {
-        self.locate(anchor, &safe::location(object)?).map(drop)
+    /// Rule 5 for the object opened at `rel`.
+    fn verify(&self, anchor: &Root, rel: &RelPath, object: &File) -> Result<(), FsError> {
+        self.locate(anchor, &anchor.safe().location_of(rel, object)?)
+            .map(drop)
     }
 
     /// Rule 5 for a new entry; its parent's real location plus its name,
@@ -1240,7 +1241,11 @@ mod tests {
         let allowing = builder.build().unwrap();
         std::fs::hard_link(&outside, notes.join("linked.txt")).unwrap();
         let auth = allowing.authorize(&origin()).unwrap();
+        // Judged by the name used, whichever name was looked up last
+        std::fs::read(&outside).unwrap();
         assert_eq!(auth.read_file(&linked).unwrap(), b"outside");
+        std::fs::read(&outside).unwrap();
+        assert_eq!(auth.size(&linked).unwrap(), 7);
     }
 
     #[cfg(target_os = "macos")]

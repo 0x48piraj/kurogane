@@ -85,6 +85,15 @@ pub(super) fn location(file: &File) -> io::Result<PathBuf> {
     Ok(path)
 }
 
+/// `/proc/self/fd` already names the path `object` was opened through.
+pub(super) fn object_location(
+    _root: &File,
+    _rel: &RelPath,
+    object: &File,
+) -> Result<PathBuf, FsError> {
+    Ok(location(object)?)
+}
+
 pub(super) fn link_count(file: &File) -> io::Result<u64> {
     Ok(file.metadata()?.nlink())
 }

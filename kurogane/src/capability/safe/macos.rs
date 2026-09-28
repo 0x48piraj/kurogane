@@ -1,36 +1,43 @@
 //! macOS backend for filesystem access confined beneath a root fd.
 //!
-//! macOS has no `openat2`, so resolution opens the validated relative path
-//! beneath the root fd with `O_NOFOLLOW_ANY` (macOS 11+), which refuses a
-//! symlink met at *any* component, not just the final one. Plain
-//! `O_NOFOLLOW` only covers the final component — an interior directory
-//! symlink opened with it is still followed, straight out of the root — so
-//! `O_NOFOLLOW_ANY` is the primitive that actually enforces "links are never
-//! traversed". Because no symlink is followed and the validated names contain
-//! no `..` and no separator, resolution from the root fd cannot leave the
-//! root.
+//! macOS has no `openat2`. Resolution therefore opens each validated
+//! relative path beneath the root fd with `O_NOFOLLOW_ANY` (macOS 11+).
+//! Unlike `O_NOFOLLOW`, which applies only to the final component,
+//! `O_NOFOLLOW_ANY` rejects a symlink at any path component. A path cannot
+//! leave the root; validated names contain neither `..` nor separators, and
+//! resolution never follows a symlink.
 //!
-//! A symlink met anywhere in the path (final component included) fails with
-//! `ELOOP`, which is a confinement verdict (`Denial::ObjectLocation`), not an
-//! I/O error. Object locations come from
-//! `fcntl(F_GETPATH)`, which returns the canonical, case- and
-//! normalization-preserving on-disk path the authorization layer re-checks
-//! against the deny rules — the macOS analogue of Linux `/proc/self/fd` and
-//! the Windows `GetFinalPathNameByHandleW` re-check, and what defeats
-//! case-insensitive aliases on the default APFS/HFS+ volumes.
+//! A symlink at any component, including the final one, fails with `ELOOP`.
+//! This is a confinement failure (`Denial::ObjectLocation`), not an I/O
+//! error. Object locations come from `fcntl(F_GETPATH)`, which returns the
+//! canonical on-disk path while preserving case and normalization. The
+//! authorization layer re-checks that path against the deny rules. This is
+//! the macOS equivalent of the Linux `/proc/self/fd` and Windows
+//! `GetFinalPathNameByHandleW` re-checks, and it prevents case-insensitive
+//! aliases on the default APFS/HFS+ volumes from bypassing the check.
 //!
-//! A volume mounted inside a root is a link too. macOS resolution cannot be
-//! told to stop at mount points, so every opened object, every leaf a
-//! mutation touches and every listed directory must share the root's device;
-//! anything else is refused (`Denial::ObjectLocation`) or omitted.
+//! A file may have several names through hard links. `F_GETPATH` reports the
+//! name used by the most recent kernel lookup, which may be outside the root.
+//! Such a file is therefore located by the path used to open it, as on Linux
+//! and Windows; the parent directory's location plus the leaf, after
+//! `fstatat` confirms that the leaf still names the same file.
 //!
-//! Reads and existing-file writes require a regular file and open with
-//! `O_NONBLOCK`, so a FIFO cannot block the worker at `open`. Leaf mutations
-//! use `mkdirat` / `unlinkat` / `renameat` on the parent fd, so the object
-//! that was authorized is the object that is modified.
+//! A volume mounted beneath the root is treated the same as a link. macOS
+//! resolution cannot restrict lookup to a device boundary, so every opened
+//! object, every leaf touched by a mutation, and every listed directory must
+//! have the same device as the root. Objects on another device are refused
+//! (`Denial::ObjectLocation`) or omitted.
 //!
-//! `O_NOFOLLOW_ANY` needs macOS 11 (Darwin 20); older kernels would ignore
-//! it, so roots fail to open there.
+//! Reads and writes to existing files require a regular file and use
+//! `O_NONBLOCK`, preventing a FIFO from blocking the worker during `open`.
+//! Leaf mutations use `mkdirat` / `unlinkat` / `renameat` on the parent fd,
+//! keeping the operation within the authorized directory. The leaf is looked
+//! up by name again at the point of mutation. Another local process may
+//! replace it between the checks and the operation; a link placed there is
+//! removed or renamed as the link itself, never followed.
+//!
+//! `O_NOFOLLOW_ANY` requires macOS 11 (Darwin 20). On older kernels the flag
+//! is ignored, so roots cannot be opened there.
 
 use std::ffi::{CStr, CString, OsStr};
 use std::fs::{File, OpenOptions};
@@ -90,15 +97,19 @@ fn kernel_has_nofollow_any() -> bool {
         .is_some_and(|major| major >= 20)
 }
 
-/// The device `fd` lives on.
-fn device(fd: RawFd) -> io::Result<libc::dev_t> {
+fn stat(fd: RawFd) -> io::Result<libc::stat> {
     let mut st = MaybeUninit::<libc::stat>::uninit();
     // SAFETY: `st` is writable storage for one stat and `fd` is open
     if unsafe { libc::fstat(fd, st.as_mut_ptr()) } < 0 {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: fstat succeeded, so it initialized `st`
-    Ok(unsafe { st.assume_init() }.st_dev)
+    Ok(unsafe { st.assume_init() })
+}
+
+/// The device `fd` lives on.
+fn device(fd: RawFd) -> io::Result<libc::dev_t> {
+    Ok(stat(fd)?.st_dev)
 }
 
 /// Refuses `fd` unless it lies on the same volume as `anchor`: a different
@@ -122,6 +133,32 @@ pub(super) fn location(file: &File) -> io::Result<PathBuf> {
     }
     let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
     Ok(PathBuf::from(OsStr::from_bytes(&buf[..len])))
+}
+
+/// The location of `object`, opened at `rel` beneath `root`. A file with
+/// several names is located through its parent (see the module
+/// documentation); directories keep `F_GETPATH`, as their link counts count
+/// subdirectories rather than names.
+pub(super) fn object_location(
+    root: &File,
+    rel: &RelPath,
+    object: &File,
+) -> Result<PathBuf, FsError> {
+    let st = stat(object.as_raw_fd())?;
+    let is_dir = st.st_mode as u32 & libc::S_IFMT as u32 == libc::S_IFDIR as u32;
+    let Some((parent, leaf)) = rel.split_leaf().filter(|_| !is_dir && st.st_nlink > 1) else {
+        return Ok(location(object)?);
+    };
+    let dir = File::from(lookup(root, &parent, libc::O_RDONLY | libc::O_DIRECTORY)?);
+    let named = stat_at(dir.as_raw_fd(), &c_name(leaf))?;
+    if (named.st_dev, named.st_ino) != (st.st_dev, st.st_ino) {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "the object was removed after it was opened",
+        )
+        .into());
+    }
+    Ok(location(&dir)?.join(leaf.as_os_str()))
 }
 
 pub(super) fn link_count(file: &File) -> io::Result<u64> {
@@ -323,9 +360,8 @@ fn regular(file: File) -> Result<File, FsError> {
     Ok(file)
 }
 
-/// The device and kind of `name` in `dirfd` without following it; the kind
-/// is `None` for a link. A mount point reports the mounted volume's device.
-fn stat_entry(dirfd: RawFd, name: &CStr) -> io::Result<(libc::dev_t, Option<EntryKind>)> {
+/// `name` in `dirfd`, without following it.
+fn stat_at(dirfd: RawFd, name: &CStr) -> io::Result<libc::stat> {
     let mut st = MaybeUninit::<libc::stat>::uninit();
     // SAFETY: `name` is NUL-terminated and `st` is writable storage for one stat
     let rc = unsafe {
@@ -340,7 +376,13 @@ fn stat_entry(dirfd: RawFd, name: &CStr) -> io::Result<(libc::dev_t, Option<Entr
         return Err(io::Error::last_os_error());
     }
     // SAFETY: fstatat returned success, so it initialized `st`
-    let st = unsafe { st.assume_init() };
+    Ok(unsafe { st.assume_init() })
+}
+
+/// The device and kind of `name` in `dirfd` without following it; the kind
+/// is `None` for a link. A mount point reports the mounted volume's device.
+fn stat_entry(dirfd: RawFd, name: &CStr) -> io::Result<(libc::dev_t, Option<EntryKind>)> {
+    let st = stat_at(dirfd, name)?;
     let mode = st.st_mode as u32 & libc::S_IFMT as u32;
     let kind = match mode {
         m if m == libc::S_IFLNK as u32 => None,
@@ -482,6 +524,44 @@ mod tests {
         let root = open_root(d.path()).unwrap();
         let file = open_file(&root, &rel("report.txt")).unwrap();
         assert_eq!(location(&file).unwrap().file_name().unwrap(), "report.txt");
+    }
+
+    #[test]
+    fn a_file_with_several_names_is_located_by_the_one_opened() {
+        let d = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let other = outside.path().join("other.txt");
+        std::fs::write(&other, b"x").unwrap();
+        std::fs::create_dir(d.path().join("dir")).unwrap();
+        std::fs::hard_link(&other, d.path().join("dir/linked.txt")).unwrap();
+        let root = open_root(d.path()).unwrap();
+        let file = open_file(&root, &rel("dir/linked.txt")).unwrap();
+        // F_GETPATH may now report the other name
+        std::fs::read(&other).unwrap();
+
+        assert_eq!(
+            object_location(&root, &rel("dir/linked.txt"), &file).unwrap(),
+            location(&root).unwrap().join("dir/linked.txt")
+        );
+    }
+
+    #[test]
+    fn a_file_with_several_names_moved_off_its_name_fails_closed() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("linked.txt"), b"old").unwrap();
+        // Two more names, so it still has several once one is replaced
+        for name in ["second.txt", "third.txt"] {
+            std::fs::hard_link(d.path().join("linked.txt"), d.path().join(name)).unwrap();
+        }
+        let root = open_root(d.path()).unwrap();
+        let file = open_file(&root, &rel("linked.txt")).unwrap();
+        std::fs::write(d.path().join("new.txt"), b"new").unwrap();
+        std::fs::rename(d.path().join("new.txt"), d.path().join("linked.txt")).unwrap();
+
+        match object_location(&root, &rel("linked.txt"), &file) {
+            Err(FsError::Io(e)) => assert_eq!(e.kind(), io::ErrorKind::NotFound),
+            other => panic!("the old file was located: {other:?}"),
+        }
     }
 
     #[test]

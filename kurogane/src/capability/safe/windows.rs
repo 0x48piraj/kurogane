@@ -108,6 +108,15 @@ pub(super) fn location(file: &File) -> io::Result<PathBuf> {
     }
 }
 
+/// NTFS names a handle by the link it was opened through.
+pub(super) fn object_location(
+    _root: &File,
+    _rel: &RelPath,
+    object: &File,
+) -> Result<PathBuf, FsError> {
+    Ok(location(object)?)
+}
+
 pub(super) fn link_count(file: &File) -> io::Result<u64> {
     // SAFETY: an all-zero FILE_STANDARD_INFO is a valid value (integers and
     // `false`)

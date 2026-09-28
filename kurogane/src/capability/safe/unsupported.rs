@@ -32,6 +32,14 @@ pub(super) fn location(_file: &File) -> io::Result<PathBuf> {
     Err(unsupported())
 }
 
+pub(super) fn object_location(
+    _root: &File,
+    _rel: &RelPath,
+    _object: &File,
+) -> Result<PathBuf, FsError> {
+    Err(unsupported().into())
+}
+
 pub(super) fn link_count(_file: &File) -> io::Result<u64> {
     Err(unsupported())
 }

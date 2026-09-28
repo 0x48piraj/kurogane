@@ -11,9 +11,13 @@
 //!   through them return [`Denial::ObjectLocation`](crate::capability::error::Denial);
 //!   listings omit them, and link entries cannot be opened, removed or renamed.
 //! - Mutations operate from a directory handle and one validated [`Name`],
-//!   without re-resolving the authorized path.
+//!   without re-resolving the authorized path. Windows also holds the leaf
+//!   open across the mutation; Linux and macOS find the leaf again by name,
+//!   so a leaf another local process swaps in meanwhile is acted on as itself
+//!   (a link is removed or renamed, never followed).
 //! - Objects expose their kernel-reported location, which the authorization
-//!   layer re-checks against deny rules before use.
+//!   layer re-checks against deny rules before use. A file with several
+//!   names (hard links) is located by the name it was opened through.
 //!
 //! This module determines how objects are opened; origins, grants and deny
 //! rules are enforced by the authorization layer.
@@ -127,6 +131,11 @@ impl SafeRoot {
     /// Opens the directory `rel` (the root itself when empty).
     pub(crate) fn open_dir(&self, rel: &RelPath) -> Result<Dir, FsError> {
         sys::open_dir(&self.handle, rel).map(Dir)
+    }
+
+    /// The kernel-reported location of `object`, which was opened at `rel`.
+    pub(crate) fn location_of(&self, rel: &RelPath, object: &File) -> Result<PathBuf, FsError> {
+        sys::object_location(&self.handle, rel, object)
     }
 }
 
