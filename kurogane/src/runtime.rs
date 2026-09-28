@@ -1,4 +1,5 @@
 use cef::{args::Args, sys::cef_window_handle_t, *};
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -253,6 +254,11 @@ pub(crate) fn close_all_browsers_and_windows(
     wreg.close_all_windows();
 }
 
+/// Returns whether this is the thread CEF's UI work must run on.
+fn on_ui_thread() -> bool {
+    currently_on(ThreadId::UI) != 0
+}
+
 wrap_task! {
     struct CloseAllTask {
         browser_registry: Arc<Mutex<BrowserRegistry>>,
@@ -262,6 +268,28 @@ wrap_task! {
     impl Task {
         fn execute(&self) {
             close_all_browsers_and_windows(&self.browser_registry, &self.window_registry);
+        }
+    }
+}
+
+wrap_task! {
+    struct CloseWindowsTask {
+        window_registry: Arc<Mutex<WindowRegistry>>,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            self.window_registry.lock().unwrap().close_all_windows();
+        }
+    }
+}
+
+wrap_task! {
+    struct QuitTask;
+
+    impl Task {
+        fn execute(&self) {
+            quit_message_loop();
         }
     }
 }
@@ -371,14 +399,18 @@ impl Clone for AppHandle {
     }
 }
 
-// SAFETY:
-//
-// AppHandleInner is shared across threads via Arc. The only CEF object it
-// indirectly reaches (cef::Frame, stored in EventSubscription) is accessed
-// exclusively via Frame::send_process_message, which CEF documents as
-// safe to call from any thread. No other Frame methods are invoked from
-// non-UI threads through AppHandle.
+// SAFETY: the CEF objects an `AppHandle` reaches (browsers and windows in the
+// registries, frames in event subscriptions) are reference counted by CEF
+// with atomic counts, so they may be cloned and dropped on any thread. The
+// calls made on them from other threads are ones CEF allows from any thread
+// of the browser process (`Browser`, `BrowserHost` and `Frame` methods).
+// Views windows and the message loop are UI-thread only, so `close_all_windows`
+// and `shutdown` post to the UI thread, and `BrowserHandle` asserts it.
 unsafe impl Send for AppHandle {}
+
+// SAFETY: as for `Send`. Shared access to the registries goes through their
+// mutexes and to the shutdown state through atomics and no method hands out
+// a reference to a CEF object.
 unsafe impl Sync for AppHandle {}
 
 impl AppHandle {
@@ -388,13 +420,19 @@ impl AppHandle {
 
     /// Signals the CEF message loop to exit.
     ///
-    /// Safe to call from any thread. CEF posts the quit internally to the UI
-    /// thread. The actual cef::shutdown() call happens on the UI thread in
-    /// AppInstance::run or AppInstance::shutdown after the loop exits.
+    /// Safe to call from any thread: CEF quits its message loop only on the
+    /// UI thread, so a call from elsewhere is posted there. The actual
+    /// cef::shutdown() call happens on the UI thread in AppInstance::run or
+    /// AppInstance::shutdown after the loop exits.
     pub fn shutdown(&self) {
         self.services().shutdown_signal.request_shutdown();
         debug!("AppHandle::shutdown: quitting message loop");
-        quit_message_loop();
+
+        if on_ui_thread() {
+            quit_message_loop();
+        } else {
+            post_task(ThreadId::UI, Some(&mut QuitTask::new()));
+        }
     }
 
     /// Returns true when shutdown has been requested
@@ -439,9 +477,20 @@ impl AppHandle {
     }
 
     /// Close all open windows.
+    ///
+    /// Safe to call from any thread: CEF's windows close only on the UI
+    /// thread, so a call from elsewhere is posted there.
     pub fn close_all_windows(&self) {
-        let reg = self.services().window_registry.lock().unwrap();
-        reg.close_all_windows();
+        let registry = &self.services().window_registry;
+
+        if on_ui_thread() {
+            registry.lock().unwrap().close_all_windows();
+        } else {
+            post_task(
+                ThreadId::UI,
+                Some(&mut CloseWindowsTask::new(registry.clone())),
+            );
+        }
     }
 
     /// Close all live browser instances.
@@ -805,9 +854,14 @@ impl BrowserHandle {
     }
 }
 
-// AppInstance: UI-thread lifecycle owner
+/// The running application, owned by the thread that started it.
+///
+/// Not `Send`: CEF shuts down on the thread that initialized it and dropping
+/// an `AppInstance` shuts CEF down. Use [`AppInstance::handle`] from other
+/// threads.
 pub struct AppInstance {
     handle: AppHandle,
+    _ui_thread: PhantomData<*const ()>,
 }
 
 impl AppInstance {
@@ -831,16 +885,6 @@ impl AppInstance {
     /// e.g. the window was closed or Ctrl+C was received.
     pub fn should_shutdown(&self) -> bool {
         self.handle.should_shutdown()
-    }
-
-    /// Broadcast an event to all renderer processes.
-    pub fn broadcast(&self, event: &str, data: &[u8]) {
-        self.handle.broadcast(event, data);
-    }
-
-    /// Broadcast a JSON-serializable event to all renderer processes.
-    pub fn broadcast_json<T: serde::Serialize>(&self, event: &str, value: &T) {
-        self.handle.broadcast_json(event, value);
     }
 
     /// Creates a new top-level window with an embedded browser.
@@ -1059,71 +1103,6 @@ impl AppInstance {
             ui_thread_id: self.handle.inner.ui_thread_id,
         })
     }
-
-    /// Number of live browser instances.
-    pub fn browser_count(&self) -> usize {
-        self.handle.browser_count()
-    }
-
-    /// Number of open windows.
-    pub fn window_count(&self) -> usize {
-        self.handle.window_count()
-    }
-
-    /// IDs of all open windows.
-    pub fn window_ids(&self) -> Vec<WindowId> {
-        self.handle.window_ids()
-    }
-
-    /// Close all open windows.
-    pub fn close_all_windows(&self) {
-        self.handle.close_all_windows()
-    }
-
-    /// Close all live browser instances.
-    pub fn close_all_browsers(&self, force: bool) {
-        self.handle.close_all_browsers(force)
-    }
-
-    /// Look up the window that hosts a given browser.
-    pub fn find_window_by_browser(&self, browser_id: BrowserId) -> Option<WindowId> {
-        self.handle.find_window_by_browser(browser_id)
-    }
-
-    /// Metadata for all live browsers.
-    pub fn browsers(&self) -> Vec<(BrowserId, BrowserMetadata)> {
-        self.handle.browsers()
-    }
-
-    /// Metadata for all open windows.
-    pub fn windows(&self) -> Vec<(WindowId, WindowMetadata)> {
-        self.handle.windows()
-    }
-
-    /// Parent of a given browser.
-    pub fn browser_parent(&self, id: BrowserId) -> Option<BrowserId> {
-        self.handle.browser_parent(id)
-    }
-
-    /// Returns the opener BrowserId for a given browser, if any.
-    pub fn browser_opener(&self, id: BrowserId) -> Option<BrowserId> {
-        self.handle.browser_opener(id)
-    }
-
-    /// Returns all browsers whose parent is the given BrowserId.
-    pub fn children_of(&self, id: BrowserId) -> Vec<BrowserId> {
-        self.handle.children_of(id)
-    }
-
-    /// Returns the BrowserId hosted in the given window, if any.
-    pub fn browser_for_window(&self, id: WindowId) -> Option<BrowserId> {
-        self.handle.browser_for_window(id)
-    }
-
-    /// Create a BrowserHandle for a registered browser id.
-    pub fn get_browser_handle(&self, id: BrowserId) -> Option<BrowserHandle> {
-        self.handle.get_browser_handle(id)
-    }
 }
 
 /// Initializes CEF and prepares the browser process runtime.
@@ -1242,7 +1221,10 @@ impl RuntimeBootstrap {
                 cef_shutdown_called: AtomicBool::new(false),
             }),
         };
-        Ok(AppInstance { handle })
+        Ok(AppInstance {
+            handle,
+            _ui_thread: PhantomData,
+        })
     }
 
     /// Initialize CEF in embedded mode (no window created by CEF Views)
@@ -1258,7 +1240,10 @@ impl RuntimeBootstrap {
                 cef_shutdown_called: AtomicBool::new(false),
             }),
         };
-        Ok(AppInstance { handle })
+        Ok(AppInstance {
+            handle,
+            _ui_thread: PhantomData,
+        })
     }
 }
 

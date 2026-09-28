@@ -67,7 +67,7 @@ impl ApplicationHandler for EmbeddedDriver {
                 self.closing = true;
 
                 // Begin asynchronous browser shutdown
-                self.handle.close_all_browsers(true);
+                self.handle.handle().close_all_browsers(true);
 
                 // Release the host window
                 // Browser destruction continues asynchronously via pump()
@@ -89,7 +89,7 @@ impl ApplicationHandler for EmbeddedDriver {
         // Drive pending Chromium work, including browser shutdown
         self.handle.pump();
 
-        if self.closing && self.handle.browser_count() == 0 {
+        if self.closing && self.handle.handle().browser_count() == 0 {
             // Shutdown after the final browser has been destroyed
             self.handle.shutdown();
             event_loop.exit();

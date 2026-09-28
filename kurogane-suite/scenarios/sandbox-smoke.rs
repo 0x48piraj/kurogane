@@ -51,7 +51,7 @@ fn main() -> ExitCode {
         }
     };
 
-    runtime.close_all_browsers(true);
+    runtime.handle().close_all_browsers(true);
 
     let closing = Instant::now();
     while !runtime.should_shutdown() && closing.elapsed() < Duration::from_secs(10) {
