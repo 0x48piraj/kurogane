@@ -17,7 +17,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use crate::debug;
-use crate::ipc::browser_state::IpcContext;
+use crate::ipc::browser_state::{ErrorCode, IpcContext};
 use crate::ipc::envelope::{
     Envelope, STREAM_OPEN, STREAM_DATA, STREAM_END, STREAM_ERROR, STREAM_CANCEL, decode_cmd_payload,
 };
@@ -67,9 +67,15 @@ impl StreamSubsystem {
             Some(v) => v,
             None => {
                 debug!("[Stream Browser] invalid open payload");
-                let _ = responder.error("invalid open payload");
+                let _ = responder.error_with_code("invalid open payload", ErrorCode::Buffer);
                 return false;
             }
+        };
+
+        let Ok(metadata) = std::str::from_utf8(metadata_bytes) else {
+            debug!("[Stream Browser] open metadata is not UTF-8");
+            let _ = responder.error_with_code("stream metadata is not UTF-8", ErrorCode::Buffer);
+            return false;
         };
 
         let browser_id = match ctx.browser_id {
@@ -99,10 +105,7 @@ impl StreamSubsystem {
             return false;
         };
 
-        let metadata_str = std::str::from_utf8(metadata_bytes).unwrap_or("");
-        let open_result = catch_unwind(AssertUnwindSafe(|| {
-            handler.on_open(metadata_str, &responder)
-        }));
+        let open_result = catch_unwind(AssertUnwindSafe(|| handler.on_open(metadata, &responder)));
 
         match open_result {
             Ok(Ok(())) => {

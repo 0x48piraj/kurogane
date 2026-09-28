@@ -80,12 +80,13 @@ fn build_inline_parts(name: &str, envelope: &Envelope, parts: &[&[u8]]) -> Optio
     let msg = process_message_create(Some(&CefString::from(name)))?;
     let args = msg.argument_list()?;
 
-    args.set_int(0, envelope.version as i32);
-    args.set_int(1, envelope.subsystem as i32);
-    args.set_int(2, envelope.opcode as i32);
-    args.set_int(3, envelope.flags as i32);
+    args.set_int(0, envelope.version.into());
+    args.set_int(1, envelope.subsystem.into());
+    args.set_int(2, envelope.opcode.into());
+    args.set_int(3, envelope.flags.into());
+    // A ListValue holds only i32; the id travels as its bit pattern
     args.set_int(4, envelope.correlation_id as i32);
-    args.set_int(5, envelope.payload_kind as i32);
+    args.set_int(5, envelope.payload_kind.into());
 
     let total_payload: usize = parts.iter().map(|p| p.len()).sum();
     if total_payload > 0 {
@@ -149,13 +150,16 @@ pub fn extract_message(message: &ProcessMessage) -> Option<ReceivedMessage> {
     // Inline path: read from ListValue fields
     let args = message.argument_list()?;
 
+    // A byte field out of range is malformed, not truncated into another value
+    let byte = |index| u8::try_from(args.int(index)).ok();
+
     let envelope = Envelope {
-        version: args.int(0) as u8,
-        subsystem: args.int(1) as u8,
-        opcode: args.int(2) as u8,
-        flags: args.int(3) as u8,
+        version: byte(0)?,
+        subsystem: byte(1)?,
+        opcode: byte(2)?,
+        flags: byte(3)?,
         correlation_id: args.int(4) as u32,
-        payload_kind: args.int(5) as u8,
+        payload_kind: byte(5)?,
     };
 
     if envelope.version != ENVELOPE_VERSION {
