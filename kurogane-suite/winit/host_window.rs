@@ -66,14 +66,9 @@ impl ApplicationHandler for EmbeddedDriver {
             WindowEvent::CloseRequested => {
                 self.closing = true;
 
-                // Begin asynchronous browser shutdown
+                // Begin asynchronous browser shutdown; the window stays until
+                // every browser has closed
                 self.handle.handle().close_all_browsers(true);
-
-                // Release the host window
-                // Browser destruction continues asynchronously via pump()
-                if let Some(window) = self.window.take() {
-                    drop(window);
-                }
             }
             WindowEvent::Resized(_) => {
                 // Notify Chromium that the host window size has changed
@@ -91,6 +86,7 @@ impl ApplicationHandler for EmbeddedDriver {
 
         if self.closing && self.handle.handle().browser_count() == 0 {
             // Shutdown after the final browser has been destroyed
+            self.window = None;
             self.handle.shutdown();
             event_loop.exit();
         }

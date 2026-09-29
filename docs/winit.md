@@ -150,7 +150,7 @@ sequenceDiagram
     H->>W: event_loop.exit()
 ```
 
-#### Standard Chromium browser close lifecycle
+#### Closing an embedded browser
 
 ```mermaid
 sequenceDiagram
@@ -159,14 +159,16 @@ sequenceDiagram
 
     Host->>Chromium: BrowserHandle::close(false)
 
+    Chromium->>Chromium: Unload handlers run
     Chromium->>Chromium: DoClose()
-    Note right of Chromium: Return false to allow<br/>normal Chromium shutdown
+    Note right of Chromium: The browser's own child window<br/>is destroyed
 
-    Chromium->>Chromium: Native window closes
     Chromium->>Chromium: OnBeforeClose()
 
-    Note right of Chromium: Browser removed from registry<br/>ShutdownSignal may be set
+    Note right of Chromium: Browser removed from registry<br/>browser_count() drops
 ```
+
+Closing a browser never asks the host's window to close. The window stays open, with any other browsers in it. The host decides when to close its window and keeps pumping until `browser_count()` is 0 before it calls `AppInstance::shutdown`.
 
 The correct pattern is to decouple window-close intent from event-loop exit:
 

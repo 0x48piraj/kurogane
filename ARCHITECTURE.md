@@ -282,7 +282,7 @@ flowchart LR
 
 The runtime can be initialized without entering Chromium's blocking message loop.
 
-In embedded mode, the host owns the event loop and window hierarchy and drives Chromium's message pump explicitly. Chromium creates no window of its own, and Kurogane installs no signal handling.
+In embedded mode, the host owns the event loop and window hierarchy and drives Chromium's message pump explicitly. Each browser draws into a child window Chromium makes inside the host's window; closing the browser destroys that child window and leaves the host's window open. Kurogane installs no signal handling.
 
 This makes it possible to embed Kurogane into `winit`, raw OS window handles, or an existing GUI framework.
 

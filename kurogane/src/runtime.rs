@@ -458,9 +458,6 @@ impl AppHandle {
     /// The application ends after the last browser closes. Calling this from
     /// another thread posts the close to the UI thread. The call does not wait
     /// for the browsers to close.
-    ///
-    /// With [`App::start_embedded`](crate::App::start_embedded), browser closing
-    /// also waits for the host window to close.
     pub fn shutdown(&self) {
         debug!("AppHandle::shutdown: closing every browser");
 
@@ -534,6 +531,11 @@ impl AppHandle {
     }
 
     /// Close all live browser instances.
+    ///
+    /// The call does not wait: a browser counts in [`AppHandle::browser_count`]
+    /// until CEF has finished closing it, so an application that pumps CEF
+    /// keeps pumping until the count is 0. A browser embedded in the
+    /// application's own window closes without asking that window to close.
     pub fn close_all_browsers(&self, force: bool) {
         close_browsers(&self.services().browser_registry, force);
     }
@@ -676,6 +678,12 @@ impl BrowserHandle {
         self.id
     }
 
+    /// Closes the browser.
+    ///
+    /// With `force` false the page's unload handlers run first and may cancel
+    /// the close. The call does not wait: the browser is gone once CEF has
+    /// finished closing it. A browser embedded in the application's own
+    /// window closes without asking that window to close.
     pub fn close(&self, force: bool) {
         if let Some(b) = self.browser() {
             debug!(

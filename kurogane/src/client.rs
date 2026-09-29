@@ -81,6 +81,24 @@ wrap_life_span_handler! {
             reg.ensure_registered(browser, browser_type, opener);
         }
 
+        // CEF calls `do_close` only for Alloy-style browsers. In Kurogane, these are
+        // browsers created with `create_child_browser` and the popups they open.
+        // For an embedded browser, CEF's default closes the host's top-level window;
+        // destroying that window closes the browser. A popup already lives in a
+        // top-level window created by CEF, where the default is right.
+        //
+        // Linux keeps CEF's default, which closes the browser's X window.
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        fn do_close(&self, browser: Option<&mut Browser>) -> ::std::os::raw::c_int {
+            match browser {
+                // Use CEF's default.
+                Some(browser) if browser.is_popup() == 0 => {
+                    crate::platform::embed::destroy_child_window_later(browser).into()
+                }
+                _ => 0,
+            }
+        }
+
         fn on_before_close(&self, browser: Option<&mut Browser>) {
             let Some(browser) = browser else {
                 return;
