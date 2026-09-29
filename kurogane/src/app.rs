@@ -14,7 +14,7 @@ use crate::ipc::{
     AppCell, IpcRouter, RequestResponseSubsystem, EventSubsystem, StreamSubsystem, StreamFactory,
     Responder, BinaryResponder, SyncHandler, AsyncHandler, IpcContext, IpcError,
 };
-use crate::runtime::{RuntimeBootstrap, AppHandle, AppInstance};
+use crate::runtime::{AppHandle, AppInstance};
 use crate::error::{ConfigError, RuntimeError};
 use crate::spec::{RuntimeSpec, RuntimeMode, SandboxMode};
 use crate::scheme::{CustomScheme, SchemeHandler, validate_scheme_name};
@@ -824,7 +824,7 @@ impl App {
             scheme_handlers,
         };
 
-        let instance = RuntimeBootstrap::start(spec, router)?;
+        let instance = crate::runtime::start(spec, router)?;
         // Populated before the message loop starts
         resolver.resolve(instance.handle().clone());
         Ok(instance)

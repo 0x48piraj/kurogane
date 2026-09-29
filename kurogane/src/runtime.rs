@@ -15,15 +15,6 @@ use crate::ipc::IpcRouter;
 use crate::spec::{RuntimeMode, RuntimeSpec, SandboxMode};
 use crate::debug;
 
-/// Public entry point for launching a CEF application.
-///
-/// Responsible for:
-/// - Initializing platform-specific CEF requirements
-/// - Spawning CEF subprocesses
-/// - Starting the browser process
-/// - Running the CEF message loop
-pub(crate) struct RuntimeBootstrap;
-
 struct RuntimeLayout {
     cef_root: std::path::PathBuf,
     cache_dir: std::path::PathBuf,
@@ -338,11 +329,11 @@ pub(crate) struct RuntimeServices {
     pub router: Arc<IpcRouter>,
     pub browser_registry: Arc<Mutex<BrowserRegistry>>,
     pub window_registry: Arc<Mutex<WindowRegistry>>,
-}
-
-pub(crate) struct RuntimeState {
-    pub services: Arc<RuntimeServices>,
-    pub ui_thread_id: std::thread::ThreadId,
+    /// The thread that initialized CEF: CEF's UI thread, since Kurogane
+    /// never sets `multi_threaded_message_loop`
+    ui_thread: std::thread::ThreadId,
+    /// Set when AppInstance::shutdown begins
+    cef_shut_down: AtomicBool,
 }
 
 /// A rectangle: a position and a size.
@@ -419,48 +410,38 @@ pub struct WindowOptions {
     pub show_state: WindowState,
 }
 
-/// Shared inner state for AppHandle
-struct AppHandleInner {
-    services: Arc<RuntimeServices>,
-    ui_thread_id: std::thread::ThreadId,
-    cef_shutdown_called: AtomicBool,
-}
-
 /// Shared lifecycle handle for a running Kurogane application.
 ///
 /// AppHandle can be used from any thread to query state,
 /// broadcast events, or signal shutdown.
 ///
 /// Obtain one via AppInstance::handle().
+///
+/// # Threads
+///
+/// Every method can be called from any thread. The browsers, windows and
+/// frames it reaches are reference counted by CEF with atomic counts, and the
+/// `Browser`, `BrowserHost` and `Frame` calls it makes off the UI thread are
+/// ones CEF allows on any thread of the browser process. Views windows and
+/// the message loop belong to the UI thread, so [`AppHandle::shutdown`] and
+/// [`AppHandle::close_all_windows`] post their work there from any other
+/// thread.
+#[derive(Clone)]
 pub struct AppHandle {
-    inner: Arc<AppHandleInner>,
+    services: Arc<RuntimeServices>,
 }
 
-impl Clone for AppHandle {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
-// SAFETY: the CEF objects an `AppHandle` reaches (browsers and windows in the
-// registries, frames in event subscriptions) are reference counted by CEF
-// with atomic counts, so they may be cloned and dropped on any thread. The
-// calls made on them from other threads are ones CEF allows from any thread
-// of the browser process (`Browser`, `BrowserHost` and `Frame` methods).
-// Views windows and the message loop are UI-thread only, so `close_all_windows`
-// and `shutdown` post to the UI thread, and `BrowserHandle` asserts it.
-unsafe impl Send for AppHandle {}
-
-// SAFETY: as for `Send`. Shared access to the registries goes through their
-// mutexes and to the shutdown state through atomics and no method hands out
-// a reference to a CEF object.
-unsafe impl Sync for AppHandle {}
+// Send and Sync come from the fields: this stops compiling if a field of
+// either handle is not both
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<AppHandle>();
+    assert_send_sync::<BrowserHandle>();
+};
 
 impl AppHandle {
     fn services(&self) -> &RuntimeServices {
-        &self.inner.services
+        &self.services
     }
 
     /// Ends the application by closing all browsers.
@@ -474,7 +455,7 @@ impl AppHandle {
         if on_ui_thread() {
             close_all(self.services(), true);
         } else {
-            let mut task = CloseAllTask::new(self.inner.services.clone(), true);
+            let mut task = CloseAllTask::new(self.services.clone(), true);
             post_task(ThreadId::UI, Some(&mut task));
         }
     }
@@ -620,7 +601,7 @@ impl AppHandle {
             Some(BrowserHandle {
                 id,
                 browser_registry: self.services().browser_registry.clone(),
-                ui_thread_id: self.inner.ui_thread_id,
+                ui_thread_id: self.services.ui_thread,
             })
         } else {
             None
@@ -876,16 +857,16 @@ impl AppInstance {
 
     /// Creates a new top-level window with an embedded browser.
     pub fn create_window(&self, options: WindowOptions) -> Result<WindowId, RuntimeError> {
-        let mut client = KuroganeClient::new(self.handle.inner.services.clone(), BrowserType::Main);
+        let mut client = KuroganeClient::new(self.handle.services.clone(), BrowserType::Main);
 
         let window_id = {
-            let mut reg = self.handle.inner.services.window_registry.lock().unwrap();
+            let mut reg = self.handle.services.window_registry.lock().unwrap();
             reg.allocate_id()
         };
 
         let mut bv_delegate = KuroganeBrowserViewDelegate::new(
-            self.handle.inner.services.browser_registry.clone(),
-            self.handle.inner.services.window_registry.clone(),
+            self.handle.services.browser_registry.clone(),
+            self.handle.services.window_registry.clone(),
             Some(window_id),
         );
 
@@ -904,7 +885,7 @@ impl AppInstance {
         let mut delegate = KuroganeWindowDelegate::new(
             window_id,
             browser_view,
-            self.handle.inner.services.window_registry.clone(),
+            self.handle.services.window_registry.clone(),
             Rect {
                 x: options.bounds.x,
                 y: options.bounds.y,
@@ -976,22 +957,14 @@ impl AppInstance {
     /// All browsers must already be closed; [`AppHandle::should_shutdown`] is
     /// true at that point.
     pub fn shutdown(&self) {
-        if self
-            .handle
-            .inner
-            .cef_shutdown_called
-            .swap(true, Ordering::SeqCst)
-        {
+        let services = &self.handle.services;
+        if services.cef_shut_down.swap(true, Ordering::SeqCst) {
             return;
         }
 
         debug!("Shutting down Kurogane runtime");
         shutdown();
-        self.handle
-            .inner
-            .services
-            .shutdown_signal
-            .request_shutdown();
+        services.shutdown_signal.request_shutdown();
         debug!("Kurogane runtime shutdown complete");
     }
 
@@ -1058,7 +1031,7 @@ impl AppInstance {
             },
         );
 
-        let mut client = KuroganeClient::new(self.handle.inner.services.clone(), BrowserType::Main);
+        let mut client = KuroganeClient::new(self.handle.services.clone(), BrowserType::Main);
 
         let mut rc = request_context;
         let browser = browser_host_create_browser_sync(
@@ -1073,7 +1046,7 @@ impl AppInstance {
         debug!("create_child_browser_impl cef_id={}", browser.identifier());
 
         let id = {
-            let reg = self.handle.inner.services.browser_registry.lock().unwrap();
+            let reg = self.handle.services.browser_registry.lock().unwrap();
 
             reg.find_id_by_cef_id(browser.identifier())
                 .expect("browser should have been registered by on_after_created")
@@ -1087,8 +1060,8 @@ impl AppInstance {
 
         Some(BrowserHandle {
             id,
-            browser_registry: self.handle.inner.services.browser_registry.clone(),
-            ui_thread_id: self.handle.inner.ui_thread_id,
+            browser_registry: self.handle.services.browser_registry.clone(),
+            ui_thread_id: self.handle.services.ui_thread,
         })
     }
 }
@@ -1101,8 +1074,12 @@ impl AppInstance {
 /// Behavior differs slightly in embedded mode, where the host
 /// application owns window creation and lifecycle management.
 ///
-/// Returns the initialized runtime state on success.
-fn initialize_cef(spec: RuntimeSpec, router: Arc<IpcRouter>) -> Result<RuntimeState, RuntimeError> {
+/// Returns the application's handle on success.
+fn initialize_cef(spec: RuntimeSpec, router: Arc<IpcRouter>) -> Result<AppHandle, RuntimeError> {
+    // CEF's UI thread is the thread that initializes it, since Kurogane
+    // never sets `multi_threaded_message_loop`
+    let ui_thread = std::thread::current().id();
+
     #[cfg(target_os = "macos")]
     crate::platform::macos::init_ns_app(spec.sandbox_mode)?;
 
@@ -1118,18 +1095,22 @@ fn initialize_cef(spec: RuntimeSpec, router: Arc<IpcRouter>) -> Result<RuntimeSt
     let browser_registry = Arc::new(Mutex::new(BrowserRegistry::new(shutdown_signal.clone())));
     let window_registry = Arc::new(Mutex::new(WindowRegistry::new()));
 
-    let services = Arc::new(RuntimeServices {
-        shutdown_signal,
-        router,
-        browser_registry,
-        window_registry,
-    });
+    let handle = AppHandle {
+        services: Arc::new(RuntimeServices {
+            shutdown_signal,
+            router,
+            browser_registry,
+            window_registry,
+            ui_thread,
+            cef_shut_down: AtomicBool::new(false),
+        }),
+    };
 
     #[cfg(target_os = "macos")]
-    crate::platform::macos::set_services(services.clone());
+    crate::platform::macos::set_services(handle.services.clone());
 
     // ONE app for ALL processes
-    let mut app: App = KuroganeApp::create(services.clone(), spec.clone());
+    let mut app: App = KuroganeApp::create(handle.services.clone(), spec.clone());
 
     // The same value has to reach both CEF entry points
     let sandbox_info = crate::sandbox::cef_sandbox_info(spec.sandbox_mode);
@@ -1179,38 +1160,25 @@ fn initialize_cef(spec: RuntimeSpec, router: Arc<IpcRouter>) -> Result<RuntimeSt
     // In embedded mode the host application manages its own lifecycle
     if spec.mode == RuntimeMode::Views {
         debug!("Installing shutdown handler");
-        install_ctrlc_handler(services.clone());
+        install_ctrlc_handler(handle.services.clone());
     }
 
-    Ok(RuntimeState {
-        services,
-        ui_thread_id: std::thread::current().id(),
-    })
+    Ok(handle)
 }
 
-impl RuntimeBootstrap {
-    /// Initialize CEF and return an AppInstance without entering a message loop.
-    ///
-    /// In [`RuntimeMode::Embedded`] the host application owns window creation
-    /// and lifecycle, so CEF Views creates no window.
-    pub(crate) fn start(
-        spec: RuntimeSpec,
-        router: Arc<IpcRouter>,
-    ) -> Result<AppInstance, RuntimeError> {
-        let state = initialize_cef(spec, router)?;
-        let handle = AppHandle {
-            inner: Arc::new(AppHandleInner {
-                services: state.services,
-                ui_thread_id: state.ui_thread_id,
-                cef_shutdown_called: AtomicBool::new(false),
-            }),
-        };
-
-        Ok(AppInstance {
-            handle,
-            _ui_thread: PhantomData,
-        })
-    }
+/// Initializes CEF and returns the application without entering a message
+/// loop.
+///
+/// In [`RuntimeMode::Embedded`] the host application owns window creation
+/// and lifecycle, so CEF Views creates no window.
+pub(crate) fn start(
+    spec: RuntimeSpec,
+    router: Arc<IpcRouter>,
+) -> Result<AppInstance, RuntimeError> {
+    Ok(AppInstance {
+        handle: initialize_cef(spec, router)?,
+        _ui_thread: PhantomData,
+    })
 }
 
 #[cfg(test)]
