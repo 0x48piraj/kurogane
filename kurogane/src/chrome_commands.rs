@@ -96,6 +96,10 @@ fn allowed(id: c_int, disposition: WindowOpenDisposition) -> bool {
             || custom_context_ids().is_some_and(|(first, last)| (first..=last).contains(&id)))
 }
 
+// Leave CEF's four `is_chrome_*` callbacks at their defaults. cef-rs returns
+// 0 for these callbacks, whereas CEF's C++ defaults return true. For a
+// Chrome-style window, this keeps the app menu items, page actions and
+// toolbar buttons hidden when Chromium creates them itself.
 wrap_command_handler! {
     pub struct KuroganeCommandHandler;
 

@@ -115,7 +115,7 @@ wrap_browser_process_handler! {
             let mut bv_delegate = crate::window::KuroganeBrowserViewDelegate::new(
                 self.services.browser_registry.clone(),
                 self.services.window_registry.clone(),
-                window_id,
+                Some(window_id),
             );
 
             let browser_view = match browser_view_create(

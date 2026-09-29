@@ -825,7 +825,7 @@ impl AppInstance {
         let mut bv_delegate = KuroganeBrowserViewDelegate::new(
             self.handle.inner.services.browser_registry.clone(),
             self.handle.inner.services.window_registry.clone(),
-            window_id,
+            Some(window_id),
         );
 
         let url = CefString::from(options.url.as_str());

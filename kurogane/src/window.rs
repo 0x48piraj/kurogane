@@ -144,6 +144,8 @@ wrap_window_delegate! {
             reg.unregister(self.window_id);
         }
 
+        // cef-rs answers 0 for a callback left out, where CEF's C++ defaults
+        // answer true; these restore them
         fn with_standard_window_buttons(
             &self,
             _window: Option<&mut Window>,
@@ -163,6 +165,8 @@ wrap_window_delegate! {
             1
         }
 
+        // CEF's default is true; the window asks its browser instead, as
+        // cefsimple's CanClose does, so the page's unload handlers can run
         fn can_close(&self, _window: Option<&mut Window>) -> ::std::os::raw::c_int {
             if self.is_closing.load(Ordering::Acquire) {
                 return 1;
@@ -179,8 +183,9 @@ wrap_browser_view_delegate! {
     pub struct KuroganeBrowserViewDelegate {
         registry: Arc<Mutex<BrowserRegistry>>,
         window_registry: Arc<Mutex<WindowRegistry>>,
-        // The window this delegate's BrowserView is shown in
-        window_id: WindowId,
+        // The window this delegate's BrowserView is shown in; none for a
+        // popup's view, whose window its opener's delegate makes
+        window_id: Option<WindowId>,
     }
 
     impl ViewDelegate {}
@@ -191,9 +196,9 @@ wrap_browser_view_delegate! {
             _browser_view: Option<&mut BrowserView>,
             browser: Option<&mut Browser>,
         ) {
-            // CEF hands popups their opener's delegate as well; each popup's
-            // window is made and linked in on_popup_browser_view_created
-            let Some(browser) = browser.filter(|browser| browser.is_popup() == 0) else {
+            // A popup is registered and linked to its window in its opener's
+            // on_popup_browser_view_created
+            let (Some(browser), Some(window_id)) = (browser, self.window_id) else {
                 return;
             };
 
@@ -203,13 +208,30 @@ wrap_browser_view_delegate! {
                 .unwrap()
                 .ensure_registered(browser, BrowserType::Main, None);
 
-            if self.window_registry.lock().unwrap().link(self.window_id, browser_id) {
+            if self.window_registry.lock().unwrap().link(window_id, browser_id) {
                 debug!(
                     "[BrowserRegistry] linked browser {} to window {}",
                     browser_id.as_u32(),
-                    self.window_id.as_u32()
+                    window_id.as_u32()
                 );
             }
+        }
+
+        // cef-rs answers None here where CEF's C++ default answers this
+        // delegate. Without one, a popup's own popups and DevTools opened for
+        // it get CEF's window, which the runtime neither tracks nor sizes
+        fn delegate_for_popup_browser_view(
+            &self,
+            _browser_view: Option<&mut BrowserView>,
+            _settings: Option<&BrowserSettings>,
+            _client: Option<&mut Client>,
+            _is_devtools: ::std::os::raw::c_int,
+        ) -> Option<BrowserViewDelegate> {
+            Some(KuroganeBrowserViewDelegate::new(
+                self.registry.clone(),
+                self.window_registry.clone(),
+                None,
+            ))
         }
 
         fn on_popup_browser_view_created(
@@ -340,6 +362,8 @@ wrap_window_delegate! {
             reg.unregister(self.window_id);
         }
 
+        // cef-rs answers 0 for a callback left out, where CEF's C++ defaults
+        // answer true; these restore them
         fn with_standard_window_buttons(
             &self,
             _window: Option<&mut Window>,
@@ -359,6 +383,8 @@ wrap_window_delegate! {
             1
         }
 
+        // CEF's default is true; the window asks its browser instead, as
+        // cefsimple's CanClose does, so the page's unload handlers can run
         fn can_close(&self, _window: Option<&mut Window>) -> ::std::os::raw::c_int {
             if self.is_closing.load(Ordering::Acquire) {
                 return 1;
