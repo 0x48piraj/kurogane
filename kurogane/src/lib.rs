@@ -37,8 +37,7 @@ pub use gpu::GpuMode;
 pub use credentials::CredentialStorage;
 pub use spec::SandboxMode;
 pub use scheme::{
-    AppResourceHandler, CustomScheme, ResolveError, ResolvedAsset, SchemeHandler,
-    resource_handler_from_bytes,
+    CustomScheme, ResolveError, ResolvedAsset, SchemeHandler, resource_handler_from_bytes,
 };
 pub use error::{ConfigError, RuntimeError};
 pub use acl::{Origin, OriginError};

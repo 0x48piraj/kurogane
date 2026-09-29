@@ -155,7 +155,7 @@ Shutdown follows browser lifetime rather than individual window destruction, so 
 
 ## Custom protocol (`app://`)
 
-Local assets are served through a Chromium scheme handler under `app://`.
+Local assets are served through a Chromium scheme handler under `app://`. The handler only records the request on CEF's IO thread; the file is resolved and read when CEF opens the response, on a worker thread.
 
 Goals:
 

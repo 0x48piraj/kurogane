@@ -27,7 +27,7 @@ use cef::sys::cef_scheme_options_t::{
     CEF_SCHEME_OPTION_STANDARD, CEF_SCHEME_OPTION_SECURE, CEF_SCHEME_OPTION_CORS_ENABLED,
     CEF_SCHEME_OPTION_FETCH_ENABLED,
 };
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use percent_encoding::percent_decode_str;
@@ -100,10 +100,12 @@ pub struct ResolvedAsset {
 /// [`SchemeHandlerFactory::create`](cef::SchemeHandlerFactory) minus the
 /// scheme name which is fixed per registration.
 ///
-/// The handler is invoked on the browser-process IO thread and must serve the
-/// response asynchronously or synchronously via a [`ResourceHandler`].
+/// CEF calls `create` on the browser-process IO thread, which also carries
+/// every IPC message and must not block: decide there what to answer. Slow
+/// work, such as reading a file, belongs in the returned handler's `open` and
+/// `read`, which CEF calls on a worker thread that may block.
 ///
-/// [`AppResourceHandler`] covers the common static-bytes case.
+/// [`resource_handler_from_bytes`] covers the common static-bytes case.
 pub trait SchemeHandler: Send + Sync {
     /// Create a resource handler for `request`, or `None` to fail the request.
     fn create(
@@ -166,9 +168,9 @@ wrap_scheme_handler_factory! {
     }
 
     impl SchemeHandlerFactory {
-        /// Resolves and loads an app:// resource for the request.
-        ///
-        /// Populates response data and status code.
+        /// Hands the request's URL to a handler that resolves and reads the
+        /// file in `open`: CEF calls this on the IO thread, which must not
+        /// block, and `open` on a worker that may.
         fn create(
             &self,
             _browser: Option<&mut Browser>,
@@ -180,42 +182,10 @@ wrap_scheme_handler_factory! {
             let request = request?;
             let raw_url = CefString::from(&request.url()).to_string();
 
-            let (data, mime, status) = match extract_rel_path(&raw_url)
-                .and_then(|rel| resolve_asset(&self.root, &rel))
-            {
-                Ok(asset) => {
-                    debug!(
-                        "[kurogane] status=200 url=\"{}\" path=\"{}\" bytes={} mime={}",
-                        raw_url,
-                        asset.path.display(),
-                        asset.bytes.len(),
-                        asset.mime
-                    );
-
-                    (
-                        Arc::<[u8]>::from(asset.bytes),
-                        asset.mime,
-                        200,
-                    )
-                }
-                Err(e) => {
-                    let status = e.http_status();
-
-                    eprintln!("[kurogane] status={status} url=\"{raw_url}\" reason={e}");
-
-                    (
-                        Arc::<[u8]>::from(e.http_repr()),
-                        "text/plain".to_string(),
-                        status,
-                    )
-                }
-            };
-
             Some(AppResourceHandler::new(
-                data,
+                Some((self.root.clone(), raw_url)),
+                Arc::new(OnceLock::new()),
                 Arc::new(AtomicUsize::new(0)),
-                mime,
-                status,
             ))
         }
     }
@@ -249,23 +219,78 @@ wrap_scheme_handler_factory! {
 // ResourceHandler
 //
 
+/// What an [`AppResourceHandler`] answers.
+pub(crate) struct Body {
+    bytes: Vec<u8>,
+    mime: String,
+    status: i32,
+}
+
+impl Body {
+    /// Resolves and reads the app:// asset `url` names under `root`. A failure
+    /// becomes its status's fixed answer: the same 404 for anything that is
+    /// not a file inside the root. Blocks on the filesystem.
+    fn asset(root: &CanonicalRoot, url: &str) -> Self {
+        match extract_rel_path(url).and_then(|rel| resolve_asset(root, &rel)) {
+            Ok(asset) => {
+                debug!(
+                    "[kurogane] status=200 url=\"{}\" path=\"{}\" bytes={} mime={}",
+                    url,
+                    asset.path.display(),
+                    asset.bytes.len(),
+                    asset.mime
+                );
+
+                Self {
+                    bytes: asset.bytes,
+                    mime: asset.mime,
+                    status: 200,
+                }
+            }
+            Err(e) => {
+                let status = e.http_status();
+
+                eprintln!("[kurogane] status={status} url=\"{url}\" reason={e}");
+
+                Self {
+                    bytes: e.http_repr().to_vec(),
+                    mime: "text/plain".to_string(),
+                    status,
+                }
+            }
+        }
+    }
+}
+
 wrap_resource_handler! {
-    pub struct AppResourceHandler {
-        data: Arc<[u8]>,
+    pub(crate) struct AppResourceHandler {
+        // The app:// asset open reads; none when the body is given up front
+        asset: Option<(CanonicalRoot, String)>,
+        // Shared, not copied: the macro's Clone makes another handle on the
+        // same CEF object, which must serve the same body from the same place
+        body: Arc<OnceLock<Body>>,
         offset: Arc<AtomicUsize>,
-        mime: String,
-        status: i32,
     }
 
     impl ResourceHandler {
 
+        /// Reads the app:// asset, if the handler has one. CEF calls this on a
+        /// worker that may block, never on the UI or IO thread, and asks for
+        /// the headers once it has returned.
         fn open(
             &self,
             _request: Option<&mut Request>,
             handle_request: Option<&mut i32>,
             _callback: Option<&mut Callback>,
         ) -> i32 {
-            debug!("[app://] open: {} bytes to serve", self.data.len());
+            if let Some((root, url)) = &self.asset {
+                self.body.get_or_init(|| Body::asset(root, url));
+            }
+
+            debug!(
+                "[app://] open: {} bytes to serve",
+                self.body.get().map_or(0, |body| body.bytes.len())
+            );
 
             self.offset.store(0, Ordering::Release);
 
@@ -276,10 +301,6 @@ wrap_resource_handler! {
             1
         }
 
-        #[expect(
-            clippy::not_unsafe_ptr_arg_deref,
-            reason = "signature fixed by cef-rs ImplResourceHandler; CEF owns the buffer contract"
-        )]
         fn read(
             &self,
             data_out: *mut u8,
@@ -302,8 +323,16 @@ wrap_resource_handler! {
                 return 0;
             }
 
+            // open has filled the body by the time CEF reads
+            let Some(body) = self.body.get() else {
+                debug!("[app://] read: refused (no body)");
+
+                *br = 0;
+                return 0;
+            };
+
             let offset = self.offset.load(Ordering::Acquire);
-            let data = self.data.as_ref();
+            let data = body.bytes.as_slice();
 
             // Runs inside a CEF FFI callback, where a slice panic could abort the process
             // Refuse the read rather than panic
@@ -322,7 +351,7 @@ wrap_resource_handler! {
 
             if read > 0 {
                 // SAFETY: CEF guarantees `data_out` is a writable buffer of at
-                // least `bytes_to_read` bytes that does not alias `self.data`.
+                // least `bytes_to_read` bytes that does not alias the body.
                 // It is non-null and `bytes_to_read > 0` (checked above), and
                 // `read <= bytes_to_read`, so the copy stays in bounds. The raw
                 // copy never forms a reference to the possibly uninitialized
@@ -359,10 +388,17 @@ wrap_resource_handler! {
                 return;
             };
 
-            let data_len = self.data.len() as i64;
+            // open has filled the body by the time CEF asks for the headers;
+            // without one, fail the request the way CEF documents
+            let Some(body) = self.body.get() else {
+                response.set_error(Errorcode::FAILED);
+                return;
+            };
 
-            response.set_status(self.status);
-            response.set_mime_type(Some(&CefString::from(self.mime.as_str())));
+            let data_len = body.bytes.len() as i64;
+
+            response.set_status(body.status);
+            response.set_mime_type(Some(&CefString::from(body.mime.as_str())));
 
             if let Some(len) = response_length {
                 *len = data_len;
@@ -370,7 +406,7 @@ wrap_resource_handler! {
 
             debug!(
                 "[app://] response_headers: status={} mime={} length={data_len}",
-                self.status, self.mime
+                body.status, body.mime
             );
         }
     }
@@ -473,14 +509,20 @@ fn mime_from_path(path: &Path) -> String {
 /// Builds a [`ResourceHandler`] serving `data` once with the given MIME type
 /// and status code.
 ///
-/// Convenience wrapper around [`AppResourceHandler`] for custom scheme
-/// handlers that answer with static bytes.
+/// For custom scheme handlers that answer with static bytes. The bytes exist
+/// before [`SchemeHandler::create`] returns, on the IO thread, so producing
+/// them must be cheap.
 pub fn resource_handler_from_bytes(data: Vec<u8>, mime: &str, status: i32) -> ResourceHandler {
-    AppResourceHandler::new(
-        Arc::<[u8]>::from(data),
-        Arc::new(AtomicUsize::new(0)),
-        mime.to_string(),
+    let body = Body {
+        bytes: data,
+        mime: mime.to_string(),
         status,
+    };
+
+    AppResourceHandler::new(
+        None,
+        Arc::new(OnceLock::from(body)),
+        Arc::new(AtomicUsize::new(0)),
     )
 }
 
@@ -646,12 +688,14 @@ mod tests {
         fs::write(root_path.join("index.html"), b"ok").unwrap();
         let root = CanonicalRoot::new(&root_path).unwrap();
 
-        let answer =
-            |url: &str| match extract_rel_path(url).and_then(|rel| resolve_asset(&root, &rel)) {
-                Ok(_) => 200,
-                Err(e) => e.http_status(),
-            };
-        assert_eq!(answer("app://app/index.html"), 200);
+        // What the page receives: status, MIME type and bytes
+        let answer = |url: &str| {
+            let body = Body::asset(&root, url);
+            (body.status, body.mime, body.bytes)
+        };
+        let served = (200, "text/html".to_owned(), b"ok".to_vec());
+        assert_eq!(answer("app://app/index.html"), served);
+        let not_found = (404, "text/plain".to_owned(), b"404 Not Found".to_vec());
         for url in [
             "app://app/missing.html",
             "app://app/%2e%2e/secret.txt",
@@ -664,8 +708,33 @@ mod tests {
             "app://app/sub//index.html",
             "app://app/index.html%00.png",
         ] {
-            assert_eq!(answer(url), 404, "{url}");
+            assert_eq!(answer(url), not_found, "{url}");
         }
+    }
+
+    #[test]
+    fn open_reads_an_asset_written_after_the_handler_was_made() {
+        // The handler reads the file when CEF opens it, on a worker, not
+        // when it is made: a file written in between is what it serves
+        let dir = tmp();
+        let root = CanonicalRoot::new(dir.path()).unwrap();
+        let handler = AppResourceHandler::new(
+            Some((root, "app://app/late.txt".to_owned())),
+            Arc::new(OnceLock::new()),
+            Arc::new(AtomicUsize::new(0)),
+        );
+        fs::write(dir.path().join("late.txt"), b"written after the handler").unwrap();
+
+        let mut handle_request = 0;
+        assert_eq!(handler.open(None, Some(&mut handle_request), None), 1);
+        assert_eq!(handle_request, 1);
+
+        let mut buf = [0u8; 64];
+        let mut n = 0;
+        assert_eq!(handler.read(buf.as_mut_ptr(), 64, Some(&mut n), None), 1);
+        assert_eq!(&buf[..n as usize], b"written after the handler");
+        assert_eq!(handler.read(buf.as_mut_ptr(), 64, Some(&mut n), None), 0);
+        assert_eq!(n, 0);
     }
 
     #[test]
