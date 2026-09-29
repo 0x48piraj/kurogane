@@ -5,6 +5,7 @@
 
 use cef::*;
 
+use crate::acl::Origin;
 use crate::debug;
 use crate::ipc::browser_state::{still_addressed, ErrorCode, IpcContext};
 use crate::ipc::envelope::*;
@@ -123,17 +124,23 @@ impl EventSubsystem {
             return;
         };
 
-        let subs = self.subscriptions.lock().unwrap();
-        let Some(entries) = subs.get(cmd) else {
-            return;
+        // Copied out, so no CEF call runs under the lock
+        let targets: Vec<(Frame, u32, Origin)> = {
+            let subs = self.subscriptions.lock().unwrap();
+            let Some(entries) = subs.get(cmd) else {
+                return;
+            };
+            entries
+                .iter()
+                .map(|sub| (sub.frame.clone(), sub.id, sub.url_origin.clone()))
+                .collect()
         };
-        for sub in entries {
-            let frame = sub.frame.clone();
+        for (frame, id, url_origin) in targets {
             if frame.is_valid() == 0 {
                 continue;
             }
             let url: CefString = (&frame.url()).into();
-            if !still_addressed(&sub.url_origin, &url.to_string()) {
+            if !still_addressed(&url_origin, &url.to_string()) {
                 continue;
             }
             let envelope = Envelope {
@@ -141,7 +148,7 @@ impl EventSubsystem {
                 subsystem: SUB_EVENT,
                 opcode: EVENT_EMIT,
                 flags: 0,
-                correlation_id: sub.id,
+                correlation_id: id,
                 payload_kind: PAYLOAD_JSON,
             };
             // A sent message belongs to CEF; build one per subscription
