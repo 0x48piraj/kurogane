@@ -67,7 +67,7 @@ wrap_app! {
         ) {
             debug!("on_register_custom_schemes called!");
 
-            let registrar = registrar.unwrap();
+            let Some(registrar) = registrar else { return };
 
             let flags = crate::scheme::custom_scheme_flags();
 

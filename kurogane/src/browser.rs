@@ -1,7 +1,6 @@
 //! Browser-process lifecycle handling.
 
 use cef::*;
-use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,9 +16,6 @@ wrap_browser_process_handler! {
     pub struct KuroganeBrowserProcessHandler {
         services: Arc<RuntimeServices>,
         spec: RuntimeSpec,
-
-        // Keep factories alive for the browser lifetime; RefCell for interior mutability
-        scheme_factories: RefCell<Vec<SchemeHandlerFactory>>,
 
         // Given to every browser Chromium opens on its own
         chrome_ui_client: Client,
@@ -37,45 +33,9 @@ wrap_browser_process_handler! {
                 delegate.on_context_initialized();
             }
 
-            // Register once per request context
-            if self.scheme_factories.borrow().is_empty() {
-                let mut factories = std::mem::take(&mut *self.scheme_factories.borrow_mut());
-                let global = request_context_get_global_context().unwrap();
-
-                // Register `app://` only when serving local assets; URL mode (App::url) has
-                // no asset root or scheme handler.
-                if let Some(root) = &self.spec.asset_root {
-                    debug!("Registering scheme handler factory for app://");
-                    let mut factory = crate::scheme::AppSchemeHandlerFactory::new(root.clone());
-                    let result = global.register_scheme_handler_factory(
-                        Some(&CefString::from("app")),
-                        Some(&CefString::from("app")),
-                        Some(&mut factory),
-                    );
-                    debug!("register app:// scheme handler factory result: {result}");
-                    factories.push(factory);
-                }
-
-                // User-registered custom schemes are served on any host
-                for scheme in &self.spec.scheme_handlers {
-                    debug!("Registering scheme handler factory for {}://", scheme.name);
-                    let mut factory =
-                        crate::scheme::CustomSchemeHandlerFactory::new(scheme.handler.clone());
-                    let result = global.register_scheme_handler_factory(
-                        Some(&CefString::from(scheme.name.as_str())),
-                        Some(&CefString::from("")),
-                        Some(&mut factory),
-                    );
-                    debug!(
-                        "register {}:// scheme handler factory result: {result}",
-                        scheme.name
-                    );
-                    factories.push(factory);
-                }
-
-                // Store so CEF never calls freed memory
-                *self.scheme_factories.borrow_mut() = factories;
-            }
+            // Embedded browsers load app:// and custom schemes too, so this
+            // runs before the embedded return below
+            register_scheme_handlers(&self.spec);
 
             // Embedded mode delegates window creation to the host application which embeds CEF as a child
             // Skip browser/window creation in on_context_initialized; only register scheme handlers
@@ -205,7 +165,48 @@ impl KuroganeBrowserProcessHandler {
         spec: RuntimeSpec,
     ) -> BrowserProcessHandler {
         let chrome_ui_client = KuroganeClient::new(services.clone(), BrowserType::ChromeUi);
-        Self::new(services, spec, RefCell::new(Vec::new()), chrome_ui_client)
+        Self::new(services, spec, chrome_ui_client)
+    }
+}
+
+/// Registers the scheme handler factories on the global request context:
+/// `app://` when the application serves local assets and every scheme given
+/// to [`App::register_scheme`](crate::App::register_scheme).
+///
+/// Nothing here keeps the factories: cef-rs adds the reference CEF adopts
+/// for each one and CEF holds it until the factory is replaced or cleared.
+fn register_scheme_handlers(spec: &RuntimeSpec) {
+    let Some(global) = request_context_get_global_context() else {
+        eprintln!("kurogane: no global request context; scheme handlers not registered");
+        return;
+    };
+
+    // Register `app://` only when serving local assets; URL mode (App::url) has
+    // no asset root or scheme handler.
+    if let Some(root) = &spec.asset_root {
+        debug!("Registering scheme handler factory for app://");
+        let mut factory = crate::scheme::AppSchemeHandlerFactory::new(root.clone());
+        let result = global.register_scheme_handler_factory(
+            Some(&CefString::from("app")),
+            Some(&CefString::from("app")),
+            Some(&mut factory),
+        );
+        debug!("register app:// scheme handler factory result: {result}");
+    }
+
+    // User-registered custom schemes are served on any host
+    for scheme in &spec.scheme_handlers {
+        debug!("Registering scheme handler factory for {}://", scheme.name);
+        let mut factory = crate::scheme::CustomSchemeHandlerFactory::new(scheme.handler.clone());
+        let result = global.register_scheme_handler_factory(
+            Some(&CefString::from(scheme.name.as_str())),
+            Some(&CefString::from("")),
+            Some(&mut factory),
+        );
+        debug!(
+            "register {}:// scheme handler factory result: {result}",
+            scheme.name
+        );
     }
 }
 
