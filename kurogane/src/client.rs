@@ -138,6 +138,9 @@ wrap_life_span_handler! {
                 (id, stragglers)
             };
 
+            #[cfg(target_os = "macos")]
+            crate::platform::embed::forget_view(browser_id);
+
             for straggler in stragglers {
                 if let Some(host) = straggler.host() {
                     host.close_browser(1);

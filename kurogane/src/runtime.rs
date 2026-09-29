@@ -345,6 +345,16 @@ pub(crate) struct RuntimeState {
     pub ui_thread_id: std::thread::ThreadId,
 }
 
+/// A rectangle: a position and a size.
+///
+/// In [`WindowOptions::bounds`] it is a window's place on the screen.
+///
+/// For [`AppInstance::create_child_browser`] and [`BrowserHandle::set_bounds`]
+/// it is a browser's place inside its parent window, in that window's own
+/// coordinates, which CEF applies unconverted: pixels from the top-left of the
+/// client area on Windows and X11; on macOS, points in the parent `NSView`,
+/// whose origin is its top-left corner when the view is flipped (winit's is)
+/// and its bottom-left corner otherwise.
 #[derive(Clone, Copy, Debug)]
 pub struct BrowserBounds {
     pub x: i32,
@@ -697,12 +707,42 @@ impl BrowserHandle {
         }
     }
 
-    pub fn notify_resized(&self) {
-        if let Some(h) = self.host() {
-            h.was_resized();
+    /// Moves and resizes a browser made by
+    /// [`AppInstance::create_child_browser`] inside its parent window.
+    ///
+    /// `bounds` are in the parent's coordinates, as at creation (see
+    /// [`BrowserBounds`]); a width or height below one counts as one. On
+    /// Windows and Linux Chromium places such a browser once and does not
+    /// follow its parent, so the application calls this whenever the
+    /// browser's place changes: for a browser that fills its window, on every
+    /// resize. On macOS the browser stretches with its parent by itself, and
+    /// this places it anywhere.
+    ///
+    /// Does nothing for any other browser, and nothing once the browser has
+    /// closed.
+    ///
+    /// # Panics
+    ///
+    /// Off the thread that started the application, which is CEF's UI thread:
+    /// the browser's native window is moved only there.
+    #[track_caller]
+    pub fn set_bounds(&self, bounds: BrowserBounds) {
+        let Some(browser) = self.browser() else {
+            return;
+        };
+        let Some(host) = browser.host() else {
+            return;
+        };
+        // A browser in a window Kurogane or CEF made (the application's,
+        // a popup's, DevTools') is sized with that window
+        if host.has_view() != 0 || browser.is_popup() != 0 {
+            return;
         }
+        crate::platform::embed::set_child_window_bounds(self.id, host.window_handle(), bounds);
     }
 
+    /// Tells the browser that the window hosting it is about to move or
+    /// resize. CEF uses this on Windows and Linux only.
     pub fn notify_move_or_resize_started(&self) {
         if let Some(h) = self.host() {
             h.notify_move_or_resize_started();
@@ -957,7 +997,9 @@ impl AppInstance {
 
     /// Creates a Chromium browser hosted inside an existing native window.
     ///
-    /// The browser is attached to parent and positioned using the provided bounds.
+    /// The browser is a native child window of `parent`, placed at `bounds`
+    /// in the parent's coordinates (see [`BrowserBounds`]).
+    /// [`BrowserHandle::set_bounds`] moves it later.
     ///
     /// 'parent' must be a valid platform window handle ('HWND' on Windows,
     /// 'NSView' on macOS, or the corresponding native handle on Linux)
@@ -966,7 +1008,7 @@ impl AppInstance {
     /// and AppInstance::pump must continue to be called regularly for
     /// Chromium to process events.
     ///
-    /// Returns true if browser creation succeeded.
+    /// Returns None if CEF could not create the browser.
     pub fn create_child_browser(
         &self,
         parent: *mut std::ffi::c_void,
@@ -1036,6 +1078,12 @@ impl AppInstance {
             reg.find_id_by_cef_id(browser.identifier())
                 .expect("browser should have been registered by on_after_created")
         };
+
+        // set_bounds reaches the view through this, never through the handle
+        #[cfg(target_os = "macos")]
+        if let Some(host) = browser.host() {
+            crate::platform::embed::remember_view(id, host.window_handle());
+        }
 
         Some(BrowserHandle {
             id,

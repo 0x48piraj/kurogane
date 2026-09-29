@@ -101,7 +101,7 @@ Event::MainEventsCleared => {
 
 ## Host-managed native window embedding _(aka the Mad scientist)_
 
-The embedded integration inverts the Views ownership model. The host application creates a native OS window via winit, then attaches a Chromium browser as a child window using [`CefWindowInfo::SetAsChild`](https://magpcss.org/ceforum/apidocs3/projects/(default)/CefWindowInfo.html). The host retains complete ownership of the top-level window and is responsible for resizing and positioning the child browser surface.
+The embedded integration inverts the Views ownership model. The host application creates a native OS window via winit, then attaches a Chromium browser as a child window using [`CefWindowInfo::SetAsChild`](https://magpcss.org/ceforum/apidocs3/projects/(default)/CefWindowInfo.html). The host retains complete ownership of the top-level window and is responsible for resizing and positioning the child browser surface, with `BrowserHandle::set_bounds`.
 
 ```rust
 let mut window_info = CefWindowInfo::new();
@@ -119,7 +119,7 @@ host.create_browser(
 
 - **Cadence & CPU:** Reactive (identical to reactive event-driven loop). Driven by Kurogane's `App::scheduler` callbacks. Wakes on demand, near-zero idle CPU.
 - **Window hierarchy:** The host process owns the window hierarchy. Chromium renders into a raw child surface (`HWND` / `NSView` / `XWindow`) of the `winit` window's native handle.
-- **Layout contract:** Resize events must be forwarded to the browser via [`CefBrowserHost::WasResized`](https://magpcss.org/ceforum/apidocs3/projects/(default)/CefBrowserHost.html#WasResized()), which signals the renderer process to re-layout. Failure to call this will leave the browser surface clipped or stretched.
+- **Layout contract:** Chromium places a child browser once, at the bounds given to `create_child_browser`. On Windows and Linux it does not follow the host window: the host moves and resizes it with `BrowserHandle::set_bounds` whenever its place changes, on every `WindowEvent::Resized` for a browser that fills the window, as CEF's own sample client does (`SetWindowPos` on Windows, `XMoveResizeWindow` on X11). On macOS Chromium stretches the browser with its parent view, and `set_bounds` places it anywhere by setting the view's frame. Bounds are in the parent window's coordinates: pixels on Windows and X11, points on macOS, where winit's `inner_size()` is converted with `to_logical`. [`CefBrowserHost::WasResized`](https://magpcss.org/ceforum/apidocs3/projects/(default)/CefBrowserHost.html#WasResized()) does not apply: it is for windowless (off-screen) browsers only.
 
 Because the host process owns the root window, teardown requires a coordinated multi-step asynchronous dance across the host thread and Chromium UI thread.
 

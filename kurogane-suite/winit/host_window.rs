@@ -37,20 +37,13 @@ impl ApplicationHandler for EmbeddedDriver {
             .create_window(Window::default_attributes().with_title("Kurogane Embedded"))
             .unwrap();
 
-        let size = window.inner_size();
         let hwnd = native_handle(&window);
 
         // Map the child browser layout bounds 1:1 with the parent container
-        self.browser = self.handle.create_child_browser(
-            hwnd,
-            BrowserBounds {
-                x: 0,
-                y: 0,
-                width: size.width as i32,
-                height: size.height as i32,
-            },
-            "app://app/index.html",
-        );
+        let bounds = client_bounds(&window);
+        self.browser = self
+            .handle
+            .create_child_browser(hwnd, bounds, "app://app/index.html");
 
         self.window = Some(window);
     }
@@ -71,9 +64,9 @@ impl ApplicationHandler for EmbeddedDriver {
                 self.handle.handle().close_all_browsers(true);
             }
             WindowEvent::Resized(_) => {
-                // Notify Chromium that the host window size has changed
-                if let Some(browser) = &self.browser {
-                    browser.notify_resized();
+                // Chromium placed the browser once; keep it filling the window
+                if let (Some(browser), Some(window)) = (&self.browser, &self.window) {
+                    browser.set_bounds(client_bounds(window));
                 }
             }
             _ => {}
@@ -90,6 +83,20 @@ impl ApplicationHandler for EmbeddedDriver {
             self.handle.shutdown();
             event_loop.exit();
         }
+    }
+}
+
+/// The window's whole client area, in the units a child browser is placed in:
+/// points on macOS, pixels on Windows and X11
+fn client_bounds(window: &Window) -> BrowserBounds {
+    let size = window.inner_size();
+    #[cfg(target_os = "macos")]
+    let size = size.to_logical::<u32>(window.scale_factor());
+    BrowserBounds {
+        x: 0,
+        y: 0,
+        width: size.width as i32,
+        height: size.height as i32,
     }
 }
 
