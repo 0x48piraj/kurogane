@@ -77,26 +77,14 @@ wrap_browser_process_handler! {
                 *self.scheme_factories.borrow_mut() = factories;
             }
 
-            // Check if any delegate provides a custom default client
-            let mut client: Client = {
-                let mut delegate_client = None;
-                for delegate in &self.spec.delegates {
-                    if let Some(c) = delegate.default_client() {
-                        delegate_client = Some(c);
-                        break;
-                    }
-                }
-                delegate_client.unwrap_or_else(|| {
-                    KuroganeClient::new(self.services.clone(), BrowserType::Main)
-                })
-            };
-
             // Embedded mode delegates window creation to the host application which embeds CEF as a child
             // Skip browser/window creation in on_context_initialized; only register scheme handlers
             if matches!(self.spec.mode, RuntimeMode::Embedded) {
                 debug!("Embedded mode; skipping window creation");
                 return;
             }
+
+            let mut client = KuroganeClient::new(self.services.clone(), BrowserType::Main);
 
             let url = CefString::from(self.spec.start_url.as_str());
 

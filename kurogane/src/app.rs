@@ -116,7 +116,7 @@ pub(crate) enum Source {
 /// Register via App::delegate to customize browser-process startup
 /// without replacing Kurogane's built-in runtime.
 ///
-/// Delegates are invoked in registration order. The first delegate returning a client from Self::default_client wins.
+/// Delegates are invoked in registration order.
 pub trait ClientAppBrowserDelegate: Send + Sync {
     /// Invoked before Chromium processes command-line arguments.
     ///
@@ -128,16 +128,6 @@ pub trait ClientAppBrowserDelegate: Send + Sync {
     ///
     /// At this point global browser-process initialization has completed and browser creation may begin.
     fn on_context_initialized(&self) {}
-
-    /// Supplies a custom default Client implementation.
-    ///
-    /// The returned client will be used when Kurogane creates browser
-    /// instances unless another delegate registered earlier has already supplied one.
-    ///
-    /// Returning None defers to subsequent delegates or Kurogane's built-in client implementation.
-    fn default_client(&self) -> Option<Client> {
-        None
-    }
 }
 
 /// Customizes render-process behavior.
