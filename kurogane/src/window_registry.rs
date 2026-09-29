@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use cef::{Window, ImplWindow};
+use cef::Window;
 use crate::browser_registry::BrowserId;
 use crate::debug;
 
@@ -99,11 +99,18 @@ impl WindowRegistry {
         self.windows.get_mut(&id)
     }
 
-    pub fn close_all_windows(&self) {
-        let windows: Vec<Window> = self.windows.values().map(|s| s.window.clone()).collect();
-        for w in windows {
-            w.close();
-        }
+    /// Every registered window.
+    pub fn all(&self) -> Vec<Window> {
+        self.windows.values().map(|s| s.window.clone()).collect()
+    }
+
+    /// Returns windows whose browser is still being created or has already gone.
+    pub fn unlinked(&self) -> Vec<Window> {
+        self.windows
+            .values()
+            .filter(|s| s.browser_id.is_none())
+            .map(|s| s.window.clone())
+            .collect()
     }
 
     pub fn window_id_for_browser(&self, browser_id: BrowserId) -> Option<WindowId> {

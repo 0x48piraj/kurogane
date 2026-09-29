@@ -374,6 +374,8 @@ fn main() {
 }
 ```
 
+`should_shutdown()` becomes true when the application has finished closing its browsers; after the last window closes or after `AppHandle::shutdown()` closes them all. Keep calling `pump()` until then, then call `AppInstance::shutdown()` to shut down CEF.
+
 Useful for:
 
 * Custom event loops

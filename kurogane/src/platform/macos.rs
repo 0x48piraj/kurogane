@@ -183,7 +183,7 @@ mod application {
     use objc2_app_kit::{NSApplication, NSEvent};
 
     use super::SERVICES;
-    use crate::runtime::close_all_browsers_and_windows;
+    use crate::runtime::close_all;
 
     /// CEF-compatible `NSApplication` subclass.
     #[derive(Default)]
@@ -218,11 +218,9 @@ mod application {
             /// Closing all browsers instead lets the normal CEF shutdown path run.
             #[unsafe(method(terminate:))]
             unsafe fn terminate(&self, _sender: &AnyObject) {
+                // Unload handlers still run, as for a window closed by hand
                 if let Some(services) = SERVICES.get() {
-                    close_all_browsers_and_windows(
-                        &services.browser_registry,
-                        &services.window_registry,
-                    );
+                    close_all(services, false);
                 }
             }
         }

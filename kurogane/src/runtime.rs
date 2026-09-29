@@ -210,17 +210,12 @@ fn execute_subprocesses(args: &Args, app: &mut App, sandbox_info: *mut u8) {
     debug!("Continuing as browser process");
 }
 
-fn install_ctrlc_handler(
-    browser_registry: Arc<Mutex<BrowserRegistry>>,
-    window_registry: Arc<Mutex<WindowRegistry>>,
-) {
+fn install_ctrlc_handler(services: Arc<RuntimeServices>) {
     // Prevent double-fire (dev hammers Ctrl+C twice)
     let quitting = Arc::new(AtomicBool::new(false));
 
     let installed = ctrlc::set_handler({
         let quitting = quitting.clone();
-        let browser_registry = browser_registry.clone();
-        let window_registry = window_registry.clone();
 
         move || {
             debug!("SIGINT received");
@@ -233,7 +228,8 @@ fn install_ctrlc_handler(
 
             debug!("Scheduling browser shutdown on UI thread");
 
-            let mut task = CloseAllTask::new(browser_registry.clone(), window_registry.clone());
+            // Unload handlers still run, as for a window closed by hand
+            let mut task = CloseAllTask::new(services.clone(), false);
             post_task(ThreadId::UI, Some(&mut task));
         }
     });
@@ -245,17 +241,44 @@ fn install_ctrlc_handler(
     }
 }
 
-pub(crate) fn close_all_browsers_and_windows(
-    browser_registry: &Arc<Mutex<BrowserRegistry>>,
-    window_registry: &Arc<Mutex<WindowRegistry>>,
-) {
+/// Closes all browsers, then any remaining Views windows. UI thread only.
+///
+/// Shutdown completes from the last browser's `OnBeforeClose` callback. If
+/// there are no browsers or windows, it completes immediately. A window whose
+/// browser is still being created remains open for this purpose.
+///
+/// `force` uses `CloseBrowser(true)`. It also closes unlinked Views windows
+/// directly; linked windows close with their browser.
+pub(crate) fn close_all(services: &RuntimeServices, force: bool) {
+    let no_browsers = services.browser_registry.lock().unwrap().is_empty();
+    let no_windows = services.window_registry.lock().unwrap().count() == 0;
+    if no_browsers && no_windows {
+        services.shutdown_signal.request_shutdown();
+        quit_message_loop();
+        return;
+    }
+
     // Close all browsers first; in Views mode this cascades to close their parent windows
     // Embedded mode has no Views windows
-    close_browsers(browser_registry, false);
+    close_browsers(&services.browser_registry, force);
 
-    // Close any remaining Views windows not closed by the browser cascade
-    let wreg = window_registry.lock().unwrap();
-    wreg.close_all_windows();
+    // In a forced close, linked windows close with their browser. Close only
+    // unlinked windows directly.
+    let windows = {
+        let reg = services.window_registry.lock().unwrap();
+        if force { reg.unlinked() } else { reg.all() }
+    };
+    close_windows(windows);
+}
+
+/// Closes the given Views windows. UI thread only.
+///
+/// Copy the windows before calling `Window::close` so the registry is not
+/// held while the window delegate runs.
+fn close_windows(windows: Vec<Window>) {
+    for window in windows {
+        window.close();
+    }
 }
 
 /// Asks every live browser to close.
@@ -282,13 +305,13 @@ fn on_ui_thread() -> bool {
 
 wrap_task! {
     struct CloseAllTask {
-        browser_registry: Arc<Mutex<BrowserRegistry>>,
-        window_registry: Arc<Mutex<WindowRegistry>>,
+        services: Arc<RuntimeServices>,
+        force: bool,
     }
 
     impl Task {
         fn execute(&self) {
-            close_all_browsers_and_windows(&self.browser_registry, &self.window_registry);
+            close_all(&self.services, self.force);
         }
     }
 }
@@ -300,17 +323,8 @@ wrap_task! {
 
     impl Task {
         fn execute(&self) {
-            self.window_registry.lock().unwrap().close_all_windows();
-        }
-    }
-}
-
-wrap_task! {
-    struct QuitTask;
-
-    impl Task {
-        fn execute(&self) {
-            quit_message_loop();
+            let windows = self.window_registry.lock().unwrap().all();
+            close_windows(windows);
         }
     }
 }
@@ -439,25 +453,29 @@ impl AppHandle {
         &self.inner.services
     }
 
-    /// Signals the CEF message loop to exit.
+    /// Ends the application by closing all browsers.
     ///
-    /// Safe to call from any thread: CEF quits its message loop only on the
-    /// UI thread, so a call from elsewhere is posted there. The actual
-    /// cef::shutdown() call happens on the UI thread in AppInstance::run or
-    /// AppInstance::shutdown after the loop exits.
+    /// The application ends after the last browser closes. Calling this from
+    /// another thread posts the close to the UI thread. The call does not wait
+    /// for the browsers to close.
+    ///
+    /// With [`App::start_embedded`](crate::App::start_embedded), browser closing
+    /// also waits for the host window to close.
     pub fn shutdown(&self) {
-        self.services().shutdown_signal.request_shutdown();
-        debug!("AppHandle::shutdown: quitting message loop");
+        debug!("AppHandle::shutdown: closing every browser");
 
         if on_ui_thread() {
-            quit_message_loop();
+            close_all(self.services(), true);
         } else {
-            post_task(ThreadId::UI, Some(&mut QuitTask::new()));
+            let mut task = CloseAllTask::new(self.inner.services.clone(), true);
+            post_task(ThreadId::UI, Some(&mut task));
         }
     }
 
-    /// Returns true when shutdown has been requested
-    /// (e.g. via shutdown(Self::shutdown), window close, or Ctrl+C).
+    /// Returns whether the application has ended.
+    ///
+    /// Becomes true after the last browser closes, after
+    /// [`AppHandle::shutdown`], or when the application receives a quit request.
     pub fn should_shutdown(&self) -> bool {
         self.services().shutdown_signal.is_shutdown_requested()
     }
@@ -505,7 +523,8 @@ impl AppHandle {
         let registry = &self.services().window_registry;
 
         if on_ui_thread() {
-            registry.lock().unwrap().close_all_windows();
+            let windows = registry.lock().unwrap().all();
+            close_windows(windows);
         } else {
             post_task(
                 ThreadId::UI,
@@ -801,8 +820,8 @@ impl AppInstance {
         do_message_loop_work();
     }
 
-    /// Returns true when shutdown has been requested
-    /// e.g. the window was closed or Ctrl+C was received.
+    /// Returns true once the application has ended; see
+    /// [`AppHandle::should_shutdown`].
     pub fn should_shutdown(&self) -> bool {
         self.handle.should_shutdown()
     }
@@ -883,11 +902,23 @@ impl AppInstance {
 
     /// Takes ownership and blocks on the CEF message loop.
     ///
-    /// The loop runs until AppHandle::shutdown is called (from any thread)
-    /// or all browser windows close. After the loop exits, cef::shutdown()
-    /// is called on the current (UI) thread.
+    /// The loop runs until the application's last browser has closed:
+    /// after [`AppHandle::shutdown`] (from any thread), its last window
+    /// closing, or Ctrl+C. After the loop exits, cef::shutdown() is called on
+    /// the current (UI) thread.
+    ///
+    /// Not for an application given an [`App::scheduler`](crate::App::scheduler):
+    /// the scheduler turns on CEF's external message pump, under which this
+    /// loop returns at once and cef::shutdown() would run under a window
+    /// still opening. Such an application calls [`AppInstance::pump`] from its
+    /// own loop until [`AppInstance::should_shutdown`], then
+    /// [`AppInstance::shutdown`].
     pub fn run(self) -> Result<(), RuntimeError> {
-        run_message_loop();
+        // An application that ended before its loop started, with nothing
+        // open, has nothing left to quit the loop
+        if !self.should_shutdown() {
+            run_message_loop();
+        }
 
         debug!("Message loop exited");
         self.shutdown();
@@ -900,8 +931,9 @@ impl AppInstance {
     /// Sets the shutdown signal and calls cef::shutdown() on the UI thread.
     /// Safe to call multiple times. Subsequent calls are no-ops.
     ///
-    /// Unlike [`AppHandle::shutdown`], which only asks the message loop to
-    /// exit, this shuts CEF itself down.
+    /// Unlike [`AppHandle::shutdown`], this shuts down the CEF runtime itself.
+    /// All browsers must already be closed; [`AppHandle::should_shutdown`] is
+    /// true at that point.
     pub fn shutdown(&self) {
         if self
             .handle
@@ -1103,10 +1135,7 @@ fn initialize_cef(spec: RuntimeSpec, router: Arc<IpcRouter>) -> Result<RuntimeSt
     // In embedded mode the host application manages its own lifecycle
     if spec.mode == RuntimeMode::Views {
         debug!("Installing shutdown handler");
-        install_ctrlc_handler(
-            services.browser_registry.clone(),
-            services.window_registry.clone(),
-        );
+        install_ctrlc_handler(services.clone());
     }
 
     Ok(RuntimeState {
