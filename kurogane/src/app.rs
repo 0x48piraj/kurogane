@@ -501,7 +501,9 @@ impl App {
     /// with a PumpRequest indicating how urgently. The integrator is
     /// responsible for calling AppInstance::pump accordingly.
     ///
-    /// Only meaningful when using App::start_embedded / App::start
+    /// CEF may call the scheduler from any thread. It enables CEF's external
+    /// message pump, which returns after each pump. Use it with [`App::start`]
+    /// and [`App::start_embedded`]; [`App::run`] does not accept one.
     pub fn scheduler<F>(mut self, f: F) -> Self
     where
         F: Fn(PumpRequest) + Send + Sync + 'static,
@@ -839,7 +841,15 @@ impl App {
     }
 
     /// Start the application and run the message loop.
-    pub fn run(self) -> Result<(), RuntimeError> {
+    ///
+    /// # Errors
+    ///
+    /// As [`App::build`]. Returns [`ConfigError::SchedulerWithRunLoop`] when a
+    /// [`App::scheduler`] is configured, since [`App::run`] owns the message loop.
+    pub fn run(mut self) -> Result<(), RuntimeError> {
+        if self.scheduler.is_some() {
+            self.problems.push(ConfigError::SchedulerWithRunLoop);
+        }
         self.build()?.run()
     }
 
@@ -978,6 +988,18 @@ mod tests {
             }
             Err(other) => panic!("expected a configuration error, got: {other}"),
             Ok(_) => panic!("a misconfigured app must not start"),
+        }
+    }
+
+    #[test]
+    fn run_refuses_a_scheduler() {
+        let result = App::new("./dist").scheduler(|_| {}).run();
+        match result {
+            Err(RuntimeError::InvalidConfiguration(problems)) => {
+                assert_eq!(problems, vec![ConfigError::SchedulerWithRunLoop])
+            }
+            Err(other) => panic!("expected a configuration error, got: {other}"),
+            Ok(()) => panic!("App::run must refuse a scheduler"),
         }
     }
 

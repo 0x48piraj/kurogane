@@ -91,10 +91,11 @@ Event::MainEventsCleared => {
 }
 ```
 
-* **Cadence:** Purely reactive. Driven by [`CefApp::OnScheduleMessagePumpWork`](https://cef-builds.spotifycdn.com/docs/108.4/classCefBrowserProcessHandler.html#a7ff7d1618399ede096ba16486a71d76e) via Kurogane's `App::scheduler`. Chromium explicitly requests a pump from the browser-process UI thread only when delayed tasks or internal work are pending.
+* **Cadence:** Purely reactive. Driven by [`CefApp::OnScheduleMessagePumpWork`](https://cef-builds.spotifycdn.com/docs/108.4/classCefBrowserProcessHandler.html#a7ff7d1618399ede096ba16486a71d76e) via Kurogane's `App::scheduler`. Chromium explicitly requests a pump only when delayed tasks or internal work are pending.
 * **CPU profile:** Near-zero idle overhead. The host event loop sleeps indefinitely via [`ControlFlow::Wait`](https://docs.rs/winit/latest/winit/event_loop/enum.ControlFlow.html#variant.Wait) until awakened by an OS event or a Kurogane schedule request.
 * **Active profile:** Dynamically scales. Automatically matches Chromium's internal work frequency (typically matching `requestAnimationFrame` up to ~60Hz or monitor refresh rate for rAF-driven content).
-* **Threading Contract:** Kurogane's `App::scheduler` callback executes on the Chromium UI thread. Crossing this boundary requires [`EventLoopProxy::send_event`](https://docs.rs/winit/latest/winit/event_loop/struct.EventLoopProxy.html) to thread-safely wake the `winit` event loop.
+* **Threading Contract:** Chromium may call Kurogane's `App::scheduler` callback from any thread. Crossing this boundary requires [`EventLoopProxy::send_event`](https://docs.rs/winit/latest/winit/event_loop/struct.EventLoopProxy.html) to thread-safely wake the `winit` event loop.
+* **Startup:** a scheduler turns on Chromium's external message pump, so the application starts with `App::start` (or `App::start_embedded`) and pumps from its own loop. `App::run` refuses one: Chromium's own loop cannot run under an external pump.
 
 **Use when:** building a production application where resource optimization, battery life and frame-accurate animation fidelity are critical. This follows the external-message-pump architecture recommended for host-managed event loops in Chromium's own [documentation on external message pumps](https://chromiumembedded.github.io/cef/general_usage#message-loop-integration).
 

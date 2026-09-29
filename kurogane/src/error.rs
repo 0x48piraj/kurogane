@@ -229,7 +229,7 @@ impl std::error::Error for RuntimeError {
 }
 
 /// One problem in the [`App`](crate::App) builder configuration, reported
-/// by `build()` / `start_embedded()` as [`RuntimeError::InvalidConfiguration`].
+/// by `build()` / `run()` / `start_embedded()` as [`RuntimeError::InvalidConfiguration`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ConfigError {
@@ -245,6 +245,9 @@ pub enum ConfigError {
     /// An ACL rule names the opaque origin, which would match every frame
     /// without a host.
     OpaqueOrigin(String),
+    /// [`App::run`](crate::App::run) was given a pump scheduler, which requires
+    /// the application to drive CEF's message loop itself.
+    SchedulerWithRunLoop,
 }
 
 impl Display for ConfigError {
@@ -267,6 +270,10 @@ impl Display for ConfigError {
             ConfigError::OpaqueOrigin(name) => write!(
                 f,
                 "the rule for '{name}' names the opaque origin, which matches every frame without a host"
+            ),
+            ConfigError::SchedulerWithRunLoop => f.write_str(
+                "App::scheduler is for an application that pumps CEF from its own loop \
+                 start it with App::start or App::start_embedded, not App::run",
             ),
         }
     }

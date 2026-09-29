@@ -49,7 +49,7 @@ fn main() {
 
     let handle = App::url("https://example.com")
         .scheduler(move |_request: PumpRequest| {
-            // Executed on Chromium's UI thread
+            // CEF may call this from any thread
             // EventLoopProxy provides a thread-safe wakeup mechanism
             // The request payload is ignored because any wakeup triggers a pump
             let _ = proxy.send_event(());
