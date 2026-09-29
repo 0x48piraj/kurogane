@@ -2,11 +2,10 @@
 
 use cef::*;
 use crate::debug;
-use std::sync::{Arc, Mutex};
-use crate::runtime::RuntimeServices;
-use crate::browser_registry::{BrowserRegistry, BrowserType};
+use crate::runtime::AppHandle;
+use crate::browser_registry::BrowserType;
 use crate::chrome_commands::KuroganeCommandHandler;
-use crate::ipc::{FrameId, IpcRouter};
+use crate::ipc::FrameId;
 use crate::window::PopupGeometry;
 
 //
@@ -14,8 +13,7 @@ use crate::window::PopupGeometry;
 //
 wrap_life_span_handler! {
     pub struct KuroganeLifeSpanHandler {
-        browser_registry: Arc<Mutex<BrowserRegistry>>,
-        router: Arc<IpcRouter>,
+        app: AppHandle,
         // What the browsers of this client are, popups aside
         browser_type: BrowserType,
     }
@@ -38,9 +36,9 @@ wrap_life_span_handler! {
             _extra_info: Option<&mut Option<DictionaryValue>>,
             _no_javascript_access: Option<&mut i32>,
         ) -> i32 {
-            let mut reg = self.browser_registry.lock().unwrap();
-            let opener = browser.and_then(|browser| reg.find_id_by_browser(browser));
-            if let Some(state) = opener.and_then(|id| reg.get_mut(id)) {
+            let mut reg = self.app.registry();
+            let opener = browser.and_then(|browser| reg.browsers.find_id_by_browser(browser));
+            if let Some(state) = opener.and_then(|id| reg.browsers.get_mut(id)) {
                 let requested = popup_features.and_then(PopupGeometry::requested);
                 state.pending_popups.push(popup_id, requested);
             }
@@ -48,9 +46,9 @@ wrap_life_span_handler! {
         }
 
         fn on_before_popup_aborted(&self, browser: Option<&mut Browser>, popup_id: i32) {
-            let mut reg = self.browser_registry.lock().unwrap();
-            let opener = browser.and_then(|browser| reg.find_id_by_browser(browser));
-            if let Some(state) = opener.and_then(|id| reg.get_mut(id)) {
+            let mut reg = self.app.registry();
+            let opener = browser.and_then(|browser| reg.browsers.find_id_by_browser(browser));
+            if let Some(state) = opener.and_then(|id| reg.browsers.get_mut(id)) {
                 state.pending_popups.abort(popup_id);
             }
         }
@@ -61,7 +59,7 @@ wrap_life_span_handler! {
             };
             debug!("on_after_created cef_id={}", browser.identifier());
 
-            let mut reg = self.browser_registry.lock().unwrap();
+            let mut reg = self.app.registry();
 
             // A popup shares its opener's client. The BrowserView delegate
             // classifies a Views popup exactly; CEF does not promise which of
@@ -72,26 +70,27 @@ wrap_life_span_handler! {
                 _ if browser.is_popup() != 0 => {
                     let opener = browser
                         .host()
-                        .and_then(|host| reg.find_id_by_cef_id(host.opener_identifier()));
+                        .and_then(|host| reg.browsers.find_id_by_cef_id(host.opener_identifier()));
                     (BrowserType::Popup, opener)
                 }
                 browser_type => (browser_type, None),
             };
 
-            reg.ensure_registered(browser, browser_type, opener);
+            reg.browsers.ensure_registered(browser, browser_type, opener);
         }
 
         // CEF calls `do_close` only for Alloy-style browsers. In Kurogane, these are
         // browsers created with `create_child_browser` and the popups they open.
-        // For an embedded browser, CEF's default closes the host's top-level window;
-        // destroying that window closes the browser. A popup already lives in a
-        // top-level window created by CEF, where the default is right.
+        // For an embedded browser, CEF's default asks the host's top-level window
+        // to close. Kurogane destroys the browser's own child window instead which
+        // completes the close. A popup already lives in a top-level window created
+        // by CEF, where the default is right.
         //
         // Linux keeps CEF's default, which closes the browser's X window.
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         fn do_close(&self, browser: Option<&mut Browser>) -> ::std::os::raw::c_int {
             match browser {
-                // Use CEF's default.
+                // If the task cannot be posted, fall back to CEF's default.
                 Some(browser) if browser.is_popup() == 0 => {
                     crate::platform::embed::destroy_child_window_later(browser).into()
                 }
@@ -106,18 +105,19 @@ wrap_life_span_handler! {
             debug!("on_before_close cef_id={}", browser.identifier());
 
             let (browser_id, stragglers) = {
-                let mut reg = self.browser_registry.lock().unwrap();
-                let Some(id) = reg.find_id_by_browser(browser) else {
+                let mut reg = self.app.registry();
+                let Some(id) = reg.browsers.find_id_by_browser(browser) else {
                     return;
                 };
                 let was_app_browser = reg
+                    .browsers
                     .get(id)
                     .is_some_and(|state| state.metadata.browser_type != BrowserType::ChromeUi);
 
-                reg.unregister(id);
+                reg.browsers.unregister(id);
                 debug!("Browser {} destroyed", id.as_u32());
 
-                if reg.is_empty() {
+                if reg.browsers.is_empty() {
                     debug!("[BrowserRegistry] last browser removed, quitting message loop");
 
                     // quit_message_loop() is only meaningful when CEF owns the main loop
@@ -129,8 +129,8 @@ wrap_life_span_handler! {
 
                 // Windows Chromium opened on its own close with the
                 // application's last one rather than keep the process running
-                let stragglers = if was_app_browser && !reg.has_app_browsers() {
-                    reg.chrome_ui_browsers()
+                let stragglers = if was_app_browser && !reg.browsers.has_app_browsers() {
+                    reg.browsers.chrome_ui_browsers()
                 } else {
                     Vec::new()
                 };
@@ -148,7 +148,7 @@ wrap_life_span_handler! {
             }
 
             // Cancel any pending async handlers for this browser
-            self.router.cancel_all_for_browser(browser_id);
+            self.app.router().cancel_all_for_browser(browser_id);
         }
     }
 }
@@ -158,7 +158,7 @@ wrap_life_span_handler! {
 //
 wrap_load_handler! {
     pub struct KuroganeLoadHandler {
-        router: Arc<IpcRouter>,
+        app: AppHandle,
     }
 
     impl LoadHandler {
@@ -174,7 +174,7 @@ wrap_load_handler! {
             let u: CefString = (&frame.url()).into();
             debug!("[LoadHandler] START {}", u.to_string());
             // Reset state when the frame loads a new document
-            self.router.clear_for_frame(&FrameId::of(frame));
+            self.app.router().clear_for_frame(&FrameId::of(frame));
         }
 
         fn on_load_end(
@@ -209,7 +209,7 @@ wrap_load_handler! {
 //
 wrap_client! {
     pub struct KuroganeClient {
-        services: Arc<RuntimeServices>,
+        app: AppHandle,
         // What the browsers of this client are, popups aside
         browser_type: BrowserType,
     }
@@ -220,15 +220,11 @@ wrap_client! {
         }
 
         fn load_handler(&self) -> Option<LoadHandler> {
-            Some(KuroganeLoadHandler::new(self.services.router.clone()))
+            Some(KuroganeLoadHandler::new(self.app.clone()))
         }
 
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
-            Some(KuroganeLifeSpanHandler::new(
-                self.services.browser_registry.clone(),
-                self.services.router.clone(),
-                self.browser_type,
-            ))
+            Some(KuroganeLifeSpanHandler::new(self.app.clone(), self.browser_type))
         }
 
         fn on_process_message_received(
@@ -253,10 +249,10 @@ wrap_client! {
             let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 // Resolve browser identity from the registry
                 let browser_id = {
-                    let reg = self.services.browser_registry.lock().unwrap();
-                    reg.find_id_by_browser(browser)
+                    let reg = self.app.registry();
+                    reg.browsers.find_id_by_browser(browser)
                 };
-                crate::ipc::handle_ipc_message(browser, frame, msg, &self.services.router, browser_id)
+                crate::ipc::handle_ipc_message(browser, frame, msg, self.app.router(), browser_id)
             }));
             match handled {
                 Ok(true) => 1,

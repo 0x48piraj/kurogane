@@ -2,8 +2,6 @@
 //!
 //! Boundary between CEF's message system and the IPC infrastructure.
 
-use std::sync::Arc;
-
 use cef::*;
 
 use crate::browser_registry::BrowserId;
@@ -18,7 +16,7 @@ pub fn handle_ipc_message(
     _browser: &mut Browser,
     frame: &mut Frame,
     message: &ProcessMessage,
-    router: &Arc<IpcRouter>,
+    router: &IpcRouter,
     browser_id: Option<BrowserId>,
 ) -> bool {
     let name: CefString = (&message.name()).into();

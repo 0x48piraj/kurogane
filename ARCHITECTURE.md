@@ -153,6 +153,8 @@ The runtime maintains an ownership graph with O(1) lookup, derives popup ownersh
 
 Shutdown follows browser lifetime rather than individual window destruction, so DevTools and auxiliary popups do not tear down the application.
 
+The graph sits behind one lock. Only the UI thread changes it, and any thread may read it through `AppHandle`. Kurogane lets go of the lock before any CEF call that can call back into it, such as creating or closing a browser or a window: CEF may run those callbacks on the same thread before the call returns.
+
 ## Custom protocol (`app://`)
 
 Local assets are served through a Chromium scheme handler under `app://`. The handler only records the request on CEF's IO thread; the file is resolved and read when CEF opens the response, on a worker thread.

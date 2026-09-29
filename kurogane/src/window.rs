@@ -5,11 +5,10 @@
 
 use cef::*;
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
 
 use crate::debug;
-use crate::browser_registry::{BrowserId, BrowserRegistry, BrowserType};
-use crate::window_registry::WindowRegistry;
+use crate::browser_registry::{BrowserId, BrowserType};
+use crate::runtime::AppHandle;
 use crate::window_registry::WindowId;
 
 /// Size and position requested by a page for a popup window.
@@ -87,7 +86,7 @@ wrap_window_delegate! {
     pub struct KuroganeWindowDelegate {
         window_id: WindowId,
         browser_view: BrowserView,
-        registry: Arc<Mutex<WindowRegistry>>,
+        app: AppHandle,
         initial_bounds: Rect,
         show_state: ShowState,
     }
@@ -118,8 +117,8 @@ wrap_window_delegate! {
             if let Some(window) = window {
                 // Registered before the BrowserView is added, which creates
                 // its browser; on_browser_created links that browser here
-                let mut reg = self.registry.lock().unwrap();
-                reg.insert(
+                let mut reg = self.app.registry();
+                reg.windows.insert(
                     self.window_id,
                     window.clone(),
                     None,
@@ -138,8 +137,8 @@ wrap_window_delegate! {
         fn on_window_destroyed(&self, _window: Option<&mut Window>) {
             debug!("Window destroyed");
 
-            let mut reg = self.registry.lock().unwrap();
-            reg.unregister(self.window_id);
+            let mut reg = self.app.registry();
+            reg.windows.unregister(self.window_id);
         }
 
         // cef-rs answers 0 for a callback left out, where CEF's C++ defaults
@@ -176,8 +175,7 @@ wrap_window_delegate! {
 
 wrap_browser_view_delegate! {
     pub struct KuroganeBrowserViewDelegate {
-        registry: Arc<Mutex<BrowserRegistry>>,
-        window_registry: Arc<Mutex<WindowRegistry>>,
+        app: AppHandle,
         // The window this delegate's BrowserView is shown in; none for a
         // popup's view, whose window its opener's delegate makes
         window_id: Option<WindowId>,
@@ -198,12 +196,12 @@ wrap_browser_view_delegate! {
             };
 
             let browser_id = self
-                .registry
-                .lock()
-                .unwrap()
+                .app
+                .registry()
+                .browsers
                 .ensure_registered(browser, BrowserType::Main, None);
 
-            if self.window_registry.lock().unwrap().link(window_id, browser_id) {
+            if self.app.registry().windows.link(window_id, browser_id) {
                 debug!(
                     "[BrowserRegistry] linked browser {} to window {}",
                     browser_id.as_u32(),
@@ -222,11 +220,7 @@ wrap_browser_view_delegate! {
             _client: Option<&mut Client>,
             _is_devtools: ::std::os::raw::c_int,
         ) -> Option<BrowserViewDelegate> {
-            Some(KuroganeBrowserViewDelegate::new(
-                self.registry.clone(),
-                self.window_registry.clone(),
-                None,
-            ))
+            Some(KuroganeBrowserViewDelegate::new(self.app.clone(), None))
         }
 
         fn on_popup_browser_view_created(
@@ -241,17 +235,17 @@ wrap_browser_view_delegate! {
                 // Derive parent/opener BrowserId from the parent BrowserView
                 let parent_id = browser_view.and_then(|bv| bv.browser())
                     .and_then(|b| {
-                        let reg = self.registry.lock().unwrap();
-                        reg.find_id_by_browser(&b)
+                        let reg = self.app.registry();
+                        reg.browsers.find_id_by_browser(&b)
                     });
 
                 // Classified here, where its kind and opener are known,
                 // whether or not on_after_created registered it first
                 let browser_type = if is_devtools != 0 { BrowserType::DevTools } else { BrowserType::Popup };
                 let browser_id = pbv.browser().map(|browser| {
-                    let mut reg = self.registry.lock().unwrap();
-                    let id = reg.ensure_registered(&browser, browser_type, parent_id);
-                    reg.classify(id, browser_type, parent_id);
+                    let mut reg = self.app.registry();
+                    let id = reg.browsers.ensure_registered(&browser, browser_type, parent_id);
+                    reg.browsers.classify(id, browser_type, parent_id);
                     debug!("[BrowserViewDelegate] registered popup browser");
                     id
                 });
@@ -261,9 +255,9 @@ wrap_browser_view_delegate! {
                 // on_before_dev_tools_popup and are not in its list
                 let requested = match parent_id {
                     Some(opener) if is_devtools == 0 => self
-                        .registry
-                        .lock()
-                        .unwrap()
+                        .app
+                        .registry()
+                        .browsers
                         .get_mut(opener)
                         .and_then(|state| state.pending_popups.take()),
                     _ => None,
@@ -273,14 +267,14 @@ wrap_browser_view_delegate! {
                 // Create the popup window with a delegate that tracks the window
                 let bv_clone = pbv.clone();
                 let window_id = {
-                    let mut reg = self.window_registry.lock().unwrap();
-                    reg.allocate_id()
+                    let mut reg = self.app.registry();
+                    reg.windows.allocate_id()
                 };
 
                 let mut delegate = KuroganePopupDelegate::new(
                     window_id,
                     bv_clone,
-                    self.window_registry.clone(),
+                    self.app.clone(),
                     browser_id,
                     requested,
                     ShowState::NORMAL,
@@ -301,7 +295,7 @@ wrap_window_delegate! {
     pub struct KuroganePopupDelegate {
         window_id: WindowId,
         browser_view: BrowserView,
-        registry: Arc<Mutex<WindowRegistry>>,
+        app: AppHandle,
         browser_id: Option<BrowserId>,
         // The window the page asked for; without it CEF gives the popup its
         // default 800x600 window
@@ -338,8 +332,8 @@ wrap_window_delegate! {
                 debug!("Popup window shown at {:?}", window.bounds());
 
                 // Register popup window in registry, associated with its browser
-                let mut reg = self.registry.lock().unwrap();
-                reg.insert(
+                let mut reg = self.app.registry();
+                reg.windows.insert(
                     self.window_id,
                     window.clone(),
                     self.browser_id,
@@ -350,8 +344,8 @@ wrap_window_delegate! {
         fn on_window_destroyed(&self, _window: Option<&mut Window>) {
             debug!("Popup window destroyed");
 
-            let mut reg = self.registry.lock().unwrap();
-            reg.unregister(self.window_id);
+            let mut reg = self.app.registry();
+            reg.windows.unregister(self.window_id);
         }
 
         // cef-rs answers 0 for a callback left out, where CEF's C++ defaults

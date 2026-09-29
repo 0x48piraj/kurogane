@@ -2,7 +2,7 @@
 
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use kurogane_layout::detect_cef_root_with_version;
 use objc2::{
@@ -17,14 +17,16 @@ use objc2_app_kit::{
 
 use crate::error::RuntimeError;
 use crate::platform::macos::application::SimpleApplication;
-use crate::runtime::RuntimeServices;
+use crate::runtime::AppHandle;
 
-/// Runtime services used by the Objective-C `terminate:` override.
-static SERVICES: OnceLock<Arc<RuntimeServices>> = OnceLock::new();
+/// The application, for the Objective-C `terminate:` override.
+static APP: OnceLock<AppHandle> = OnceLock::new();
 
-/// Registers runtime services for the application `terminate:` override.
-pub fn set_services(services: Arc<RuntimeServices>) {
-    let _ = SERVICES.set(services);
+/// Registers the application for the `terminate:` override, once CEF has
+/// initialized.
+pub fn set_app(app: AppHandle) {
+    let first = APP.set(app).is_ok();
+    debug_assert!(first, "CEF initializes once per process");
 }
 
 /// Loads CEF and, in the browser process, installs the required
@@ -182,7 +184,7 @@ mod application {
     };
     use objc2_app_kit::{NSApplication, NSEvent};
 
-    use super::SERVICES;
+    use super::APP;
     use crate::runtime::close_all;
 
     /// CEF-compatible `NSApplication` subclass.
@@ -219,8 +221,8 @@ mod application {
             #[unsafe(method(terminate:))]
             unsafe fn terminate(&self, _sender: &AnyObject) {
                 // Unload handlers still run, as for a window closed by hand
-                if let Some(services) = SERVICES.get() {
-                    close_all(services, false);
+                if let Some(app) = APP.get() {
+                    close_all(app, false);
                 }
             }
         }

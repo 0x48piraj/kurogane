@@ -1,11 +1,10 @@
 //! Root CEF application object.
 
 use cef::*;
-use std::sync::Arc;
 
 use crate::browser::KuroganeBrowserProcessHandler;
 use crate::ipc::IpcRenderProcessHandler;
-use crate::runtime::RuntimeServices;
+use crate::runtime::AppHandle;
 use crate::spec::RuntimeSpec;
 use crate::debug;
 use crate::chromium_flags::ChromiumFlags;
@@ -102,8 +101,8 @@ wrap_app! {
 
 impl KuroganeApp {
     /// Makes the application object every process of the application uses.
-    pub(crate) fn create(services: Arc<RuntimeServices>, spec: RuntimeSpec) -> App {
-        let browser_handler = KuroganeBrowserProcessHandler::create(services, spec.clone());
+    pub(crate) fn create(app: AppHandle, spec: RuntimeSpec) -> App {
+        let browser_handler = KuroganeBrowserProcessHandler::create(app, spec.clone());
         Self::new(spec, browser_handler)
     }
 }

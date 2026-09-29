@@ -800,7 +800,7 @@ impl App {
         let rpc = RequestResponseSubsystem::new(sync_handlers, async_handlers);
         let event = EventSubsystem::new();
         let stream = StreamSubsystem::new(stream_handlers);
-        let router = Arc::new(IpcRouter::new(rpc, event, stream, acl));
+        let router = IpcRouter::new(rpc, event, stream, acl);
 
         let ResolvedFrontend {
             asset_root,

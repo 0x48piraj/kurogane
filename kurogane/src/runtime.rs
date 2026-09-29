@@ -1,14 +1,15 @@
 use cef::{args::Args, sys::cef_window_handle_t, *};
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::cef_app::KuroganeApp;
 use crate::client::KuroganeClient;
 use crate::error::RuntimeError;
 use crate::ShutdownSignal;
-use crate::browser_registry::{BrowserRegistry, BrowserId, BrowserMetadata, BrowserType};
-use crate::window_registry::{WindowRegistry, WindowId, WindowMetadata};
+use crate::browser_registry::{BrowserId, BrowserMetadata, BrowserType};
+use crate::registry::Registry;
+use crate::window_registry::{WindowId, WindowMetadata};
 use crate::window::{KuroganeWindowDelegate, KuroganeBrowserViewDelegate};
 use kurogane_layout::{DetectError, detect_cef_root_with_version, validate_cef_runtime, profile_dir};
 use crate::ipc::IpcRouter;
@@ -201,28 +202,26 @@ fn execute_subprocesses(args: &Args, app: &mut App, sandbox_info: *mut u8) {
     debug!("Continuing as browser process");
 }
 
-fn install_ctrlc_handler(services: Arc<RuntimeServices>) {
-    // Prevent double-fire (dev hammers Ctrl+C twice)
-    let quitting = Arc::new(AtomicBool::new(false));
+/// Closes every browser on Ctrl+C, as closing the windows by hand would.
+fn install_ctrlc_handler(app: AppHandle) {
+    // ctrlc runs the handler on its one "ctrl-c" thread, one signal at a
+    // time, so a plain flag is enough
+    let mut quitting = false;
 
-    let installed = ctrlc::set_handler({
-        let quitting = quitting.clone();
+    let installed = ctrlc::set_handler(move || {
+        debug!("SIGINT received");
 
-        move || {
-            debug!("SIGINT received");
-
-            // Only act on the first signal
-            if quitting.swap(true, Ordering::SeqCst) {
-                debug!("Shutdown already in progress");
-                return;
-            }
-
-            debug!("Scheduling browser shutdown on UI thread");
-
-            // Unload handlers still run, as for a window closed by hand
-            let mut task = CloseAllTask::new(services.clone(), false);
-            post_task(ThreadId::UI, Some(&mut task));
+        // Only act on the first signal (dev hammers Ctrl+C twice)
+        if std::mem::replace(&mut quitting, true) {
+            debug!("Shutdown already in progress");
+            return;
         }
+
+        debug!("Scheduling browser shutdown on UI thread");
+
+        // Unload handlers still run, as for a window closed by hand
+        let mut task = CloseAllTask::new(app.clone(), false);
+        post_task(ThreadId::UI, Some(&mut task));
     });
 
     // A host that installed its own handler keeps it; the app still closes
@@ -240,24 +239,28 @@ fn install_ctrlc_handler(services: Arc<RuntimeServices>) {
 ///
 /// `force` uses `CloseBrowser(true)`. It also closes unlinked Views windows
 /// directly; linked windows close with their browser.
-pub(crate) fn close_all(services: &RuntimeServices, force: bool) {
-    let no_browsers = services.browser_registry.lock().unwrap().is_empty();
-    let no_windows = services.window_registry.lock().unwrap().count() == 0;
+pub(crate) fn close_all(app: &AppHandle, force: bool) {
+    let no_browsers = app.registry().browsers.is_empty();
+    let no_windows = app.registry().windows.count() == 0;
     if no_browsers && no_windows {
-        services.shutdown_signal.request_shutdown();
+        app.services.shutdown_signal.request_shutdown();
         quit_message_loop();
         return;
     }
 
     // Close all browsers first; in Views mode this cascades to close their parent windows
     // Embedded mode has no Views windows
-    close_browsers(&services.browser_registry, force);
+    close_browsers(app, force);
 
     // In a forced close, linked windows close with their browser. Close only
     // unlinked windows directly.
     let windows = {
-        let reg = services.window_registry.lock().unwrap();
-        if force { reg.unlinked() } else { reg.all() }
+        let reg = app.registry();
+        if force {
+            reg.windows.unlinked()
+        } else {
+            reg.windows.all()
+        }
     };
     close_windows(windows);
 }
@@ -275,10 +278,13 @@ fn close_windows(windows: Vec<Window>) {
 /// Asks every live browser to close.
 ///
 /// CEF allows `BrowserHost` calls from any thread of the browser process.
-fn close_browsers(browser_registry: &Mutex<BrowserRegistry>, force: bool) {
+fn close_browsers(app: &AppHandle, force: bool) {
     let browsers: Vec<Browser> = {
-        let reg = browser_registry.lock().unwrap();
-        reg.iter().map(|(_, s)| s.browser.clone()).collect()
+        let reg = app.registry();
+        reg.browsers
+            .iter()
+            .map(|(_, s)| s.browser.clone())
+            .collect()
     };
 
     for browser in browsers {
@@ -296,44 +302,55 @@ fn on_ui_thread() -> bool {
 
 wrap_task! {
     struct CloseAllTask {
-        services: Arc<RuntimeServices>,
+        app: AppHandle,
         force: bool,
     }
 
     impl Task {
         fn execute(&self) {
-            close_all(&self.services, self.force);
+            close_all(&self.app, self.force);
         }
     }
 }
 
 wrap_task! {
     struct CloseWindowsTask {
-        window_registry: Arc<Mutex<WindowRegistry>>,
+        app: AppHandle,
     }
 
     impl Task {
         fn execute(&self) {
-            let windows = self.window_registry.lock().unwrap().all();
+            let windows = self.app.registry().windows.all();
             close_windows(windows);
         }
     }
 }
 
-/// Live shared runtime services.
-///
-/// Handlers and delegates should depend on RuntimeServices
-/// instead of receiving individual registries and dispatchers separately.
+/// What the running application shares between CEF's callbacks, tasks and
+/// the application's handles, all of which hold it through an [`AppHandle`].
 pub(crate) struct RuntimeServices {
-    pub shutdown_signal: ShutdownSignal,
-    pub router: Arc<IpcRouter>,
-    pub browser_registry: Arc<Mutex<BrowserRegistry>>,
-    pub window_registry: Arc<Mutex<WindowRegistry>>,
+    router: IpcRouter,
+    registry: Mutex<Registry>,
+    shutdown_signal: ShutdownSignal,
     /// The thread that initialized CEF: CEF's UI thread, since Kurogane
     /// never sets `multi_threaded_message_loop`
     ui_thread: std::thread::ThreadId,
     /// Set when AppInstance::shutdown begins
     cef_shut_down: AtomicBool,
+}
+
+impl RuntimeServices {
+    /// Services with nothing open, whose UI thread is `ui_thread`.
+    fn new(router: IpcRouter, ui_thread: std::thread::ThreadId) -> Self {
+        let shutdown_signal = ShutdownSignal::new();
+        Self {
+            router,
+            registry: Mutex::new(Registry::new(shutdown_signal.clone())),
+            shutdown_signal,
+            ui_thread,
+            cef_shut_down: AtomicBool::new(false),
+        }
+    }
 }
 
 /// A rectangle: a position and a size.
@@ -440,8 +457,29 @@ const _: () = {
 };
 
 impl AppHandle {
-    fn services(&self) -> &RuntimeServices {
-        &self.services
+    /// The open browsers and windows.
+    ///
+    /// Only the UI thread changes them; any thread may read them. Copy out
+    /// what is needed and let the guard go before any CEF call that can run
+    /// Kurogane's callbacks: creating a browser or a window, adding a
+    /// browser's view to a window, or closing either. CEF may run those
+    /// callbacks on this thread before the call returns, and they take this
+    /// lock again, which deadlocks or panics. No other Kurogane lock is taken
+    /// while the guard is held.
+    ///
+    /// A poisoned lock is recovered rather than turned into another panic: a
+    /// panic under the guard can come only from a debug line, never from the
+    /// middle of a map update, so the maps stay usable.
+    pub(crate) fn registry(&self) -> MutexGuard<'_, Registry> {
+        self.services
+            .registry
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The IPC router.
+    pub(crate) fn router(&self) -> &IpcRouter {
+        &self.services.router
     }
 
     /// Ends the application by closing all browsers.
@@ -453,9 +491,9 @@ impl AppHandle {
         debug!("AppHandle::shutdown: closing every browser");
 
         if on_ui_thread() {
-            close_all(self.services(), true);
+            close_all(self, true);
         } else {
-            let mut task = CloseAllTask::new(self.services.clone(), true);
+            let mut task = CloseAllTask::new(self.clone(), true);
             post_task(ThreadId::UI, Some(&mut task));
         }
     }
@@ -465,7 +503,7 @@ impl AppHandle {
     /// Becomes true after the last browser closes, after
     /// [`AppHandle::shutdown`], or when the application receives a quit request.
     pub fn should_shutdown(&self) -> bool {
-        self.services().shutdown_signal.is_shutdown_requested()
+        self.services.shutdown_signal.is_shutdown_requested()
     }
 
     /// Broadcast an event to all renderers subscribed to event.
@@ -474,7 +512,7 @@ impl AppHandle {
     /// given event name. This method is thread-safe and returns immediately after
     /// queuing the event for delivery.
     pub fn broadcast(&self, event: &str, data: &[u8]) {
-        self.services().router.event.broadcast(event, data);
+        self.router().event.broadcast(event, data);
     }
 
     /// Broadcast a JSON-serializable event to all renderers subscribed to event.
@@ -489,18 +527,18 @@ impl AppHandle {
 
     /// Number of currently live browser instances.
     pub fn browser_count(&self) -> usize {
-        self.services().browser_registry.lock().unwrap().count()
+        self.registry().browsers.count()
     }
 
     /// Number of currently open windows.
     pub fn window_count(&self) -> usize {
-        self.services().window_registry.lock().unwrap().count()
+        self.registry().windows.count()
     }
 
     /// IDs of all open windows.
     pub fn window_ids(&self) -> Vec<WindowId> {
-        let reg = self.services().window_registry.lock().unwrap();
-        reg.iter().map(|(id, _)| *id).collect()
+        let reg = self.registry();
+        reg.windows.iter().map(|(id, _)| *id).collect()
     }
 
     /// Close all open windows.
@@ -508,16 +546,12 @@ impl AppHandle {
     /// Safe to call from any thread: CEF's windows close only on the UI
     /// thread, so a call from elsewhere is posted there.
     pub fn close_all_windows(&self) {
-        let registry = &self.services().window_registry;
-
         if on_ui_thread() {
-            let windows = registry.lock().unwrap().all();
+            let windows = self.registry().windows.all();
             close_windows(windows);
         } else {
-            post_task(
-                ThreadId::UI,
-                Some(&mut CloseWindowsTask::new(registry.clone())),
-            );
+            let mut task = CloseWindowsTask::new(self.clone());
+            post_task(ThreadId::UI, Some(&mut task));
         }
     }
 
@@ -528,83 +562,83 @@ impl AppHandle {
     /// keeps pumping until the count is 0. A browser embedded in the
     /// application's own window closes without asking that window to close.
     pub fn close_all_browsers(&self, force: bool) {
-        close_browsers(&self.services().browser_registry, force);
+        close_browsers(self, force);
     }
 
     /// Look up the window that hosts a given browser.
     pub fn find_window_by_browser(&self, browser_id: BrowserId) -> Option<WindowId> {
-        self.services()
-            .window_registry
-            .lock()
-            .unwrap()
-            .window_id_for_browser(browser_id)
+        self.registry().windows.window_id_for_browser(browser_id)
     }
 
     /// Metadata for all live browsers.
     pub fn browsers(&self) -> Vec<(BrowserId, BrowserMetadata)> {
-        let reg = self.services().browser_registry.lock().unwrap();
-        reg.iter()
+        let reg = self.registry();
+        reg.browsers
+            .iter()
             .map(|(id, s)| (*id, s.metadata.clone()))
             .collect()
     }
 
     /// Metadata for all open windows.
     pub fn windows(&self) -> Vec<(WindowId, WindowMetadata)> {
-        let reg = self.services().window_registry.lock().unwrap();
-        reg.iter()
+        let reg = self.registry();
+        reg.windows
+            .iter()
             .map(|(id, s)| (*id, s.metadata.clone()))
             .collect()
     }
 
     /// Parent of a given browser.
     pub fn browser_parent(&self, id: BrowserId) -> Option<BrowserId> {
-        self.services()
-            .browser_registry
-            .lock()
-            .unwrap()
-            .browser_parent(id)
+        self.registry().browsers.browser_parent(id)
     }
 
     /// Opener of a given browser.
     pub fn browser_opener(&self, id: BrowserId) -> Option<BrowserId> {
-        self.services()
-            .browser_registry
-            .lock()
-            .unwrap()
-            .browser_opener(id)
+        self.registry().browsers.browser_opener(id)
     }
 
     /// All children of the given parent browser.
     pub fn children_of(&self, id: BrowserId) -> Vec<BrowserId> {
-        self.services()
-            .browser_registry
-            .lock()
-            .unwrap()
-            .children_of(id)
+        self.registry().browsers.children_of(id)
     }
 
     /// Browser hosted in the given window.
     pub fn browser_for_window(&self, id: WindowId) -> Option<BrowserId> {
-        self.services()
-            .window_registry
-            .lock()
-            .unwrap()
-            .browser_for_window(id)
+        self.registry().windows.browser_for_window(id)
     }
 
     /// Creates a BrowserHandle for a registered browser, if it exists.
     ///
     /// Returns None if no browser with the given BrowserId is registered.
     pub fn get_browser_handle(&self, id: BrowserId) -> Option<BrowserHandle> {
-        let reg = self.services().browser_registry.lock().unwrap();
-        if reg.get(id).is_some() {
+        let reg = self.registry();
+        if reg.browsers.get(id).is_some() {
             Some(BrowserHandle {
                 id,
-                browser_registry: self.services().browser_registry.clone(),
-                ui_thread_id: self.services.ui_thread,
+                app: self.clone(),
             })
         } else {
             None
+        }
+    }
+}
+
+#[cfg(test)]
+impl AppHandle {
+    /// A handle to an application CEF never saw: nothing open, no command,
+    /// and the calling thread as its UI thread.
+    pub(crate) fn detached() -> Self {
+        use std::collections::HashMap;
+
+        let router = IpcRouter::new(
+            crate::ipc::RequestResponseSubsystem::new(HashMap::new(), HashMap::new()),
+            crate::ipc::EventSubsystem::new(),
+            crate::ipc::StreamSubsystem::new(HashMap::new()),
+            crate::acl::CommandAcl::new(),
+        );
+        Self {
+            services: Arc::new(RuntimeServices::new(router, std::thread::current().id())),
         }
     }
 }
@@ -635,8 +669,7 @@ fn native_to_cef_window(handle: *mut std::ffi::c_void) -> cef_window_handle_t {
 
 pub struct BrowserHandle {
     id: BrowserId,
-    browser_registry: Arc<Mutex<BrowserRegistry>>,
-    ui_thread_id: std::thread::ThreadId,
+    app: AppHandle,
 }
 
 impl BrowserHandle {
@@ -645,7 +678,7 @@ impl BrowserHandle {
     fn assert_ui_thread(&self) {
         assert_eq!(
             std::thread::current().id(),
-            self.ui_thread_id,
+            self.app.services.ui_thread,
             "BrowserHandle methods must be called from the UI thread where the runtime was initialized"
         );
     }
@@ -654,8 +687,8 @@ impl BrowserHandle {
     #[track_caller]
     fn browser(&self) -> Option<Browser> {
         self.assert_ui_thread();
-        let reg = self.browser_registry.lock().unwrap();
-        reg.get(self.id).map(|s| s.browser.clone())
+        let reg = self.app.registry();
+        reg.browsers.get(self.id).map(|s| s.browser.clone())
     }
 
     /// Returns the host of the browser this handle names, while it is open.
@@ -857,18 +890,15 @@ impl AppInstance {
 
     /// Creates a new top-level window with an embedded browser.
     pub fn create_window(&self, options: WindowOptions) -> Result<WindowId, RuntimeError> {
-        let mut client = KuroganeClient::new(self.handle.services.clone(), BrowserType::Main);
+        let mut client = KuroganeClient::new(self.handle.clone(), BrowserType::Main);
 
         let window_id = {
-            let mut reg = self.handle.services.window_registry.lock().unwrap();
-            reg.allocate_id()
+            let mut reg = self.handle.registry();
+            reg.windows.allocate_id()
         };
 
-        let mut bv_delegate = KuroganeBrowserViewDelegate::new(
-            self.handle.services.browser_registry.clone(),
-            self.handle.services.window_registry.clone(),
-            Some(window_id),
-        );
+        let mut bv_delegate =
+            KuroganeBrowserViewDelegate::new(self.handle.clone(), Some(window_id));
 
         let url = CefString::from(options.url.as_str());
 
@@ -885,7 +915,7 @@ impl AppInstance {
         let mut delegate = KuroganeWindowDelegate::new(
             window_id,
             browser_view,
-            self.handle.services.window_registry.clone(),
+            self.handle.clone(),
             Rect {
                 x: options.bounds.x,
                 y: options.bounds.y,
@@ -1031,7 +1061,7 @@ impl AppInstance {
             },
         );
 
-        let mut client = KuroganeClient::new(self.handle.services.clone(), BrowserType::Main);
+        let mut client = KuroganeClient::new(self.handle.clone(), BrowserType::Main);
 
         let mut rc = request_context;
         let browser = browser_host_create_browser_sync(
@@ -1046,11 +1076,12 @@ impl AppInstance {
         debug!("create_child_browser_impl cef_id={}", browser.identifier());
 
         let id = {
-            let reg = self.handle.services.browser_registry.lock().unwrap();
-
-            reg.find_id_by_cef_id(browser.identifier())
-                .expect("browser should have been registered by on_after_created")
+            let reg = self.handle.registry();
+            reg.browsers.find_id_by_cef_id(browser.identifier())
         };
+        // CreateBrowserSync delivers on_after_created, which registers the
+        // browser, before it returns; checked with the registry unlocked
+        let id = id.expect("browser should have been registered by on_after_created");
 
         // set_bounds reaches the view through this, never through the handle
         #[cfg(target_os = "macos")]
@@ -1060,8 +1091,7 @@ impl AppInstance {
 
         Some(BrowserHandle {
             id,
-            browser_registry: self.handle.services.browser_registry.clone(),
-            ui_thread_id: self.handle.services.ui_thread,
+            app: self.handle.clone(),
         })
     }
 }
@@ -1075,7 +1105,7 @@ impl AppInstance {
 /// application owns window creation and lifecycle management.
 ///
 /// Returns the application's handle on success.
-fn initialize_cef(spec: RuntimeSpec, router: Arc<IpcRouter>) -> Result<AppHandle, RuntimeError> {
+fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, RuntimeError> {
     // CEF's UI thread is the thread that initializes it, since Kurogane
     // never sets `multi_threaded_message_loop`
     let ui_thread = std::thread::current().id();
@@ -1091,26 +1121,12 @@ fn initialize_cef(spec: RuntimeSpec, router: Arc<IpcRouter>) -> Result<AppHandle
 
     let args = Args::new();
 
-    let shutdown_signal = ShutdownSignal::new();
-    let browser_registry = Arc::new(Mutex::new(BrowserRegistry::new(shutdown_signal.clone())));
-    let window_registry = Arc::new(Mutex::new(WindowRegistry::new()));
-
     let handle = AppHandle {
-        services: Arc::new(RuntimeServices {
-            shutdown_signal,
-            router,
-            browser_registry,
-            window_registry,
-            ui_thread,
-            cef_shut_down: AtomicBool::new(false),
-        }),
+        services: Arc::new(RuntimeServices::new(router, ui_thread)),
     };
 
-    #[cfg(target_os = "macos")]
-    crate::platform::macos::set_services(handle.services.clone());
-
     // ONE app for ALL processes
-    let mut app: App = KuroganeApp::create(handle.services.clone(), spec.clone());
+    let mut app: App = KuroganeApp::create(handle.clone(), spec.clone());
 
     // The same value has to reach both CEF entry points
     let sandbox_info = crate::sandbox::cef_sandbox_info(spec.sandbox_mode);
@@ -1153,6 +1169,10 @@ fn initialize_cef(spec: RuntimeSpec, router: Arc<IpcRouter>) -> Result<AppHandle
 
     debug!("CEF initialized");
 
+    // Set once CEF runs, so a start that fails leaves it unset
+    #[cfg(target_os = "macos")]
+    crate::platform::macos::set_app(handle.clone());
+
     #[cfg(target_os = "macos")]
     crate::platform::macos::setup_app_delegate();
 
@@ -1160,7 +1180,7 @@ fn initialize_cef(spec: RuntimeSpec, router: Arc<IpcRouter>) -> Result<AppHandle
     // In embedded mode the host application manages its own lifecycle
     if spec.mode == RuntimeMode::Views {
         debug!("Installing shutdown handler");
-        install_ctrlc_handler(handle.services.clone());
+        install_ctrlc_handler(handle.clone());
     }
 
     Ok(handle)
@@ -1171,10 +1191,7 @@ fn initialize_cef(spec: RuntimeSpec, router: Arc<IpcRouter>) -> Result<AppHandle
 ///
 /// In [`RuntimeMode::Embedded`] the host application owns window creation
 /// and lifecycle, so CEF Views creates no window.
-pub(crate) fn start(
-    spec: RuntimeSpec,
-    router: Arc<IpcRouter>,
-) -> Result<AppInstance, RuntimeError> {
+pub(crate) fn start(spec: RuntimeSpec, router: IpcRouter) -> Result<AppInstance, RuntimeError> {
     Ok(AppInstance {
         handle: initialize_cef(spec, router)?,
         _ui_thread: PhantomData,
@@ -1219,6 +1236,27 @@ mod tests {
             subprocess_path(std::path::Path::new("/app/myapp")),
             Some(std::path::PathBuf::from("/app/myapp"))
         );
+    }
+
+    #[test]
+    fn a_panic_under_the_registry_lock_leaves_it_usable() {
+        let app = AppHandle::detached();
+        let holder = app.clone();
+        let panicked: std::thread::Result<()> = std::thread::spawn(move || {
+            let _registry = holder.registry();
+            panic!("a panic while the registry is locked");
+        })
+        .join();
+        assert!(panicked.is_err());
+
+        // Poisoned, and every query still answers
+        assert_eq!(app.browser_count(), 0);
+        assert_eq!(app.window_count(), 0);
+        assert!(app.window_ids().is_empty());
+        assert!(app.browsers().is_empty());
+        assert!(app.windows().is_empty());
+        assert_eq!(app.find_window_by_browser(BrowserId::new(1)), None);
+        assert!(app.children_of(BrowserId::new(1)).is_empty());
     }
 
     #[test]

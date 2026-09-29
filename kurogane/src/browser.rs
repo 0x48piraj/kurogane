@@ -1,10 +1,9 @@
 //! Browser-process lifecycle handling.
 
 use cef::*;
-use std::sync::Arc;
 use std::time::Duration;
 
-use crate::runtime::RuntimeServices;
+use crate::runtime::AppHandle;
 use crate::spec::{RuntimeSpec, RuntimeMode};
 use crate::browser_registry::BrowserType;
 use crate::client::KuroganeClient;
@@ -14,7 +13,7 @@ use crate::debug;
 
 wrap_browser_process_handler! {
     pub struct KuroganeBrowserProcessHandler {
-        services: Arc<RuntimeServices>,
+        app: AppHandle,
         spec: RuntimeSpec,
 
         // Given to every browser Chromium opens on its own
@@ -44,7 +43,7 @@ wrap_browser_process_handler! {
                 return;
             }
 
-            let mut client = KuroganeClient::new(self.services.clone(), BrowserType::Main);
+            let mut client = KuroganeClient::new(self.app.clone(), BrowserType::Main);
 
             let url = CefString::from(self.spec.start_url.as_str());
 
@@ -53,13 +52,12 @@ wrap_browser_process_handler! {
             debug!("Creating BrowserView");
 
             let window_id = {
-                let mut reg = self.services.window_registry.lock().unwrap();
-                reg.allocate_id()
+                let mut reg = self.app.registry();
+                reg.windows.allocate_id()
             };
 
             let mut bv_delegate = crate::window::KuroganeBrowserViewDelegate::new(
-                self.services.browser_registry.clone(),
-                self.services.window_registry.clone(),
+                self.app.clone(),
                 Some(window_id),
             );
 
@@ -83,7 +81,7 @@ wrap_browser_process_handler! {
             let mut delegate = KuroganeWindowDelegate::new(
                 window_id,
                 browser_view,
-                self.services.window_registry.clone(),
+                self.app.clone(),
                 Rect::default(),
                 ShowState::NORMAL,
             );
@@ -116,14 +114,7 @@ wrap_browser_process_handler! {
         ) -> i32 {
             // Chromium brings existing windows to the front before delivering the launch.
             // Keep their current set so windows opened by the handler can be distinguished.
-            let windows: Vec<Window> = self
-                .services
-                .window_registry
-                .lock()
-                .unwrap()
-                .iter()
-                .map(|(_, state)| state.window.clone())
-                .collect();
+            let windows = self.app.registry().windows.all();
 
             for window in windows {
                 if window.is_minimized() != 0 {
@@ -160,12 +151,9 @@ impl KuroganeBrowserProcessHandler {
     ///
     /// CEF requests the handler from multiple threads. Keep one handler and
     /// its state for the lifetime of the process.
-    pub(crate) fn create(
-        services: Arc<RuntimeServices>,
-        spec: RuntimeSpec,
-    ) -> BrowserProcessHandler {
-        let chrome_ui_client = KuroganeClient::new(services.clone(), BrowserType::ChromeUi);
-        Self::new(services, spec, chrome_ui_client)
+    pub(crate) fn create(app: AppHandle, spec: RuntimeSpec) -> BrowserProcessHandler {
+        let chrome_ui_client = KuroganeClient::new(app.clone(), BrowserType::ChromeUi);
+        Self::new(app, spec, chrome_ui_client)
     }
 }
 

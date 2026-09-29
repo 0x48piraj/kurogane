@@ -10,6 +10,7 @@ mod cef_app;
 mod browser;
 mod browser_registry;
 mod window_registry;
+mod registry;
 mod window;
 mod client;
 mod chrome_commands;
