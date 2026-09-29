@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use cef::{Browser, ImplBrowser, RequestContext};
 use crate::ShutdownSignal;
 use crate::debug;
+use crate::window::PendingPopups;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BrowserId(u32);
@@ -45,6 +46,8 @@ pub(crate) struct BrowserState {
     pub metadata: BrowserMetadata,
     #[allow(dead_code)]
     pub request_context: Option<RequestContext>,
+    /// Popups this browser opened that are not shown yet; they go with it
+    pub pending_popups: PendingPopups,
 }
 
 pub(crate) struct BrowserRegistry {
@@ -115,6 +118,7 @@ impl BrowserRegistry {
                 created_at: std::time::Instant::now(),
             },
             request_context,
+            pending_popups: PendingPopups::default(),
         };
         debug!(
             "[BrowserRegistry] registered browser {} (type={:?})",
@@ -166,7 +170,6 @@ impl BrowserRegistry {
         self.browsers.get(&id)
     }
 
-    #[allow(dead_code)]
     pub fn get_mut(&mut self, id: BrowserId) -> Option<&mut BrowserState> {
         self.browsers.get_mut(&id)
     }

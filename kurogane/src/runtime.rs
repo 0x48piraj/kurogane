@@ -776,7 +776,7 @@ impl BrowserHandle {
 
 /// The running application, owned by the thread that started it.
 ///
-/// Not `Send`: CEF shuts down on the thread that initialized it and dropping
+/// Not `Send`; CEF shuts down on the thread that initialized it and dropping
 /// an `AppInstance` shuts CEF down. Use [`AppInstance::handle`] from other
 /// threads.
 pub struct AppInstance {

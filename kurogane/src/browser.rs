@@ -230,7 +230,7 @@ impl KuroganeBrowserProcessHandler {
 }
 
 /// Chrome's `session.restore_on_startup` value for starting without the last
-/// session ([`SessionStartupPref::kPrefValueNewTab`](https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/sessions/session_startup_pref.h)).
+/// session ([`SessionStartupPref::kPrefValueNewTab`](https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/prefs/session_startup_pref.h)).
 const START_WITHOUT_LAST_SESSION: i32 = 5;
 
 /// Turns off Chromium's "continue where you left off" for this profile.
