@@ -28,6 +28,7 @@ use cef::sys::cef_scheme_options_t::{
     CEF_SCHEME_OPTION_FETCH_ENABLED,
 };
 use std::sync::{Arc, OnceLock};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use percent_encoding::percent_decode_str;
@@ -104,6 +105,10 @@ pub struct ResolvedAsset {
 /// every IPC message and must not block: decide there what to answer. Slow
 /// work, such as reading a file, belongs in the returned handler's `open` and
 /// `read`, which CEF calls on a worker thread that may block.
+///
+/// A panic in `create` fails the request, as returning `None` does (with
+/// Rust's default `panic = "unwind"`). A [`ResourceHandler`] you implement
+/// yourself is called by CEF directly: a panic inside it aborts the process.
 ///
 /// [`resource_handler_from_bytes`] covers the common static-bytes case.
 pub trait SchemeHandler: Send + Sync {
@@ -210,7 +215,16 @@ wrap_scheme_handler_factory! {
             _scheme_name: Option<&CefString>,
             request: Option<&mut Request>,
         ) -> Option<ResourceHandler> {
-            self.handler.create(browser, frame, request)
+            // The page chose this request; a panic in the application's
+            // handler fails it rather than unwind across this CEF callback
+            let Ok(handler) = catch_unwind(AssertUnwindSafe(|| {
+                self.handler.create(browser, frame, request)
+            })) else {
+                debug!("[scheme] handler panicked; request failed");
+                return None;
+            };
+
+            handler
         }
     }
 }
@@ -908,6 +922,29 @@ mod tests {
         let s = ResolveError::Forbidden(PathBuf::from("/etc/passwd")).to_string();
         assert!(s.contains("Forbidden"));
         assert!(s.contains("passwd"));
+    }
+
+    // Custom scheme handlers
+
+    struct Panics;
+
+    impl SchemeHandler for Panics {
+        fn create(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _request: Option<&mut Request>,
+        ) -> Option<ResourceHandler> {
+            panic!("the application's handler has a bug");
+        }
+    }
+
+    #[test]
+    fn a_panicking_scheme_handler_fails_its_request() {
+        // Called through cef-rs's extern "C" trampoline, as CEF calls it: a
+        // panic escaping the factory would abort the test process
+        let factory = CustomSchemeHandlerFactory::new(Arc::new(Panics));
+        assert!(factory.create(None, None, None, None).is_none());
     }
 
     // Custom scheme name validation

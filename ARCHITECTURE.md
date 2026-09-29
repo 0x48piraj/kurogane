@@ -278,6 +278,8 @@ flowchart LR
     class N note;
 ```
 
+CEF calls into Kurogane through cef-rs's `extern "C"` trampolines, which do not catch panics: a panic that reaches one aborts the process it runs in, which in the browser process ends the application and in a renderer ends that renderer. Kurogane's own callbacks never unwrap a value CEF may leave out. Kurogane catches a panic in the application code it runs to answer a page's request: a command handler (the request rejects), a stream factory or stream handler (the stream errors) and `SchemeHandler::create` (the request fails, as it does for `None`). A panic in any other application code aborts, callbacks that see page data included: renderer delegates, the application's own `ResourceHandler` and a delegate's `LoadHandler`. The entry points `sandbox_entry!` exports for CEF's Windows bootstrap catch a panic in the application's `main` and return exit code 1. This holds with Rust's default `panic = "unwind"`; an application built with `panic = "abort"` ends at any panic.
+
 ## Embedding
 
 The runtime can be initialized without entering Chromium's blocking message loop.
