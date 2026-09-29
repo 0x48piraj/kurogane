@@ -78,6 +78,7 @@
               rustc
               cargo
               pkg-config
+              stdenv.cc
             ]
             ++ lib.optionals stdenv.hostPlatform.isDarwin [
               cmake
