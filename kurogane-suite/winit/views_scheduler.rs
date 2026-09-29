@@ -10,10 +10,12 @@
 //! This minimizes unnecessary wakeups and is the
 //! preferred event-driven integration pattern.
 
+use std::sync::{Arc, OnceLock};
+
 use kurogane::{App, PumpRequest};
 
 use winit::application::ApplicationHandler;
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 
 struct ViewsDriver {
     handle: kurogane::AppInstance,
@@ -42,20 +44,29 @@ impl ApplicationHandler for ViewsDriver {
 }
 
 fn main() {
-    // Enable user events so Chromium's scheduler callback can wake the event loop
-    let event_loop = EventLoop::<()>::with_user_event().build().unwrap();
-
-    let proxy = event_loop.create_proxy();
+    // Kurogane starts before winit: on macOS it installs the NSApplication
+    // subclass CEF needs, which must happen before winit creates the
+    // application. The scheduler wakes the event loop once it exists
+    let wake: Arc<OnceLock<EventLoopProxy<()>>> = Arc::default();
 
     let handle = App::url("https://example.com")
-        .scheduler(move |_request: PumpRequest| {
-            // CEF may call this from any thread
-            // EventLoopProxy provides a thread-safe wakeup mechanism
-            // The request payload is ignored because any wakeup triggers a pump
-            let _ = proxy.send_event(());
+        .scheduler({
+            let wake = wake.clone();
+            move |_request: PumpRequest| {
+                // CEF may call this from any thread
+                // EventLoopProxy provides a thread-safe wakeup mechanism
+                // The request payload is ignored because any wakeup triggers a pump
+                if let Some(proxy) = wake.get() {
+                    let _ = proxy.send_event(());
+                }
+            }
         })
         .start()
         .expect("Kurogane failed to initialize");
+
+    // Enable user events so Chromium's scheduler callback can wake the event loop
+    let event_loop = EventLoop::<()>::with_user_event().build().unwrap();
+    let _ = wake.set(event_loop.create_proxy());
 
     // Sleep until an OS event or scheduler wakeup is received
     event_loop.set_control_flow(ControlFlow::Wait);

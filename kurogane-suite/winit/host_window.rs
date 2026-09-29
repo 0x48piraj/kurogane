@@ -11,13 +11,15 @@
 //! pumping Chromium until on_before_close has completed and all
 //! browser instances have been destroyed.
 
+use std::sync::{Arc, OnceLock};
+
 use kurogane::{App, BrowserBounds, PumpRequest};
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::Window;
 
 struct EmbeddedDriver {
@@ -117,17 +119,26 @@ fn native_handle(window: &Window) -> *mut std::ffi::c_void {
 }
 
 fn main() {
-    let event_loop = EventLoop::new().unwrap();
-    let proxy = event_loop.create_proxy();
+    // Kurogane starts before winit: on macOS it installs the NSApplication
+    // subclass CEF needs, which must happen before winit creates the
+    // application. The scheduler wakes the event loop once it exists
+    let wake: Arc<OnceLock<EventLoopProxy<()>>> = Arc::default();
 
     let handle = App::new("winit/frontend")
-        .scheduler(move |_request: PumpRequest| {
-            // Marshal Chromium wake requests onto the event loop thread
-            let _ = proxy.send_event(());
+        .scheduler({
+            let wake = wake.clone();
+            move |_request: PumpRequest| {
+                // Marshal Chromium wake requests onto the event loop thread
+                if let Some(proxy) = wake.get() {
+                    let _ = proxy.send_event(());
+                }
+            }
         })
         .start_embedded()
         .expect("Kurogane failed to initialize");
 
+    let event_loop = EventLoop::new().unwrap();
+    let _ = wake.set(event_loop.create_proxy());
     event_loop.set_control_flow(ControlFlow::Wait);
 
     let mut app = EmbeddedDriver {
