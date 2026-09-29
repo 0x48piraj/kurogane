@@ -22,7 +22,7 @@ Browsers and windows are independently tracked entities with separate lifetimes.
 
 ### Browser lifecycle
 
-Browser creation returns a browser handle. Close routing follows Chromium's expected browser shutdown protocol, including closing-state tracking, reentrancy protection and deterministic destruction sequencing. [`on_before_close`](https://magpcss.org/ceforum/apidocs3/projects/(default)/CefLifeSpanHandler.html#OnBeforeClose) fires reliably and shutdown signals propagate in a controlled and predictable order.
+Browser creation returns a browser handle. Close routing follows CEF's close protocol. A window asks its browser to close through `TryCloseBrowser`. Page unload handlers can cancel the close. A browser is considered closed only after [`on_before_close`](https://magpcss.org/ceforum/apidocs3/projects/(default)/CefLifeSpanHandler.html#OnBeforeClose) runs for it. Shutdown signals propagate in a controlled and predictable order.
 
 ### Request/response IPC (RPC-style)
 

@@ -5,7 +5,6 @@
 
 use cef::*;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::debug;
@@ -91,7 +90,6 @@ wrap_window_delegate! {
         registry: Arc<Mutex<WindowRegistry>>,
         initial_bounds: Rect,
         show_state: ShowState,
-        is_closing: Arc<AtomicBool>,
     }
 
     impl ViewDelegate {
@@ -168,9 +166,6 @@ wrap_window_delegate! {
         // CEF's default is true; the window asks its browser instead, as
         // cefsimple's CanClose does, so the page's unload handlers can run
         fn can_close(&self, _window: Option<&mut Window>) -> ::std::os::raw::c_int {
-            if self.is_closing.load(Ordering::Acquire) {
-                return 1;
-            }
             if let Some(browser) = self.browser_view.browser() && let Some(host) = browser.host() {
                 return host.try_close_browser();
             }
@@ -282,7 +277,6 @@ wrap_browser_view_delegate! {
                     reg.allocate_id()
                 };
 
-                let is_closing = Arc::new(AtomicBool::new(false));
                 let mut delegate = KuroganePopupDelegate::new(
                     window_id,
                     bv_clone,
@@ -290,7 +284,6 @@ wrap_browser_view_delegate! {
                     browser_id,
                     requested,
                     ShowState::NORMAL,
-                    is_closing,
                 );
                 if let Some(window) = window_create_top_level(Some(&mut delegate)) {
                     window.show();
@@ -314,7 +307,6 @@ wrap_window_delegate! {
         // default 800x600 window
         requested: Option<PopupGeometry>,
         show_state: ShowState,
-        is_closing: Arc<AtomicBool>,
     }
 
     impl ViewDelegate {
@@ -386,9 +378,6 @@ wrap_window_delegate! {
         // CEF's default is true; the window asks its browser instead, as
         // cefsimple's CanClose does, so the page's unload handlers can run
         fn can_close(&self, _window: Option<&mut Window>) -> ::std::os::raw::c_int {
-            if self.is_closing.load(Ordering::Acquire) {
-                return 1;
-            }
             if let Some(browser) = self.browser_view.browser() && let Some(host) = browser.host() {
                 return host.try_close_browser();
             }

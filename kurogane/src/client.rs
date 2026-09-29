@@ -2,7 +2,6 @@
 
 use cef::*;
 use crate::debug;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use crate::runtime::RuntimeServices;
 use crate::browser_registry::{BrowserRegistry, BrowserType};
@@ -16,7 +15,6 @@ use crate::window::PopupGeometry;
 wrap_life_span_handler! {
     pub struct KuroganeLifeSpanHandler {
         browser_registry: Arc<Mutex<BrowserRegistry>>,
-        is_closing: Arc<AtomicBool>,
         router: Arc<IpcRouter>,
         // What the browsers of this client are, popups aside
         browser_type: BrowserType,
@@ -81,14 +79,6 @@ wrap_life_span_handler! {
             };
 
             reg.ensure_registered(browser, browser_type, opener);
-        }
-
-        fn do_close(&self, _browser: Option<&mut Browser>) -> i32 {
-            let reg = self.browser_registry.lock().unwrap();
-            if reg.count() == 1 {
-                self.is_closing.store(true, Ordering::Release);
-            }
-            0
         }
 
         fn on_before_close(&self, browser: Option<&mut Browser>) {
@@ -199,7 +189,6 @@ wrap_load_handler! {
 wrap_client! {
     pub struct KuroganeClient {
         services: Arc<RuntimeServices>,
-        is_closing: Arc<AtomicBool>,
         // What the browsers of this client are, popups aside
         browser_type: BrowserType,
     }
@@ -216,7 +205,6 @@ wrap_client! {
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
             Some(KuroganeLifeSpanHandler::new(
                 self.services.browser_registry.clone(),
-                self.is_closing.clone(),
                 self.services.router.clone(),
                 self.browser_type,
             ))

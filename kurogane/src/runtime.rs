@@ -828,13 +828,7 @@ impl AppInstance {
 
     /// Creates a new top-level window with an embedded browser.
     pub fn create_window(&self, options: WindowOptions) -> Result<WindowId, RuntimeError> {
-        let is_closing = Arc::new(AtomicBool::new(false));
-
-        let mut client = KuroganeClient::new(
-            self.handle.inner.services.clone(),
-            is_closing.clone(),
-            BrowserType::Main,
-        );
+        let mut client = KuroganeClient::new(self.handle.inner.services.clone(), BrowserType::Main);
 
         let window_id = {
             let mut reg = self.handle.inner.services.window_registry.lock().unwrap();
@@ -870,7 +864,6 @@ impl AppInstance {
                 height: options.bounds.height,
             },
             options.show_state.into(),
-            is_closing,
         );
 
         window_create_top_level(Some(&mut delegate)).ok_or(RuntimeError::WindowCreationFailed)?;
@@ -1015,12 +1008,7 @@ impl AppInstance {
             },
         );
 
-        let is_closing = Arc::new(AtomicBool::new(false));
-        let mut client = KuroganeClient::new(
-            self.handle.inner.services.clone(),
-            is_closing,
-            BrowserType::Main,
-        );
+        let mut client = KuroganeClient::new(self.handle.inner.services.clone(), BrowserType::Main);
 
         let mut rc = request_context;
         let browser = browser_host_create_browser_sync(

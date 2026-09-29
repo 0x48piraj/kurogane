@@ -2,7 +2,6 @@
 
 use cef::*;
 use std::cell::RefCell;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -78,8 +77,6 @@ wrap_browser_process_handler! {
                 *self.scheme_factories.borrow_mut() = factories;
             }
 
-            let is_closing = Arc::new(AtomicBool::new(false));
-
             // Check if any delegate provides a custom default client
             let mut client: Client = {
                 let mut delegate_client = None;
@@ -90,7 +87,7 @@ wrap_browser_process_handler! {
                     }
                 }
                 delegate_client.unwrap_or_else(|| {
-                    KuroganeClient::new(self.services.clone(), is_closing.clone(), BrowserType::Main)
+                    KuroganeClient::new(self.services.clone(), BrowserType::Main)
                 })
             };
 
@@ -141,7 +138,6 @@ wrap_browser_process_handler! {
                 self.services.window_registry.clone(),
                 Rect::default(),
                 ShowState::NORMAL,
-                is_closing,
             );
 
             // Create window
@@ -220,11 +216,7 @@ impl KuroganeBrowserProcessHandler {
         services: Arc<RuntimeServices>,
         spec: RuntimeSpec,
     ) -> BrowserProcessHandler {
-        let chrome_ui_client = KuroganeClient::new(
-            services.clone(),
-            Arc::new(AtomicBool::new(false)),
-            BrowserType::ChromeUi,
-        );
+        let chrome_ui_client = KuroganeClient::new(services.clone(), BrowserType::ChromeUi);
         Self::new(services, spec, RefCell::new(Vec::new()), chrome_ui_client)
     }
 }

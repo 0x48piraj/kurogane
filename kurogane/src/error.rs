@@ -272,7 +272,7 @@ impl Display for ConfigError {
                 "the rule for '{name}' names the opaque origin, which matches every frame without a host"
             ),
             ConfigError::SchedulerWithRunLoop => f.write_str(
-                "App::scheduler is for an application that pumps CEF from its own loop \
+                "App::scheduler is for an application that pumps CEF from its own loop: \
                  start it with App::start or App::start_embedded, not App::run",
             ),
         }
