@@ -1,7 +1,8 @@
 //! Project and runtime cache cleanup.
 //!
-//! This module removes generated build artifacts and, when explicitly
-//! requested, system-wide Kurogane runtime and profile data.
+//! Regular cleanup removes generated project artifacts. `clean all` also
+//! removes installed CEF runtimes, build caches and Kurogane application
+//! profiles.
 
 use anyhow::Result;
 use std::fs;
@@ -26,6 +27,7 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
     if nuclear && !confirmed {
         tui::warn("This will remove ALL Kurogane data.");
         tui::warn("Including installed Chromium runtimes.");
+        tui::warn("Including every Kurogane application's browser profile (cookies, storage).");
 
         // Never prompt when running unattended
         if non_interactive {
@@ -58,7 +60,10 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
             tui::info("Aborted");
             return Ok(());
         }
+    }
 
+    // Confirmed, at the prompt or with --yes
+    if nuclear {
         tui::step("Deprovisioning Kurogane environment");
 
         // Global CEF installs
@@ -86,6 +91,10 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
         // Build tools cache
         let tools = cache_root().join("tools");
         remove("tools", "build tools", &tools, &mut failed);
+
+        // Every Kurogane application's browser profiles
+        let profiles = cache_root().join("profiles");
+        remove("profiles", "browser profiles", &profiles, &mut failed);
     }
 
     tui::blank();
@@ -120,7 +129,6 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
         return Ok(());
     }
 
-    let profiles = base.join("profiles");
     let showcase = base.join("showcase");
     let templates = crate::cache::templates_root().ok();
 
@@ -132,7 +140,6 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
         None => tui::field("templates", "clean"),
     }
 
-    remove("profiles", "profiles", &profiles, &mut failed);
     remove("showcase", "showcase", &showcase, &mut failed);
 
     tui::blank();
