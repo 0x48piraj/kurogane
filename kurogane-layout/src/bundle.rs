@@ -157,22 +157,21 @@ impl BundleLayout {
 
         let runtime_target = format!("runtime/{}", exe_name.to_string_lossy());
 
-        // Optional library path override for non-standard runtime environments
-        let extra_ld = std::env::var("KUROGANE_LD_LIBRARY_PATH").unwrap_or_default();
-
-        let extra_ld_block = if extra_ld.is_empty() {
-            String::new()
-        } else {
-            format!("export LD_LIBRARY_PATH=\"{extra_ld}:${{LD_LIBRARY_PATH:-}}\"\n")
-        };
-
+        // The library path override is the running machine's, so the script
+        // reads it when it starts; an unset LD_LIBRARY_PATH gains no empty
+        // entry, which the loader would read as the working directory
         let script = format!(
             r#"#!/usr/bin/env sh
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
-{extra_ld_block}exec "$ROOT/{runtime_target}" "$@"
+# Opt-in library path for systems the executable's RUNPATH does not cover
+if [ -n "${{KUROGANE_LD_LIBRARY_PATH:-}}" ]; then
+    export LD_LIBRARY_PATH="$KUROGANE_LD_LIBRARY_PATH${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"
+fi
+
+exec "$ROOT/{runtime_target}" "$@"
 "#
         );
 
@@ -436,6 +435,52 @@ mod tests {
         assert!(
             !content.contains("runtime/cef"),
             "launcher must not set LD_LIBRARY_PATH for CEF"
+        );
+    }
+
+    // KUROGANE_LD_LIBRARY_PATH belongs to the machine the application runs
+    // on: the launcher reads it when it starts, keeps it a plain value, and
+    // leaves an unset LD_LIBRARY_PATH without an empty entry
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_launcher_reads_the_library_path_override_when_it_runs() {
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let layout = BundleLayout::new(dir.path().join("out"));
+        layout.materialize(&dist).unwrap();
+
+        // The executable the launcher starts reports what it was given
+        let target = layout.executable_path(test_exe_name());
+        fs::write(
+            &target,
+            "#!/bin/sh\nprintf '%s' \"${LD_LIBRARY_PATH-unset}\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+        let launcher = layout.launcher_path(test_exe_name());
+        let run = |vars: &[(&str, &str)]| {
+            let output = std::process::Command::new(&launcher)
+                .env_remove("KUROGANE_LD_LIBRARY_PATH")
+                .env_remove("LD_LIBRARY_PATH")
+                .envs(vars.iter().copied())
+                .output()
+                .unwrap();
+            String::from_utf8(output.stdout).unwrap()
+        };
+
+        assert_eq!(run(&[]), "unset");
+        assert_eq!(run(&[("KUROGANE_LD_LIBRARY_PATH", "/opt/a")]), "/opt/a");
+        assert_eq!(
+            run(&[
+                ("KUROGANE_LD_LIBRARY_PATH", "/opt/a"),
+                ("LD_LIBRARY_PATH", "/usr/b")
+            ]),
+            "/opt/a:/usr/b"
+        );
+        assert_eq!(run(&[("LD_LIBRARY_PATH", "/usr/b")]), "/usr/b");
+        assert_eq!(
+            run(&[("KUROGANE_LD_LIBRARY_PATH", "$(false)\"")]),
+            "$(false)\""
         );
     }
 
