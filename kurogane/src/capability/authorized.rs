@@ -248,6 +248,51 @@ impl Target<'_> {
     }
 }
 
+/// An existing file, verified for [`AuthorizedFs::write_file`] and replaced
+/// whole by [`Existing::replace`].
+struct Existing {
+    dir: Dir,
+    leaf: Name,
+    permissions: std::fs::Permissions,
+}
+
+impl Existing {
+    /// Writes `contents` to a new file in the same directory, then renames it
+    /// over the existing one. Until the rename the existing file is untouched,
+    /// so a write that fails part-way (a full disk, the process ending) leaves
+    /// its old contents; the new file is removed on failure.
+    fn replace(self, contents: &[u8]) -> Result<(), FsError> {
+        let temp = temp_name();
+        let mut file = self.dir.create_file(&temp, Create::New)?;
+        // Not synced: a disk flush per write would cost every fs.write_file,
+        // and an OS crash can lose a write here as it could before
+        let written = file
+            .write_all(contents)
+            .and_then(|()| file.set_permissions(self.permissions));
+        drop(file);
+        let replaced = written
+            .map_err(FsError::from)
+            .and_then(|()| self.dir.entry(&temp)?.rename(&self.dir, &self.leaf));
+        if replaced.is_err()
+            && let Ok(entry) = self.dir.entry(&temp)
+        {
+            // Best effort: the error reported is the write's, and a new file
+            // left behind holds nothing the existing one lost
+            let _ = entry.remove();
+        }
+        replaced
+    }
+}
+
+/// A name for a file that becomes another: `.kurogane-write-<pid>-<n>`,
+/// unique in this process and valid on every platform.
+fn temp_name() -> Name {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let raw = format!(".kurogane-write-{}-{n}", std::process::id());
+    Name::parse(std::ffi::OsStr::new(&raw)).expect("an ASCII name without separators is valid")
+}
+
 impl<'a> AuthorizedFs<'a> {
     /// Every capability the origin holds, across its grants.
     pub fn access(&self) -> FsAccess {
@@ -281,21 +326,27 @@ impl<'a> AuthorizedFs<'a> {
     /// `fs.write_file`: WRITE to replace an existing file, CREATE to make a
     /// new one. The object decides which applies. Contents over the transfer
     /// limit are refused before anything is opened.
+    ///
+    /// An existing file is replaced whole: the contents go to a new file
+    /// beside it, which then takes its name and its permissions, so a write
+    /// that fails part-way leaves the old contents. The file is a new object
+    /// afterwards (its owner is the application's user); on Windows another
+    /// program holding it open without delete sharing makes the write fail.
     pub fn write_file(&self, path: &Path, contents: &[u8]) -> Result<(), FsError> {
         if self.exceeds_limit(contents) {
             return Err(FsError::TooLarge {
                 limit: self.max_file_size,
             });
         }
-        let mut file = match self.open_existing(path) {
-            Ok(file) => file,
+        let existing = match self.open_existing(path) {
+            Ok(existing) => existing,
             Err(FsError::Io(e)) if e.kind() == io::ErrorKind::NotFound => {
                 match self.create_new(path) {
                     // Lost a creation race; the file exists now
                     Err(FsError::Io(e)) if e.kind() == io::ErrorKind::AlreadyExists => {
                         self.open_existing(path)?
                     }
-                    created => created?,
+                    created => return Ok(created?.write_all(contents)?),
                 }
             }
             Err(denied @ (FsError::CapabilityDenied | FsError::PathDenied(_))) => {
@@ -305,13 +356,12 @@ impl<'a> AuthorizedFs<'a> {
                         return Err(denied);
                     }
                     Err(FsError::CapabilityDenied) => return Err(denied),
-                    created => created?,
+                    created => return Ok(created?.write_all(contents)?),
                 }
             }
             Err(e) => return Err(e),
         };
-        file.write_all(contents)?;
-        Ok(())
+        existing.replace(contents)
     }
 
     /// `fs.create_dir`: CREATE. One level; the parent must exist.
@@ -421,16 +471,20 @@ impl<'a> AuthorizedFs<'a> {
         u64::try_from(contents.len()).map_or(true, |len| len > self.max_file_size)
     }
 
-    fn open_existing(&self, path: &Path) -> Result<File, FsError> {
+    /// The existing file `path`, verified for replacement. Nothing is written.
+    fn open_existing(&self, path: &Path) -> Result<Existing, FsError> {
         let target = self.resolve(FsAccess::WRITE, path)?;
         let (parent, leaf) = target.split()?;
         let dir = target.root.safe().open_dir(&parent)?;
         let file = dir.create_file(leaf, Create::Existing)?;
-        // Verified before the first byte changes: truncation comes after
         self.verify(target.root, &target.rel, &file)?;
         self.single_link(&file)?;
-        file.set_len(0)?;
-        Ok(file)
+        let permissions = file.metadata()?.permissions();
+        Ok(Existing {
+            dir,
+            leaf: leaf.clone(),
+            permissions,
+        })
     }
 
     fn create_new(&self, path: &Path) -> Result<File, FsError> {
@@ -907,6 +961,37 @@ mod tests {
             Err(FsError::CapabilityDenied)
         ));
         assert!(!notes.join("new.txt").exists());
+    }
+
+    // The new contents go to a file of their own, renamed over the old one:
+    // the name keeps its permissions and nothing else is left in the directory
+    #[test]
+    fn a_replaced_file_keeps_its_permissions_and_leaves_nothing_behind() {
+        let (_tmp, notes, fs) = fixture(FsAccess::WRITE);
+        let note = notes.join("note.txt");
+        #[cfg(unix)]
+        std::fs::set_permissions(&note, std::os::unix::fs::PermissionsExt::from_mode(0o640))
+            .unwrap();
+        let names = |dir: &Path| {
+            let mut names: Vec<_> = std::fs::read_dir(dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            names.sort();
+            names
+        };
+        let before = names(&notes);
+        let auth = fs.authorize(&origin()).unwrap();
+        auth.write_file(&note, b"replaced").unwrap();
+        assert_eq!(std::fs::read(&note).unwrap(), b"replaced");
+        assert_eq!(names(&notes), before);
+        #[cfg(unix)]
+        assert_eq!(
+            std::os::unix::fs::PermissionsExt::mode(
+                &std::fs::metadata(&note).unwrap().permissions()
+            ) & 0o777,
+            0o640
+        );
     }
 
     #[test]
