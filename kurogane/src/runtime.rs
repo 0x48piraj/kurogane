@@ -38,12 +38,16 @@ fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeEr
 
     let detected = detect_cef_root_with_version(None).map_err(cef_not_found)?;
 
-    validate_cef_runtime(&detected.root)
-        .map_err(|e| RuntimeError::InvalidCefInstallation(e.to_string()))?;
-
-    let cef_root = detected.root.canonicalize().map_err(|e| {
-        RuntimeError::InvalidCefInstallation(format!("{}: {e}", detected.root.display()))
-    })?;
+    let invalid =
+        |source: Box<dyn std::error::Error + Send + Sync>| RuntimeError::InvalidCefInstallation {
+            path: detected.root.clone(),
+            source,
+        };
+    validate_cef_runtime(&detected.root).map_err(|e| invalid(Box::new(e)))?;
+    let cef_root = detected
+        .root
+        .canonicalize()
+        .map_err(|e| invalid(Box::new(e)))?;
 
     debug!("CEF root: {}", cef_root.display());
 

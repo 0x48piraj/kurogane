@@ -882,11 +882,17 @@ impl App {
         self.build()
     }
 
-    /// Run the application and terminate the process on failure.
+    /// Run the application and terminate the process on failure, after
+    /// printing the error and each of its causes.
     /// Intended for binaries. Libraries embedding the runtime should use run() instead.
     pub fn run_or_exit(self) {
         if let Err(e) = self.run() {
             eprintln!("\nApplication failed to start:\n{e}\n");
+            let mut cause = std::error::Error::source(&e);
+            while let Some(error) = cause {
+                eprintln!("Caused by: {error}");
+                cause = error.source();
+            }
             std::process::exit(1);
         }
     }

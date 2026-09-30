@@ -93,20 +93,22 @@ fn load_framework() -> Result<(), RuntimeError> {
     // (<exe>/../Frameworks/...), which is unavailable in non-bundled dev runs
     let detected = detect_cef_root_with_version(None).map_err(crate::runtime::cef_not_found)?;
 
-    let framework = detected.root.join(cef::sys::FRAMEWORK_PATH);
-    let framework = framework.canonicalize().map_err(|e| {
-        RuntimeError::InvalidCefInstallation(format!("{}: {e}", framework.display()))
-    })?;
-
-    let framework = CString::new(framework.as_os_str().as_bytes())
-        .map_err(|_| RuntimeError::InvalidCefInstallation("invalid framework path".into()))?;
+    let path = detected.root.join(cef::sys::FRAMEWORK_PATH);
+    let invalid =
+        |source: Box<dyn std::error::Error + Send + Sync>| RuntimeError::InvalidCefInstallation {
+            path: path.clone(),
+            source,
+        };
+    let canonical = path.canonicalize().map_err(|e| invalid(Box::new(e)))?;
+    let framework =
+        CString::new(canonical.as_os_str().as_bytes()).map_err(|e| invalid(Box::new(e)))?;
 
     // SAFETY: `framework` is a valid, NUL-terminated C string that outlives the call.
     // Executed prior to any other CEF invocations, satisfying CEF's pre-initialization requirement.
     let loaded = unsafe { cef::sys::cef_load_library(framework.as_ptr()) };
     if loaded != 1 {
-        return Err(RuntimeError::InvalidCefInstallation(
-            "failed to load Chromium Embedded Framework".into(),
+        return Err(invalid(
+            "cef_load_library could not load the Chromium Embedded Framework".into(),
         ));
     }
 

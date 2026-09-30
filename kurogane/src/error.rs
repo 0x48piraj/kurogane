@@ -7,8 +7,15 @@ use crate::capability::FsConfigError;
 #[non_exhaustive]
 pub enum RuntimeError {
     InvalidAssetRoot(PathBuf),
-    InvalidFrontendUrl(String),
+    /// The frontend URL could not be parsed; `source` says why.
+    InvalidFrontendUrl {
+        url: String,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     AssetRootMissing(PathBuf),
+    /// The frontend directory exists but has no `index.html` to serve; none,
+    /// a directory by that name, or a link out of the directory.
+    EntrypointMissing(PathBuf),
     AssetRootUnavailable {
         path: PathBuf,
         source: std::io::Error,
@@ -16,7 +23,11 @@ pub enum RuntimeError {
 
     CefInitializeFailed,
     CefNotInstalled,
-    InvalidCefInstallation(String),
+    /// The Chromium runtime at `path` cannot be used; `source` says why.
+    InvalidCefInstallation {
+        path: PathBuf,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 
     /// The path to the running executable could not be determined.
     ExecutableUnavailable(std::io::Error),
@@ -63,7 +74,7 @@ impl Display for RuntimeError {
                 path.display()
             ),
 
-            RuntimeError::InvalidFrontendUrl(url) => write!(
+            RuntimeError::InvalidFrontendUrl { url, .. } => write!(
                 f,
                 concat!(
                     "Invalid URL:\n\n",
@@ -88,17 +99,25 @@ impl Display for RuntimeError {
                 path.display()
             ),
 
-            RuntimeError::AssetRootUnavailable { path, source } => write!(
+            RuntimeError::EntrypointMissing(path) => write!(
                 f,
                 concat!(
-                    "Unable to access frontend directory:\n\n",
+                    "Frontend directory has no index.html:\n\n",
                     "  {}\n\n",
-                    "OS error:\n",
+                    "Build your frontend into this directory, or pass the directory ",
+                    "that holds its index.html to App::new."
+                ),
+                path.display()
+            ),
+
+            RuntimeError::AssetRootUnavailable { path, .. } => write!(
+                f,
+                concat!(
+                    "Unable to access the frontend:\n\n",
                     "  {}\n\n",
                     "Check filesystem permissions and ensure the path is accessible."
                 ),
                 path.display(),
-                source,
             ),
 
             RuntimeError::CefInitializeFailed => write!(
@@ -119,40 +138,33 @@ impl Display for RuntimeError {
                 )
             ),
 
-            RuntimeError::InvalidCefInstallation(reason) => write!(
+            RuntimeError::InvalidCefInstallation { path, .. } => write!(
                 f,
                 concat!(
-                    "Chromium installation is invalid.\n\n",
-                    "Reason:\n",
+                    "Chromium installation is invalid:\n\n",
                     "  {}\n\n",
                     "Try reinstalling Chromium:\n\n",
                     "  kurogane install"
                 ),
-                reason
+                path.display()
             ),
 
-            RuntimeError::ExecutableUnavailable(source) => write!(
+            RuntimeError::ExecutableUnavailable(_) => write!(
                 f,
                 concat!(
                     "Unable to locate the running executable.\n\n",
-                    "OS error:\n",
-                    "  {}\n\n",
                     "Kurogane finds its Chromium runtime and profile cache from the executable's path."
-                ),
-                source
+                )
             ),
 
-            RuntimeError::CacheUnavailable { path, source } => write!(
+            RuntimeError::CacheUnavailable { path, .. } => write!(
                 f,
                 concat!(
                     "Unable to create cache directory:\n\n",
                     "  {}\n\n",
-                    "OS error:\n",
-                    "  {}\n\n",
                     "Check filesystem permissions or free up disk space."
                 ),
                 path.display(),
-                source,
             ),
 
             RuntimeError::BrowserCreationFailed => write!(
@@ -194,14 +206,16 @@ impl Display for RuntimeError {
                 f.write_str("\nNothing was started. Fix the builder calls above.")
             }
 
-            RuntimeError::InvalidFilesystem(error) => write!(
-                f,
-                "Invalid filesystem configuration:\n\n  {error}\n\nNothing was started."
-            ),
+            RuntimeError::InvalidFilesystem(_) => {
+                f.write_str("Invalid filesystem configuration. Nothing was started.")
+            }
         }
     }
 }
 
+/// `Display` names the failure and `source()` holds its cause, so a report
+/// that walks the chain ([`App::run_or_exit`](crate::App::run_or_exit) does)
+/// shows each cause once.
 impl std::error::Error for RuntimeError {
     /// Returns the underlying error that caused this runtime error, when available.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
@@ -211,14 +225,16 @@ impl std::error::Error for RuntimeError {
 
             RuntimeError::ExecutableUnavailable(source) => Some(source),
 
+            RuntimeError::InvalidFrontendUrl { source, .. }
+            | RuntimeError::InvalidCefInstallation { source, .. } => Some(&**source),
+
             RuntimeError::InvalidFilesystem(error) => Some(error),
 
             RuntimeError::InvalidAssetRoot(_)
-            | RuntimeError::InvalidFrontendUrl(_)
             | RuntimeError::AssetRootMissing(_)
+            | RuntimeError::EntrypointMissing(_)
             | RuntimeError::CefInitializeFailed
             | RuntimeError::CefNotInstalled
-            | RuntimeError::InvalidCefInstallation(_)
             | RuntimeError::BrowserCreationFailed
             | RuntimeError::WindowCreationFailed
             | RuntimeError::SandboxUnsupported { .. }
@@ -280,3 +296,41 @@ impl Display for ConfigError {
 }
 
 impl std::error::Error for ConfigError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error;
+
+    #[test]
+    fn a_cause_is_reported_once() {
+        let denied = || std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no entry");
+        let errors = [
+            RuntimeError::AssetRootUnavailable {
+                path: "web".into(),
+                source: denied(),
+            },
+            RuntimeError::ExecutableUnavailable(denied()),
+            RuntimeError::CacheUnavailable {
+                path: "cache".into(),
+                source: denied(),
+            },
+            RuntimeError::InvalidCefInstallation {
+                path: "cef".into(),
+                source: Box::new(denied()),
+            },
+            RuntimeError::InvalidFrontendUrl {
+                url: "not a url".into(),
+                source: Box::new(denied()),
+            },
+        ];
+        for error in errors {
+            assert!(!error.to_string().contains("no entry"), "{error}");
+            assert_eq!(
+                error.source().map(ToString::to_string).as_deref(),
+                Some("no entry"),
+                "{error}"
+            );
+        }
+    }
+}

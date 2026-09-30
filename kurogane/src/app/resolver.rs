@@ -7,6 +7,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use crate::error::RuntimeError;
 use crate::fs::CanonicalRoot;
+use crate::scheme::ResolveError;
 
 /// Result of frontend resolution.
 #[derive(Debug)]
@@ -56,7 +57,10 @@ pub(crate) fn resolve_for_process(source: &Source) -> Result<ResolvedFrontend, R
 pub(crate) fn resolve(source: &Source) -> Result<ResolvedFrontend, RuntimeError> {
     match source {
         Source::Url(url) => {
-            Url::parse(url).map_err(|_| RuntimeError::InvalidFrontendUrl(url.clone()))?;
+            Url::parse(url).map_err(|source| RuntimeError::InvalidFrontendUrl {
+                url: url.clone(),
+                source: Box::new(source),
+            })?;
 
             Ok(ResolvedFrontend {
                 asset_root: None,
@@ -86,8 +90,22 @@ pub(crate) fn resolve(source: &Source) -> Result<ResolvedFrontend, RuntimeError>
                 }
             };
 
-            crate::scheme::validate_asset_root(&root)
-                .map_err(|_| RuntimeError::AssetRootMissing(root.as_path().to_path_buf()))?;
+            match crate::scheme::validate_asset_root(&root) {
+                Ok(()) => {}
+                Err(ResolveError::Io(source)) => {
+                    return Err(RuntimeError::AssetRootUnavailable {
+                        path: root.as_path().join("index.html"),
+                        source,
+                    });
+                }
+                // Missing, a directory, or a link out of the root: the
+                // directory is there, its entrypoint is not
+                Err(_) => {
+                    return Err(RuntimeError::EntrypointMissing(
+                        root.as_path().to_path_buf(),
+                    ));
+                }
+            }
 
             Ok(ResolvedFrontend {
                 asset_root: Some(root),
@@ -238,11 +256,12 @@ mod tests {
 
         let err = resolve(&source).unwrap_err();
 
+        // The directory exists; what is missing is its index.html
         match err {
-            RuntimeError::AssetRootMissing(p) => {
+            RuntimeError::EntrypointMissing(p) => {
                 assert_eq!(p, dir.path().canonicalize().unwrap());
             }
-            _ => panic!("expected AssetRootMissing"),
+            other => panic!("expected EntrypointMissing, got {other:?}"),
         }
     }
 
@@ -258,8 +277,8 @@ mod tests {
         let err = resolve(&source).unwrap_err();
 
         match err {
-            RuntimeError::AssetRootMissing(_) => {}
-            _ => panic!("expected AssetRootMissing"),
+            RuntimeError::EntrypointMissing(_) => {}
+            other => panic!("expected EntrypointMissing, got {other:?}"),
         }
     }
 
@@ -335,7 +354,7 @@ mod property_tests {
 
             let err = resolve(&source).unwrap_err();
 
-            prop_assert!(matches!(err, RuntimeError::AssetRootMissing(_)));
+            prop_assert!(matches!(err, RuntimeError::EntrypointMissing(_)));
         }
     }
 
