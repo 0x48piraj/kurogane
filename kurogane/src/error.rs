@@ -40,6 +40,12 @@ pub enum RuntimeError {
     BrowserCreationFailed,
     WindowCreationFailed,
 
+    /// The window given to
+    /// [`AppInstance::create_child_browser`](crate::AppInstance::create_child_browser)
+    /// cannot parent a browser: CEF embeds only in a Win32 window, an AppKit
+    /// view or an X11 window, never, for one, in a Wayland surface.
+    UnsupportedParentWindow,
+
     /// The requested sandbox cannot be enforced on this platform or layout.
     SandboxUnsupported {
         reason: String,
@@ -183,6 +189,15 @@ impl Display for RuntimeError {
                 )
             ),
 
+            RuntimeError::UnsupportedParentWindow => write!(
+                f,
+                concat!(
+                    "The window cannot host a Chromium browser.\n\n",
+                    "CEF embeds a browser in a Win32 window, an AppKit view or an X11 window. ",
+                    "On Linux, ask winit for X11 (with_x11()); a Wayland session runs it under XWayland."
+                )
+            ),
+
             RuntimeError::SandboxUnsupported { reason } => write!(
                 f,
                 concat!(
@@ -237,6 +252,7 @@ impl std::error::Error for RuntimeError {
             | RuntimeError::CefNotInstalled
             | RuntimeError::BrowserCreationFailed
             | RuntimeError::WindowCreationFailed
+            | RuntimeError::UnsupportedParentWindow
             | RuntimeError::SandboxUnsupported { .. }
             | RuntimeError::SandboxUnavailable { .. }
             | RuntimeError::InvalidConfiguration(_) => None,

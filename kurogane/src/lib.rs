@@ -43,6 +43,9 @@ pub use error::{ConfigError, RuntimeError};
 pub use acl::{Origin, OriginError};
 pub use app::App;
 pub use resources::resource_dir;
+/// The window-handle traits [`AppInstance::create_child_browser`] takes, at
+/// the version Kurogane uses: a host passes its window as it is.
+pub use raw_window_handle;
 
 /// What Kurogane's macros expand to. Not a public API.
 #[doc(hidden)]

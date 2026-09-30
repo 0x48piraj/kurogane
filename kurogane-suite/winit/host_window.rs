@@ -19,8 +19,6 @@ use std::time::{Duration, Instant};
 
 use kurogane::{App, BrowserBounds, PumpRequest};
 
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
@@ -50,13 +48,15 @@ impl ApplicationHandler<Instant> for EmbeddedDriver {
             .create_window(Window::default_attributes().with_title("Kurogane Embedded"))
             .unwrap();
 
-        let hwnd = native_handle(&window);
-
         // Map the child browser layout bounds 1:1 with the parent container
         let bounds = client_bounds(&window);
-        self.browser = self
+        match self
             .handle
-            .create_child_browser(hwnd, bounds, "app://app/index.html");
+            .create_child_browser(&window, bounds, "app://app/index.html")
+        {
+            Ok(browser) => self.browser = Some(browser),
+            Err(e) => eprintln!("the browser could not be created:\n{e}"),
+        }
 
         self.window = Some(window);
     }
@@ -124,21 +124,6 @@ fn client_bounds(window: &Window) -> BrowserBounds {
         y: 0,
         width: size.width as i32,
         height: size.height as i32,
-    }
-}
-
-/// Helper function to extract a platform-native window handle for browser
-/// embedding: an HWND on Windows, an NSView on macOS, an X11 window on Linux
-fn native_handle(window: &Window) -> *mut std::ffi::c_void {
-    let handle = window.window_handle().unwrap();
-    match handle.as_raw() {
-        #[cfg(target_os = "windows")]
-        RawWindowHandle::Win32(h) => h.hwnd.get() as *mut _,
-        #[cfg(target_os = "macos")]
-        RawWindowHandle::AppKit(h) => h.ns_view.as_ptr(),
-        #[cfg(target_os = "linux")]
-        RawWindowHandle::Xlib(h) => h.window as usize as *mut _,
-        _ => panic!("unsupported platform"),
     }
 }
 

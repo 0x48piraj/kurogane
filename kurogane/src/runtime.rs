@@ -1,4 +1,5 @@
 use cef::{args::Args, sys::cef_window_handle_t, *};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -767,19 +768,24 @@ impl Drop for AppInstance {
     }
 }
 
-#[cfg(target_os = "windows")]
-fn native_to_cef_window(handle: *mut std::ffi::c_void) -> cef_window_handle_t {
-    cef::sys::HWND(handle.cast())
-}
-
-#[cfg(target_os = "macos")]
-fn native_to_cef_window(handle: *mut std::ffi::c_void) -> cef_window_handle_t {
-    handle as cef_window_handle_t
-}
-
-#[cfg(target_os = "linux")]
-fn native_to_cef_window(handle: *mut std::ffi::c_void) -> cef_window_handle_t {
-    handle as usize as cef_window_handle_t
+/// The CEF parent window for `parent`: its HWND on Windows, its NSView on
+/// macOS, its X11 window on Linux (Xlib or XCB). CEF parents a browser in
+/// nothing else, so any other handle, a Wayland surface included, is refused.
+fn parent_window(parent: &impl HasWindowHandle) -> Result<cef_window_handle_t, RuntimeError> {
+    let handle = parent
+        .window_handle()
+        .map_err(|_| RuntimeError::UnsupportedParentWindow)?;
+    match handle.as_raw() {
+        #[cfg(target_os = "windows")]
+        RawWindowHandle::Win32(window) => Ok(cef::sys::HWND(window.hwnd.get() as *mut _)),
+        #[cfg(target_os = "macos")]
+        RawWindowHandle::AppKit(window) => Ok(window.ns_view.as_ptr() as cef_window_handle_t),
+        #[cfg(target_os = "linux")]
+        RawWindowHandle::Xlib(window) => Ok(window.window),
+        #[cfg(target_os = "linux")]
+        RawWindowHandle::Xcb(window) => Ok(window.window.get().into()),
+        _ => Err(RuntimeError::UnsupportedParentWindow),
+    }
 }
 
 /// A browser of the running application.
@@ -1125,20 +1131,26 @@ impl AppInstance {
     /// in the parent's coordinates (see [`BrowserBounds`]).
     /// [`BrowserHandle::set_bounds`] moves it later.
     ///
-    /// 'parent' must be a valid platform window handle ('HWND' on Windows,
-    /// 'NSView' on macOS, or the corresponding native handle on Linux)
+    /// `parent` is the host's window as it is, a winit `Window` for one:
+    /// anything that hands out a [`raw_window_handle`] window handle. It must
+    /// outlive the browser, which the host closes first (docs/winit.md).
     ///
     /// The runtime must have been started with App::start_embedded,
     /// and AppInstance::pump must continue to be called regularly for
     /// Chromium to process events.
     ///
-    /// Returns None if CEF could not create the browser.
+    /// # Errors
+    ///
+    /// [`RuntimeError::UnsupportedParentWindow`] when `parent` is not a
+    /// Win32 window, an AppKit view or an X11 window (a Wayland surface, for
+    /// one), and [`RuntimeError::BrowserCreationFailed`] when CEF creates no
+    /// browser.
     pub fn create_child_browser(
         &self,
-        parent: *mut std::ffi::c_void,
+        parent: &impl HasWindowHandle,
         bounds: BrowserBounds,
         url: &str,
-    ) -> Option<BrowserHandle> {
+    ) -> Result<BrowserHandle, RuntimeError> {
         self.create_child_browser_impl(parent, bounds, url, None)
     }
 
@@ -1148,32 +1160,39 @@ impl AppInstance {
     /// the cache partition, cookie persistence and accept language for this browser.
     ///
     /// The runtime must have been started with App::start_embedded.
+    ///
+    /// # Errors
+    ///
+    /// As [`create_child_browser`](Self::create_child_browser), and
+    /// [`RuntimeError::BrowserCreationFailed`] when CEF creates no request
+    /// context from `rc_settings`.
     pub fn create_child_browser_with_request_context(
         &self,
-        parent: *mut std::ffi::c_void,
+        parent: &impl HasWindowHandle,
         bounds: BrowserBounds,
         url: &str,
         rc_settings: &cef::RequestContextSettings,
-    ) -> Option<BrowserHandle> {
+    ) -> Result<BrowserHandle, RuntimeError> {
         // Without its own context the browser would share the global cookie
         // and cache partition the caller asked to avoid
-        let rc = cef::request_context_create_context(Some(rc_settings), None)?;
+        let rc = cef::request_context_create_context(Some(rc_settings), None)
+            .ok_or(RuntimeError::BrowserCreationFailed)?;
         self.create_child_browser_impl(parent, bounds, url, Some(rc))
     }
 
     fn create_child_browser_impl(
         &self,
-        parent: *mut std::ffi::c_void,
+        parent: &impl HasWindowHandle,
         bounds: BrowserBounds,
         url: &str,
         request_context: Option<cef::RequestContext>,
-    ) -> Option<BrowserHandle> {
+    ) -> Result<BrowserHandle, RuntimeError> {
         let info = WindowInfo {
             runtime_style: RuntimeStyle::ALLOY,
             ..WindowInfo::default()
         }
         .set_as_child(
-            native_to_cef_window(parent),
+            parent_window(parent)?,
             &Rect {
                 x: bounds.x,
                 y: bounds.y,
@@ -1192,17 +1211,19 @@ impl AppInstance {
             Some(&Default::default()),
             None,
             rc.as_mut(),
-        )?;
+        )
+        .ok_or(RuntimeError::BrowserCreationFailed)?;
 
         debug!("create_child_browser_impl cef_id={}", browser.identifier());
 
-        let id = {
-            let reg = self.handle.registry();
-            reg.browsers.find_id_by_cef_id(browser.identifier())
-        };
         // CreateBrowserSync delivers on_after_created, which registers the
-        // browser, before it returns; checked with the registry unlocked
-        let id = id.expect("browser should have been registered by on_after_created");
+        // browser, before it returns; the guard ends with the statement
+        let id = self
+            .handle
+            .registry()
+            .browsers
+            .find_id_by_cef_id(browser.identifier())
+            .ok_or(RuntimeError::BrowserCreationFailed)?;
 
         // set_bounds reaches the view through this, never through the handle
         #[cfg(target_os = "macos")]
@@ -1210,7 +1231,7 @@ impl AppInstance {
             crate::platform::embed::remember_view(id, host.window_handle());
         }
 
-        Some(BrowserHandle {
+        Ok(BrowserHandle {
             id,
             app: self.handle.clone(),
         })
@@ -1330,6 +1351,48 @@ pub(crate) fn start(spec: RuntimeSpec, router: IpcRouter) -> Result<AppInstance,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A host window whose handle is `raw`.
+    struct HostWindow(RawWindowHandle);
+
+    impl HasWindowHandle for HostWindow {
+        fn window_handle(
+            &self,
+        ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+            // SAFETY: the handle is only mapped to CEF's parent type here,
+            // never used as a window
+            Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(self.0) })
+        }
+    }
+
+    #[test]
+    fn a_child_browser_is_parented_only_in_a_window_cef_embeds_in() {
+        let wayland = raw_window_handle::WaylandWindowHandle::new(std::ptr::NonNull::dangling());
+        assert!(matches!(
+            parent_window(&HostWindow(wayland.into())),
+            Err(RuntimeError::UnsupportedParentWindow)
+        ));
+        #[cfg(target_os = "windows")]
+        {
+            let hwnd = std::num::NonZeroIsize::new(0x2a).unwrap();
+            let window = raw_window_handle::Win32WindowHandle::new(hwnd);
+            assert!(parent_window(&HostWindow(window.into())).is_ok());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let view = std::ptr::NonNull::<std::ffi::c_void>::dangling();
+            let window = raw_window_handle::AppKitWindowHandle::new(view);
+            assert!(parent_window(&HostWindow(window.into())).is_ok());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let xlib = raw_window_handle::XlibWindowHandle::new(0x2a);
+            assert_eq!(parent_window(&HostWindow(xlib.into())).ok(), Some(0x2a));
+            let xcb =
+                raw_window_handle::XcbWindowHandle::new(std::num::NonZeroU32::new(0x2b).unwrap());
+            assert_eq!(parent_window(&HostWindow(xcb.into())).ok(), Some(0x2b));
+        }
+    }
 
     #[test]
     #[cfg(target_os = "windows")]

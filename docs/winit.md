@@ -183,27 +183,13 @@ let event_loop = EventLoop::<Instant>::with_user_event().build()?;
 fn resumed(&mut self, event_loop: &ActiveEventLoop) {
     let window = event_loop.create_window(Window::default_attributes()).unwrap();
 
-    // None if CEF could not create the browser
-    self.browser = self.handle.create_child_browser(
-        native_handle(&window),
-        client_bounds(&window),
-        "app://app/index.html",
-    );
-    self.window = Some(window);
-}
-
-/// The parent window CEF takes: an HWND on Windows, an NSView on macOS, an
-/// X11 window on Linux
-fn native_handle(window: &Window) -> *mut c_void {
-    match window.window_handle().unwrap().as_raw() {
-        #[cfg(target_os = "windows")]
-        RawWindowHandle::Win32(h) => h.hwnd.get() as *mut c_void,
-        #[cfg(target_os = "macos")]
-        RawWindowHandle::AppKit(h) => h.ns_view.as_ptr(),
-        #[cfg(target_os = "linux")]
-        RawWindowHandle::Xlib(h) => h.window as usize as *mut c_void,
-        _ => panic!("unsupported platform"),
+    // The window itself is the parent; Kurogane takes its HWND, NSView or X11
+    // window and refuses a Wayland surface
+    match self.handle.create_child_browser(&window, client_bounds(&window), "app://app/index.html") {
+        Ok(browser) => self.browser = Some(browser),
+        Err(e) => eprintln!("the browser could not be created:\n{e}"),
     }
+    self.window = Some(window);
 }
 ```
 
@@ -211,7 +197,7 @@ fn native_handle(window: &Window) -> *mut c_void {
 
 - **Cadence & CPU:** As in the reactive event-driven loop: at the deadlines Chromium asks for through Kurogane's `App::scheduler`, and at least every 33 ms.
 - **Window hierarchy:** The host process owns the window hierarchy. Chromium renders into a raw child surface (`HWND` / `NSView` / X11 window) of the `winit` window's native handle.
-- **Linux:** CEF takes an X11 window as the parent, so the host window must be one: winit's `with_x11()` gives an X11 window, under XWayland in a Wayland session. A Wayland surface cannot be a parent. For the same reason Kurogane runs Chromium itself on X11 in an embedded application: in a Wayland session Chromium would pick Wayland and draw the page beside the host's window instead of in it. `App::chromium_flag_with_value("ozone-platform", ..)` overrides this.
+- **Linux:** CEF takes an X11 window as the parent, so the host window must be one: winit's `with_x11()` gives an X11 window, under XWayland in a Wayland session. A Wayland surface cannot be a parent: `create_child_browser` refuses it with `RuntimeError::UnsupportedParentWindow`. For the same reason Kurogane runs Chromium itself on X11 in an embedded application: in a Wayland session Chromium would pick Wayland and draw the page beside the host's window instead of in it. `App::chromium_flag_with_value("ozone-platform", ..)` overrides this.
 - **Layout contract:** Chromium places a child browser once, at the bounds given to `create_child_browser`. On Windows and Linux it does not follow the host window: the host moves and resizes it with `BrowserHandle::set_bounds` whenever its place changes, on every `WindowEvent::Resized` for a browser that fills the window, as CEF's own sample client does (`SetWindowPos` on Windows, `XMoveResizeWindow` on X11). On macOS Chromium stretches the browser with its parent view, and `set_bounds` places it anywhere by setting the view's frame. Bounds are in the parent window's coordinates: pixels on Windows and X11, points on macOS, where winit's `inner_size()` is converted with `to_logical`. [`CefBrowserHost::WasResized`](https://magpcss.org/ceforum/apidocs3/projects/(default)/CefBrowserHost.html#WasResized()) does not apply: it is for windowless (off-screen) browsers only.
 
 Because the host process owns the root window, teardown requires a coordinated multi-step asynchronous dance across the host thread and Chromium UI thread.
