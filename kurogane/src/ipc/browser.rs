@@ -10,13 +10,13 @@ use crate::acl::Origin;
 use crate::ipc::browser_state::{effective_origin, FrameId, IpcContext};
 use crate::ipc::envelope::KNOWN_FLAGS;
 use crate::ipc::transport::message::extract_message;
-use crate::ipc::router::IpcRouter;
+use crate::runtime::AppHandle;
 
 pub fn handle_ipc_message(
+    app: &AppHandle,
     _browser: &mut Browser,
     frame: &mut Frame,
     message: &ProcessMessage,
-    router: &IpcRouter,
     browser_id: Option<BrowserId>,
 ) -> bool {
     let name: CefString = (&message.name()).into();
@@ -53,5 +53,6 @@ pub fn handle_ipc_message(
         url_origin,
     };
 
-    router.route_browser(frame, &envelope, payload, ctx)
+    app.router()
+        .route_browser(app, frame, &envelope, payload, ctx)
 }

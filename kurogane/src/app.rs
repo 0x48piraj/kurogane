@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use cef::*;
 use crate::app::resolver::ResolvedFrontend;
 use crate::ipc::{
-    AppCell, IpcRouter, RequestResponseSubsystem, EventSubsystem, StreamSubsystem, StreamFactory,
-    Responder, BinaryResponder, SyncHandler, AsyncHandler, IpcContext, IpcError,
+    IpcRouter, RequestResponseSubsystem, EventSubsystem, StreamSubsystem, StreamFactory, Responder,
+    BinaryResponder, SyncHandler, AsyncHandler, IpcError,
 };
 use crate::runtime::{AppHandle, AppInstance};
 use crate::error::{ConfigError, RuntimeError};
@@ -102,8 +102,9 @@ impl SecondInstance {
     }
 }
 
-/// What [`App::on_second_instance`] stores; the closure, with the handle bound.
-pub(crate) type SecondInstanceHandler = Arc<dyn Fn(&SecondInstance) + Send + Sync>;
+/// What [`App::on_second_instance`] stores. The browser process handler passes
+/// its handle to each call.
+pub(crate) type SecondInstanceHandler = Arc<dyn Fn(&SecondInstance, &AppHandle) + Send + Sync>;
 
 /// Describes where the frontend comes from
 pub(crate) enum Source {
@@ -239,8 +240,6 @@ pub struct App {
     stream_handlers: HashMap<String, StreamFactory>,
 
     acl: crate::acl::CommandAcl,
-    cell: AppCell,
-    resolver: Option<crate::ipc::handle_cell::AppCellResolver>,
 
     profile_id: Option<String>,
     sandbox_mode: SandboxMode,
@@ -273,15 +272,12 @@ impl App {
     }
 
     fn with_source(source: Source) -> Self {
-        let (cell, resolver) = AppCell::new();
         Self {
             source,
             sync_handlers: HashMap::new(),
             async_handlers: HashMap::new(),
             stream_handlers: HashMap::new(),
             acl: crate::acl::CommandAcl::new(),
-            cell,
-            resolver: Some(resolver),
 
             profile_id: None,
             sandbox_mode: SandboxMode::default(),
@@ -505,13 +501,20 @@ impl App {
     /// Registers a synchronous JSON command handler.
     ///
     /// The closure receives the deserialized request and a reference to the
-    /// shared runtime handle. Use the handle to broadcast events, spawn
-    /// background work, or query runtime state.
+    /// shared runtime handle. Use the handle to broadcast events, query what
+    /// is open or end the application.
     ///
     /// Ignore it with _ when not needed.
     ///
     /// A name that is already registered is a configuration error, reported
     /// by [`App::build`].
+    ///
+    /// # Threads
+    ///
+    /// The closure runs on the UI thread, which also runs every window and
+    /// receives every message from the page: they all wait until it returns,
+    /// and CEF says not to block this thread. For slow work use
+    /// [`App::async_command`] and resolve its responder from another thread.
     pub fn command<Req, Res, F>(mut self, name: impl Into<String>, f: F) -> Self
     where
         Req: serde::de::DeserializeOwned + Send + 'static,
@@ -520,17 +523,16 @@ impl App {
     {
         let name = name.into();
         self.guard_unique_name(&name);
-        let cell = self.cell.clone();
         self.sync_handlers.insert(
             name,
-            Box::new(move |data: &[u8], _ctx: IpcContext| {
+            Box::new(move |data: &[u8], app: &AppHandle, _ctx| {
                 let req: Req = if data.is_empty() {
                     serde_json::from_value(Value::Null)
                 } else {
                     serde_json::from_slice(data)
                 }
                 .map_err(IpcError::from)?;
-                let res = f(req, cell.get())?;
+                let res = f(req, app)?;
                 serde_json::to_vec(&res).map_err(IpcError::from)
             }),
         );
@@ -544,6 +546,11 @@ impl App {
     ///
     /// A name that is already registered is a configuration error, reported
     /// by [`App::build`].
+    ///
+    /// # Threads
+    ///
+    /// The closure runs on the UI thread, as for [`App::command`], so it should
+    /// return promptly; the [`Responder`] may be resolved from any thread.
     pub fn async_command<Req, Res, F>(mut self, name: impl Into<String>, f: F) -> Self
     where
         Req: serde::de::DeserializeOwned + Send + 'static,
@@ -552,11 +559,10 @@ impl App {
     {
         let name = name.into();
         self.guard_unique_name(&name);
-        let cell = self.cell.clone();
         self.async_handlers.insert(
             name,
             Box::new(
-                move |data: &[u8], responder: BinaryResponder, _ctx: IpcContext| {
+                move |data: &[u8], responder: BinaryResponder, app: &AppHandle, _ctx| {
                     let req: Req = match if data.is_empty() {
                         serde_json::from_value(Value::Null)
                     } else {
@@ -570,7 +576,7 @@ impl App {
                     };
                     let responder =
                         responder.map(|res: Res| serde_json::to_vec(&res).map_err(IpcError::from));
-                    f(req, responder, cell.get())
+                    f(req, responder, app)
                 },
             ),
         );
@@ -583,16 +589,19 @@ impl App {
     ///
     /// A name that is already registered is a configuration error, reported
     /// by [`App::build`].
+    ///
+    /// # Threads
+    ///
+    /// As for [`App::command`]; for slow work use [`App::async_binary_command`].
     pub fn binary_command<F>(mut self, name: impl Into<String>, f: F) -> Self
     where
         F: Fn(&[u8], &AppHandle) -> Result<Vec<u8>, IpcError> + Send + Sync + 'static,
     {
         let name = name.into();
         self.guard_unique_name(&name);
-        let cell = self.cell.clone();
         self.sync_handlers.insert(
             name,
-            Box::new(move |data: &[u8], _ctx: IpcContext| f(data, cell.get())),
+            Box::new(move |data: &[u8], app: &AppHandle, _ctx| f(data, app)),
         );
         self
     }
@@ -604,18 +613,21 @@ impl App {
     ///
     /// A name that is already registered is a configuration error, reported
     /// by [`App::build`].
+    ///
+    /// # Threads
+    ///
+    /// As for [`App::async_command`].
     pub fn async_binary_command<F>(mut self, name: impl Into<String>, f: F) -> Self
     where
         F: Fn(Vec<u8>, BinaryResponder, &AppHandle) + Send + Sync + 'static,
     {
         let name = name.into();
         self.guard_unique_name(&name);
-        let cell = self.cell.clone();
         self.async_handlers.insert(
             name,
             Box::new(
-                move |data: &[u8], responder: BinaryResponder, _ctx: IpcContext| {
-                    f(data.to_vec(), responder, cell.get())
+                move |data: &[u8], responder: BinaryResponder, app: &AppHandle, _ctx| {
+                    f(data.to_vec(), responder, app)
                 },
             ),
         );
@@ -630,26 +642,33 @@ impl App {
     ///
     /// A name that is already registered is a configuration error, reported
     /// by [`App::build`].
-    pub fn stream<F, H>(mut self, name: impl Into<String>, factory: F) -> Self
+    ///
+    /// # Threads
+    ///
+    /// The factory and every [`StreamHandler`](crate::ipc::StreamHandler)
+    /// callback run on the UI thread, as for [`App::command`], so they should
+    /// return promptly. A [`StreamResponder`](crate::ipc::StreamResponder)
+    /// may be used from any thread.
+    pub fn stream<F, H>(self, name: impl Into<String>, factory: F) -> Self
     where
         F: Fn() -> H + Send + Sync + 'static,
         H: crate::ipc::StreamHandler + 'static,
     {
-        let name = name.into();
-        self.guard_unique_name(&name);
-        self.stream_handlers
-            .insert(name, Box::new(move || Box::new(factory())));
-        self
+        self.stream_h(name, move |_: &AppHandle| factory())
     }
 
     /// Registers a stream handler whose factory receives &AppHandle.
     ///
-    /// Identical to stream(Self::stream) but the factory receives a
-    /// reference to the shared runtime handle, useful for broadcasting events
-    /// or querying runtime state from within stream lifecycle callbacks.
+    /// Like [`App::stream`], but the factory receives a reference to the
+    /// shared runtime handle, useful for broadcasting events or querying
+    /// runtime state from within stream lifecycle callbacks.
     ///
     /// A name that is already registered is a configuration error, reported
     /// by [`App::build`].
+    ///
+    /// # Threads
+    ///
+    /// As for [`App::stream`].
     pub fn stream_h<F, H>(mut self, name: impl Into<String>, factory: F) -> Self
     where
         F: Fn(&AppHandle) -> H + Send + Sync + 'static,
@@ -657,10 +676,9 @@ impl App {
     {
         let name = name.into();
         self.guard_unique_name(&name);
-        let cell = self.cell.clone();
         self.stream_handlers.insert(
             name,
-            Box::new(move || Box::new(factory(cell.get())) as Box<dyn crate::ipc::StreamHandler>),
+            Box::new(move |app: &AppHandle| Box::new(factory(app))),
         );
         self
     }
@@ -693,10 +711,7 @@ impl App {
     where
         F: Fn(&SecondInstance, &AppHandle) + Send + Sync + 'static,
     {
-        let cell = self.cell.clone();
-        self.on_second_instance = Some(Arc::new(move |launch: &SecondInstance| {
-            f(launch, cell.get())
-        }));
+        self.on_second_instance = Some(Arc::new(f));
         self
     }
 
@@ -775,7 +790,6 @@ impl App {
     /// Checks the configuration, then starts the runtime in `mode`.
     fn launch(mut self, mode: RuntimeMode) -> Result<AppInstance, RuntimeError> {
         self.check_configuration()?;
-        let resolver = self.resolver.take().expect("an App starts only once");
 
         let Self {
             source,
@@ -824,10 +838,7 @@ impl App {
             scheme_handlers,
         };
 
-        let instance = crate::runtime::start(spec, router)?;
-        // Populated before the message loop starts
-        resolver.resolve(instance.handle().clone());
-        Ok(instance)
+        crate::runtime::start(spec, router)
     }
 
     /// Start the application and run the message loop.
@@ -873,6 +884,81 @@ mod tests {
 
     fn async_noop(_: Value, r: Responder<Value>, _: &AppHandle) {
         r.resolve(Ok(Value::Null));
+    }
+
+    /// What a handler receives with a message from `app://app`.
+    fn context() -> crate::ipc::IpcContext {
+        crate::ipc::IpcContext {
+            browser_id: None,
+            frame: crate::ipc::FrameId::new("test-frame"),
+            origin: origin("app://app"),
+            url_origin: origin("app://app"),
+        }
+    }
+
+    /// Whether `call` ended the application of the handle it was given. With
+    /// nothing open, a shutdown ends it at once.
+    fn ends(call: impl FnOnce(&AppHandle)) -> bool {
+        let handle = AppHandle::detached();
+        call(&handle);
+        handle.should_shutdown()
+    }
+
+    fn ignored() -> BinaryResponder {
+        BinaryResponder::new(Box::new(|_| {}))
+    }
+
+    #[test]
+    fn handlers_use_the_handle_they_are_called_with() {
+        let app = App::new("./dist")
+            .command("json", |_: Value, handle: &AppHandle| {
+                handle.shutdown();
+                Ok(Value::Null)
+            })
+            .binary_command("bytes", |_: &[u8], handle: &AppHandle| {
+                handle.shutdown();
+                Ok(Vec::new())
+            })
+            .async_command(
+                "json-later",
+                |_: Value, _: Responder<Value>, handle: &AppHandle| handle.shutdown(),
+            )
+            .async_binary_command(
+                "bytes-later",
+                |_: Vec<u8>, _: BinaryResponder, handle: &AppHandle| handle.shutdown(),
+            )
+            .stream_h("stream", |handle: &AppHandle| {
+                handle.shutdown();
+                NoopStream
+            })
+            .on_second_instance(|_: &SecondInstance, handle: &AppHandle| handle.shutdown());
+
+        assert!(ends(|h| {
+            app.sync_handlers["json"](b"", h, context()).unwrap();
+        }));
+        assert!(ends(|h| {
+            app.sync_handlers["bytes"](b"", h, context()).unwrap();
+        }));
+        assert!(ends(|h| app.async_handlers["json-later"](
+            b"",
+            ignored(),
+            h,
+            context()
+        )));
+        assert!(ends(|h| app.async_handlers["bytes-later"](
+            b"",
+            ignored(),
+            h,
+            context()
+        )));
+        assert!(ends(|h| drop(app.stream_handlers["stream"](h))));
+        let launch = SecondInstance {
+            args: Vec::new(),
+            switches: HashMap::new(),
+            working_dir: None,
+        };
+        let hook = app.on_second_instance.as_ref().expect("registered");
+        assert!(ends(|h| hook(&launch, h)));
     }
 
     #[test]

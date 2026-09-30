@@ -16,7 +16,6 @@ pub(crate) mod request_response;
 pub(crate) mod router;
 pub(crate) mod browser;
 pub(crate) mod renderer;
-pub(crate) mod handle_cell;
 
 // Public API: the types handlers see.
 pub use browser_state::{ErrorCode, IpcError};
@@ -32,4 +31,3 @@ pub(crate) use router::IpcRouter;
 pub(crate) use request_response::{RequestResponseSubsystem, SyncHandler, AsyncHandler};
 pub(crate) use event::EventSubsystem;
 pub(crate) use stream::{StreamSubsystem, StreamFactory};
-pub(crate) use handle_cell::AppCell;

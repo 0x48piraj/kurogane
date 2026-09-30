@@ -14,6 +14,7 @@ use crate::ipc::envelope::*;
 use crate::ipc::request_response::RequestResponseSubsystem;
 use crate::ipc::event::EventSubsystem;
 use crate::ipc::stream::{StreamResponder, StreamSubsystem};
+use crate::runtime::AppHandle;
 
 /// Top-level IPC router that owns all subsystems.
 pub struct IpcRouter {
@@ -93,6 +94,7 @@ impl IpcRouter {
     /// Route a message received from the renderer (browser-side dispatch).
     pub fn route_browser(
         &self,
+        app: &AppHandle,
         frame: &mut Frame,
         envelope: &Envelope,
         payload: &[u8],
@@ -104,9 +106,11 @@ impl IpcRouter {
         match envelope.subsystem {
             SUB_RPC => self
                 .request_response
-                .handle_browser(frame, envelope, payload, ctx),
+                .handle_browser(app, frame, envelope, payload, ctx),
             SUB_EVENT => self.event.handle_browser(frame, envelope, payload, ctx),
-            SUB_STREAM => self.stream.handle_browser(frame, envelope, payload, ctx),
+            SUB_STREAM => self
+                .stream
+                .handle_browser(app, frame, envelope, payload, ctx),
             _ => {
                 debug!("[Router Browser] unknown subsystem {}", envelope.subsystem);
                 false

@@ -2,7 +2,7 @@
 
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, Weak};
 
 use kurogane_layout::detect_cef_root_with_version;
 use objc2::{
@@ -17,15 +17,17 @@ use objc2_app_kit::{
 
 use crate::error::RuntimeError;
 use crate::platform::macos::application::SimpleApplication;
-use crate::runtime::AppHandle;
+use crate::runtime::{AppHandle, RuntimeServices};
 
-/// The application, for the Objective-C `terminate:` override.
-static APP: OnceLock<AppHandle> = OnceLock::new();
+/// The application, for the Objective-C `terminate:` override. Held weakly:
+/// the static lasts as long as the process and must not keep the
+/// application's state alive once it has ended.
+static APP: OnceLock<Weak<RuntimeServices>> = OnceLock::new();
 
 /// Registers the application for the `terminate:` override, once CEF has
 /// initialized.
-pub fn set_app(app: AppHandle) {
-    let first = APP.set(app).is_ok();
+pub fn set_app(app: &AppHandle) {
+    let first = APP.set(app.downgrade()).is_ok();
     debug_assert!(first, "CEF initializes once per process");
 }
 
@@ -185,7 +187,7 @@ mod application {
     use objc2_app_kit::{NSApplication, NSEvent};
 
     use super::APP;
-    use crate::runtime::Close;
+    use crate::runtime::{AppHandle, Close};
 
     /// CEF-compatible `NSApplication` subclass.
     #[derive(Default)]
@@ -222,7 +224,8 @@ mod application {
             unsafe fn terminate(&self, _sender: &AnyObject) {
                 // Unload handlers still run, as for a window closed by hand.
                 // This is the main thread, CEF's UI thread, so it closes at once
-                if let Some(app) = APP.get() {
+                // Nothing to close once the application has ended
+                if let Some(app) = APP.get().and_then(AppHandle::upgrade) {
                     app.request(Close::Everything { force: false });
                 }
             }

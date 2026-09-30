@@ -1,6 +1,6 @@
 use cef::{args::Args, sys::cef_window_handle_t, *};
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::cef_app::KuroganeApp;
@@ -202,7 +202,11 @@ fn execute_subprocesses(args: &Args, app: &mut App, sandbox_info: *mut u8) {
 }
 
 /// Closes every browser on Ctrl+C, as closing the windows by hand would.
-fn install_ctrlc_handler(app: AppHandle) {
+///
+/// ctrlc keeps the handler until the process exits, so it holds the runtime
+/// weakly: it must not keep the application's state alive once it has ended.
+fn install_ctrlc_handler(app: &AppHandle) {
+    let runtime = app.downgrade();
     // ctrlc runs the handler on its one "ctrl-c" thread, one signal at a
     // time, so a plain flag is enough
     let mut quitting = false;
@@ -218,8 +222,11 @@ fn install_ctrlc_handler(app: AppHandle) {
 
         debug!("Scheduling browser shutdown on UI thread");
 
-        // Unload handlers still run, as for a window closed by hand
-        app.request(Close::Everything { force: false });
+        // Unload handlers still run, as for a window closed by hand; nothing
+        // to close once the application has ended
+        if let Some(app) = AppHandle::upgrade(&runtime) {
+            app.request(Close::Everything { force: false });
+        }
     });
 
     // A host that installed its own handler keeps it; the app still closes
@@ -335,7 +342,9 @@ fn close(app: &AppHandle, what: Close) {
 }
 
 /// What the running application shares between CEF's callbacks, tasks and
-/// the application's handles, all of which hold it through an [`AppHandle`].
+/// the application's handles, which hold it through an [`AppHandle`]. The
+/// Ctrl+C handler and the macOS `terminate:` override last as long as the
+/// process, so they hold it weakly: it goes with the last handle.
 pub(crate) struct RuntimeServices {
     router: IpcRouter,
     registry: Mutex<Registry>,
@@ -490,6 +499,18 @@ impl AppHandle {
     /// The IPC router.
     pub(crate) fn router(&self) -> &IpcRouter {
         &self.services.router
+    }
+
+    /// The runtime held weakly, for what lasts as long as the process: the
+    /// Ctrl+C handler and the macOS `terminate:` override.
+    pub(crate) fn downgrade(&self) -> Weak<RuntimeServices> {
+        Arc::downgrade(&self.services)
+    }
+
+    /// The handle of a runtime held weakly, while anything else still holds
+    /// it.
+    pub(crate) fn upgrade(runtime: &Weak<RuntimeServices>) -> Option<Self> {
+        runtime.upgrade().map(|services| Self { services })
     }
 
     /// Ends the application once no browser is open: CEF asks an application
@@ -1234,7 +1255,7 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
 
     // Set once CEF runs, so a start that fails leaves it unset
     #[cfg(target_os = "macos")]
-    crate::platform::macos::set_app(handle.clone());
+    crate::platform::macos::set_app(&handle);
 
     #[cfg(target_os = "macos")]
     crate::platform::macos::setup_app_delegate();
@@ -1243,7 +1264,7 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
     // In embedded mode the host application manages its own lifecycle
     if spec.mode == RuntimeMode::Views {
         debug!("Installing shutdown handler");
-        install_ctrlc_handler(handle.clone());
+        install_ctrlc_handler(&handle);
     }
 
     Ok(handle)

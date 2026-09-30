@@ -127,7 +127,8 @@ wrap_browser_process_handler! {
             if let (Some(on_second_instance), Some(command_line)) =
                 (&self.spec.on_second_instance, command_line)
             {
-                on_second_instance(&SecondInstance::from_launch(command_line, current_directory));
+                let launch = SecondInstance::from_launch(command_line, current_directory);
+                on_second_instance(&launch, &self.app);
             }
 
             1

@@ -72,7 +72,7 @@ pub(crate) fn handlers(filesystem: Filesystem) -> impl Iterator<Item = (FsComman
 }
 
 fn handler(worker: Arc<Worker>, command: FsCommand) -> AsyncHandler {
-    Box::new(move |data, responder, ctx| {
+    Box::new(move |data, responder, _app, ctx| {
         // Refused requests are answered here, before anything is copied
         let permit = match worker.admit(command, data, &ctx.origin) {
             Ok(permit) => permit,
@@ -432,6 +432,7 @@ mod tests {
         use crate::acl::Origin;
         use crate::capability::policy::FsAccess;
         use crate::ipc::{BinaryResponder, FrameId, IpcContext};
+        use crate::runtime::AppHandle;
 
         fn notes(access: FsAccess) -> (tempfile::TempDir, PathBuf, Vec<(FsCommand, AsyncHandler)>) {
             let tmp = tempfile::tempdir().unwrap();
@@ -470,7 +471,7 @@ mod tests {
             let responder = BinaryResponder::new(Box::new(move |r| {
                 let _ = tx.send((std::thread::current().name().map(str::to_owned), r));
             }));
-            handler(request, responder, ctx(origin));
+            handler(request, responder, &AppHandle::detached(), ctx(origin));
             rx.recv_timeout(Duration::from_secs(10))
                 .expect("handler resolved")
         }
@@ -526,6 +527,7 @@ mod tests {
             let (_tmp, _notes, handlers) = notes(FsAccess::ALL);
             let find = |command| &handlers.iter().find(|(c, _)| *c == command).unwrap().1;
             let (tx, rx) = std::sync::mpsc::channel();
+            let app = AppHandle::detached();
             let requests = [
                 (FsCommand::WriteFile, frame("order.txt", b"first")),
                 (FsCommand::ReadFile, b"order.txt".to_vec()),
@@ -535,7 +537,7 @@ mod tests {
                 let responder = BinaryResponder::new(Box::new(move |r| {
                     let _ = tx.send((std::thread::current().name().map(str::to_owned), r));
                 }));
-                find(command)(&request, responder, ctx("app://notes"));
+                find(command)(&request, responder, &app, ctx("app://notes"));
             }
             let (thread, written) = rx.recv_timeout(Duration::from_secs(10)).unwrap();
             assert!(written.is_ok());

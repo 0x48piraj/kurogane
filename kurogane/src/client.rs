@@ -230,7 +230,7 @@ wrap_client! {
                     let reg = self.app.registry();
                     reg.browsers.find_id_by_browser(browser)
                 };
-                crate::ipc::handle_ipc_message(browser, frame, msg, self.app.router(), browser_id)
+                crate::ipc::handle_ipc_message(&self.app, browser, frame, msg, browser_id)
             }));
             match handled {
                 Ok(true) => 1,

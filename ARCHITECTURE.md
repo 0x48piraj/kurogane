@@ -253,7 +253,7 @@ Chromium enforces thread affinity:
 | IO       | Resource loading |
 | Renderer | V8 execution     |
 
-Kurogane keeps these threads non-blocking and moves longer-running work to worker pools when needed.
+Kurogane reads `app://` files on a CEF worker thread and runs `fs.*` operations on a worker thread of its own (inline only if that thread cannot be started), so neither holds up the UI or IO thread. The application's handlers run on the UI thread: commands (including the body of an async command), stream factories and stream handlers, and the second-instance hook. Every window waits until one returns, so slow work belongs on a thread of the application's own; a `Responder` may be resolved, and a `StreamResponder` used, from any thread.
 
 ```mermaid
 flowchart LR
@@ -265,9 +265,8 @@ flowchart LR
 
     A -.-> D
     B -.-> D
-    C -.-> D
 
-    N["CEF threads stay non-blocking"]
+    N["Kurogane's own work stays off the UI and IO threads"]
 
     D --- N
 

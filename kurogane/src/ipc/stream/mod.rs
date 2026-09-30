@@ -17,6 +17,7 @@ use crate::ipc::browser_state::still_addressed;
 use crate::ipc::envelope::*;
 use crate::ipc::{ErrorCode, FrameId, IpcContext};
 use crate::ipc::transport::message::build_message;
+use crate::runtime::AppHandle;
 
 /// Responder for sending data from a browser-side stream handler to the renderer.
 ///
@@ -145,6 +146,13 @@ impl StreamResponder {
 ///
 /// on_chunk borrows the responder (the stream continues).
 /// on_end takes ownership (the stream is consumed).
+///
+/// # Threads
+///
+/// Every callback runs on the UI thread, which also runs every window and
+/// receives every message from the page, so return promptly: CEF says not
+/// to block this thread. The responder may be cloned and used from any
+/// thread.
 pub trait StreamHandler: Send + 'static {
     /// Called when the stream opens.
     fn on_open(&mut self, metadata: &str, responder: &StreamResponder) -> Result<(), String> {
@@ -168,7 +176,7 @@ pub trait StreamHandler: Send + 'static {
 }
 
 /// Factory type: creates a new handler instance per stream.
-pub type StreamFactory = Box<dyn Fn() -> Box<dyn StreamHandler> + Send + Sync>;
+pub type StreamFactory = Box<dyn Fn(&AppHandle) -> Box<dyn StreamHandler> + Send + Sync>;
 
 pub mod browser;
 pub mod renderer;

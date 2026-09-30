@@ -11,9 +11,11 @@ use crate::ipc::envelope::*;
 use crate::ipc::pending::{PendingEntry, PendingKey, PendingMap};
 use crate::ipc::transport::message::build_message;
 use crate::ipc::responder::Responder;
+use crate::runtime::AppHandle;
 
-pub type SyncHandler = Box<dyn Fn(&[u8], IpcContext) -> Result<Vec<u8>, IpcError> + Send + Sync>;
-pub type AsyncHandler = Box<dyn Fn(&[u8], BinaryResponder, IpcContext) + Send + Sync>;
+pub type SyncHandler =
+    Box<dyn Fn(&[u8], &AppHandle, IpcContext) -> Result<Vec<u8>, IpcError> + Send + Sync>;
+pub type AsyncHandler = Box<dyn Fn(&[u8], BinaryResponder, &AppHandle, IpcContext) + Send + Sync>;
 pub type BinaryResponder = Responder<Vec<u8>>;
 
 /// Unified request/response subsystem handling both JSON and Binary IPC.
@@ -44,13 +46,14 @@ impl RequestResponseSubsystem {
     /// Handle a request/response message arriving from the renderer (browser-side dispatch).
     pub fn handle_browser(
         &self,
+        app: &AppHandle,
         frame: &mut Frame,
         envelope: &Envelope,
         payload: &[u8],
         ctx: IpcContext,
     ) -> bool {
         match envelope.opcode {
-            RPC_INVOKE => self.on_invoke(frame, envelope, payload, ctx),
+            RPC_INVOKE => self.on_invoke(app, frame, envelope, payload, ctx),
             RPC_CANCEL => self.on_cancel(envelope, ctx),
             _ => {
                 debug!(
@@ -76,6 +79,7 @@ impl RequestResponseSubsystem {
 
     fn on_invoke(
         &self,
+        app: &AppHandle,
         frame: &mut Frame,
         envelope: &Envelope,
         payload: &[u8],
@@ -123,9 +127,9 @@ impl RequestResponseSubsystem {
                 aborted,
             );
 
-            self.dispatch_async(cmd, data, responder, ctx);
+            self.dispatch_async(app, cmd, data, responder, ctx);
         } else {
-            let result = catch_unwind(AssertUnwindSafe(|| self.dispatch(cmd, data, ctx)));
+            let result = catch_unwind(AssertUnwindSafe(|| self.dispatch(app, cmd, data, ctx)));
 
             let response = match result {
                 Ok(res) => res,
@@ -157,15 +161,22 @@ impl RequestResponseSubsystem {
         true
     }
 
-    fn dispatch(&self, command: &str, data: &[u8], ctx: IpcContext) -> Result<Vec<u8>, IpcError> {
+    fn dispatch(
+        &self,
+        app: &AppHandle,
+        command: &str,
+        data: &[u8],
+        ctx: IpcContext,
+    ) -> Result<Vec<u8>, IpcError> {
         match self.sync_handlers.get(command) {
-            Some(h) => h(data, ctx),
+            Some(h) => h(data, app, ctx),
             None => Err(IpcError::new(format!("unknown command '{command}'"))),
         }
     }
 
     fn dispatch_async(
         &self,
+        app: &AppHandle,
         command: &str,
         data: &[u8],
         responder: BinaryResponder,
@@ -174,7 +185,7 @@ impl RequestResponseSubsystem {
         if let Some(handler) = self.async_handlers.get(command) {
             // A panicking handler drops its responder, which rejects the
             // request; unwinding must not cross the CEF callback
-            if catch_unwind(AssertUnwindSafe(|| handler(data, responder, ctx))).is_err() {
+            if catch_unwind(AssertUnwindSafe(|| handler(data, responder, app, ctx))).is_err() {
                 debug!(
                     "[RequestResponse Browser] async handler '{}' panicked",
                     command

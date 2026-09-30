@@ -22,11 +22,13 @@ use crate::ipc::envelope::{
     Envelope, STREAM_OPEN, STREAM_DATA, STREAM_END, STREAM_ERROR, STREAM_CANCEL, decode_cmd_payload,
 };
 use crate::ipc::stream::{StreamEntry, StreamKey, StreamResponder, StreamSubsystem};
+use crate::runtime::AppHandle;
 
 impl StreamSubsystem {
     /// Handle a stream message arriving from the renderer (browser-side dispatch).
     pub fn handle_browser(
         &self,
+        app: &AppHandle,
         frame: &mut Frame,
         envelope: &Envelope,
         payload: &[u8],
@@ -34,7 +36,7 @@ impl StreamSubsystem {
     ) -> bool {
         let key = StreamKey::new(&ctx, envelope.correlation_id);
         match envelope.opcode {
-            STREAM_OPEN => self.on_open(frame, key, payload, ctx),
+            STREAM_OPEN => self.on_open(app, frame, key, payload, ctx),
             STREAM_DATA => self.on_data(key, payload),
             STREAM_END => self.on_end(key, payload),
             STREAM_ERROR => self.on_error(key, payload),
@@ -53,7 +55,14 @@ impl StreamSubsystem {
         true
     }
 
-    fn on_open(&self, frame: &mut Frame, key: StreamKey, payload: &[u8], ctx: IpcContext) -> bool {
+    fn on_open(
+        &self,
+        app: &AppHandle,
+        frame: &mut Frame,
+        key: StreamKey,
+        payload: &[u8],
+        ctx: IpcContext,
+    ) -> bool {
         let stream_id = key.id;
         let closed = Arc::new(AtomicBool::new(false));
         let responder = StreamResponder::bound(
@@ -99,7 +108,7 @@ impl StreamSubsystem {
             }
         };
 
-        let Ok(mut handler) = catch_unwind(AssertUnwindSafe(factory)) else {
+        let Ok(mut handler) = catch_unwind(AssertUnwindSafe(|| factory(app))) else {
             debug!("[Stream Browser] factory '{}' panicked", handler_name);
             let _ = responder.error("handler panicked");
             return false;
