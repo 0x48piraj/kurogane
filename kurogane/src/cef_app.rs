@@ -11,6 +11,7 @@ use crate::chromium_flags::ChromiumFlags;
 use crate::credentials::apply_credential_flags;
 use crate::gpu::apply_gpu_flags;
 use crate::sandbox::apply_sandbox_flags;
+use crate::platform::embed::apply_embedding_flags;
 
 wrap_app! {
     pub struct KuroganeApp {
@@ -47,6 +48,7 @@ wrap_app! {
             apply_sandbox_flags(&mut flags, self.spec.sandbox_mode);
             apply_gpu_flags(&mut flags, self.spec.gpu_mode, self.spec.sandbox_mode);
             apply_credential_flags(&mut flags, self.spec.credential_storage);
+            apply_embedding_flags(&mut flags, self.spec.mode);
 
             // Apply user overrides
             flags.extend_user_flags(&self.spec.chromium_flags);

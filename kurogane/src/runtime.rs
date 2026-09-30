@@ -991,6 +991,9 @@ impl BrowserHandle {
 /// threads.
 pub struct AppInstance {
     handle: AppHandle,
+    /// CEF runs its external message pump; the application has a scheduler
+    #[cfg(target_os = "linux")]
+    external_pump: bool,
     _ui_thread: PhantomData<*const ()>,
 }
 
@@ -1008,6 +1011,13 @@ impl AppInstance {
     /// Note: Kurogane currently assumes pump calls are non-reentrant and
     /// originate from a single UI thread.
     pub fn pump(&self) {
+        // Under the external pump nothing else dispatches Chromium's X11 and
+        // Wayland events on Linux. Native events first, then the work they
+        // post, as Chromium's own glib pump orders them
+        #[cfg(target_os = "linux")]
+        if self.external_pump {
+            crate::platform::linux::dispatch_glib_events();
+        }
         do_message_loop_work();
     }
 
@@ -1281,8 +1291,12 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
 /// In [`RuntimeMode::Embedded`] the host application owns window creation
 /// and lifecycle, so CEF Views creates no window.
 pub(crate) fn start(spec: RuntimeSpec, router: IpcRouter) -> Result<AppInstance, RuntimeError> {
+    #[cfg(target_os = "linux")]
+    let external_pump = spec.scheduler.is_some();
     Ok(AppInstance {
         handle: initialize_cef(spec, router)?,
+        #[cfg(target_os = "linux")]
+        external_pump,
         _ui_thread: PhantomData,
     })
 }

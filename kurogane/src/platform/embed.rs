@@ -21,13 +21,30 @@
 use cef::sys::cef_window_handle_t;
 
 use crate::browser_registry::BrowserId;
+use crate::chromium_flags::ChromiumFlags;
 use crate::runtime::BrowserBounds;
+use crate::spec::RuntimeMode;
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) use close::destroy_child_window_later;
 
 #[cfg(target_os = "macos")]
 pub(crate) use imp::{forget_view, remember_view};
+
+/// Runs Chromium on X11 in an embedded application on Linux.
+///
+/// CEF parents an embedded browser to an X11 window there, and Chromium
+/// draws into it only on its X11 backend. In a Wayland session Chromium picks
+/// Wayland by itself: the page goes to a surface of its own beside the host's
+/// window, and the browser's close never completes.
+/// `App::chromium_flag_with_value("ozone-platform", ..)` still overrides this;
+/// as with every switch the runtime sets, the process's own command line does
+/// not.
+pub(crate) fn apply_embedding_flags(flags: &mut ChromiumFlags, mode: RuntimeMode) {
+    if cfg!(target_os = "linux") && mode == RuntimeMode::Embedded {
+        flags.set_with_value("ozone-platform", "x11");
+    }
+}
 
 /// Moves and resizes browser `id`'s window, `handle`, inside its parent, in
 /// the parent's coordinates, as CEF placed it at creation.
@@ -252,5 +269,38 @@ mod imp {
         frame.size.width = bounds.width.into();
         frame.size.height = bounds.height.into();
         view.setFrame(frame);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chromium_flags::ChromiumFlag;
+
+    #[test]
+    fn only_an_embedded_application_on_linux_asks_for_x11() {
+        let mut views = ChromiumFlags::default();
+        apply_embedding_flags(&mut views, RuntimeMode::Views);
+        assert_eq!(views.to_string(), "");
+
+        let mut embedded = ChromiumFlags::default();
+        apply_embedding_flags(&mut embedded, RuntimeMode::Embedded);
+        let expected = if cfg!(target_os = "linux") {
+            "--ozone-platform=x11\n"
+        } else {
+            ""
+        };
+        assert_eq!(embedded.to_string(), expected);
+    }
+
+    #[test]
+    fn a_user_ozone_platform_overrides_it() {
+        let mut flags = ChromiumFlags::default();
+        apply_embedding_flags(&mut flags, RuntimeMode::Embedded);
+        flags.extend_user_flags(&[ChromiumFlag::WithValue(
+            "--ozone-platform".into(),
+            "wayland".into(),
+        )]);
+        assert_eq!(flags.to_string(), "--ozone-platform=wayland\n");
     }
 }
