@@ -7,7 +7,6 @@ pub(crate) mod renderer_registry;
 pub(crate) mod renderer_state;
 pub(crate) mod pending;
 pub(crate) mod rpc;
-pub(crate) mod binary_buffer;
 pub(crate) mod utils;
 pub(crate) mod responder;
 pub(crate) mod event;

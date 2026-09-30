@@ -26,7 +26,7 @@ Browser creation returns a browser handle. Close routing follows CEF's close pro
 
 ### Request/response IPC (RPC-style)
 
-Kurogane provides IPC as a direct Rust-to-Chromium communication bridge designed for high-throughput interaction between runtime and renderer processes. Messages are structured and low-overhead, designed for high-frequency interaction between runtime and frontend. Large payloads are routed through a zero-copy transfer path instead of serialized IPC, allowing efficient exchange of binary data without additional runtime layers.
+Kurogane provides IPC as a direct Rust-to-Chromium communication bridge designed for high-throughput interaction between runtime and renderer processes. Messages are structured and low-overhead, designed for high-frequency interaction between runtime and frontend. Large payloads travel through shared memory instead of serialized IPC, allowing efficient exchange of binary data without additional runtime layers. Both sides read a payload in place, except when renderers run in Chromium's sandbox: then the browser copies a renderer's payload out once, on arrival, since a compromised renderer could keep writing its side of the region. Unsandboxed, such a renderer already has the user's rights, and the copy would protect nothing.
 
 ### Runtime extensibility
 

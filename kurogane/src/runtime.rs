@@ -12,6 +12,7 @@ use crate::window_registry::{WindowId, WindowMetadata};
 use crate::window::{Placement, open_browser_window};
 use kurogane_layout::{DetectError, detect_cef_root_with_version, validate_cef_runtime, profile_dir};
 use crate::ipc::IpcRouter;
+use crate::ipc::transport::message::RendererSandbox;
 use crate::spec::{RuntimeMode, RuntimeSpec, SandboxMode};
 use crate::debug;
 
@@ -359,11 +360,18 @@ pub(crate) struct RuntimeServices {
     ended: AtomicBool,
     /// Set when AppInstance::shutdown begins
     cef_shut_down: AtomicBool,
+    /// Whether the renderers run in Chromium's sandbox, which decides
+    /// whether the browser copies their shared memory
+    renderer_sandbox: RendererSandbox,
 }
 
 impl RuntimeServices {
     /// Services with nothing open, whose UI thread is `ui_thread`.
-    fn new(router: IpcRouter, ui_thread: std::thread::ThreadId) -> Self {
+    fn new(
+        router: IpcRouter,
+        ui_thread: std::thread::ThreadId,
+        renderer_sandbox: RendererSandbox,
+    ) -> Self {
         Self {
             router,
             registry: Mutex::new(Registry::new()),
@@ -371,6 +379,7 @@ impl RuntimeServices {
             in_run_loop: AtomicBool::new(false),
             ended: AtomicBool::new(false),
             cef_shut_down: AtomicBool::new(false),
+            renderer_sandbox,
         }
     }
 }
@@ -499,6 +508,11 @@ impl AppHandle {
     /// The IPC router.
     pub(crate) fn router(&self) -> &IpcRouter {
         &self.services.router
+    }
+
+    /// Whether the renderers run in Chromium's sandbox.
+    pub(crate) fn renderer_sandbox(&self) -> RendererSandbox {
+        self.services.renderer_sandbox
     }
 
     /// The runtime held weakly, for what lasts as long as the process: the
@@ -731,7 +745,11 @@ impl AppHandle {
             crate::acl::CommandAcl::new(),
         );
         Self {
-            services: Arc::new(RuntimeServices::new(router, std::thread::current().id())),
+            services: Arc::new(RuntimeServices::new(
+                router,
+                std::thread::current().id(),
+                RendererSandbox::Sandboxed,
+            )),
         }
     }
 }
@@ -1221,7 +1239,11 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
     let args = Args::new();
 
     let handle = AppHandle {
-        services: Arc::new(RuntimeServices::new(router, ui_thread)),
+        services: Arc::new(RuntimeServices::new(
+            router,
+            ui_thread,
+            RendererSandbox::of(spec.sandbox_mode),
+        )),
     };
 
     // ONE app for ALL processes

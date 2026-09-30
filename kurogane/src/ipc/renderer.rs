@@ -9,7 +9,7 @@ use crate::app::ClientAppRendererDelegate;
 use crate::debug;
 use crate::ipc::browser_state::ErrorCode;
 use crate::ipc::envelope::*;
-use crate::ipc::transport::message::{build_message, build_message_parts, extract_message};
+use crate::ipc::transport::message::{build_message, build_message_parts, receive_from_browser};
 use crate::ipc::router;
 use crate::ipc::renderer_registry::StreamSink;
 use crate::ipc::renderer_state::state;
@@ -304,18 +304,15 @@ wrap_render_process_handler! {
                 return 0;
             };
 
-            let received = match extract_message(msg) {
-                Some(m) => m,
-                None => {
-                    debug!("[IPC Renderer] failed to extract message");
-                    return 1;
-                }
+            // SAFETY: the browser sent it: source_process was checked above
+            let Some(received) = (unsafe { receive_from_browser(msg) }) else {
+                debug!("[IPC Renderer] failed to extract message");
+                return 1;
             };
 
-            let (envelope, payload) = received.as_envelope_payload();
             // A panic must not unwind across this CEF callback
             let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                router::route_renderer(frame, &envelope, payload);
+                router::route_renderer(frame, &received.envelope(), received.payload());
             }));
             if routed.is_err() {
                 debug!("[IPC Renderer] dispatch panicked; message dropped");

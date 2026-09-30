@@ -1,48 +1,198 @@
-use std::sync::Arc;
-
 use cef::*;
 
 use crate::ipc::envelope::*;
-use crate::ipc::binary_buffer::{ShmBinary};
-use crate::ipc::binary_buffer::SharedBinary;
+use crate::spec::SandboxMode;
 
 /// Minimum message size for shared-memory transport.
 ///
 /// Smaller messages are sent inline.
 pub const SHM_THRESHOLD: usize = 16 * 1024;
 
-/// Message data received over the CEF transport.
+/// A message received over CEF: its envelope and its payload.
 ///
-/// Inline messages are decoded from CEF ListValue fields.
-/// Shared-memory messages retain their shared representation.
-pub enum ReceivedMessage {
-    /// Inline message data.
-    Inline {
-        envelope: Envelope,
-        payload: Vec<u8>,
-    },
-    /// Message data backed by shared memory with a validated envelope.
-    Shm {
-        envelope: Envelope,
-        binary: SharedBinary,
-    },
+/// Where the payload lives depends on who sent it. A renderer's message is
+/// copied ([`receive_from_renderer`]); the browser's may stay in its
+/// shared-memory region and be read in place ([`receive_from_browser`]).
+pub struct ReceivedMessage {
+    envelope: Envelope,
+    bytes: Bytes,
 }
 
-impl ReceivedMessage {
-    /// Returns the decoded envelope and a reference to the payload bytes.
-    pub fn as_envelope_payload(&self) -> (Envelope, &[u8]) {
-        match self {
-            Self::Inline { envelope, payload } => (*envelope, payload.as_slice()),
-            Self::Shm { envelope, binary } => (*envelope, &binary.data()[ENVELOPE_SIZE..]),
+/// Private, so that only the receive functions decide which region stays in
+/// place: one the browser sent, or an unsandboxed renderer's.
+enum Bytes {
+    /// Inline ListValue data, or a region copied out of shared memory.
+    Owned(Vec<u8>),
+    /// A region at least an envelope long, read in place.
+    Shared(SharedMemoryRegion),
+}
+
+/// Whether the renderers run in Chromium's sandbox, which decides whether
+/// the browser copies their shared memory ([`receive_from_renderer`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RendererSandbox {
+    /// A renderer is a security boundary: its shared memory is copied.
+    Sandboxed,
+    /// A compromised renderer already runs with the user's rights: its
+    /// shared memory is read in place, as the browser's is.
+    Unsandboxed,
+}
+
+impl RendererSandbox {
+    /// Exhaustive, so a new sandbox mode decides whether it copies.
+    pub(crate) fn of(mode: SandboxMode) -> Self {
+        match mode {
+            SandboxMode::Chromium => Self::Sandboxed,
+            SandboxMode::Disabled => Self::Unsandboxed,
         }
     }
 }
 
-/// Returns the envelope if `data` contains a complete envelope.
+impl ReceivedMessage {
+    pub fn envelope(&self) -> Envelope {
+        self.envelope
+    }
+
+    pub fn payload(&self) -> &[u8] {
+        match &self.bytes {
+            Bytes::Owned(payload) => payload,
+            Bytes::Shared(region) => {
+                // SAFETY: only shared_message makes a Shared, whose callers
+                // stand for the region (see receive_from_browser and
+                // receive_from_renderer)
+                let bytes = unsafe { in_place(region) };
+                bytes.get(ENVELOPE_SIZE..).unwrap_or_default()
+            }
+        }
+    }
+}
+
+/// The renderer's side: a message from the browser. A shared region is read
+/// in place, which saves a copy of every large response and stream chunk the
+/// page receives.
 ///
-/// The data may have been written by another process and is not trusted.
-fn shm_envelope(data: &[u8]) -> Option<Envelope> {
-    parse_envelope(data).map(|(envelope, _)| envelope)
+/// # Safety
+///
+/// `message` must come from the browser, as every message a renderer
+/// receives does. The browser is the only process that wrote the region,
+/// and CEF's shared message builder gives up its view when it sends the
+/// message, so nothing writes the region while this process reads it.
+pub unsafe fn receive_from_browser(message: &ProcessMessage) -> Option<ReceivedMessage> {
+    let Some(region) = shared_region(message) else {
+        return receive_inline(message);
+    };
+    // SAFETY: the caller guarantees the browser sent the region
+    unsafe { shared_message(region) }
+}
+
+/// The browser's side: a message from a renderer.
+///
+/// A sandboxed renderer's shared region is copied once, here. The renderer
+/// is a security boundary then, and a compromised one could keep writing its
+/// side of the region (CEF maps it writable in both processes): the copy
+/// lets the ACL and the subsystem that runs the message read the same
+/// bytes, and nothing in the browser borrows memory another process writes.
+///
+/// An unsandboxed renderer's region is read in place, as a renderer reads
+/// the browser's. An honest renderer gave up its view when it sent it, and a
+/// compromised one already runs with the user's rights and could write this
+/// process's memory directly: the copy would protect nothing and cost every
+/// large upload.
+pub fn receive_from_renderer(
+    message: &ProcessMessage,
+    sandbox: RendererSandbox,
+) -> Option<ReceivedMessage> {
+    let Some(region) = shared_region(message) else {
+        return receive_inline(message);
+    };
+    match sandbox {
+        RendererSandbox::Sandboxed => {
+            // SAFETY: CEF keeps the region mapped for `size()` bytes while
+            // `region` lives, past this call
+            let (envelope, payload) =
+                unsafe { copy_shared(region.memory() as *const u8, region.size()) }?;
+            Some(ReceivedMessage {
+                envelope,
+                bytes: Bytes::Owned(payload),
+            })
+        }
+        // SAFETY: deliberately weaker than shared_message asks. Only a
+        // compromised renderer could still write the region, and unsandboxed
+        // it could already write this process's memory directly
+        RendererSandbox::Unsandboxed => unsafe { shared_message(region) },
+    }
+}
+
+/// A message left in its shared region, to be read in place.
+///
+/// # Safety
+///
+/// As for [`in_place`]: no other process may write the region while the
+/// message lives.
+unsafe fn shared_message(region: SharedMemoryRegion) -> Option<ReceivedMessage> {
+    // SAFETY: the caller's guarantee
+    let (envelope, _) = parse_envelope(unsafe { in_place(&region) })?;
+    Some(ReceivedMessage {
+        envelope,
+        bytes: Bytes::Shared(region),
+    })
+}
+
+/// The message's shared-memory region, when it has one that is mapped and
+/// holds at least an envelope.
+fn shared_region(message: &ProcessMessage) -> Option<SharedMemoryRegion> {
+    message.shared_memory_region().filter(|region| {
+        region.is_valid() != 0 && region.size() >= ENVELOPE_SIZE && !region.memory().is_null()
+    })
+}
+
+/// The bytes of a shared region, in place.
+///
+/// # Safety
+///
+/// No other process may write the region while the returned slice lives:
+/// it must be one the browser sent (see [`receive_from_browser`]). A
+/// sandboxed renderer's region is copied instead ([`copy_shared`]).
+unsafe fn in_place(region: &SharedMemoryRegion) -> &[u8] {
+    let base = region.memory() as *const u8;
+    if base.is_null() {
+        return &[];
+    }
+    // SAFETY: `region` keeps `size()` bytes mapped while it lives, which the
+    // slice cannot outlive; the caller guarantees that nothing writes them
+    unsafe { std::slice::from_raw_parts(base, region.size()) }
+}
+
+/// Copies a shared-memory message out of its region: the envelope, then the
+/// payload.
+///
+/// # Safety
+///
+/// `base` must be readable for `len` bytes for the duration of the call.
+/// Another process may write them meanwhile: they are only copied, by raw
+/// pointer, and never borrowed as a slice.
+unsafe fn copy_shared(base: *const u8, len: usize) -> Option<(Envelope, Vec<u8>)> {
+    if base.is_null() || len < ENVELOPE_SIZE {
+        return None;
+    }
+    let mut header = [0u8; ENVELOPE_SIZE];
+    // SAFETY: the caller guarantees `len` readable bytes at `base`, and
+    // `header` is a buffer of its own. A sender still writing makes this a
+    // racy read of plain bytes, which Chromium also accepts for shared
+    // memory: copy first, then validate the copy
+    unsafe { std::ptr::copy_nonoverlapping(base, header.as_mut_ptr(), ENVELOPE_SIZE) };
+    // Validated before the payload is copied: a malformed message costs no copy
+    let (envelope, _) = parse_envelope(&header)?;
+    let size = len - ENVELOPE_SIZE;
+    let mut payload = Vec::with_capacity(size);
+    // SAFETY: as above for the source; `payload` has room for `size` bytes,
+    // which the copy initializes before set_len exposes them. The buffer is
+    // not zeroed first: every byte is written by the copy
+    unsafe {
+        std::ptr::copy_nonoverlapping(base.add(ENVELOPE_SIZE), payload.as_mut_ptr(), size);
+        payload.set_len(size);
+    }
+    Some((envelope, payload))
 }
 
 /// Builds a ProcessMessage from an envelope and payload.
@@ -133,21 +283,8 @@ fn build_shm_parts(name: &str, envelope: &Envelope, parts: &[&[u8]]) -> Option<P
     builder.build()
 }
 
-/// Extracts a serialized message from a ProcessMessage.
-///
-/// Returns either shared-memory-backed or inline storage from CEF ListValue fields.
-pub fn extract_message(message: &ProcessMessage) -> Option<ReceivedMessage> {
-    // SHM path: zero-copy from shared memory
-    if let Some(region) = message.shared_memory_region()
-        && region.is_valid() != 0
-        && region.size() >= ENVELOPE_SIZE
-    {
-        let binary: SharedBinary = Arc::new(ShmBinary::new(region, 0));
-        let envelope = shm_envelope(binary.data())?;
-        return Some(ReceivedMessage::Shm { envelope, binary });
-    }
-
-    // Inline path: read from ListValue fields
+/// A message sent inline, in CEF ListValue fields.
+fn receive_inline(message: &ProcessMessage) -> Option<ReceivedMessage> {
     let args = message.argument_list()?;
 
     // A byte field out of range is malformed, not truncated into another value
@@ -176,7 +313,10 @@ pub fn extract_message(message: &ProcessMessage) -> Option<ReceivedMessage> {
         Vec::new()
     };
 
-    Some(ReceivedMessage::Inline { envelope, payload })
+    Some(ReceivedMessage {
+        envelope,
+        bytes: Bytes::Owned(payload),
+    })
 }
 
 #[cfg(test)]
@@ -194,19 +334,23 @@ mod tests {
         }
     }
 
+    fn copied(region: &[u8]) -> Option<(Envelope, Vec<u8>)> {
+        // SAFETY: `region` is readable for its length during the call.
+        unsafe { copy_shared(region.as_ptr(), region.len()) }
+    }
+
     #[test]
     fn decode_shm_rejects_wrong_version() {
         let mut region = encode_envelope_bytes(&envelope()).to_vec();
         region.extend_from_slice(b"payload");
-        assert_eq!(shm_envelope(&region).map(|e| e.correlation_id), Some(7));
+        assert_eq!(copied(&region).map(|(e, _)| e.correlation_id), Some(7));
         for version in [0, ENVELOPE_VERSION.wrapping_add(1), 0xFF] {
             region[0] = version;
-            assert!(
-                shm_envelope(&region).is_none(),
-                "version {version} was accepted"
-            );
+            assert!(copied(&region).is_none(), "version {version} was accepted");
         }
-        assert!(shm_envelope(&region[..ENVELOPE_SIZE - 1]).is_none());
-        assert!(shm_envelope(&[]).is_none());
+        assert!(copied(&region[..ENVELOPE_SIZE - 1]).is_none());
+        assert!(copied(&[]).is_none());
+        // SAFETY: a null pointer is refused before it is read.
+        assert!(unsafe { copy_shared(std::ptr::null(), 64) }.is_none());
     }
 }

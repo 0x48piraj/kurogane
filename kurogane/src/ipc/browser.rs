@@ -10,7 +10,7 @@ use crate::acl::Origin;
 use crate::ipc::browser_state::{effective_origin, FrameId, IpcContext};
 use crate::ipc::envelope::KNOWN_FLAGS;
 use crate::ipc::router::IpcRouter;
-use crate::ipc::transport::message::extract_message;
+use crate::ipc::transport::message::receive_from_renderer;
 use crate::runtime::AppHandle;
 
 pub fn handle_ipc_message(
@@ -27,15 +27,12 @@ pub fn handle_ipc_message(
         return false;
     }
 
-    let received = match extract_message(message) {
-        Some(m) => m,
-        None => {
-            debug!("[IPC Browser] failed to extract message");
-            return false;
-        }
+    let Some(received) = receive_from_renderer(message, app.renderer_sandbox()) else {
+        debug!("[IPC Browser] failed to extract message");
+        return false;
     };
+    let envelope = received.envelope();
 
-    let (envelope, payload) = received.as_envelope_payload();
     if envelope.flags & !KNOWN_FLAGS != 0 {
         debug!(
             "[IPC Browser] unknown envelope flags {:#04x}; message dropped",
@@ -67,5 +64,5 @@ pub fn handle_ipc_message(
     };
 
     app.router()
-        .route_browser(app, frame, &envelope, payload, ctx)
+        .route_browser(app, frame, &envelope, received.payload(), ctx)
 }
