@@ -19,7 +19,8 @@ wrap_life_span_handler! {
     }
 
     impl LifeSpanHandler {
-        // Save the requested geometry until CEF creates the popup window.
+        // Give the popup a client of its own, and save the requested
+        // geometry until CEF creates the popup window.
         fn on_before_popup(
             &self,
             browser: Option<&mut Browser>,
@@ -31,11 +32,13 @@ wrap_life_span_handler! {
             _user_gesture: i32,
             popup_features: Option<&PopupFeatures>,
             _window_info: Option<&mut WindowInfo>,
-            _client: Option<&mut Option<Client>>,
+            client: Option<&mut Option<Client>>,
             _settings: Option<&mut BrowserSettings>,
             _extra_info: Option<&mut Option<DictionaryValue>>,
             _no_javascript_access: Option<&mut i32>,
         ) -> i32 {
+            own_client(client, &self.app, self.browser_type);
+
             let mut reg = self.app.registry();
             let opener = browser.and_then(|browser| reg.browsers.find_id_by_browser(browser));
             if let Some(state) = opener.and_then(|id| reg.browsers.get_mut(id)) {
@@ -53,6 +56,20 @@ wrap_life_span_handler! {
             }
         }
 
+        // DevTools that Chrome's own command opens gets a client of its own
+        // too; BrowserHandle::show_devtools does not come through here.
+        fn on_before_dev_tools_popup(
+            &self,
+            _browser: Option<&mut Browser>,
+            _window_info: Option<&mut WindowInfo>,
+            client: Option<&mut Option<Client>>,
+            _settings: Option<&mut BrowserSettings>,
+            _extra_info: Option<&mut Option<DictionaryValue>>,
+            _use_default_window: Option<&mut i32>,
+        ) {
+            own_client(client, &self.app, self.browser_type);
+        }
+
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             let Some(browser) = browser else {
                 return;
@@ -61,9 +78,10 @@ wrap_life_span_handler! {
 
             let mut reg = self.app.registry();
 
-            // A popup shares its opener's client. The BrowserView delegate
-            // classifies a Views popup exactly; CEF does not promise which of
-            // the two sees it first, and the first registers it
+            // A popup has a client of its opener's kind (own_client). The
+            // BrowserView delegate classifies a Views popup exactly; CEF does
+            // not promise which of the two sees it first, and the first
+            // registers it
             let (browser_type, opener) = match self.browser_type {
                 // Whatever Chromium opens on its own stays that kind
                 BrowserType::ChromeUi => (BrowserType::ChromeUi, None),
@@ -128,6 +146,22 @@ wrap_life_span_handler! {
                 self.app.all_browsers_closed();
             }
         }
+    }
+}
+
+/// Puts a new client in `client`, in place of the one CEF passes in for a
+/// popup or DevTools browser (its opener's).
+///
+/// cef-rs keeps the reference CEF passes with that client when a handler
+/// leaves it unchanged, so the opener's client, and the application's state
+/// it holds, would never be released. Replacing the client releases that
+/// reference. Remove this once cef-rs releases it itself.
+fn own_client(client: Option<&mut Option<Client>>, app: &AppHandle, browser_type: BrowserType) {
+    // No client stays no client
+    if let Some(client) = client
+        && client.is_some()
+    {
+        *client = Some(KuroganeClient::new(app.clone(), browser_type));
     }
 }
 
@@ -247,5 +281,35 @@ wrap_client! {
 impl Drop for KuroganeClient {
     fn drop(&mut self) {
         debug!("KuroganeClient dropped");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_browser_gets_a_client_of_its_own() {
+        let app = AppHandle::detached();
+        let opener = KuroganeClient::new(app.clone(), BrowserType::Main);
+
+        // What CEF passes in: the opener's client, with a reference of its own
+        let mut passed = Some(opener.clone());
+        own_client(Some(&mut passed), &app, BrowserType::Main);
+        let own = passed.expect("a client is replaced, not cleared");
+        assert_ne!(
+            cef::ImplClient::get_raw(&own),
+            cef::ImplClient::get_raw(&opener),
+            "the new browser gets a client of its own"
+        );
+        assert!(
+            cef::rc::Rc::has_one_ref(&opener),
+            "the reference that came with the opener's client is released"
+        );
+
+        // CEF passed no client: none is made up
+        let mut none: Option<Client> = None;
+        own_client(Some(&mut none), &app, BrowserType::Main);
+        assert!(none.is_none());
     }
 }
