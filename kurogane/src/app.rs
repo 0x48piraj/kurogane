@@ -912,7 +912,7 @@ mod tests {
     /// What a handler receives with a message from `app://app`.
     fn context() -> crate::ipc::IpcContext {
         crate::ipc::IpcContext {
-            browser_id: None,
+            browser_id: crate::browser_registry::BrowserId::new(1),
             frame: crate::ipc::FrameId::new("test-frame"),
             origin: origin("app://app"),
             url_origin: origin("app://app"),

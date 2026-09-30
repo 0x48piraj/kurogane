@@ -7,7 +7,7 @@ use cef::*;
 
 use crate::acl::Origin;
 use crate::debug;
-use crate::ipc::browser_state::{still_addressed, ErrorCode, IpcContext};
+use crate::ipc::browser_state::{still_addressed, IpcContext, IpcError};
 use crate::ipc::envelope::*;
 use crate::ipc::event::EventSubsystem;
 use crate::ipc::transport::message::build_message;
@@ -46,13 +46,7 @@ impl EventSubsystem {
             }
         };
 
-        let browser_id = match ctx.browser_id {
-            Some(id) => id,
-            None => {
-                debug!("[Event Browser] subscribe without browser_id");
-                return false;
-            }
-        };
+        let browser_id = ctx.browser_id;
 
         let mut subs = self.subscriptions.lock().unwrap();
         subs.entry(event_name.to_string()).or_default().push(
@@ -92,8 +86,8 @@ impl EventSubsystem {
     }
 
     /// Tells the renderer that the subscription carried by `envelope` was
-    /// refused by the ACL, so its `onError` fires instead of silence.
-    pub(crate) fn refuse(frame: &Frame, envelope: &Envelope, message: &str) {
+    /// refused with `error`, so its `onError` fires instead of silence.
+    pub(crate) fn refuse(frame: &Frame, envelope: &Envelope, error: &IpcError) {
         if frame.is_valid() == 0 {
             return;
         }
@@ -105,7 +99,7 @@ impl EventSubsystem {
             correlation_id: envelope.correlation_id,
             payload_kind: PAYLOAD_BINARY,
         };
-        let payload = encode_error_payload(ErrorCode::Acl.wire(), message);
+        let payload = encode_error_payload(error.code().wire(), error.message());
         match build_message("kurogane_event", &reply, &payload) {
             Some(mut msg) => frame.send_process_message(ProcessId::RENDERER, Some(&mut msg)),
             None => debug!("[Event Browser] failed to build refusal message"),

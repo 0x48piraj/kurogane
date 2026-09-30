@@ -136,7 +136,9 @@ impl FrameId {
 
 /// Context for an IPC dispatch.
 pub struct IpcContext {
-    pub browser_id: Option<BrowserId>,
+    /// Browser that sent the message. A message from a browser the runtime
+    /// has not registered is refused before dispatch.
+    pub browser_id: BrowserId,
     /// Frame that sent the message.
     pub frame: FrameId,
     /// Origin the message acts for.

@@ -112,7 +112,7 @@
     /**
      * Subscribe to a browser-side event.
      *
-     * If the browser refuses the subscription (code -4: the event is not
+     * If the browser refuses the subscription (code -4 when the event is not
      * permitted for this origin), the subscription is removed and onError
      * receives an Error with a numeric .code. Without onError the refusal
      * is reported with console.warn.

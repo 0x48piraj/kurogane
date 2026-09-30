@@ -9,12 +9,13 @@ use crate::debug;
 use crate::acl::Origin;
 use crate::ipc::browser_state::{effective_origin, FrameId, IpcContext};
 use crate::ipc::envelope::KNOWN_FLAGS;
+use crate::ipc::router::IpcRouter;
 use crate::ipc::transport::message::extract_message;
 use crate::runtime::AppHandle;
 
 pub fn handle_ipc_message(
     app: &AppHandle,
-    _browser: &mut Browser,
+    browser: &mut Browser,
     frame: &mut Frame,
     message: &ProcessMessage,
     browser_id: Option<BrowserId>,
@@ -42,6 +43,18 @@ pub fn handle_ipc_message(
         );
         return true;
     }
+
+    // Not registered yet, or no longer: nothing is dispatched or kept for
+    // the browser, and what the message opens is refused, so its sender
+    // does not wait forever
+    let Some(browser_id) = browser_id else {
+        debug!(
+            "[IPC Browser] message from unregistered browser cef_id={}",
+            browser.identifier()
+        );
+        IpcRouter::refuse_unregistered(frame, &envelope);
+        return true;
+    };
 
     let frame_url: CefString = (&frame.url()).into();
     let url_origin = Origin::from_url(&frame_url.to_string());

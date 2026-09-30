@@ -451,7 +451,7 @@ mod tests {
 
         fn ctx(origin: &str) -> IpcContext {
             IpcContext {
-                browser_id: None,
+                browser_id: crate::browser_registry::BrowserId::new(1),
                 frame: FrameId::new("test-frame"),
                 origin: Origin::from_url(origin),
                 url_origin: Origin::from_url(origin),

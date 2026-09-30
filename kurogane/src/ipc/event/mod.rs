@@ -107,9 +107,8 @@ impl EventSubsystem {
         };
         let before = entries.len();
         entries.retain(|s| {
-            let owner = Some(s.browser_id) == ctx.browser_id
-                && s.frame_id == ctx.frame
-                && s.origin == ctx.origin;
+            let owner =
+                s.browser_id == ctx.browser_id && s.frame_id == ctx.frame && s.origin == ctx.origin;
             !(owner && s.id == id)
         });
         let removed = before - entries.len();

@@ -23,14 +23,14 @@ pub struct PendingEntry {
 /// Identifies one pending request.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct PendingKey {
-    browser: Option<BrowserId>,
+    browser: BrowserId,
     frame: FrameId,
     origin: Origin,
     id: i32,
 }
 
 impl PendingKey {
-    pub fn new(browser: Option<BrowserId>, frame: FrameId, origin: Origin, id: i32) -> Self {
+    pub fn new(browser: BrowserId, frame: FrameId, origin: Origin, id: i32) -> Self {
         Self {
             browser,
             frame,
@@ -72,7 +72,7 @@ impl PendingMap {
 
     /// Aborts and removes every entry of `browser_id`; returns how many.
     pub fn cancel_all_for_browser(&self, browser_id: BrowserId) -> usize {
-        self.cancel_where(|key| key.browser == Some(browser_id))
+        self.cancel_where(|key| key.browser == browser_id)
     }
 
     /// Aborts and removes every entry `frame` sent; returns how many.
@@ -106,23 +106,7 @@ mod tests {
 
     fn keyed(browser: u32, frame: &str, origin: &str, id: i32) -> PendingKey {
         let origin = Origin::parse(origin).unwrap();
-        PendingKey::new(
-            Some(BrowserId::new(browser)),
-            FrameId::new(frame),
-            origin,
-            id,
-        )
-    }
-
-    #[test]
-    fn requests_without_a_browser_are_still_cancelled_with_their_frame() {
-        let map = PendingMap::new();
-        let e = entry();
-        let flag = e.aborted.clone();
-        let origin = Origin::parse("app://app").unwrap();
-        map.insert(PendingKey::new(None, FrameId::new("popup"), origin, 1), e);
-        assert_eq!(map.cancel_frame(&FrameId::new("popup")), 1);
-        assert!(flag.load(Ordering::SeqCst));
+        PendingKey::new(BrowserId::new(browser), FrameId::new(frame), origin, id)
     }
 
     fn entry() -> PendingEntry {

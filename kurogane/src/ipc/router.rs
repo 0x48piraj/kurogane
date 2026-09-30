@@ -34,6 +34,27 @@ enum Verdict<'p> {
     RefuseEvent(&'p str),
 }
 
+/// What a message opens: a command invocation, a stream or an event
+/// subscription, whose sender waits for an answer (the invocation's promise,
+/// `openStream`'s promise, the subscription's `onError`). Follow-ups
+/// (cancel, stream data, end, error and cancel, unsubscribe) open nothing
+/// and wait for nothing.
+#[derive(Debug, PartialEq, Eq)]
+enum Opens {
+    Invocation,
+    Stream,
+    Subscription,
+}
+
+fn opens(envelope: &Envelope) -> Option<Opens> {
+    match (envelope.subsystem, envelope.opcode) {
+        (SUB_RPC, RPC_INVOKE) => Some(Opens::Invocation),
+        (SUB_STREAM, STREAM_OPEN) => Some(Opens::Stream),
+        (SUB_EVENT, EVENT_SUBSCRIBE) => Some(Opens::Subscription),
+        _ => None,
+    }
+}
+
 /// Applies the ACL to messages that open commands, streams or event
 /// subscriptions. Follow-up messages such as cancel, stream data and
 /// unsubscribe are authorized by their subsystems against the frame and
@@ -45,16 +66,30 @@ fn verdict<'p>(
     payload: &'p [u8],
     origin: &Origin,
 ) -> Verdict<'p> {
-    match (envelope.subsystem, envelope.opcode) {
-        (SUB_RPC, RPC_INVOKE) | (SUB_STREAM, STREAM_OPEN) => match decode_cmd_payload(payload) {
+    match opens(envelope) {
+        Some(Opens::Invocation | Opens::Stream) => match decode_cmd_payload(payload) {
             Some((name, _)) if !acl.allows(name, origin) => Verdict::RefuseName(name),
             _ => Verdict::Pass,
         },
-        (SUB_EVENT, EVENT_SUBSCRIBE) => match decode_cmd_payload(payload) {
+        Some(Opens::Subscription) => match decode_cmd_payload(payload) {
             Some((name, _)) if !acl.allows_event(name, origin) => Verdict::RefuseEvent(name),
             _ => Verdict::Pass,
         },
-        _ => Verdict::Pass,
+        None => Verdict::Pass,
+    }
+}
+
+/// Refuses what `envelope` opens with `error`, in the form its sender waits
+/// for. A follow-up waits for nothing and gets nothing.
+fn refuse_opening(frame: &Frame, envelope: &Envelope, error: IpcError) {
+    match opens(envelope) {
+        Some(Opens::Invocation) => RequestResponseSubsystem::reject(frame, envelope, error),
+        Some(Opens::Stream) => {
+            let responder = StreamResponder::new(frame.clone(), envelope.correlation_id);
+            let _ = responder.error_with_code(error.message(), error.code());
+        }
+        Some(Opens::Subscription) => EventSubsystem::refuse(frame, envelope, &error),
+        None => {}
     }
 }
 
@@ -122,39 +157,36 @@ impl IpcRouter {
     /// an RPC rejection, a failed stream open, or a refused subscription.
     /// All carry [`ErrorCode::Acl`]. Returns true when the message was refused.
     fn refuse(&self, frame: &Frame, envelope: &Envelope, payload: &[u8], origin: &Origin) -> bool {
-        match verdict(&self.acl, envelope, payload, origin) {
-            Verdict::Pass => false,
+        let message = match verdict(&self.acl, envelope, payload, origin) {
+            Verdict::Pass => return false,
             Verdict::RefuseName(name) => {
                 debug!(
                     "[Router Browser] ACL denied '{}' for origin {}",
                     name, origin
                 );
-                let message = format!("'{name}' is not allowed for origin {origin}");
-                if envelope.subsystem == SUB_RPC {
-                    RequestResponseSubsystem::reject(
-                        frame,
-                        envelope,
-                        IpcError::with_code(message, ErrorCode::Acl),
-                    );
-                } else {
-                    let responder = StreamResponder::new(frame.clone(), envelope.correlation_id);
-                    let _ = responder.error_with_code(&message, ErrorCode::Acl);
-                }
-                true
+                format!("'{name}' is not allowed for origin {origin}")
             }
             Verdict::RefuseEvent(name) => {
                 debug!(
                     "[Router Browser] ACL denied event '{}' for origin {}",
                     name, origin
                 );
-                EventSubsystem::refuse(
-                    frame,
-                    envelope,
-                    &format!("event '{name}' is not allowed for origin {origin}"),
-                );
-                true
+                format!("event '{name}' is not allowed for origin {origin}")
             }
-        }
+        };
+        refuse_opening(
+            frame,
+            envelope,
+            IpcError::with_code(message, ErrorCode::Acl),
+        );
+        true
+    }
+
+    /// Answers a message from a browser the runtime has not registered, yet
+    /// or any longer. Nothing is dispatched for it; what it opens is refused
+    /// so its sender does not wait forever.
+    pub(crate) fn refuse_unregistered(frame: &Frame, envelope: &Envelope) {
+        refuse_opening(frame, envelope, IpcError::new("the browser is not open"));
     }
 
     /// Drops everything opened by the document in `frame`. Pending requests are
@@ -295,5 +327,37 @@ mod tests {
             verdict(&acl, &envelope(SUB_RPC, RPC_INVOKE), b"\x09", &evil),
             Verdict::Pass
         );
+    }
+
+    #[test]
+    fn only_messages_that_open_something_wait_for_an_answer() {
+        assert_eq!(
+            opens(&envelope(SUB_RPC, RPC_INVOKE)),
+            Some(Opens::Invocation)
+        );
+        assert_eq!(
+            opens(&envelope(SUB_STREAM, STREAM_OPEN)),
+            Some(Opens::Stream)
+        );
+        assert_eq!(
+            opens(&envelope(SUB_EVENT, EVENT_SUBSCRIBE)),
+            Some(Opens::Subscription)
+        );
+        for (subsystem, opcode) in [
+            (SUB_RPC, RPC_CANCEL),
+            (SUB_STREAM, STREAM_DATA),
+            (SUB_STREAM, STREAM_END),
+            (SUB_STREAM, STREAM_ERROR),
+            (SUB_STREAM, STREAM_CANCEL),
+            (SUB_EVENT, EVENT_UNSUBSCRIBE),
+            // A subsystem the runtime does not know opens nothing
+            (9, RPC_INVOKE),
+        ] {
+            assert_eq!(
+                opens(&envelope(subsystem, opcode)),
+                None,
+                "subsystem {subsystem}, opcode {opcode}"
+            );
+        }
     }
 }

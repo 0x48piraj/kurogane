@@ -93,15 +93,6 @@ impl StreamSubsystem {
             return false;
         };
 
-        let browser_id = match ctx.browser_id {
-            Some(id) => id,
-            None => {
-                debug!("[Stream Browser] open without browser_id");
-                let _ = responder.error("no browser_id");
-                return false;
-            }
-        };
-
         let factory = match self.factories.get(handler_name) {
             Some(f) => f,
             None => {
@@ -149,7 +140,7 @@ impl StreamSubsystem {
         );
 
         let mut entry = StreamEntry {
-            browser_id,
+            browser_id: ctx.browser_id,
             handler,
             frame: frame.clone(),
             url_origin: ctx.url_origin,
