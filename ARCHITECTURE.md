@@ -234,11 +234,11 @@ flowchart TD
 
 * **Request/response**: RPC-style calls resolving to a JS promise.
 * **Events**: Publish/subscribe delivery to subscribed frames.
-* **Streams**: Bi-directional transfers identified by stream ID, with per-stream handlers and state.
+* **Streams**: Bi-directional transfers identified by stream ID, with per-stream handlers and state. A handler accepts or refuses the open before the page holds the stream; the first end or error sent closes it, and an end the page sends is always answered.
 
 Small payloads use JSON over Chromium's string transport. Large binary payloads use Kurogane's purpose-built shared-memory transport instead, avoiding serialization and an extra copy across the boundary.
 
-See [exposing Rust commands to JavaScript](docs/recipes.md#exposing-rust-commands-to-javascript) for usage.
+See [exposing Rust commands to JavaScript](docs/recipes.md#exposing-rust-commands-to-javascript) and [streaming data](docs/recipes.md#streaming-data) for usage.
 
 ## Threading
 

@@ -189,7 +189,10 @@
         /**
          * Register a callback for stream completion.
          *
-         * Fires once when the browser signals the stream is done.
+         * Fires once, when the browser ends the stream: with the result the
+         * handler ended it with, or with "" after end() when the handler did
+         * not end it. An end that arrives before the callback is registered
+         * is delivered when it is.
          *
          * @param {Function} callback - receives (string result)
          */
@@ -204,7 +207,9 @@
         /**
          * Register a callback for stream errors.
          *
-         * Fires once when the browser signals a stream error.
+         * Fires once, when the browser fails the stream, with the failure's
+         * message. An error that arrives before the callback is registered
+         * is delivered when it is.
          *
          * @param {Function} callback - receives (string errorMessage)
          */
@@ -239,7 +244,9 @@
         }
 
         /**
-         * Close the stream.
+         * End the stream. The handler's on_end receives `result`; onEnd then
+         * fires with the handler's answer, or "" if it gave none, and onError
+         * fires instead if the handler fails.
          *
          * @param {string} [result] - optional result string
          */
@@ -252,13 +259,14 @@
     /**
      * Open a stream to the browser process.
      *
-     * Resolves with a Stream object for reading data and handling completion.
-     * The callbacks are bound to the stream when it is opened, so only the
+     * Resolves with a Stream once the handler accepts the open. The
+     * callbacks are bound to the stream when it is opened, so only the
      * owning frame can receive its messages. Data received before the page
      * installs its callbacks is buffered.
      *
      * A refused open rejects with an Error carrying a numeric .code
-     * (-4 when the handler is not permitted for this origin). A handlerName
+     * (0 when the handler refuses it, -4 when the handler is not permitted
+     * for this origin). A handlerName
      * that is empty or not a string rejects with an Error that has no .code.
      *
      * @param {string} handlerName - registered stream handler name

@@ -4,12 +4,15 @@
 //! chunk delivery, completion, cancellation and cleanup of active streams.
 //! Each stream gets its own handler instance from the registered factory.
 //!
+//! An open is answered before the handler can send: `STREAM_BROWSER_OPENED`
+//! once `on_open` accepts, or `STREAM_BROWSER_ERROR`.
+//!
 //! Streams are scoped to the frame and origin that opened them. Only that
 //! frame may send data, complete, or cancel the stream and only while it
 //! retains the same origin.
 //!
 //! Stream responders share stream state, so responses stop once the stream
-//! has ended.
+//! has ended or failed.
 
 use cef::*;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -63,6 +66,9 @@ impl StreamSubsystem {
         payload: &[u8],
         ctx: IpcContext,
     ) -> bool {
+        // Streams another thread ended or failed are over: drop their handlers
+        self.close_where(|_, entry| entry.is_closed());
+
         let stream_id = key.id;
         let closed = Arc::new(AtomicBool::new(false));
         let responder = StreamResponder::bound(
@@ -114,42 +120,60 @@ impl StreamSubsystem {
             return false;
         };
 
-        let open_result = catch_unwind(AssertUnwindSafe(|| handler.on_open(metadata, &responder)));
-
-        match open_result {
-            Ok(Ok(())) => {
-                // Retain the handler and frame for subsequent stream callbacks
-                self.streams.lock().unwrap().insert(
-                    key,
-                    StreamEntry {
-                        browser_id,
-                        handler,
-                        frame: frame.clone(),
-                        url_origin: ctx.url_origin,
-                        closed,
-                    },
-                );
-
-                // Complete the open handshake by acknowledging success
-                let _ = responder.end("");
-
-                debug!(
-                    "[Stream Browser] open '{}' stream_id={}",
-                    handler_name, stream_id,
-                );
-                true
-            }
+        // The handler accepts or refuses the stream before the page holds it
+        match catch_unwind(AssertUnwindSafe(|| handler.on_open(metadata))) {
+            Ok(Ok(())) => {}
             Ok(Err(e)) => {
                 debug!("[Stream Browser] on_open error: {}", e);
                 let _ = responder.error(&e);
-                false
+                return false;
             }
             Err(_) => {
                 debug!("[Stream Browser] on_open handler panicked");
                 let _ = responder.error("handler panicked");
-                false
+                return false;
             }
         }
+
+        // The page learns the stream is open before anything else of it
+        if let Err(e) = responder.opened() {
+            debug!(
+                "[Stream Browser] open '{}' not acknowledged: {}",
+                handler_name, e
+            );
+            return false;
+        }
+        debug!(
+            "[Stream Browser] open '{}' stream_id={}",
+            handler_name, stream_id,
+        );
+
+        let mut entry = StreamEntry {
+            browser_id,
+            handler,
+            frame: frame.clone(),
+            url_origin: ctx.url_origin,
+            closed,
+        };
+        let opened = catch_unwind(AssertUnwindSafe(|| entry.handler.on_opened(&responder)));
+        let failure = match opened {
+            Ok(Ok(())) => None,
+            Ok(Err(e)) => Some(e),
+            Err(_) => Some("handler panicked".to_owned()),
+        };
+        if let Some(e) = &failure {
+            debug!("[Stream Browser] on_opened error: {}", e);
+            let _ = responder.error(e);
+        }
+        if failure.is_some() || entry.is_closed() {
+            // Over already: a responder the handler kept stops here too
+            entry.close();
+            return true;
+        }
+
+        // Retain the handler for the stream's later messages
+        self.streams.lock().unwrap().insert(key, entry);
+        true
     }
 
     fn on_data(&self, key: StreamKey, payload: &[u8]) -> bool {
@@ -160,6 +184,10 @@ impl StreamSubsystem {
             debug!("[Stream Browser] data for unknown stream {}", stream_id);
             return false;
         };
+        if entry.is_closed() {
+            // Another thread ended or failed the stream while this chunk was on its way
+            return true;
+        }
 
         let responder = entry.responder(stream_id);
         let data_result = catch_unwind(AssertUnwindSafe(|| {
@@ -167,9 +195,11 @@ impl StreamSubsystem {
         }));
 
         match data_result {
-            Ok(Ok(())) => {
+            // Kept for the next chunk, unless the handler ended or failed the stream
+            Ok(Ok(())) if !entry.is_closed() => {
                 self.streams.lock().unwrap().insert(key, entry);
             }
+            Ok(Ok(())) => {}
             Ok(Err(e)) => {
                 debug!("[Stream Browser] on_chunk error: {}", e);
                 let _ = responder.error(&e);
@@ -195,6 +225,10 @@ impl StreamSubsystem {
             debug!("[Stream Browser] end for unknown stream {}", stream_id);
             return false;
         };
+        if entry.is_closed() {
+            // Another thread ended or failed the stream: the page has its answer
+            return true;
+        }
         let responder = entry.responder(stream_id);
         let responder_clone = responder.clone();
         let end_result = catch_unwind(AssertUnwindSafe(|| {
@@ -202,7 +236,11 @@ impl StreamSubsystem {
         }));
 
         match end_result {
-            Ok(Ok(())) => {}
+            // The page's end is answered: by the handler's own end or error
+            // if it sent one, otherwise with an empty end
+            Ok(Ok(())) => {
+                let _ = responder_clone.end("");
+            }
             Ok(Err(e)) => {
                 debug!("[Stream Browser] on_end error: {}", e);
                 let _ = responder_clone.error(&e);

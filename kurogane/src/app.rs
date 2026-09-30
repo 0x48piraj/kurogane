@@ -636,9 +636,10 @@ impl App {
 
     /// Registers a stream handler whose factory does not need AppHandle.
     ///
-    /// Stream handlers process data chunks sent from the renderer. The factory
-    /// closure is called once per stream open to create a dedicated handler
-    /// instance, giving each stream its own mutable state.
+    /// The factory is called for each stream a page opens under `name` that
+    /// the ACL lets through, so each stream has a handler, and mutable state,
+    /// of its own. [`StreamHandler`](crate::ipc::StreamHandler) describes a
+    /// stream's life: the handler accepts or refuses the open, then sends.
     ///
     /// A name that is already registered is a configuration error, reported
     /// by [`App::build`].

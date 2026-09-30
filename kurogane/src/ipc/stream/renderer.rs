@@ -1,8 +1,10 @@
 //! Renderer-side stream subsystem dispatch.
 //!
-//! Handles stream data, end, and error messages from the browser.
+//! Handles the browser's stream messages: opened, data, end and error.
 //! Messages are delivered only to streams opened by the addressed frame,
-//! using the callbacks bound when the stream was opened.
+//! using the callbacks bound when the stream was opened. The browser
+//! answers an open before it sends anything else of the stream, so a
+//! stream still opening receives nothing but that answer.
 
 use cef::*;
 
@@ -17,6 +19,7 @@ pub fn handle_stream_renderer(frame: &mut Frame, envelope: &Envelope, payload: &
     let addressed = FrameId::of(frame);
     let id = envelope.correlation_id as i32;
     match envelope.opcode {
+        STREAM_BROWSER_OPENED => on_opened(id, &addressed),
         STREAM_BROWSER_DATA => on_data(id, &addressed, payload),
         STREAM_BROWSER_END => on_end(id, &addressed, payload),
         STREAM_BROWSER_ERROR => on_error(id, &addressed, payload),
@@ -27,6 +30,28 @@ pub fn handle_stream_renderer(frame: &mut Frame, envelope: &Envelope, payload: &
     }
 }
 
+/// `STREAM_BROWSER_OPENED`: the handler accepted the open. The stream's
+/// callbacks become live and `openStream` resolves with its id.
+fn on_opened(id: i32, addressed: &FrameId) -> bool {
+    let opened = state().stream_opened(id, addressed);
+    let Some((context, promise)) = opened else {
+        debug!(
+            "[Stream Renderer] opened for unknown or foreign stream {}",
+            id
+        );
+        return true;
+    };
+    if context.enter() == 0 {
+        return true;
+    }
+    let mut value = v8_value_create_uint(id as u32);
+    promise.resolve_promise(value.as_mut());
+    context.exit();
+    true
+}
+
+/// `STREAM_BROWSER_DATA` for an open stream. A chunk for a stream still
+/// opening is dropped.
 fn on_data(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
     let target = state().stream_data(id, addressed);
     let Some((context, callback)) = target else {
@@ -52,19 +77,9 @@ fn on_data(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
     true
 }
 
-/// `STREAM_BROWSER_END` acknowledges an open, or ends an open stream.
+/// `STREAM_BROWSER_END` ends an open stream. An END for a stream still
+/// opening is dropped and leaves its open pending.
 fn on_end(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
-    let opened = state().stream_opened(id, addressed);
-    if let Some((context, promise)) = opened {
-        if context.enter() == 0 {
-            return true;
-        }
-        let mut value = v8_value_create_uint(id as u32);
-        promise.resolve_promise(value.as_mut());
-        context.exit();
-        return true;
-    }
-
     let ended = state().stream_end(id, addressed);
     let Some((context, callback)) = ended else {
         debug!("[Stream Renderer] end for unknown or foreign stream {}", id);
@@ -80,7 +95,8 @@ fn on_end(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
     true
 }
 
-/// `STREAM_BROWSER_ERROR` fails an open, or fails an open stream.
+/// `STREAM_BROWSER_ERROR` rejects an open the browser refused, or fails an
+/// open stream.
 fn on_error(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
     let (code, message) = decode_error_payload(payload);
 

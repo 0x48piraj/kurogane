@@ -186,18 +186,11 @@ impl<C: ContextHandle, V: Clone> Registry<C, V> {
         }
     }
 
-    /// The data callback of a stream of `addressed`, open or still opening
-    /// (a handler may send data before the open completes).
+    /// The data callback of an open stream of `addressed`. A stream still
+    /// opening receives nothing: the browser acknowledges an open first.
     pub(crate) fn stream_data(&self, id: i32, addressed: &FrameId) -> Option<(C, V)> {
-        if let Some((owner, sink)) = self.streams.get(&id) {
-            return (owner.frame == *addressed).then(|| (owner.context.clone(), sink.data.clone()));
-        }
-        match self.pending.get(&id) {
-            Some((owner, Pending::StreamOpen { sink, .. })) if owner.frame == *addressed => {
-                Some((owner.context.clone(), sink.data.clone()))
-            }
-            _ => None,
-        }
+        let (owner, sink) = self.streams.get(&id)?;
+        (owner.frame == *addressed).then(|| (owner.context.clone(), sink.data.clone()))
     }
 
     /// Closes a stream of `addressed`; returns its end callback.
@@ -377,11 +370,13 @@ mod tests {
     fn stream_callbacks_are_bound_at_open_and_reach_only_their_frame() {
         let mut r = two_frames();
         let id = r.register_stream_open(&Ctx(1), "open", sink()).unwrap();
-        // Data sent before the open completes still reaches the opener
-        assert_eq!(r.stream_data(id, &frame("A")), Some((Ctx(1), "data")));
-        assert!(r.stream_data(id, &frame("B")).is_none());
+        // Nothing but the acknowledgement reaches a stream still opening
+        assert!(r.stream_data(id, &frame("A")).is_none());
+        assert!(r.stream_end(id, &frame("A")).is_none());
         assert!(r.stream_opened(id, &frame("B")).is_none());
         assert_eq!(r.stream_opened(id, &frame("A")), Some((Ctx(1), "open")));
+        assert_eq!(r.stream_data(id, &frame("A")), Some((Ctx(1), "data")));
+        assert!(r.stream_data(id, &frame("B")).is_none());
         assert!(r.owns_stream(id, &Ctx(1)) && !r.owns_stream(id, &Ctx(2)));
         assert!(
             r.stream_end(id, &frame("B")).is_none(),
@@ -392,6 +387,24 @@ mod tests {
             r.stream_data(id, &frame("A")).is_none(),
             "an ended stream stays closed"
         );
+        assert!(r.pending.is_empty() && r.streams.is_empty());
+    }
+
+    #[test]
+    fn a_refused_open_leaves_nothing() {
+        let mut r = two_frames();
+        let id = r.register_stream_open(&Ctx(1), "open", sink()).unwrap();
+        assert!(r.stream_open_failed(id, &frame("B")).is_none());
+        assert_eq!(
+            r.stream_open_failed(id, &frame("A")),
+            Some((Ctx(1), "open"))
+        );
+        assert!(
+            r.stream_opened(id, &frame("A")).is_none(),
+            "a refused open never opens"
+        );
+        assert!(!r.owns_stream(id, &Ctx(1)));
+        assert!(r.pending.is_empty() && r.streams.is_empty());
     }
 
     #[test]

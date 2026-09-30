@@ -60,9 +60,14 @@ pub const STREAM_ERROR: u8 = 3;
 pub const STREAM_CANCEL: u8 = 4;
 
 pub const STREAM_BROWSER_DATA: u8 = 5;
+/// Ends the stream; the payload is the result (UTF-8).
 pub const STREAM_BROWSER_END: u8 = 6;
-/// An error payload ([`encode_error_payload`]).
+/// Fails the stream, or refuses its open: an error payload
+/// ([`encode_error_payload`]).
 pub const STREAM_BROWSER_ERROR: u8 = 7;
+/// The handler accepted the open; empty payload. Sent before anything else
+/// of the stream.
+pub const STREAM_BROWSER_OPENED: u8 = 8;
 
 /// Payload encoding identifiers.
 pub const PAYLOAD_EMPTY: u8 = 0;
@@ -674,6 +679,25 @@ mod tests {
         let (cmd, rest) = decode_cmd_payload(&buf).unwrap();
         assert_eq!(cmd, "");
         assert_eq!(rest, b"trailing");
+    }
+
+    // Each stream message has an opcode of its own: the renderer tells an
+    // open's acknowledgement from an end by the opcode alone
+    #[test]
+    fn stream_opcodes_are_distinct() {
+        let opcodes = [
+            STREAM_OPEN,
+            STREAM_DATA,
+            STREAM_END,
+            STREAM_ERROR,
+            STREAM_CANCEL,
+            STREAM_BROWSER_DATA,
+            STREAM_BROWSER_END,
+            STREAM_BROWSER_ERROR,
+            STREAM_BROWSER_OPENED,
+        ];
+        let distinct: std::collections::HashSet<u8> = opcodes.into_iter().collect();
+        assert_eq!(distinct.len(), opcodes.len());
     }
 }
 

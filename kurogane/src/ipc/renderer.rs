@@ -860,8 +860,8 @@ wrap_v8_handler! {
                 promise.reject_promise(Some(&reject_msg));
             }
 
-            // The promise represents completion of the open request, not message delivery
-            // It is resolved or rejected when the browser responds
+            // The promise settles when the browser answers the open:
+            // STREAM_BROWSER_OPENED resolves it, STREAM_BROWSER_ERROR rejects it
 
             if let Some(ret) = retval {
                 *ret = Some(promise);

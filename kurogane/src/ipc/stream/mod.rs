@@ -1,7 +1,9 @@
 //! Stream IPC subsystem.
 //!
-//! Provides bidirectional streaming data transport. Streams are
-//! identified by a correlation ID and consist of open, data, end and error messages.
+//! Provides bidirectional streaming data transport. Streams are identified
+//! by a correlation ID. The page opens a stream; the browser answers with
+//! `STREAM_BROWSER_OPENED` or refuses with `STREAM_BROWSER_ERROR`, and data
+//! then flows both ways until the stream ends or fails.
 //!
 //! Each stream gets its own handler instance via a factory closure,
 //! giving handlers natural per-stream mutable state.
@@ -21,8 +23,9 @@ use crate::runtime::AppHandle;
 
 /// Responder for sending data from a browser-side stream handler to the renderer.
 ///
-/// The responder is bound to its stream and stops sending when the stream is
-/// closed or its document is replaced.
+/// A responder the runtime hands a handler is bound to its stream and its
+/// document. Once any clone has sent the stream's end or error, or the
+/// stream is closed or its document replaced, every send returns `Err`.
 #[derive(Clone)]
 pub struct StreamResponder {
     frame: Frame,
@@ -76,76 +79,118 @@ impl StreamResponder {
         Ok(())
     }
 
-    /// Send a data chunk to the renderer.
+    /// Sends a data chunk to the page's `onData`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` and sends nothing when the stream has ended or failed,
+    /// its frame is gone or shows another document, or the message cannot
+    /// be built.
     pub fn send_data(&self, data: &[u8]) -> Result<(), String> {
         self.deliverable()?;
-        let envelope = Envelope {
-            version: ENVELOPE_VERSION,
-            subsystem: SUB_STREAM,
-            opcode: STREAM_BROWSER_DATA,
-            flags: 0,
-            correlation_id: self.stream_id,
-            payload_kind: PAYLOAD_BINARY,
-        };
-        let mut msg = build_message("kurogane_stream", &envelope, data)
-            .ok_or_else(|| "failed to build STREAM_BROWSER_DATA message".to_string())?;
+        let mut msg = self.message(STREAM_BROWSER_DATA, PAYLOAD_BINARY, data)?;
         self.frame
             .send_process_message(ProcessId::RENDERER, Some(&mut msg));
         Ok(())
     }
 
-    /// Signal that the browser is done sending data for this stream.
+    /// Ends the stream: the page's `onEnd` receives `result`.
+    ///
+    /// The first `end` or `error` sent, from any clone, closes the stream.
+    ///
+    /// # Errors
+    ///
+    /// As [`send_data`](Self::send_data); `Err("stream closed")` once the
+    /// stream has ended or failed.
     pub fn end(&self, result: &str) -> Result<(), String> {
-        self.deliverable()?;
-        let envelope = Envelope {
-            version: ENVELOPE_VERSION,
-            subsystem: SUB_STREAM,
-            opcode: STREAM_BROWSER_END,
-            flags: 0,
-            correlation_id: self.stream_id,
-            payload_kind: PAYLOAD_STRING,
-        };
-        let payload = result.as_bytes();
-        let mut msg = build_message("kurogane_stream", &envelope, payload)
-            .ok_or_else(|| "failed to build STREAM_BROWSER_END message".to_string())?;
-        self.frame
-            .send_process_message(ProcessId::RENDERER, Some(&mut msg));
-        Ok(())
+        self.finish(STREAM_BROWSER_END, PAYLOAD_STRING, result.as_bytes())
     }
 
-    /// Signal an error to the renderer for this stream.
+    /// Fails the stream: the page's `onError` receives `msg`.
+    ///
+    /// Closes the stream, as [`end`](Self::end) does.
+    ///
+    /// # Errors
+    ///
+    /// As [`end`](Self::end).
     pub fn error(&self, msg: &str) -> Result<(), String> {
         self.error_with_code(msg, ErrorCode::Handler)
     }
 
-    /// Signal an error of class `code`: the renderer rejects with that code.
+    /// Fails the stream with class `code`: a pending open rejects with that code.
     pub(crate) fn error_with_code(&self, msg: &str, code: ErrorCode) -> Result<(), String> {
-        self.deliverable()?;
-        let envelope = Envelope {
-            version: ENVELOPE_VERSION,
-            subsystem: SUB_STREAM,
-            opcode: STREAM_BROWSER_ERROR,
-            flags: 0,
-            correlation_id: self.stream_id,
-            payload_kind: PAYLOAD_BINARY,
-        };
         let payload = encode_error_payload(code.wire(), msg);
-        let mut msg = build_message("kurogane_stream", &envelope, &payload)
-            .ok_or_else(|| "failed to build STREAM_BROWSER_ERROR message".to_string())?;
+        self.finish(STREAM_BROWSER_ERROR, PAYLOAD_BINARY, &payload)
+    }
+
+    /// Tells the page the handler accepted the open, which resolves its
+    /// `openStream`. Sent before anything else of the stream.
+    pub(crate) fn opened(&self) -> Result<(), String> {
+        self.deliverable()?;
+        let mut msg = self.message(STREAM_BROWSER_OPENED, PAYLOAD_EMPTY, &[])?;
         self.frame
             .send_process_message(ProcessId::RENDERER, Some(&mut msg));
         Ok(())
     }
+
+    /// Sends the stream's last message. It is built first, so only a message
+    /// that is sent closes the stream, and the swap lets exactly one end or
+    /// error through, whichever thread sends it.
+    fn finish(&self, opcode: u8, payload_kind: u8, payload: &[u8]) -> Result<(), String> {
+        self.deliverable()?;
+        let mut msg = self.message(opcode, payload_kind, payload)?;
+        if self.closed.swap(true, Ordering::SeqCst) {
+            return Err("stream closed".into());
+        }
+        self.frame
+            .send_process_message(ProcessId::RENDERER, Some(&mut msg));
+        Ok(())
+    }
+
+    /// Builds a message of this stream.
+    fn message(
+        &self,
+        opcode: u8,
+        payload_kind: u8,
+        payload: &[u8],
+    ) -> Result<ProcessMessage, String> {
+        let envelope = Envelope {
+            version: ENVELOPE_VERSION,
+            subsystem: SUB_STREAM,
+            opcode,
+            flags: 0,
+            correlation_id: self.stream_id,
+            payload_kind,
+        };
+        build_message("kurogane_stream", &envelope, payload)
+            .ok_or_else(|| format!("failed to build stream message {opcode}"))
+    }
 }
 
-/// Handles the lifecycle of a stream.
+/// Handles one stream a page opens.
 ///
-/// A handler is created when the stream opens and dropped when it ends or
-/// errors. The framework supplies a responder to callbacks that may send
-/// data back to the renderer.
+/// The factory registered with [`App::stream`](crate::App::stream) makes a
+/// handler for each stream. In order:
 ///
-/// on_chunk borrows the responder (the stream continues).
-/// on_end takes ownership (the stream is consumed).
+/// 1. [`on_open`](Self::on_open) accepts or refuses the stream. Nothing can
+///    be sent yet: the page does not hold the stream.
+/// 2. The runtime tells the page the stream is open, which resolves its
+///    `openStream`, then calls [`on_opened`](Self::on_opened).
+/// 3. [`on_chunk`](Self::on_chunk) runs for each chunk the page writes.
+/// 4. [`on_end`](Self::on_end) runs when the page ends the stream.
+///
+/// The first [`end`](StreamResponder::end) or
+/// [`error`](StreamResponder::error) sent closes the stream, whichever clone
+/// of the responder sends it; later sends return `Err("stream closed")`.
+/// An `Err` from `on_open` rejects the open; an `Err` from `on_opened`,
+/// `on_chunk` or `on_end` fails the stream unless it is already closed. A
+/// panic in any of them counts as `Err("handler panicked")`. The page's end
+/// is always answered: when `on_end` sends neither, the runtime ends the
+/// stream with an empty result.
+///
+/// The runtime drops the handler once the stream is closed. A stream closed
+/// from another thread is noticed at the next stream open, or when its
+/// document goes.
 ///
 /// # Threads
 ///
@@ -153,23 +198,67 @@ impl StreamResponder {
 /// receives every message from the page, so return promptly: CEF says not
 /// to block this thread. The responder may be cloned and used from any
 /// thread.
+///
+/// # Examples
+///
+/// A handler that greets the page, then counts the bytes the page writes:
+///
+/// ```no_run
+/// use kurogane::App;
+/// use kurogane::ipc::{StreamHandler, StreamResponder};
+///
+/// #[derive(Default)]
+/// struct Counter {
+///     bytes: usize,
+/// }
+///
+/// impl StreamHandler for Counter {
+///     fn on_opened(&mut self, responder: &StreamResponder) -> Result<(), String> {
+///         responder.send_data(b"ready")
+///     }
+///
+///     fn on_chunk(&mut self, data: &[u8], _: &StreamResponder) -> Result<(), String> {
+///         self.bytes += data.len();
+///         Ok(())
+///     }
+///
+///     fn on_end(&mut self, _: &str, responder: StreamResponder) -> Result<(), String> {
+///         responder.end(&self.bytes.to_string())
+///     }
+/// }
+///
+/// App::new("frontend").stream("count", Counter::default).run_or_exit();
+/// ```
 pub trait StreamHandler: Send + 'static {
-    /// Called when the stream opens.
-    fn on_open(&mut self, metadata: &str, responder: &StreamResponder) -> Result<(), String> {
-        let _ = (metadata, responder);
+    /// Accepts or refuses the stream. `metadata` is the second argument of
+    /// the page's `openStream`. An `Err` rejects the `openStream` with its
+    /// message.
+    fn on_open(&mut self, metadata: &str) -> Result<(), String> {
+        let _ = metadata;
         Ok(())
     }
 
-    /// Called for each data chunk.
+    /// Called once the page has been told the stream is open: the place to
+    /// send initial data, end or fail the stream, or hand a clone of
+    /// `responder` to a thread that produces data. An `Err` fails the stream.
+    fn on_opened(&mut self, responder: &StreamResponder) -> Result<(), String> {
+        let _ = responder;
+        Ok(())
+    }
+
+    /// Called for each chunk the page writes. An `Err` fails the stream.
     fn on_chunk(&mut self, data: &[u8], responder: &StreamResponder) -> Result<(), String>;
 
-    /// Called when the stream closes normally.
+    /// Called when the page ends the stream with `result`. Once it returns
+    /// `Ok`, the runtime ends the stream with an empty result unless the
+    /// handler has ended or failed it; an `Err` fails the stream instead.
     fn on_end(&mut self, result: &str, responder: StreamResponder) -> Result<(), String> {
         let _ = (result, responder);
         Ok(())
     }
 
-    /// Called when the stream errors.
+    /// Called when the renderer reports that the stream failed; not for a
+    /// failure the handler or the runtime sends.
     fn on_error(&mut self, message: &str) {
         let _ = message;
     }
@@ -199,6 +288,11 @@ impl StreamEntry {
             self.url_origin.clone(),
             self.closed.clone(),
         )
+    }
+
+    /// Whether the stream has ended, failed or been closed.
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
     }
 
     /// Prevents further responses on this stream.
