@@ -53,6 +53,8 @@
      * @param {string} command
      * @param {ArrayBuffer | ArrayBufferView | *} payload
      * @returns {Promise<ArrayBuffer | *> & { cancel: () => boolean }}
+     * @throws {Error} if command is not a non-empty string of at most 65535
+     *     UTF-8 bytes; the Error has no .code
      */
     function invoke(command, payload) {
         let p;
@@ -101,6 +103,7 @@
      *
      * @param {number} id - The native promise id
      * @returns {boolean} true if the promise was found and canceled
+     * @throws {Error} if id is not an integer; the Error has no .code
      */
     function cancel(id) {
         return !!window.core.cancel(id);
@@ -118,6 +121,9 @@
      * @param {Function} callback - receives (payload) when the event fires
      * @param {Function} [onError] - receives (Error) if the subscription is refused
      * @returns {number} subscription id (pass to off() to unsubscribe)
+     * @throws {TypeError} if eventName is not a string, or a callback is not a function
+     * @throws {Error} if eventName is empty or longer than 65535 UTF-8 bytes;
+     *     the Error has no .code
      */
     function on(eventName, callback, onError) {
         if (typeof eventName !== 'string') {
@@ -140,6 +146,7 @@
      *
      * @param {number} id - subscription id returned by on()
      * @returns {boolean} true if the subscription was found and removed
+     * @throws {Error} if id is not an integer; the Error has no .code
      */
     function off(id) {
         return !!window.core.off(id);
@@ -251,7 +258,8 @@
      * installs its callbacks is buffered.
      *
      * A refused open rejects with an Error carrying a numeric .code
-     * (-4 when the handler is not permitted for this origin).
+     * (-4 when the handler is not permitted for this origin). A handlerName
+     * that is empty or not a string rejects with an Error that has no .code.
      *
      * @param {string} handlerName - registered stream handler name
      * @param {string} [metadata] - optional metadata string

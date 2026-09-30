@@ -200,7 +200,7 @@ let runtime = App::url("https://example.com")
 Invoke them from JavaScript:
 
 ```javascript
-const result = await window.core.invoke("ping", { message: "hello" });
+const result = await window.kurogane.invoke("ping", { message: "hello" });
 ```
 
 Commands exchange JSON values between JavaScript and Rust.

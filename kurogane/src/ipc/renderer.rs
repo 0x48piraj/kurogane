@@ -27,6 +27,17 @@ fn v8_to_string(v: &V8Value) -> String {
     s.to_string()
 }
 
+/// Sets the V8 exception message and reports the call as handled.
+///
+/// CEF throws the exception when `Execute` returns `1`. cef-rs exposes the
+/// exception as a borrowed `CefString`; `try_set` writes through that wrapper.
+fn throw(exception: Option<&mut CefString>, message: &str) -> i32 {
+    if let Some(exception) = exception {
+        exception.try_set(message);
+    }
+    1
+}
+
 // Memory pinning helper
 #[inline(always)]
 fn with_array_buffer<R>(ptr: *const u8, len: usize, f: impl FnOnce(&[u8]) -> R) -> R {
@@ -358,10 +369,7 @@ wrap_v8_handler! {
             let args = match arguments {
                 Some(a) if !a.is_empty() => a,
                 _ => {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("invoke requires at least a command argument");
-                    }
-                    return 0;
+                    return throw(exception, "invoke requires at least a command argument");
                 }
             };
 
@@ -370,32 +378,24 @@ wrap_v8_handler! {
                 Some(Some(v)) if v.is_string() != 0 => {
                     let s = v8_to_string(v);
                     if s.is_empty() {
-                        if let Some(exc) = exception { *exc = CefString::from("command cannot be empty"); }
-                        return 0;
+                        return throw(exception, "command cannot be empty");
                     }
                     s
                 }
                 _ => {
-                    if let Some(exc) = exception { *exc = CefString::from("command must be a non-empty string"); }
-                    return 0;
+                    return throw(exception, "command must be a non-empty string");
                 }
             };
 
             let context = match v8_context_get_current_context() {
                 Some(ctx) => ctx,
                 None => {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("invoke: no active renderer context");
-                    }
-                    return 0;
+                    return throw(exception, "invoke: no active renderer context");
                 }
             };
 
             let Some(frame) = context.frame() else {
-                if let Some(exc) = exception {
-                    *exc = CefString::from("invoke: no frame for current context");
-                }
-                return 0;
+                return throw(exception, "invoke: no frame for current context");
             };
 
             // Detect payload type from second argument
@@ -404,17 +404,14 @@ wrap_v8_handler! {
                 .filter(|v| v.is_array_buffer() != 0);
 
             let Some(cmd_header) = encode_cmd_header(&cmd) else {
-                if let Some(exc) = exception {
-                    *exc = CefString::from(
-                        "invoke: command name exceeds the 65535-byte protocol limit",
-                    );
-                }
-                return 0;
+                return throw(
+                    exception,
+                    "invoke: command name exceeds the 65535-byte protocol limit",
+                );
             };
 
             let Some(promise) = v8_value_create_promise() else {
-                if let Some(exc) = exception { *exc = CefString::from("invoke: cannot create a promise"); }
-                return 0;
+                return throw(exception, "invoke: cannot create a promise");
             };
             let promise_for_retval = promise.clone();
             let (id, flags) = {
@@ -422,16 +419,14 @@ wrap_v8_handler! {
                 (state.register_rpc(&context, promise.clone()), state.flags_for(&context))
             };
             let Some(id) = id else {
-                if let Some(exc) = exception { *exc = CefString::from("invoke: this context is not connected"); }
-                return 0;
+                return throw(exception, "invoke: this context is not connected");
             };
 
             // Expose the id on the promise for JS-side cancellation
             let id_key = CefString::from("__kurogane_id");
             let Some(mut id_value) = v8_value_create_int(id) else {
                 state().forget(id);
-                if let Some(exc) = exception { *exc = CefString::from("invoke: cannot create the call id"); }
-                return 0;
+                return throw(exception, "invoke: cannot create the call id");
             };
             promise_for_retval.set_value_bykey(
                 Some(&id_key),
@@ -446,11 +441,8 @@ wrap_v8_handler! {
                 let len = buffer.array_buffer_byte_length();
 
                 if ptr.is_null() {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("ArrayBuffer has null data");
-                    }
                     state().forget(id);
-                    return 0;
+                    return throw(exception, "ArrayBuffer has null data");
                 }
 
                 let mut build_failed = false;
@@ -534,20 +526,14 @@ wrap_v8_handler! {
             let args = match arguments {
                 Some(a) if !a.is_empty() => a,
                 _ => {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("cancel requires an id argument");
-                    }
-                    return 0;
+                    return throw(exception, "cancel requires an id argument");
                 }
             };
 
             let id = match args.first() {
                 Some(Some(v)) if v.is_int() != 0 || v.is_uint() != 0 => v.int_value(),
                 _ => {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("cancel: id must be an integer");
-                    }
-                    return 0;
+                    return throw(exception, "cancel: id must be an integer");
                 }
             };
 
@@ -618,31 +604,28 @@ wrap_v8_handler! {
             let args = match arguments {
                 Some(a) if a.len() >= 2 => a,
                 _ => {
-                    if let Some(exc) = exception {
-                        *exc = CefString::from("on(eventName, callback[, onError]) requires two arguments");
-                    }
-                    return 0;
+                    return throw(
+                        exception,
+                        "on(eventName, callback[, onError]) requires two arguments",
+                    );
                 }
             };
 
             let event_name = match args.first() {
                 Some(Some(v)) if v.is_string() != 0 => v8_to_string(v),
                 _ => {
-                    if let Some(exc) = exception { *exc = CefString::from("event name must be a string"); }
-                    return 0;
+                    return throw(exception, "event name must be a string");
                 }
             };
 
             if event_name.is_empty() {
-                if let Some(exc) = exception { *exc = CefString::from("event name cannot be empty"); }
-                return 0;
+                return throw(exception, "event name cannot be empty");
             }
 
             let callback = match args.get(1) {
                 Some(Some(v)) if v.is_function() != 0 => v,
                 _ => {
-                    if let Some(exc) = exception { *exc = CefString::from("second argument must be a function"); }
-                    return 0;
+                    return throw(exception, "second argument must be a function");
                 }
             };
 
@@ -650,8 +633,7 @@ wrap_v8_handler! {
             let on_error = match args.get(2) {
                 Some(Some(v)) if v.is_function() != 0 => Some(v.clone()),
                 Some(Some(v)) if v.is_undefined() == 0 && v.is_null() == 0 => {
-                    if let Some(exc) = exception { *exc = CefString::from("third argument must be a function"); }
-                    return 0;
+                    return throw(exception, "third argument must be a function");
                 }
                 _ => None,
             };
@@ -659,23 +641,16 @@ wrap_v8_handler! {
             let context = match v8_context_get_current_context() {
                 Some(ctx) => ctx,
                 None => {
-                    if let Some(exc) = exception { *exc = CefString::from("on: no active renderer context"); }
-                    return 0;
+                    return throw(exception, "on: no active renderer context");
                 }
             };
 
             let Some(frame) = context.frame() else {
-                if let Some(exc) = exception { *exc = CefString::from("on: no frame for current context"); }
-                return 0;
+                return throw(exception, "on: no frame for current context");
             };
 
             let Some(payload) = encode_cmd_payload(&event_name, &[]) else {
-                if let Some(exc) = exception {
-                    *exc = CefString::from(
-                        "on: event name exceeds the 65535-byte protocol limit",
-                    );
-                }
-                return 0;
+                return throw(exception, "on: event name exceeds the 65535-byte protocol limit");
             };
 
             let (id, flags) = {
@@ -684,8 +659,7 @@ wrap_v8_handler! {
                 (id, state.flags_for(&context))
             };
             let Some(id) = id else {
-                if let Some(exc) = exception { *exc = CefString::from("on: this context is not connected"); }
-                return 0;
+                return throw(exception, "on: this context is not connected");
             };
 
             let subscribe = {
@@ -736,24 +710,21 @@ wrap_v8_handler! {
             let args = match arguments {
                 Some(a) if !a.is_empty() => a,
                 _ => {
-                    if let Some(exc) = exception { *exc = CefString::from("off requires an id argument"); }
-                    return 0;
+                    return throw(exception, "off requires an id argument");
                 }
             };
 
             let id = match args.first() {
                 Some(Some(v)) if v.is_int() != 0 || v.is_uint() != 0 => v.int_value(),
                 _ => {
-                    if let Some(exc) = exception { *exc = CefString::from("off: id must be an integer"); }
-                    return 0;
+                    return throw(exception, "off: id must be an integer");
                 }
             };
 
             let context = match v8_context_get_current_context() {
                 Some(ctx) => ctx,
                 None => {
-                    if let Some(exc) = exception { *exc = CefString::from("off: no active renderer context"); }
-                    return 0;
+                    return throw(exception, "off: no active renderer context");
                 }
             };
 
@@ -808,22 +779,19 @@ wrap_v8_handler! {
             let args = match arguments {
                 Some(a) if !a.is_empty() => a,
                 _ => {
-                    if let Some(exc) = exception { *exc = CefString::from("openStream requires a handler name argument"); }
-                    return 0;
+                    return throw(exception, "openStream requires a handler name argument");
                 }
             };
 
             let handler_name = match args.first() {
                 Some(Some(v)) if v.is_string() != 0 => v8_to_string(v),
                 _ => {
-                    if let Some(exc) = exception { *exc = CefString::from("handler name must be a string"); }
-                    return 0;
+                    return throw(exception, "handler name must be a string");
                 }
             };
 
             if handler_name.is_empty() {
-                if let Some(exc) = exception { *exc = CefString::from("handler name cannot be empty"); }
-                return 0;
+                return throw(exception, "handler name cannot be empty");
             }
 
             let metadata = match args.get(1) {
@@ -838,28 +806,25 @@ wrap_v8_handler! {
                 _ => None,
             };
             let (Some(data), Some(end), Some(error)) = (function(2), function(3), function(4)) else {
-                if let Some(exc) = exception {
-                    *exc = CefString::from("openStream(name, metadata, onData, onEnd, onError) needs three callbacks");
-                }
-                return 0;
+                return throw(
+                    exception,
+                    "openStream(name, metadata, onData, onEnd, onError) needs three callbacks",
+                );
             };
 
             let context = match v8_context_get_current_context() {
                 Some(ctx) => ctx,
                 None => {
-                    if let Some(exc) = exception { *exc = CefString::from("openStream: no active renderer context"); }
-                    return 0;
+                    return throw(exception, "openStream: no active renderer context");
                 }
             };
 
             let Some(frame) = context.frame() else {
-                if let Some(exc) = exception { *exc = CefString::from("openStream: no frame for current context"); }
-                return 0;
+                return throw(exception, "openStream: no frame for current context");
             };
 
             let Some(promise) = v8_value_create_promise() else {
-                if let Some(exc) = exception { *exc = CefString::from("openStream: cannot create a promise"); }
-                return 0;
+                return throw(exception, "openStream: cannot create a promise");
             };
             let (stream_id, flags) = {
                 let mut state = state();
@@ -867,8 +832,7 @@ wrap_v8_handler! {
                 (state.register_stream_open(&context, promise.clone(), sink), state.flags_for(&context))
             };
             let Some(stream_id) = stream_id else {
-                if let Some(exc) = exception { *exc = CefString::from("openStream: this context is not connected"); }
-                return 0;
+                return throw(exception, "openStream: this context is not connected");
             };
 
             debug!("[IPC Renderer] openStream '{}' stream_id={}", handler_name, stream_id);
@@ -927,24 +891,21 @@ wrap_v8_handler! {
             let args = match arguments {
                 Some(a) if a.len() >= 2 => a,
                 _ => {
-                    if let Some(exc) = exception { *exc = CefString::from("writeStream(streamId, ArrayBuffer)"); }
-                    return 0;
+                    return throw(exception, "writeStream(streamId, ArrayBuffer)");
                 }
             };
 
             let stream_id = match args.first() {
                 Some(Some(v)) if v.is_int() != 0 || v.is_uint() != 0 => v.int_value(),
                 _ => {
-                    if let Some(exc) = exception { *exc = CefString::from("writeStream: streamId must be an integer"); }
-                    return 0;
+                    return throw(exception, "writeStream: streamId must be an integer");
                 }
             };
 
             let buffer = match args.get(1) {
                 Some(Some(v)) if v.is_array_buffer() != 0 => v,
                 _ => {
-                    if let Some(exc) = exception { *exc = CefString::from("writeStream: second argument must be an ArrayBuffer"); }
-                    return 0;
+                    return throw(exception, "writeStream: second argument must be an ArrayBuffer");
                 }
             };
 
@@ -952,21 +913,18 @@ wrap_v8_handler! {
             let len = buffer.array_buffer_byte_length();
 
             if ptr.is_null() {
-                if let Some(exc) = exception { *exc = CefString::from("writeStream: ArrayBuffer has null data"); }
-                return 0;
+                return throw(exception, "writeStream: ArrayBuffer has null data");
             }
 
             let context = match v8_context_get_current_context() {
                 Some(ctx) => ctx,
                 None => {
-                    if let Some(exc) = exception { *exc = CefString::from("writeStream: no active renderer context"); }
-                    return 0;
+                    return throw(exception, "writeStream: no active renderer context");
                 }
             };
 
             let Some(frame) = context.frame() else {
-                if let Some(exc) = exception { *exc = CefString::from("writeStream: no frame for current context"); }
-                return 0;
+                return throw(exception, "writeStream: no frame for current context");
             };
 
             let (owned, flags) = {
@@ -1021,16 +979,14 @@ wrap_v8_handler! {
             let args = match arguments {
                 Some(a) if !a.is_empty() => a,
                 _ => {
-                    if let Some(exc) = exception { *exc = CefString::from("endStream requires a streamId argument"); }
-                    return 0;
+                    return throw(exception, "endStream requires a streamId argument");
                 }
             };
 
             let stream_id = match args.first() {
                 Some(Some(v)) if v.is_int() != 0 || v.is_uint() != 0 => v.int_value(),
                 _ => {
-                    if let Some(exc) = exception { *exc = CefString::from("endStream: streamId must be an integer"); }
-                    return 0;
+                    return throw(exception, "endStream: streamId must be an integer");
                 }
             };
 
@@ -1042,14 +998,12 @@ wrap_v8_handler! {
             let context = match v8_context_get_current_context() {
                 Some(ctx) => ctx,
                 None => {
-                    if let Some(exc) = exception { *exc = CefString::from("endStream: no active renderer context"); }
-                    return 0;
+                    return throw(exception, "endStream: no active renderer context");
                 }
             };
 
             let Some(frame) = context.frame() else {
-                if let Some(exc) = exception { *exc = CefString::from("endStream: no frame for current context"); }
-                return 0;
+                return throw(exception, "endStream: no frame for current context");
             };
 
             let (owned, flags) = {
