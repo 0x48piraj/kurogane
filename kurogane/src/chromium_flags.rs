@@ -1,7 +1,8 @@
 //! Chromium command-line construction.
 //!
 //! This module provides a normalized intermediate representation for
-//! Chromium command-line switches.
+//! Chromium command-line switches. Each switch is keyed as Chromium keys
+//! it, so every spelling of one switch is one entry.
 
 use cef::*;
 use std::collections::BTreeMap;
@@ -25,33 +26,52 @@ pub(crate) struct ChromiumFlags {
     switches: BTreeMap<String, SwitchValue>,
 }
 
+/// The name Chromium files a switch under. base::CommandLine drops one
+/// leading `--` or `-` (or `/` on Windows) and lowercases the name on
+/// Windows only.
+fn key(name: &str) -> String {
+    let stripped = name.strip_prefix("--").or_else(|| name.strip_prefix('-'));
+
+    #[cfg(target_os = "windows")]
+    let stripped = stripped.or_else(|| name.strip_prefix('/'));
+
+    let key = stripped.unwrap_or(name);
+
+    if cfg!(target_os = "windows") {
+        key.to_ascii_lowercase()
+    } else {
+        key.to_owned()
+    }
+}
+
 impl ChromiumFlags {
     /// Insert a standalone switch.
-    pub(crate) fn set(&mut self, name: impl Into<String>) {
-        self.switches.insert(name.into(), SwitchValue::Present);
+    pub(crate) fn set(&mut self, name: impl AsRef<str>) {
+        let name = key(name.as_ref());
+        self.switches.insert(name, SwitchValue::Present);
     }
 
     /// Insert a switch with a value.
-    pub(crate) fn set_with_value(&mut self, name: impl Into<String>, value: impl Into<String>) {
-        self.switches
-            .insert(name.into(), SwitchValue::Value(value.into()));
+    pub(crate) fn set_with_value(&mut self, name: impl AsRef<str>, value: impl Into<String>) {
+        let value = SwitchValue::Value(value.into());
+        self.switches.insert(key(name.as_ref()), value);
     }
 
     /// Returns whether a switch is present, with or without a value.
     pub(crate) fn contains(&self, name: &str) -> bool {
-        self.switches.contains_key(name)
+        self.switches.contains_key(&key(name))
     }
 
     /// Apply user-supplied Chromium flags.
     ///
-    /// User flags are appended after runtime policies and therefore
-    /// override runtime defaults when the same switch name is used.
+    /// User flags are applied after runtime policies and therefore
+    /// override runtime defaults for the same switch, however it is spelled.
     pub(crate) fn extend_user_flags(&mut self, user_flags: &[ChromiumFlag]) {
         for flag in user_flags {
             match flag {
-                ChromiumFlag::Present(name) => self.set(name.clone()),
+                ChromiumFlag::Present(name) => self.set(name),
                 ChromiumFlag::WithValue(name, value) => {
-                    self.set_with_value(name.clone(), value.clone());
+                    self.set_with_value(name, value.clone());
                 }
             }
         }
@@ -163,6 +183,74 @@ mod tests {
         assert!(flags.contains("use-gl"));
         assert!(!flags.contains("disable-gpu"));
     }
+
+    #[test]
+    fn a_prefix_does_not_make_another_switch() {
+        let mut flags = ChromiumFlags::default();
+
+        flags.set("no-sandbox");
+        flags.set("--no-sandbox");
+        flags.set("-no-sandbox");
+
+        assert_eq!(flags.switches.len(), 1);
+        assert!(flags.contains("no-sandbox"));
+        assert!(flags.contains("--no-sandbox"));
+    }
+
+    #[test]
+    fn a_prefixed_user_flag_overrides_the_runtime_value() {
+        let mut flags = ChromiumFlags::default();
+
+        flags.set_with_value("use-gl", "angle");
+        flags.extend_user_flags(&[ChromiumFlag::WithValue("--use-gl".into(), "egl".into())]);
+
+        assert_eq!(flags.switches.len(), 1);
+        assert_eq!(
+            flags.switches.get("use-gl"),
+            Some(&SwitchValue::Value("egl".into()))
+        );
+    }
+
+    #[test]
+    fn a_switch_is_printed_with_one_prefix() {
+        let mut flags = ChromiumFlags::default();
+
+        flags.set("--no-sandbox");
+        flags.set_with_value("-use-gl", "egl");
+
+        assert_eq!(flags.to_string(), "--no-sandbox\n--use-gl=egl\n");
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn windows_switch_names_ignore_case_and_take_a_slash() {
+        let mut flags = ChromiumFlags::default();
+
+        flags.set("/NO-SANDBOX");
+        flags.set_with_value("use-gl", "angle");
+        flags.set_with_value("--Use-GL", "egl");
+
+        assert!(flags.contains("no-sandbox"));
+        assert_eq!(flags.switches.len(), 2);
+        assert_eq!(
+            flags.switches.get("use-gl"),
+            Some(&SwitchValue::Value("egl".into()))
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn other_platforms_keep_the_case_and_no_slash_prefix() {
+        let mut flags = ChromiumFlags::default();
+
+        // Chromium keeps both as written, so neither is no-sandbox
+        flags.set("--No-Sandbox");
+        flags.set("/no-sandbox");
+
+        assert!(!flags.contains("no-sandbox"));
+        assert!(flags.contains("No-Sandbox"));
+        assert!(flags.contains("/no-sandbox"));
+    }
 }
 
 #[cfg(test)]
@@ -170,10 +258,12 @@ mod property_tests {
     use super::*;
     use proptest::prelude::*;
 
+    // Generated names never start with '-', which Chromium strips as a prefix
+
     proptest! {
         #[test]
         fn last_write_wins(
-            key in "[a-z0-9\\-]{1,32}",
+            key in "[a-z0-9][a-z0-9\\-]{0,31}",
             first in ".*",
             second in ".*",
         ) {
@@ -199,7 +289,7 @@ mod property_tests {
     proptest! {
         #[test]
         fn user_flags_always_override_runtime_values(
-            key in "[a-z0-9\\-]{1,32}",
+            key in "[a-z0-9][a-z0-9\\-]{0,31}",
             runtime in ".*",
             user in ".*",
         ) {
@@ -224,7 +314,7 @@ mod property_tests {
     proptest! {
         #[test]
         fn intermediate_assignments_do_not_affect_final_state(
-            key in "[a-z0-9\\-]{1,32}",
+            key in "[a-z0-9][a-z0-9\\-]{0,31}",
             a in ".*",
             b in ".*",
             c in ".*",
@@ -246,7 +336,7 @@ mod property_tests {
         #[test]
         fn number_of_switches_equals_number_of_unique_keys(
             keys in prop::collection::vec(
-                "[a-z0-9\\-]{1,16}",
+                "[a-z0-9][a-z0-9\\-]{0,15}",
                 0..50
             )
         ) {

@@ -111,9 +111,6 @@ Cocoa's default `terminate:` calls `exit()`, which bypasses the run loop Chromiu
 
 Chromium's command line is assembled once in the browser process from a small set of runtime policies plus user overrides. Each policy contributes switches independently to a normalized switch set with last-write-wins precedence. User-supplied flags are applied last, so they can override runtime defaults.
 
-
-Chromium's command line is assembled once in the browser process from a small set of runtime policies plus user overrides:
-
 ```mermaid
 flowchart LR
     A["Sandbox policy"]

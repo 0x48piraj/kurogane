@@ -749,12 +749,20 @@ impl App {
     }
 
     /// Add a Chromium flag with no value.
+    ///
+    /// The name is a Chromium switch name, with or without its leading `--`
+    /// or `-` (or `/` on Windows); on Windows it is case-insensitive, as
+    /// Chromium treats it. The flag overrides the runtime's own setting of
+    /// the same switch.
     pub fn chromium_flag(mut self, name: impl Into<String>) -> Self {
         self.chromium_flags.push(ChromiumFlag::Present(name.into()));
         self
     }
 
     /// Add a Chromium flag with a value.
+    ///
+    /// The name is read as [`App::chromium_flag`] reads it. The last value
+    /// given for a switch wins, over the runtime's own value too.
     pub fn chromium_flag_with_value(
         mut self,
         name: impl Into<String>,

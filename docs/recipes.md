@@ -235,6 +235,8 @@ fn main() {
 }
 ```
 
+A flag's name may be written with or without its leading `--`. A flag you pass overrides Kurogane's own value for the same switch.
+
 Useful for enabling Chromium features, diagnostics and experimental functionality.
 
 Examples:

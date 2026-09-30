@@ -140,6 +140,17 @@ mod tests {
     }
 
     #[test]
+    fn a_prefixed_user_switch_that_weakens_the_sandbox_is_reported() {
+        let mut flags = ChromiumFlags::default();
+        flags.extend_user_flags(&[ChromiumFlag::Present("--no-sandbox".into())]);
+
+        assert_eq!(
+            sandbox_overrides(&flags, SandboxMode::Chromium),
+            ["no-sandbox"]
+        );
+    }
+
+    #[test]
     fn disabled_policy_always_passes_preflight() {
         assert!(preflight(SandboxMode::Disabled, Path::new("/nonexistent")).is_ok());
     }
