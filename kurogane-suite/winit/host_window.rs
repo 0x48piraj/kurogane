@@ -6,12 +6,16 @@
 //! This gives complete control over the window hierarchy,
 //! layout, resize handling and application lifecycle.
 //!
+//! Chromium is pumped as in views_scheduler.rs: at the earliest
+//! deadline it asked for, and at least every 33 ms.
+//!
 //! Browser shutdown is asynchronous.
 //! After requesting browser closure the host must continue
 //! pumping Chromium until on_before_close has completed and all
 //! browser instances have been destroyed.
 
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use kurogane::{App, BrowserBounds, PumpRequest};
 
@@ -22,14 +26,21 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::Window;
 
+/// The longest the loop waits between pumps: cefclient's kMaxTimerDelay.
+/// CEF does not promise to ask again after every pump.
+const MAX_PUMP_DELAY: Duration = Duration::from_millis(1000 / 30);
+
 struct EmbeddedDriver {
     handle: kurogane::AppInstance,
     window: Option<Window>,
     browser: Option<kurogane::BrowserHandle>,
     closing: bool,
+    /// The earliest deadline CEF asked for, and never later than
+    /// MAX_PUMP_DELAY after the last pump
+    next_pump: Instant,
 }
 
-impl ApplicationHandler for EmbeddedDriver {
+impl ApplicationHandler<Instant> for EmbeddedDriver {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -48,6 +59,12 @@ impl ApplicationHandler for EmbeddedDriver {
             .create_child_browser(hwnd, bounds, "app://app/index.html");
 
         self.window = Some(window);
+    }
+
+    fn user_event(&mut self, _: &ActiveEventLoop, deadline: Instant) {
+        // Keep the earliest: pumping early is harmless, pumping late stalls
+        // Chromium
+        self.next_pump = self.next_pump.min(deadline);
     }
 
     fn window_event(
@@ -77,14 +94,22 @@ impl ApplicationHandler for EmbeddedDriver {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Drive pending Chromium work, including browser shutdown
-        self.handle.pump();
+        let now = Instant::now();
+        if now >= self.next_pump {
+            // Until CEF asks for an earlier pump
+            self.next_pump = now + MAX_PUMP_DELAY;
+            self.handle.pump();
+        }
 
         if self.closing && self.handle.handle().browser_count() == 0 {
             // Shutdown after the final browser has been destroyed
             self.window = None;
             self.handle.shutdown();
             event_loop.exit();
+            return;
         }
+
+        event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_pump));
     }
 }
 
@@ -102,7 +127,8 @@ fn client_bounds(window: &Window) -> BrowserBounds {
     }
 }
 
-/// Helper function to extract a platform-native window handle for browser embedding
+/// Helper function to extract a platform-native window handle for browser
+/// embedding: an HWND on Windows, an NSView on macOS, an X11 window on Linux
 fn native_handle(window: &Window) -> *mut std::ffi::c_void {
     let handle = window.window_handle().unwrap();
     match handle.as_raw() {
@@ -112,8 +138,6 @@ fn native_handle(window: &Window) -> *mut std::ffi::c_void {
         RawWindowHandle::AppKit(h) => h.ns_view.as_ptr(),
         #[cfg(target_os = "linux")]
         RawWindowHandle::Xlib(h) => h.window as usize as *mut _,
-        #[cfg(target_os = "linux")]
-        RawWindowHandle::Wayland(h) => h.surface.as_ptr(),
         _ => panic!("unsupported platform"),
     }
 }
@@ -122,30 +146,40 @@ fn main() {
     // Kurogane starts before winit: on macOS it installs the NSApplication
     // subclass CEF needs, which must happen before winit creates the
     // application. The scheduler wakes the event loop once it exists
-    let wake: Arc<OnceLock<EventLoopProxy<()>>> = Arc::default();
+    let wake: Arc<OnceLock<EventLoopProxy<Instant>>> = Arc::default();
 
     let handle = App::new("winit/frontend")
         .scheduler({
             let wake = wake.clone();
-            move |_request: PumpRequest| {
-                // Marshal Chromium wake requests onto the event loop thread
+            move |request: PumpRequest| {
+                // Marshal Chromium's deadline onto the event loop thread
                 if let Some(proxy) = wake.get() {
-                    let _ = proxy.send_event(());
+                    let _ = proxy.send_event(request.deadline(Instant::now()));
                 }
             }
         })
         .start_embedded()
         .expect("Kurogane failed to initialize");
 
-    let event_loop = EventLoop::new().unwrap();
+    // CEF parents a child browser to an X11 window on Linux, so the loop
+    // asks winit for X11, under XWayland in a Wayland session
+    #[cfg(target_os = "linux")]
+    let event_loop = {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        EventLoop::<Instant>::with_user_event().with_x11().build()
+    };
+    #[cfg(not(target_os = "linux"))]
+    let event_loop = EventLoop::<Instant>::with_user_event().build();
+    let event_loop = event_loop.unwrap();
     let _ = wake.set(event_loop.create_proxy());
-    event_loop.set_control_flow(ControlFlow::Wait);
 
     let mut app = EmbeddedDriver {
         handle,
         window: None,
         browser: None,
         closing: false,
+        // At once: requests made before the proxy was set went nowhere
+        next_pump: Instant::now(),
     };
 
     event_loop.run_app(&mut app).unwrap();

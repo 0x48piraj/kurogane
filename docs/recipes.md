@@ -129,15 +129,18 @@ let runtime = kurogane::App::url("https://xkcd.com")
 
 runtime.create_window(/* ... */)?;
 runtime.create_window(/* ... */)?;
+
+runtime.run()?;
 ```
 
-Each browser runs as a native top-level window.
+Each browser runs as a native top-level window. `run()` returns once the last browser has closed; a hidden window's browser counts too.
 
 Only the application creates windows. Chrome's own window and tab commands (Ctrl+N, Ctrl+T, "Open link in new tab") do nothing in a Kurogane window.
 
 See:
 
-* [examples/multi_window.rs](../tests/multi-window.rs)
+* [kurogane-suite/scenarios/multi-window.rs](../kurogane-suite/scenarios/multi-window.rs)
+* [kurogane-suite/scenarios/window-management.rs](../kurogane-suite/scenarios/window-management.rs): windows that start minimized, maximized or hidden
 
 ## One instance per profile
 
@@ -207,7 +210,7 @@ Commands exchange JSON values between JavaScript and Rust.
 
 See:
 
-* [examples/ipc.rs](../tests/ipc.rs)
+* [kurogane-suite/scenarios/ipc/main.rs](../kurogane-suite/scenarios/ipc/main.rs)
 
 ## Streaming data
 
@@ -297,8 +300,8 @@ Useful for enabling Chromium features, diagnostics and experimental functionalit
 
 Examples:
 
-* [examples/popups.rs](../tests/popups.rs)
-* [examples/css-to-shader.rs](../tests/css-to-shader.rs)
+* [kurogane-suite/scenarios/popups/main.rs](../kurogane-suite/scenarios/popups/main.rs)
+* [kurogane-suite/scenarios/css-to-shader/main.rs](../kurogane-suite/scenarios/css-to-shader/main.rs)
 
 ## GPU mode selection
 
@@ -411,28 +414,50 @@ Not suited to profiles holding data worth protecting.
 
 ## Custom runtime integration
 
-Use `start()` when integrating Kurogane into an existing event loop or application runtime.
+Use `start()` when integrating Kurogane into an existing event loop or application runtime, and give it a scheduler: CEF then says when it next needs `pump()`, as CEF recommends for an application that pumps it from its own loop.
 
 ```rust
-use std::time::Duration;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
-use kurogane::App;
+use kurogane::{App, PumpRequest};
+
+// The longest the loop waits between pumps, as CEF's cefclient does
+const MAX_PUMP_DELAY: Duration = Duration::from_millis(1000 / 30);
 
 fn main() {
+    // CEF may call the scheduler from any thread: it hands the loop a deadline
+    let (wake, deadlines) = mpsc::channel::<Instant>();
+
     let runtime = App::url("https://example.com")
+        .scheduler(move |request: PumpRequest| {
+            let _ = wake.send(request.deadline(Instant::now()));
+        })
         .start()
         .expect("Kurogane failed to initialize");
 
+    let mut next = Instant::now();
     while !runtime.should_shutdown() {
-        runtime.pump();
-        std::thread::sleep(Duration::from_millis(16));
+        let now = Instant::now();
+        if now >= next {
+            // Until CEF asks for an earlier pump
+            next = now + MAX_PUMP_DELAY;
+            runtime.pump();
+        }
+        // Sleep until the deadline or a new request; the earliest wins
+        let wait = next.saturating_duration_since(Instant::now());
+        if let Ok(deadline) = deadlines.recv_timeout(wait) {
+            next = next.min(deadline);
+        }
     }
 
     runtime.shutdown();
 }
 ```
 
-`should_shutdown()` becomes true when the application has finished closing its browsers; after the last window closes or after `AppHandle::shutdown()` closes them all. Keep calling `pump()` until then, then call `AppInstance::shutdown()` to shut down CEF.
+The loop runs on the thread that started Kurogane. It pumps once the earliest deadline it has not pumped yet has passed, and never waits more than 33 ms between pumps, as CEF's sample application, cefclient, does.
+
+`should_shutdown()` becomes true when the application has finished closing its browsers; after the last window closes or after `AppHandle::shutdown()` closes them all. Keep calling `pump()` until then, then call `AppInstance::shutdown()` to shut down CEF. An application without a loop of its own calls `run()` instead.
 
 Useful for:
 
@@ -442,7 +467,9 @@ Useful for:
 
 See:
 
-* [examples/pump.rs](../tests/pump.rs)
+* [docs/winit.md](winit.md): the same loop with winit
+* [kurogane-suite/winit/views_scheduler.rs](../kurogane-suite/winit/views_scheduler.rs)
+* [kurogane-suite/scenarios/pump.rs](../kurogane-suite/scenarios/pump.rs): pumping every 16 ms without a scheduler, the mode CEF discourages
 
 ## Advanced: Integrating with winit
 
@@ -488,7 +515,7 @@ Useful for:
 
 See:
 
-* [examples/delegates.rs](../tests/delegates.rs)
+* [kurogane-suite/scenarios/delegates.rs](../kurogane-suite/scenarios/delegates.rs)
 
 ## Advanced: Renderer delegates
 
@@ -527,4 +554,4 @@ Useful for:
 
 See:
 
-* [examples/delegates.rs](../tests/delegates.rs)
+* [kurogane-suite/scenarios/delegates.rs](../kurogane-suite/scenarios/delegates.rs)

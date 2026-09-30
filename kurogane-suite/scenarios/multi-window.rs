@@ -29,8 +29,5 @@ fn main() {
         })
         .expect("failed to create browser window");
 
-    while !runtime.should_shutdown() {
-        runtime.pump();
-        std::thread::sleep(std::time::Duration::from_millis(16));
-    }
+    runtime.run().expect("Kurogane failed to run");
 }

@@ -4,7 +4,7 @@
 //! This helps in the abstraction of asset resolution, environment overrides and command registration.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::sync::Arc;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -28,13 +28,26 @@ mod resolver;
 
 /// A request from CEF indicating when it next needs to be serviced.
 ///
-/// Passed to the scheduler closure supplied via App::scheduler.
-#[derive(Debug, Clone)]
+/// Passed to the closure given to [`App::scheduler`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PumpRequest {
     /// CEF needs work immediately.
     Now,
     /// CEF needs work after the given delay.
     After(Duration),
+}
+
+impl PumpRequest {
+    /// Returns when to call [`AppInstance::pump`] for a request made at
+    /// `now`: `now` itself, or `now` plus the delay.
+    ///
+    /// A delay too long to add to `now` gives `now`; pumping early is safe.
+    pub fn deadline(self, now: Instant) -> Instant {
+        match self {
+            Self::Now => now,
+            Self::After(delay) => now.checked_add(delay).unwrap_or(now),
+        }
+    }
 }
 
 /// Callback type for pump scheduling.
@@ -485,7 +498,8 @@ impl App {
     ///
     /// When CEF determines it needs work done, it will call this closure
     /// with a PumpRequest indicating how urgently. The integrator is
-    /// responsible for calling AppInstance::pump accordingly.
+    /// responsible for calling AppInstance::pump accordingly;
+    /// [`PumpRequest::deadline`] gives the instant to pump at.
     ///
     /// CEF may call the scheduler from any thread. It enables CEF's external
     /// message pump, which returns after each pump. Use it with [`App::start`]
@@ -1086,6 +1100,22 @@ mod tests {
             Err(other) => panic!("expected a configuration error, got: {other}"),
             Ok(()) => panic!("App::run must refuse a scheduler"),
         }
+    }
+
+    #[test]
+    fn a_pump_request_is_due_after_its_delay() {
+        let now = Instant::now();
+        let delay = Duration::from_millis(40);
+
+        assert_eq!(PumpRequest::Now.deadline(now), now);
+        assert_eq!(PumpRequest::After(delay).deadline(now), now + delay);
+        // Past what an Instant holds: now, since pumping early is safe
+        assert_eq!(PumpRequest::After(Duration::MAX).deadline(now), now);
+
+        // Copy and Eq: a host can keep a request and compare it
+        let request = PumpRequest::After(delay);
+        let kept = request;
+        assert_eq!(request, kept);
     }
 
     #[test]

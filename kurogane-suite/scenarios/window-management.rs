@@ -45,10 +45,10 @@ fn main() {
         })
         .expect("failed to create browser window");
 
-    // Starts hidden
-    // TODO: Verify hidden-window shutdown behavior.
-    // On Windows a hidden browser may continue running after
-    // all visible windows close, preventing runtime shutdown.
+    // Starts hidden, and the application never shows it (a second launch
+    // would: it brings every window to the front). Once the other windows
+    // close, its browser keeps the application running, as any open browser
+    // does; Ctrl+C ends it
     runtime
         .create_window(kurogane::WindowOptions {
             url: "https://docs.rs".into(),
@@ -62,8 +62,5 @@ fn main() {
         })
         .expect("failed to create browser window");
 
-    while !runtime.should_shutdown() {
-        runtime.pump();
-        std::thread::sleep(std::time::Duration::from_millis(16));
-    }
+    runtime.run().expect("Kurogane failed to run");
 }
