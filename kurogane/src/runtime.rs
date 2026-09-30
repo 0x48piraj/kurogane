@@ -219,8 +219,7 @@ fn install_ctrlc_handler(app: AppHandle) {
         debug!("Scheduling browser shutdown on UI thread");
 
         // Unload handlers still run, as for a window closed by hand
-        let mut task = CloseAllTask::new(app.clone(), false);
-        post_task(ThreadId::UI, Some(&mut task));
+        app.request(Close::Everything { force: false });
     });
 
     // A host that installed its own handler keeps it; the app still closes
@@ -239,7 +238,7 @@ fn install_ctrlc_handler(app: AppHandle) {
 /// `force` uses `CloseBrowser(true)`. It also closes unlinked Views windows
 /// directly, whose browser is not created yet or has closed; linked windows
 /// close with their browser.
-pub(crate) fn close_all(app: &AppHandle, force: bool) {
+fn close_all(app: &AppHandle, force: bool) {
     let no_browsers = app.registry().browsers.is_empty();
     let no_windows = app.registry().windows.count() == 0;
     if no_browsers && no_windows {
@@ -275,9 +274,8 @@ fn close_windows(windows: Vec<Window>) {
     }
 }
 
-/// Asks every live browser to close.
-///
-/// CEF allows `BrowserHost` calls from any thread of the browser process.
+/// Asks every live browser to close. UI thread only; [`AppHandle::request`]
+/// brings it there.
 fn close_browsers(app: &AppHandle, force: bool) {
     let browsers: Vec<Browser> = {
         let reg = app.registry();
@@ -295,32 +293,42 @@ fn close_browsers(app: &AppHandle, force: bool) {
     }
 }
 
-/// Returns whether this is the thread CEF's UI work must run on.
-fn on_ui_thread() -> bool {
-    currently_on(ThreadId::UI) != 0
+/// What a close request closes.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Close {
+    /// Every browser, then the windows `close_all` closes directly. The last
+    /// `OnBeforeClose` ends the application, or the request itself when
+    /// nothing is open.
+    Everything { force: bool },
+    /// Every browser; `force` skips the pages' unload handlers.
+    Browsers { force: bool },
+    /// Every Views window. Each asks its browser to close first.
+    Windows,
 }
 
 wrap_task! {
-    struct CloseAllTask {
+    struct CloseTask {
         app: AppHandle,
-        force: bool,
+        what: Close,
     }
 
     impl Task {
         fn execute(&self) {
-            close_all(&self.app, self.force);
+            // CEF runs this on its UI thread, so request acts at once, once it
+            // has checked again that CEF has not begun shutting down since
+            self.app.request(self.what);
         }
     }
 }
 
-wrap_task! {
-    struct CloseWindowsTask {
-        app: AppHandle,
-    }
-
-    impl Task {
-        fn execute(&self) {
-            let windows = self.app.registry().windows.all();
+/// Closes `what`. UI thread only; [`AppHandle::request`] brings it there.
+fn close(app: &AppHandle, what: Close) {
+    match what {
+        Close::Everything { force } => close_all(app, force),
+        Close::Browsers { force } => close_browsers(app, force),
+        Close::Windows => {
+            // The guard ends with the statement: Window::close runs CanClose
+            let windows = app.registry().windows.all();
             close_windows(windows);
         }
     }
@@ -434,20 +442,17 @@ pub struct WindowOptions {
 
 /// Shared lifecycle handle for a running Kurogane application.
 ///
-/// AppHandle can be used from any thread to query state,
-/// broadcast events, or signal shutdown.
-///
-/// Obtain one via AppInstance::handle().
+/// Obtain one with [`AppInstance::handle`]; clones share the application.
 ///
 /// # Threads
 ///
-/// Every method can be called from any thread. The browsers, windows and
-/// frames it reaches are reference counted by CEF with atomic counts, and the
-/// `Browser`, `BrowserHost` and `Frame` calls it makes off the UI thread are
-/// ones CEF allows on any thread of the browser process. Views windows and
-/// the message loop belong to the UI thread, so [`AppHandle::shutdown`] and
-/// [`AppHandle::close_all_windows`] post their work there from any other
-/// thread.
+/// Usable from any thread. Queries copy what is open under a short lock.
+/// A broadcast sends to its subscribers on the calling thread, which CEF
+/// allows for frames in the browser process. Closing and ending run on CEF's
+/// UI thread: at once when called there, posted there otherwise.
+///
+/// Once [`AppInstance::shutdown`] has begun, calls that would reach CEF do
+/// nothing, since CEF takes no call after it has shut down.
 #[derive(Clone)]
 pub struct AppHandle {
     services: Arc<RuntimeServices>,
@@ -500,20 +505,53 @@ impl AppHandle {
         }
     }
 
+    /// Returns whether this is CEF's UI thread: the thread that ran
+    /// CefInitialize, since Kurogane never sets `multi_threaded_message_loop`
+    /// (cef_types.h:1753-1755). Compares thread ids and asks CEF nothing, so
+    /// it holds before CefInitialize and after CefShutdown alike.
+    fn on_ui_thread(&self) -> bool {
+        std::thread::current().id() == self.services.ui_thread
+    }
+
+    /// Returns true once `AppInstance::shutdown` has begun, after which
+    /// nothing may reach CEF (cef_app.h:97-103). Asks CEF nothing.
+    ///
+    /// A call on another thread can read false just before the flag is set
+    /// and reach CEF while CefShutdown runs. Only a lock held across every
+    /// CEF call would close that gap, and CEF calls back into Kurogane on the
+    /// same thread. When every browser has closed first, as CEF requires,
+    /// such a call can only be the post of a close request. A post that races
+    /// CefShutdown is outside CEF's contract; if it runs, CloseTask checks
+    /// this flag again.
+    fn cef_is_down(&self) -> bool {
+        self.services.cef_shut_down.load(Ordering::Acquire)
+    }
+
+    /// Closes `what` on CEF's UI thread: at once when called there, posted
+    /// there otherwise, as cefsimple's CloseAllBrowsers does. Does nothing
+    /// once CEF has begun shutting down.
+    pub(crate) fn request(&self, what: Close) {
+        if self.cef_is_down() {
+            debug!("CEF has shut down; ignoring {what:?}");
+        } else if self.on_ui_thread() {
+            close(self, what);
+        } else {
+            let mut task = CloseTask::new(self.clone(), what);
+            if post_task(ThreadId::UI, Some(&mut task)) == 0 {
+                debug!("CEF refused {what:?}; it did not run");
+            }
+        }
+    }
+
     /// Ends the application by closing all browsers.
     ///
     /// The application ends after the last browser closes. Calling this from
     /// another thread posts the close to the UI thread. The call does not wait
-    /// for the browsers to close.
+    /// for the browsers to close. Does nothing once [`AppInstance::shutdown`]
+    /// has begun.
     pub fn shutdown(&self) {
         debug!("AppHandle::shutdown: closing every browser");
-
-        if on_ui_thread() {
-            close_all(self, true);
-        } else {
-            let mut task = CloseAllTask::new(self.clone(), true);
-            post_task(ThreadId::UI, Some(&mut task));
-        }
+        self.request(Close::Everything { force: true });
     }
 
     /// Returns whether the application has ended.
@@ -532,8 +570,13 @@ impl AppHandle {
     ///
     /// The event is delivered asynchronously to every active subscription for the
     /// given event name. This method is thread-safe and returns immediately after
-    /// queuing the event for delivery.
+    /// queuing the event for delivery. Does nothing once
+    /// [`AppInstance::shutdown`] has begun.
     pub fn broadcast(&self, event: &str, data: &[u8]) {
+        // Subscriptions hold CEF frames
+        if self.cef_is_down() {
+            return;
+        }
         self.router().event.broadcast(event, data);
     }
 
@@ -566,15 +609,10 @@ impl AppHandle {
     /// Close all open windows.
     ///
     /// Safe to call from any thread: CEF's windows close only on the UI
-    /// thread, so a call from elsewhere is posted there.
+    /// thread, so a call from elsewhere is posted there. Does nothing once
+    /// [`AppInstance::shutdown`] has begun.
     pub fn close_all_windows(&self) {
-        if on_ui_thread() {
-            let windows = self.registry().windows.all();
-            close_windows(windows);
-        } else {
-            let mut task = CloseWindowsTask::new(self.clone());
-            post_task(ThreadId::UI, Some(&mut task));
-        }
+        self.request(Close::Windows);
     }
 
     /// Close all live browser instances.
@@ -583,8 +621,10 @@ impl AppHandle {
     /// until CEF has finished closing it, so an application that pumps CEF
     /// keeps pumping until the count is 0. A browser embedded in the
     /// application's own window closes without asking that window to close.
+    /// A call from another thread is posted to the UI thread. Does nothing
+    /// once [`AppInstance::shutdown`] has begun.
     pub fn close_all_browsers(&self, force: bool) {
-        close_browsers(self, force);
+        self.request(Close::Browsers { force });
     }
 
     /// Look up the window that hosts a given browser.
@@ -638,8 +678,12 @@ impl AppHandle {
 
     /// Creates a BrowserHandle for a registered browser, if it exists.
     ///
-    /// Returns None if no browser with the given BrowserId is registered.
+    /// Returns None if no browser with the given BrowserId is registered, or
+    /// once [`AppInstance::shutdown`] has begun.
     pub fn get_browser_handle(&self, id: BrowserId) -> Option<BrowserHandle> {
+        if self.cef_is_down() {
+            return None;
+        }
         let reg = self.registry();
         if reg.browsers.get(id).is_some() {
             Some(BrowserHandle {
@@ -715,6 +759,10 @@ impl BrowserHandle {
     #[track_caller]
     fn browser(&self) -> Option<Browser> {
         self.assert_ui_thread();
+        // No browser is open once CEF has begun shutting down
+        if self.app.cef_is_down() {
+            return None;
+        }
         let reg = self.app.registry();
         reg.browsers.get(self.id).map(|s| s.browser.clone())
     }
@@ -997,8 +1045,13 @@ impl AppInstance {
     /// Unlike [`AppHandle::shutdown`], this shuts down the CEF runtime itself.
     /// All browsers must already be closed; [`AppHandle::should_shutdown`] is
     /// true at that point.
+    ///
+    /// From here on, [`AppHandle`] and [`BrowserHandle`] calls that would
+    /// reach CEF do nothing. Finish using them on other threads first: a call
+    /// made there at this moment can still reach CEF.
     pub fn shutdown(&self) {
         let services = &self.handle.services;
+        // Before CefShutdown, so from here no handle reaches CEF
         if services.cef_shut_down.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -1258,7 +1311,13 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use cef::rc::ConvertReturnValue;
-    use cef::sys::{_cef_base_ref_counted_t, _cef_browser_host_t, _cef_browser_t, _cef_window_t};
+    use cef::sys::{
+        _cef_base_ref_counted_t, _cef_browser_host_t, _cef_browser_t, _cef_frame_t, _cef_window_t,
+    };
+
+    use crate::acl::Origin;
+    use crate::ipc::FrameId;
+    use crate::ipc::event::EventSubscription;
 
     /// A CEF structure the test made, and the calls made through it.
     #[repr(C)]
@@ -1302,6 +1361,12 @@ mod tests {
         // SAFETY: as in called
         unsafe { count(browser) };
         std::ptr::null_mut()
+    }
+
+    unsafe extern "C" fn called_false<T>(object: *mut T) -> c_int {
+        // SAFETY: as in called
+        unsafe { count(object) };
+        0
     }
 
     // Registering a browser reads its id; that is setup, not counted
@@ -1348,6 +1413,204 @@ mod tests {
         base.release = Some(release::<_cef_window_t>);
         raw.close = Some(called::<_cef_window_t>);
         leak(raw)
+    }
+
+    fn fake_frame() -> (Frame, &'static AtomicUsize) {
+        // SAFETY: as in fake_browser
+        let mut raw: _cef_frame_t = unsafe { std::mem::zeroed() };
+        raw.base.size = std::mem::size_of::<_cef_frame_t>();
+        raw.base.add_ref = Some(add_ref::<_cef_frame_t>);
+        raw.base.release = Some(release::<_cef_frame_t>);
+        // Gone, so a broadcast stops at it
+        raw.is_valid = Some(called_false::<_cef_frame_t>);
+        leak(raw)
+    }
+
+    /// A runtime with a browser, its window and a subscription to "tick".
+    struct Opened {
+        app: AppHandle,
+        browser: BrowserId,
+        window: WindowId,
+        browser_calls: &'static AtomicUsize,
+        window_calls: &'static AtomicUsize,
+        frame_calls: &'static AtomicUsize,
+    }
+
+    impl Opened {
+        fn new() -> Self {
+            let app = AppHandle::detached();
+            let (browser, browser_calls) = fake_browser();
+            let (window, window_calls) = fake_window();
+            let (frame, frame_calls) = fake_frame();
+            let (id, window_id) = {
+                let mut registry = app.registry();
+                let id = registry
+                    .browsers
+                    .ensure_registered(&browser, BrowserType::Main, None);
+                let window_id = registry.windows.allocate_id();
+                registry.windows.insert(window_id, window, Some(id));
+                (id, window_id)
+            };
+            let origin = Origin::parse("app://app").unwrap();
+            app.router()
+                .event
+                .subscriptions
+                .lock()
+                .unwrap()
+                .entry("tick".to_owned())
+                .or_default()
+                .push(EventSubscription {
+                    id: 1,
+                    frame,
+                    browser_id: id,
+                    frame_id: FrameId::new("1"),
+                    origin: origin.clone(),
+                    url_origin: origin,
+                });
+            drop(browser);
+            // Setup is over: from here each count is what the handle did
+            for calls in [browser_calls, window_calls, frame_calls] {
+                calls.store(0, Ordering::SeqCst);
+            }
+            Self {
+                app,
+                browser: id,
+                window: window_id,
+                browser_calls,
+                window_calls,
+                frame_calls,
+            }
+        }
+
+        fn calls(&self) -> [(&'static str, usize); 3] {
+            [
+                ("browser", self.browser_calls.load(Ordering::SeqCst)),
+                ("window", self.window_calls.load(Ordering::SeqCst)),
+                ("frame", self.frame_calls.load(Ordering::SeqCst)),
+            ]
+        }
+    }
+
+    /// Every AppHandle method, with the ids of what is open.
+    fn use_every_method(app: &AppHandle, browser: BrowserId, window: WindowId) {
+        app.shutdown();
+        app.close_all_windows();
+        app.close_all_browsers(false);
+        app.close_all_browsers(true);
+        app.broadcast("tick", b"1");
+        app.broadcast_json("tick", &1);
+        let _ = app.get_browser_handle(browser);
+        let _ = app.should_shutdown();
+        let _ = (app.browser_count(), app.window_count(), app.window_ids());
+        let _ = (app.browsers(), app.windows());
+        let _ = (
+            app.find_window_by_browser(browser),
+            app.browser_for_window(window),
+        );
+        let _ = (
+            app.browser_parent(browser),
+            app.browser_opener(browser),
+            app.children_of(browser),
+        );
+    }
+
+    /// Every BrowserHandle method. UI thread, which the handle asserts.
+    fn use_every_browser_method(handle: &BrowserHandle) {
+        let _ = handle.id();
+        handle.close(false);
+        handle.set_bounds(BrowserBounds {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        });
+        handle.notify_move_or_resize_started();
+        handle.navigate("app://app/");
+        handle.reload();
+        handle.reload_ignore_cache();
+        handle.go_back();
+        handle.go_forward();
+        let _ = (
+            handle.can_go_back(),
+            handle.can_go_forward(),
+            handle.is_loading(),
+        );
+        let _ = (handle.url(), handle.has_devtools());
+        handle.execute_javascript("1", "", 0);
+        handle.show_devtools();
+        handle.close_devtools();
+    }
+
+    #[test]
+    fn the_ui_thread_is_the_one_that_made_the_runtime() {
+        // Before CefInitialize CEF knows no UI thread, so asking it would say
+        // no here (and crash on macOS, where no test loads CEF)
+        let app = AppHandle::detached();
+        assert!(app.on_ui_thread());
+        std::thread::scope(|scope| {
+            scope.spawn(|| assert!(!app.on_ui_thread()));
+        });
+    }
+
+    #[test]
+    fn nothing_reaches_cef_once_it_has_shut_down() {
+        let opened = Opened::new();
+        let app = &opened.app;
+        app.services.cef_shut_down.store(true, Ordering::Release);
+
+        // On the UI thread, where a close would run at once
+        use_every_method(app, opened.browser, opened.window);
+        use_every_browser_method(&BrowserHandle {
+            id: opened.browser,
+            app: app.clone(),
+        });
+        assert!(app.get_browser_handle(opened.browser).is_none());
+        // A task CEF runs after shutdown began checks again
+        CloseTask::new(app.clone(), Close::Everything { force: true }).execute();
+
+        // On another thread, where a close would be posted
+        std::thread::scope(|scope| {
+            scope.spawn(|| use_every_method(app, opened.browser, opened.window));
+        });
+
+        for (what, calls) in opened.calls() {
+            assert_eq!(
+                calls, 0,
+                "the handle reached the {what} after CEF shut down"
+            );
+        }
+    }
+
+    #[test]
+    fn the_fakes_see_what_a_running_handle_reaches() {
+        let opened = Opened::new();
+        let app = &opened.app;
+
+        // UI thread only: off it a close is a post, which needs a running CEF
+        app.close_all_browsers(false);
+        app.close_all_windows();
+        app.broadcast("tick", b"1");
+        for (what, calls) in opened.calls() {
+            assert!(calls > 0, "the {what} saw nothing");
+        }
+
+        opened.browser_calls.store(0, Ordering::SeqCst);
+        BrowserHandle {
+            id: opened.browser,
+            app: app.clone(),
+        }
+        .reload();
+        assert!(
+            opened.browser_calls.load(Ordering::SeqCst) > 0,
+            "a browser handle looks its browser up"
+        );
+
+        opened.window_calls.store(0, Ordering::SeqCst);
+        CloseTask::new(app.clone(), Close::Windows).execute();
+        assert!(
+            opened.window_calls.load(Ordering::SeqCst) > 0,
+            "a task closes the window"
+        );
     }
 
     #[test]
