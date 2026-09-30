@@ -7,13 +7,15 @@
 //! Operations run on a bounded `kurogane-fs` worker thread, spawned on first
 //! use, so file I/O does not block the CEF UI thread. Requests are processed
 //! in submission order; a full queue is rejected with "filesystem is busy".
+//! If the thread cannot start, requests are rejected with "filesystem worker
+//! unavailable", never run where they arrived and the next one tries again.
 //!
 //! A request is admitted before its payload is copied or queued: an origin
 //! whose grants cannot perform the command gets [`ErrorCode::Capability`],
 //! a `write_file` over the transfer limit gets [`ErrorCode::TooLarge`] from
-//! its header alone, and an oversized path or request gets
+//! its header alone and an oversized path or request gets
 //! [`ErrorCode::Buffer`]. Admitted requests hold a share of a queued-bytes
-//! budget, and one origin may have at most [`ORIGIN_IN_FLIGHT`] operations
+//! budget and one origin may have at most [`ORIGIN_IN_FLIGHT`] operations
 //! queued or running, so no origin can occupy the worker for the others.
 //!
 //! File contents use the binary channel; all other data uses the string
@@ -43,7 +45,6 @@ use crate::capability::authorized::{AuthorizedFs, Filesystem};
 use crate::capability::error::FsError;
 use crate::capability::policy::FsCommand;
 use crate::capability::safe::EntryKind;
-use crate::debug;
 use crate::ipc::{AsyncHandler, BinaryResponder, ErrorCode, IpcError};
 
 /// How many operations may wait for the worker before new ones are refused.
@@ -114,8 +115,8 @@ impl Job {
 
 struct Worker {
     filesystem: Arc<Filesystem>,
-    /// `None` when the thread could not be spawned; jobs then run inline
-    queue: OnceLock<Option<SyncSender<Job>>>,
+    /// Set once the thread has started; until then every request tries
+    queue: OnceLock<SyncSender<Job>>,
     budget: Arc<Budget>,
 }
 
@@ -160,9 +161,22 @@ impl Worker {
     }
 
     fn submit(&self, job: Job) {
-        let Some(queue) = self.queue.get_or_init(|| self.spawn()) else {
-            job.run(&self.filesystem);
-            return;
+        let queue = match self.queue.get() {
+            Some(queue) => queue,
+            // Two first requests at once may both spawn: the worker whose
+            // sender is not kept ends as soon as that sender drops
+            None => match self.spawn() {
+                Ok(sender) => self.queue.get_or_init(|| sender),
+                // Never inline: the request arrived on the CEF UI thread
+                Err(e) => {
+                    eprintln!(
+                        "kurogane: cannot start the filesystem worker ({e}); fs.* requests fail until it starts"
+                    );
+                    return job
+                        .responder
+                        .resolve(Err(IpcError::new("filesystem worker unavailable")));
+                }
+            },
         };
         let (job, reason) = match queue.try_send(job) {
             Ok(()) => return,
@@ -172,10 +186,10 @@ impl Worker {
         job.responder.resolve(Err(IpcError::new(reason)));
     }
 
-    fn spawn(&self) -> Option<SyncSender<Job>> {
+    fn spawn(&self) -> std::io::Result<SyncSender<Job>> {
         let (sender, jobs) = mpsc::sync_channel::<Job>(QUEUE_DEPTH);
         let filesystem = Arc::clone(&self.filesystem);
-        let spawned = std::thread::Builder::new()
+        std::thread::Builder::new()
             .name("kurogane-fs".to_owned())
             .spawn(move || {
                 for job in jobs {
@@ -183,18 +197,12 @@ impl Worker {
                     // request; the worker keeps serving the others
                     let _ = catch_unwind(AssertUnwindSafe(|| job.run(&filesystem)));
                 }
-            });
-        match spawned {
-            Ok(_) => Some(sender),
-            Err(e) => {
-                debug!("[fs] cannot spawn the worker thread ({e}); running operations inline");
-                None
-            }
-        }
+            })?;
+        Ok(sender)
     }
 }
 
-/// Bounds what queued requests may hold: their payload bytes in total, and
+/// Bounds what queued requests may hold: their payload bytes in total and
 /// how many one origin may have queued or running.
 struct Budget {
     capacity: usize,
@@ -570,7 +578,7 @@ mod tests {
         fn ungranted_origins_are_refused_before_queueing() {
             let (_tmp, notes, handlers) = notes(FsAccess::READ);
             let big = frame("big.bin", &vec![0; 1 << 20]);
-            // No grant at all, and a grant without the command's bit
+            // No grant at all and a grant without the command's bit
             for (origin, command, request) in [
                 ("https://attacker.example", FsCommand::WriteFile, &big[..]),
                 (
