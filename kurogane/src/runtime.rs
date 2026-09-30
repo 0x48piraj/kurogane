@@ -760,26 +760,51 @@ fn native_to_cef_window(handle: *mut std::ffi::c_void) -> cef_window_handle_t {
     handle as usize as cef_window_handle_t
 }
 
+/// A browser of the running application.
+///
+/// The handle names the browser by its [`BrowserId`] and looks it up on each
+/// call. Once the browser has closed, or once [`AppInstance::shutdown`] has
+/// begun, the calls that would reach it do nothing and its queries answer
+/// false, or an empty URL.
+///
+/// # Threads
+///
+/// Usable from any thread, as CEF allows for a browser in the browser
+/// process. [`set_bounds`](Self::set_bounds) and
+/// [`has_devtools`](Self::has_devtools) are the exceptions: they run only on
+/// the thread that started the application, which is CEF's UI thread, and
+/// panic elsewhere.
 pub struct BrowserHandle {
     id: BrowserId,
     app: AppHandle,
 }
 
+// By hand: the AppHandle it holds has no Debug
+impl std::fmt::Debug for BrowserHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BrowserHandle")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
 impl BrowserHandle {
-    /// Ensures CEF UI-thread affinity for this handle.
+    /// Panics off CEF's UI thread. CEF allows a browser, its host and its
+    /// frames on any thread of the browser process unless a method says
+    /// otherwise (cef_browser.h:56-59 and 276-279, cef_frame.h:54-57); of the
+    /// calls here only HasDevTools does (cef_browser.h:594-598). set_bounds
+    /// moves the browser's native view, which platform::embed touches only on
+    /// the UI thread.
     #[track_caller]
     fn assert_ui_thread(&self) {
-        assert_eq!(
-            std::thread::current().id(),
-            self.app.services.ui_thread,
-            "BrowserHandle methods must be called from the UI thread where the runtime was initialized"
+        assert!(
+            self.app.on_ui_thread(),
+            "BrowserHandle::set_bounds and has_devtools run only on CEF's UI thread, the thread that started the application"
         );
     }
 
     /// Returns the browser this handle names, while it is open.
-    #[track_caller]
     fn browser(&self) -> Option<Browser> {
-        self.assert_ui_thread();
         // No browser is open once CEF has begun shutting down
         if self.app.cef_is_down() {
             return None;
@@ -789,13 +814,12 @@ impl BrowserHandle {
     }
 
     /// Returns the host of the browser this handle names, while it is open.
-    #[track_caller]
     fn host(&self) -> Option<BrowserHost> {
         self.browser()?.host()
     }
 
+    /// The id of the browser this handle names.
     pub fn id(&self) -> BrowserId {
-        self.assert_ui_thread();
         self.id
     }
 
@@ -838,6 +862,7 @@ impl BrowserHandle {
     /// the browser's native window is moved only there.
     #[track_caller]
     pub fn set_bounds(&self, bounds: BrowserBounds) {
+        self.assert_ui_thread();
         let Some(browser) = self.browser() else {
             return;
         };
@@ -947,7 +972,14 @@ impl BrowserHandle {
     }
 
     /// Returns true if DevTools is currently open for this browser.
+    ///
+    /// # Panics
+    ///
+    /// Off the thread that started the application, which is CEF's UI thread:
+    /// CEF answers this only there.
+    #[track_caller]
     pub fn has_devtools(&self) -> bool {
+        self.assert_ui_thread();
         self.host().is_some_and(|h| h.has_dev_tools() != 0)
     }
 }
@@ -1535,16 +1567,10 @@ mod tests {
         );
     }
 
-    /// Every BrowserHandle method. UI thread, which the handle asserts.
-    fn use_every_browser_method(handle: &BrowserHandle) {
+    /// Every BrowserHandle method CEF allows on any thread.
+    fn use_any_thread_browser_methods(handle: &BrowserHandle) {
         let _ = handle.id();
         handle.close(false);
-        handle.set_bounds(BrowserBounds {
-            x: 0,
-            y: 0,
-            width: 1,
-            height: 1,
-        });
         handle.notify_move_or_resize_started();
         handle.navigate("app://app/");
         handle.reload();
@@ -1556,10 +1582,23 @@ mod tests {
             handle.can_go_forward(),
             handle.is_loading(),
         );
-        let _ = (handle.url(), handle.has_devtools());
+        let _ = handle.url();
         handle.execute_javascript("1", "", 0);
         handle.show_devtools();
         handle.close_devtools();
+    }
+
+    /// Every BrowserHandle method. UI thread, which set_bounds and
+    /// has_devtools assert.
+    fn use_every_browser_method(handle: &BrowserHandle) {
+        use_any_thread_browser_methods(handle);
+        handle.set_bounds(BrowserBounds {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        });
+        let _ = handle.has_devtools();
     }
 
     #[test]
@@ -1578,20 +1617,25 @@ mod tests {
         let opened = Opened::new();
         let app = &opened.app;
         app.services.cef_shut_down.store(true, Ordering::Release);
+        let handle = BrowserHandle {
+            id: opened.browser,
+            app: app.clone(),
+        };
 
         // On the UI thread, where a close would run at once
         use_every_method(app, opened.browser, opened.window);
-        use_every_browser_method(&BrowserHandle {
-            id: opened.browser,
-            app: app.clone(),
-        });
+        use_every_browser_method(&handle);
         assert!(app.get_browser_handle(opened.browser).is_none());
         // A task CEF runs after shutdown began checks again
         CloseTask::new(app.clone(), Close::Everything { force: true }).execute();
 
-        // On another thread, where a close would be posted
+        // On another thread, where a close would be posted and a browser
+        // handle calls CEF from there
         std::thread::scope(|scope| {
-            scope.spawn(|| use_every_method(app, opened.browser, opened.window));
+            scope.spawn(|| {
+                use_every_method(app, opened.browser, opened.window);
+                use_any_thread_browser_methods(&handle);
+            });
         });
 
         for (what, calls) in opened.calls() {
@@ -1615,15 +1659,25 @@ mod tests {
             assert!(calls > 0, "the {what} saw nothing");
         }
 
-        opened.browser_calls.store(0, Ordering::SeqCst);
-        BrowserHandle {
+        let handle = BrowserHandle {
             id: opened.browser,
             app: app.clone(),
-        }
-        .reload();
+        };
+        opened.browser_calls.store(0, Ordering::SeqCst);
+        handle.reload();
         assert!(
             opened.browser_calls.load(Ordering::SeqCst) > 0,
             "a browser handle looks its browser up"
+        );
+
+        // CEF allows a browser on any thread of the browser process
+        opened.browser_calls.store(0, Ordering::SeqCst);
+        std::thread::scope(|scope| {
+            scope.spawn(|| handle.reload());
+        });
+        assert!(
+            opened.browser_calls.load(Ordering::SeqCst) > 0,
+            "a browser handle reaches its browser from another thread"
         );
 
         opened.window_calls.store(0, Ordering::SeqCst);
@@ -1632,6 +1686,44 @@ mod tests {
             opened.window_calls.load(Ordering::SeqCst) > 0,
             "a task closes the window"
         );
+    }
+
+    /// Runs `call` on a handle to an open browser, on a thread that is not
+    /// the UI thread, and panics with its panic.
+    fn off_the_ui_thread(call: impl FnOnce(&BrowserHandle) + Send) {
+        let opened = Opened::new();
+        let handle = BrowserHandle {
+            id: opened.browser,
+            app: opened.app.clone(),
+        };
+        std::thread::scope(|scope| {
+            if let Err(panic) = scope.spawn(|| call(&handle)).join() {
+                std::panic::resume_unwind(panic);
+            }
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "CEF's UI thread")]
+    fn has_devtools_panics_off_the_ui_thread() {
+        // CEF answers HasDevTools only there (cef_browser.h:594-598)
+        off_the_ui_thread(|handle| {
+            let _ = handle.has_devtools();
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "CEF's UI thread")]
+    fn set_bounds_panics_off_the_ui_thread() {
+        // The native view it moves is touched only on the UI thread
+        off_the_ui_thread(|handle| {
+            handle.set_bounds(BrowserBounds {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            });
+        });
     }
 
     #[test]
