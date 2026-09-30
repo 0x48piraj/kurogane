@@ -8,6 +8,8 @@ use std::collections::VecDeque;
 
 use crate::debug;
 use crate::browser_registry::{BrowserId, BrowserType};
+use crate::client::KuroganeClient;
+use crate::error::RuntimeError;
 use crate::runtime::AppHandle;
 use crate::window_registry::WindowId;
 
@@ -82,23 +84,63 @@ impl PendingPopups {
     }
 }
 
+/// Where a new top-level window opens and how it first shows.
+#[derive(Clone, Debug)]
+pub(crate) enum Placement {
+    /// A window of the application's own, at `bounds` (empty lets CEF choose)
+    /// in `show_state`.
+    Main { bounds: Rect, show_state: ShowState },
+    /// A popup's window, at the size and position its page asked for;
+    /// without one CEF gives the popup its default 800x600 window.
+    Popup(Option<PopupGeometry>),
+}
+
+impl Placement {
+    /// The window's size when its bounds are empty; empty lets CEF choose.
+    fn preferred_size(&self) -> Size {
+        match self {
+            Self::Main { .. } => Size::default(),
+            Self::Popup(requested) => requested.map(PopupGeometry::size).unwrap_or_default(),
+        }
+    }
+
+    /// Where the window opens. Empty unless the application or the page
+    /// placed it: CEF then takes the size from preferred_size
+    /// (cef_window_delegate.h:129-134).
+    fn initial_bounds(&self) -> Rect {
+        match self {
+            Self::Main { bounds, .. } => bounds.clone(),
+            Self::Popup(requested) => requested
+                .and_then(PopupGeometry::bounds)
+                .unwrap_or_default(),
+        }
+    }
+
+    /// How the window first shows; a popup shows normally.
+    fn show_state(&self) -> ShowState {
+        match self {
+            Self::Main { show_state, .. } => *show_state,
+            Self::Popup(_) => ShowState::NORMAL,
+        }
+    }
+}
+
 wrap_window_delegate! {
     pub struct KuroganeWindowDelegate {
         window_id: WindowId,
         browser_view: BrowserView,
         app: AppHandle,
-        initial_bounds: Rect,
-        show_state: ShowState,
+        // Known for a popup, whose browser exists before its window
+        // (cef_browser_view_delegate.h:95-97). A main window's browser is
+        // created when the window adds its view, and on_browser_created
+        // links it
+        browser_id: Option<BrowserId>,
+        placement: Placement,
     }
 
     impl ViewDelegate {
-        fn on_child_view_changed(
-            &self,
-            _view: Option<&mut View>,
-            _added: ::std::os::raw::c_int,
-            _child: Option<&mut View>,
-        ) {
-            // Intentionally unused
+        fn preferred_size(&self, _view: Option<&mut View>) -> Size {
+            self.placement.preferred_size()
         }
     }
 
@@ -106,39 +148,37 @@ wrap_window_delegate! {
 
     impl WindowDelegate {
         fn initial_bounds(&self, _window: Option<&mut Window>) -> Rect {
-            self.initial_bounds.clone()
+            self.placement.initial_bounds()
         }
 
         fn initial_show_state(&self, _window: Option<&mut Window>) -> ShowState {
-            self.show_state
+            self.placement.show_state()
         }
 
         fn on_window_created(&self, window: Option<&mut Window>) {
-            if let Some(window) = window {
-                // Registered before the BrowserView is added, which creates
-                // its browser; on_browser_created links that browser here
-                let mut reg = self.app.registry();
-                reg.windows.insert(
-                    self.window_id,
-                    window.clone(),
-                    None,
-                );
-                drop(reg);
+            let Some(window) = window else {
+                return;
+            };
+            // Registered before the view is added, which creates a main
+            // window's browser; the guard ends with the statement
+            self.app
+                .registry()
+                .windows
+                .insert(self.window_id, window.clone(), self.browser_id);
 
-                let view = self.browser_view.clone();
-                window.add_child_view(Some(&mut (&view).into()));
-                if self.show_state != ShowState::HIDDEN {
-                    window.show();
-                }
-                debug!("Window shown");
+            window.add_child_view(Some(&mut (&self.browser_view).into()));
+            if self.placement.show_state() != ShowState::HIDDEN {
+                window.show();
+            }
+            match self.placement {
+                Placement::Main { .. } => debug!("Window shown"),
+                Placement::Popup(_) => debug!("Popup window shown at {:?}", window.bounds()),
             }
         }
 
         fn on_window_destroyed(&self, _window: Option<&mut Window>) {
             debug!("Window destroyed");
-
-            let mut reg = self.app.registry();
-            reg.windows.unregister(self.window_id);
+            self.app.registry().windows.unregister(self.window_id);
         }
 
         // cef-rs answers 0 for a callback left out, where CEF's C++ defaults
@@ -264,24 +304,22 @@ wrap_browser_view_delegate! {
                 };
                 debug!("[BrowserViewDelegate] popup window requested {:?}", requested);
 
-                // Create the popup window with a delegate that tracks the window
-                let bv_clone = pbv.clone();
+                // CEF made the popup's view; the window adds it and shows
+                // itself, as cefsimple's popup window does
                 let window_id = {
                     let mut reg = self.app.registry();
                     reg.windows.allocate_id()
                 };
 
-                let mut delegate = KuroganePopupDelegate::new(
+                let mut delegate = KuroganeWindowDelegate::new(
                     window_id,
-                    bv_clone,
+                    pbv.clone(),
                     self.app.clone(),
                     browser_id,
-                    requested,
-                    ShowState::NORMAL,
+                    Placement::Popup(requested),
                 );
-                if let Some(window) = window_create_top_level(Some(&mut delegate)) {
-                    window.show();
-                    debug!("[BrowserViewDelegate] popup window created and shown");
+                if window_create_top_level(Some(&mut delegate)).is_some() {
+                    debug!("[BrowserViewDelegate] popup window created");
                     return 1;
                 }
             }
@@ -291,93 +329,42 @@ wrap_browser_view_delegate! {
     }
 }
 
-wrap_window_delegate! {
-    pub struct KuroganePopupDelegate {
-        window_id: WindowId,
-        browser_view: BrowserView,
-        app: AppHandle,
-        browser_id: Option<BrowserId>,
-        // The window the page asked for; without it CEF gives the popup its
-        // default 800x600 window
-        requested: Option<PopupGeometry>,
-        show_state: ShowState,
-    }
+/// Opens `url` in a new browser, in a new top-level window at `placement`.
+/// UI thread, where CEF creates browsers and windows.
+///
+/// The browser is created when the window adds its view
+/// (cef_browser_view.h:53-54), and is registered and linked to the window
+/// then.
+pub(crate) fn open_browser_window(
+    app: &AppHandle,
+    url: &str,
+    placement: Placement,
+) -> Result<WindowId, RuntimeError> {
+    let mut client = KuroganeClient::new(app.clone(), BrowserType::Main);
+    // The guard ends with the statement, before any CEF call
+    let window_id = app.registry().windows.allocate_id();
+    let mut view_delegate = KuroganeBrowserViewDelegate::new(app.clone(), Some(window_id));
 
-    impl ViewDelegate {
-        fn preferred_size(&self, _view: Option<&mut View>) -> Size {
-            self.requested.map(PopupGeometry::size).unwrap_or_default()
-        }
-    }
+    debug!(
+        "Creating a browser for {url} in window {}",
+        window_id.as_u32()
+    );
+    let browser_view = browser_view_create(
+        Some(&mut client),
+        Some(&CefString::from(url)),
+        Some(&Default::default()),
+        None,
+        None,
+        Some(&mut view_delegate),
+    )
+    .ok_or(RuntimeError::BrowserCreationFailed)?;
 
-    impl PanelDelegate {}
+    let mut delegate =
+        KuroganeWindowDelegate::new(window_id, browser_view, app.clone(), None, placement);
+    window_create_top_level(Some(&mut delegate)).ok_or(RuntimeError::WindowCreationFailed)?;
+    debug!("Top-level window created");
 
-    impl WindowDelegate {
-        // Empty unless the page placed the window; CEF then places it and
-        // takes its size from preferred_size
-        fn initial_bounds(&self, _window: Option<&mut Window>) -> Rect {
-            self.requested.and_then(PopupGeometry::bounds).unwrap_or_default()
-        }
-
-        fn initial_show_state(&self, _window: Option<&mut Window>) -> ShowState {
-            self.show_state
-        }
-
-        fn on_window_created(&self, window: Option<&mut Window>) {
-            if let Some(window) = window {
-                let view = self.browser_view.clone();
-                window.add_child_view(Some(&mut (&view).into()));
-                if self.show_state != ShowState::HIDDEN {
-                    window.show();
-                }
-                debug!("Popup window shown at {:?}", window.bounds());
-
-                // Register popup window in registry, associated with its browser
-                let mut reg = self.app.registry();
-                reg.windows.insert(
-                    self.window_id,
-                    window.clone(),
-                    self.browser_id,
-                );
-            }
-        }
-
-        fn on_window_destroyed(&self, _window: Option<&mut Window>) {
-            debug!("Popup window destroyed");
-
-            let mut reg = self.app.registry();
-            reg.windows.unregister(self.window_id);
-        }
-
-        // cef-rs answers 0 for a callback left out, where CEF's C++ defaults
-        // answer true; these restore them
-        fn with_standard_window_buttons(
-            &self,
-            _window: Option<&mut Window>,
-        ) -> ::std::os::raw::c_int {
-            1
-        }
-
-        fn can_resize(&self, _window: Option<&mut Window>) -> ::std::os::raw::c_int {
-            1
-        }
-
-        fn can_maximize(&self, _window: Option<&mut Window>) -> ::std::os::raw::c_int {
-            1
-        }
-
-        fn can_minimize(&self, _window: Option<&mut Window>) -> ::std::os::raw::c_int {
-            1
-        }
-
-        // CEF's default is true; the window asks its browser instead, as
-        // cefsimple's CanClose does, so the page's unload handlers can run
-        fn can_close(&self, _window: Option<&mut Window>) -> ::std::os::raw::c_int {
-            if let Some(browser) = self.browser_view.browser() && let Some(host) = browser.host() {
-                return host.try_close_browser();
-            }
-            1
-        }
-    }
+    Ok(window_id)
 }
 
 #[cfg(test)]
@@ -483,5 +470,60 @@ mod tests {
 
         assert_eq!(pending.take(), Some(size_only(100, 100)));
         assert_eq!(pending.take(), Some(size_only(300, 300)));
+    }
+
+    #[test]
+    fn an_application_window_opens_at_its_bounds_in_its_state() {
+        let placement = Placement::Main {
+            bounds: Rect {
+                x: 10,
+                y: 20,
+                width: 800,
+                height: 600,
+            },
+            show_state: ShowState::HIDDEN,
+        };
+        let Rect {
+            x,
+            y,
+            width,
+            height,
+        } = placement.initial_bounds();
+        assert_eq!((x, y, width, height), (10, 20, 800, 600));
+        // Sized by its bounds, or by CEF when they are empty
+        let Size { width, height } = placement.preferred_size();
+        assert_eq!((width, height), (0, 0));
+        assert_eq!(placement.show_state(), ShowState::HIDDEN);
+    }
+
+    #[test]
+    fn a_popup_opens_at_what_its_page_asked_for() {
+        // A size alone: CEF places the window, at that size
+        let sized = Placement::Popup(Some(size_only(320, 200)));
+        let Rect { width, height, .. } = sized.initial_bounds();
+        assert_eq!((width, height), (0, 0));
+        let Size { width, height } = sized.preferred_size();
+        assert_eq!((width, height), (320, 200));
+        assert_eq!(sized.show_state(), ShowState::NORMAL);
+
+        let placed = Placement::Popup(Some(PopupGeometry {
+            origin: Some((10, 20)),
+            ..size_only(320, 200)
+        }));
+        let Rect {
+            x,
+            y,
+            width,
+            height,
+        } = placed.initial_bounds();
+        assert_eq!((x, y, width, height), (10, 20, 320, 200));
+
+        // Nothing asked for: CEF's default window
+        let default = Placement::Popup(None);
+        let Rect { width, height, .. } = default.initial_bounds();
+        assert_eq!((width, height), (0, 0));
+        let Size { width, height } = default.preferred_size();
+        assert_eq!((width, height), (0, 0));
+        assert_eq!(default.show_state(), ShowState::NORMAL);
     }
 }

@@ -9,7 +9,7 @@ use crate::error::RuntimeError;
 use crate::browser_registry::{BrowserId, BrowserMetadata, BrowserType};
 use crate::registry::Registry;
 use crate::window_registry::{WindowId, WindowMetadata};
-use crate::window::{KuroganeWindowDelegate, KuroganeBrowserViewDelegate};
+use crate::window::{Placement, open_browser_window};
 use kurogane_layout::{DetectError, detect_cef_root_with_version, validate_cef_runtime, profile_dir};
 use crate::ipc::IpcRouter;
 use crate::spec::{RuntimeMode, RuntimeSpec, SandboxMode};
@@ -1019,44 +1019,17 @@ impl AppInstance {
 
     /// Creates a new top-level window with an embedded browser.
     pub fn create_window(&self, options: WindowOptions) -> Result<WindowId, RuntimeError> {
-        let mut client = KuroganeClient::new(self.handle.clone(), BrowserType::Main);
-
-        let window_id = {
-            let mut reg = self.handle.registry();
-            reg.windows.allocate_id()
-        };
-
-        let mut bv_delegate =
-            KuroganeBrowserViewDelegate::new(self.handle.clone(), Some(window_id));
-
-        let url = CefString::from(options.url.as_str());
-
-        let browser_view = browser_view_create(
-            Some(&mut client),
-            Some(&url),
-            Some(&Default::default()),
-            None,
-            None,
-            Some(&mut bv_delegate),
-        )
-        .ok_or(RuntimeError::BrowserCreationFailed)?;
-
-        let mut delegate = KuroganeWindowDelegate::new(
-            window_id,
-            browser_view,
-            self.handle.clone(),
-            Rect {
-                x: options.bounds.x,
-                y: options.bounds.y,
-                width: options.bounds.width,
-                height: options.bounds.height,
+        let bounds = options.bounds;
+        let placement = Placement::Main {
+            bounds: Rect {
+                x: bounds.x,
+                y: bounds.y,
+                width: bounds.width,
+                height: bounds.height,
             },
-            options.show_state.into(),
-        );
-
-        window_create_top_level(Some(&mut delegate)).ok_or(RuntimeError::WindowCreationFailed)?;
-
-        Ok(window_id)
+            show_state: options.show_state.into(),
+        };
+        open_browser_window(&self.handle, &options.url, placement)
     }
 
     /// Takes ownership and blocks on the CEF message loop.

@@ -7,7 +7,7 @@ use crate::runtime::AppHandle;
 use crate::spec::{RuntimeSpec, RuntimeMode};
 use crate::browser_registry::BrowserType;
 use crate::client::KuroganeClient;
-use crate::window::KuroganeWindowDelegate;
+use crate::window::{Placement, open_browser_window};
 use crate::app::{PumpRequest, SecondInstance};
 use crate::debug;
 
@@ -43,57 +43,15 @@ wrap_browser_process_handler! {
                 return;
             }
 
-            let mut client = KuroganeClient::new(self.app.clone(), BrowserType::Main);
-
-            let url = CefString::from(self.spec.start_url.as_str());
-
-            debug!("Creating main browser with URL: {}", url.to_string());
-
-            debug!("Creating BrowserView");
-
-            let window_id = {
-                let mut reg = self.app.registry();
-                reg.windows.allocate_id()
+            debug!("Creating main browser with URL: {}", self.spec.start_url);
+            let placement = Placement::Main {
+                bounds: Rect::default(),
+                show_state: ShowState::NORMAL,
             };
-
-            let mut bv_delegate = crate::window::KuroganeBrowserViewDelegate::new(
-                self.app.clone(),
-                Some(window_id),
-            );
-
-            let browser_view = match browser_view_create(
-                Some(&mut client),
-                Some(&url),
-                Some(&Default::default()),
-                None, None,
-                Some(&mut bv_delegate),
-            ) {
-                Some(view) => view,
-                None => {
-                    eprintln!("kurogane: browser_view_create failed; no window will appear");
-                    return;
-                }
-            };
-
-            debug!("BrowserView created");
-
-            // Create delegate
-            let mut delegate = KuroganeWindowDelegate::new(
-                window_id,
-                browser_view,
-                self.app.clone(),
-                Rect::default(),
-                ShowState::NORMAL,
-            );
-
-            // Create window
-            debug!("Creating top-level window");
-            if window_create_top_level(Some(&mut delegate)).is_none() {
-                eprintln!("kurogane: window_create_top_level failed; no window will appear");
-                return;
+            // A CEF callback has nowhere to return the error
+            if let Err(error) = open_browser_window(&self.app, &self.spec.start_url, placement) {
+                eprintln!("kurogane: no window will appear:\n{error}");
             }
-
-            debug!("Top-level window created");
         }
 
         // CEF asks for this client only when Chromium opens a browser on its
