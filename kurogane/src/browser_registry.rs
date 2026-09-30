@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use cef::{Browser, ImplBrowser, RequestContext};
-use crate::ShutdownSignal;
 use crate::debug;
 use crate::window::PendingPopups;
 
@@ -54,16 +53,14 @@ pub(crate) struct BrowserRegistry {
     browsers: HashMap<BrowserId, BrowserState>,
     lookup: HashMap<i32, BrowserId>,
     next_id: u32,
-    shutdown_signal: ShutdownSignal,
 }
 
 impl BrowserRegistry {
-    pub fn new(shutdown_signal: ShutdownSignal) -> Self {
+    pub fn new() -> Self {
         Self {
             browsers: HashMap::new(),
             lookup: HashMap::new(),
             next_id: 1,
-            shutdown_signal,
         }
     }
 
@@ -134,10 +131,6 @@ impl BrowserRegistry {
             let cef_id = state.browser.identifier();
             self.lookup.remove(&cef_id);
             debug!("[BrowserRegistry] unregistered browser {}", id.0);
-            if self.browsers.is_empty() {
-                debug!("[BrowserRegistry] last browser removed, signaling shutdown");
-                self.shutdown_signal.request_shutdown();
-            }
         }
     }
 

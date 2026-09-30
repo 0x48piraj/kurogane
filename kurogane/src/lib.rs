@@ -22,7 +22,6 @@ mod chromium_flags;
 mod sandbox;
 mod gpu;
 mod credentials;
-mod shutdown;
 pub mod ipc;
 pub mod bridge;
 pub mod logger;
@@ -44,7 +43,6 @@ pub use error::{ConfigError, RuntimeError};
 pub use acl::{Origin, OriginError};
 pub use app::App;
 pub use resources::resource_dir;
-pub use shutdown::ShutdownSignal;
 
 /// What Kurogane's macros expand to. Not a public API.
 #[doc(hidden)]

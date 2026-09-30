@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::cef_app::KuroganeApp;
 use crate::client::KuroganeClient;
 use crate::error::RuntimeError;
-use crate::ShutdownSignal;
 use crate::browser_registry::{BrowserId, BrowserMetadata, BrowserType};
 use crate::registry::Registry;
 use crate::window_registry::{WindowId, WindowMetadata};
@@ -238,13 +237,14 @@ fn install_ctrlc_handler(app: AppHandle) {
 /// browser is still being created remains open for this purpose.
 ///
 /// `force` uses `CloseBrowser(true)`. It also closes unlinked Views windows
-/// directly; linked windows close with their browser.
+/// directly, whose browser is not created yet or has closed; linked windows
+/// close with their browser.
 pub(crate) fn close_all(app: &AppHandle, force: bool) {
     let no_browsers = app.registry().browsers.is_empty();
     let no_windows = app.registry().windows.count() == 0;
     if no_browsers && no_windows {
-        app.services.shutdown_signal.request_shutdown();
-        quit_message_loop();
+        // No browser's close is coming to end the application
+        app.all_browsers_closed();
         return;
     }
 
@@ -331,10 +331,15 @@ wrap_task! {
 pub(crate) struct RuntimeServices {
     router: IpcRouter,
     registry: Mutex<Registry>,
-    shutdown_signal: ShutdownSignal,
     /// The thread that initialized CEF: CEF's UI thread, since Kurogane
     /// never sets `multi_threaded_message_loop`
     ui_thread: std::thread::ThreadId,
+    /// AppInstance::run is inside CEF's message loop, the only loop Kurogane
+    /// may quit. Only the UI thread reads and writes it
+    in_run_loop: AtomicBool,
+    /// Every browser has closed: set by the last OnBeforeClose, or by a
+    /// close request that finds nothing open
+    ended: AtomicBool,
     /// Set when AppInstance::shutdown begins
     cef_shut_down: AtomicBool,
 }
@@ -342,12 +347,12 @@ pub(crate) struct RuntimeServices {
 impl RuntimeServices {
     /// Services with nothing open, whose UI thread is `ui_thread`.
     fn new(router: IpcRouter, ui_thread: std::thread::ThreadId) -> Self {
-        let shutdown_signal = ShutdownSignal::new();
         Self {
             router,
-            registry: Mutex::new(Registry::new(shutdown_signal.clone())),
-            shutdown_signal,
+            registry: Mutex::new(Registry::new()),
             ui_thread,
+            in_run_loop: AtomicBool::new(false),
+            ended: AtomicBool::new(false),
             cef_shut_down: AtomicBool::new(false),
         }
     }
@@ -482,6 +487,19 @@ impl AppHandle {
         &self.services.router
     }
 
+    /// Ends the application once no browser is open: CEF asks an application
+    /// to exit only after OnBeforeClose has run for every browser. Quits the
+    /// message loop only while [`AppInstance::run`] is in it; an application
+    /// that pumps CEF itself watches [`AppHandle::should_shutdown`] instead.
+    /// UI thread.
+    pub(crate) fn all_browsers_closed(&self) {
+        debug!("No browser is open; the application has ended");
+        self.services.ended.store(true, Ordering::Release);
+        if self.services.in_run_loop.load(Ordering::Relaxed) {
+            quit_message_loop();
+        }
+    }
+
     /// Ends the application by closing all browsers.
     ///
     /// The application ends after the last browser closes. Calling this from
@@ -500,10 +518,14 @@ impl AppHandle {
 
     /// Returns whether the application has ended.
     ///
-    /// Becomes true after the last browser closes, after
-    /// [`AppHandle::shutdown`], or when the application receives a quit request.
+    /// Becomes true once the last browser has closed, whatever closed it: its
+    /// window, [`AppHandle::shutdown`], Ctrl+C or macOS asking the
+    /// application to quit. Any of those three that finds nothing open ends
+    /// it at once. Also true once [`AppInstance::shutdown`] has begun. An
+    /// application that pumps CEF itself keeps pumping until then.
     pub fn should_shutdown(&self) -> bool {
-        self.services.shutdown_signal.is_shutdown_requested()
+        self.services.ended.load(Ordering::Acquire)
+            || self.services.cef_shut_down.load(Ordering::Acquire)
     }
 
     /// Broadcast an event to all renderers subscribed to event.
@@ -566,6 +588,9 @@ impl AppHandle {
     }
 
     /// Look up the window that hosts a given browser.
+    ///
+    /// None once the browser has closed, even while CEF is still closing
+    /// its window.
     pub fn find_window_by_browser(&self, browser_id: BrowserId) -> Option<WindowId> {
         self.registry().windows.window_id_for_browser(browser_id)
     }
@@ -604,6 +629,9 @@ impl AppHandle {
     }
 
     /// Browser hosted in the given window.
+    ///
+    /// None until the window's browser has been created, and once it has
+    /// closed.
     pub fn browser_for_window(&self, id: WindowId) -> Option<BrowserId> {
         self.registry().windows.browser_for_window(id)
     }
@@ -930,28 +958,6 @@ impl AppInstance {
         Ok(window_id)
     }
 
-    /// Blocks until the browser associated with the given window is registered,
-    /// or until the timeout expires.
-    ///
-    /// Pumps the message loop internally while waiting.
-    pub fn wait_for_browser(
-        &self,
-        window_id: WindowId,
-        timeout: std::time::Duration,
-    ) -> Option<BrowserHandle> {
-        let start = std::time::Instant::now();
-        loop {
-            if let Some(browser_id) = self.handle.browser_for_window(window_id) {
-                return self.handle.get_browser_handle(browser_id);
-            }
-            if start.elapsed() >= timeout {
-                return None;
-            }
-            self.pump();
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-    }
-
     /// Takes ownership and blocks on the CEF message loop.
     ///
     /// The loop runs until the application's last browser has closed:
@@ -969,7 +975,11 @@ impl AppInstance {
         // An application that ended before its loop started, with nothing
         // open, has nothing left to quit the loop
         if !self.should_shutdown() {
+            let services = &self.handle.services;
+            // The last browser's close quits this loop, and only this one
+            services.in_run_loop.store(true, Ordering::Relaxed);
             run_message_loop();
+            services.in_run_loop.store(false, Ordering::Relaxed);
         }
 
         debug!("Message loop exited");
@@ -980,8 +990,9 @@ impl AppInstance {
 
     /// Perform orderly CEF shutdown.
     ///
-    /// Sets the shutdown signal and calls cef::shutdown() on the UI thread.
-    /// Safe to call multiple times. Subsequent calls are no-ops.
+    /// Calls cef::shutdown() on the UI thread; [`AppHandle::should_shutdown`]
+    /// is true from here on. Safe to call multiple times. Subsequent calls are
+    /// no-ops.
     ///
     /// Unlike [`AppHandle::shutdown`], this shuts down the CEF runtime itself.
     /// All browsers must already be closed; [`AppHandle::should_shutdown`] is
@@ -994,7 +1005,6 @@ impl AppInstance {
 
         debug!("Shutting down Kurogane runtime");
         shutdown();
-        services.shutdown_signal.request_shutdown();
         debug!("Kurogane runtime shutdown complete");
     }
 
@@ -1236,6 +1246,145 @@ mod tests {
             subprocess_path(std::path::Path::new("/app/myapp")),
             Some(std::path::PathBuf::from("/app/myapp"))
         );
+    }
+
+    // ---- fake CEF objects ----
+    //
+    // A CEF object is a C structure of function pointers. A fake fills in
+    // only the functions a test needs and counts every call made through
+    // them; cef-rs answers a default for a function left out, without
+    // calling anything. No test here loads CEF
+    use std::ffi::c_int;
+    use std::sync::atomic::AtomicUsize;
+
+    use cef::rc::ConvertReturnValue;
+    use cef::sys::{_cef_base_ref_counted_t, _cef_browser_host_t, _cef_browser_t, _cef_window_t};
+
+    /// A CEF structure the test made, and the calls made through it.
+    #[repr(C)]
+    struct Fake<T> {
+        // First, so the structure and its base share the fake's address
+        raw: T,
+        calls: AtomicUsize,
+    }
+
+    /// Counts a call made through `object`.
+    ///
+    /// # Safety
+    ///
+    /// `object` points at the `raw` field of a live `Fake<T>`.
+    unsafe fn count<T>(object: *mut T) {
+        // SAFETY: `raw` is the first field of the repr(C) Fake<T> the caller
+        // names, so the two share an address
+        let fake = unsafe { &*object.cast::<Fake<T>>() };
+        fake.calls.fetch_add(1, Ordering::SeqCst);
+    }
+
+    unsafe extern "C" fn add_ref<T>(base: *mut _cef_base_ref_counted_t) {
+        // SAFETY: a CEF structure starts with its base, and every base given
+        // to this function belongs to a Fake<T>
+        unsafe { count(base.cast::<T>()) }
+    }
+
+    unsafe extern "C" fn release<T>(base: *mut _cef_base_ref_counted_t) -> c_int {
+        // SAFETY: as in add_ref
+        unsafe { count(base.cast::<T>()) };
+        // A fake is never freed
+        0
+    }
+
+    unsafe extern "C" fn called<T>(object: *mut T) {
+        // SAFETY: cef-rs passes the structure it wraps, a Fake<T>'s
+        unsafe { count(object) }
+    }
+
+    unsafe extern "C" fn no_host(browser: *mut _cef_browser_t) -> *mut _cef_browser_host_t {
+        // SAFETY: as in called
+        unsafe { count(browser) };
+        std::ptr::null_mut()
+    }
+
+    // Registering a browser reads its id; that is setup, not counted
+    unsafe extern "C" fn identifier(_browser: *mut _cef_browser_t) -> c_int {
+        1
+    }
+
+    /// Leaks a fake around `raw` and wraps it as cef-rs wraps what CEF returns.
+    fn leak<T: 'static, W>(raw: T) -> (W, &'static AtomicUsize)
+    where
+        *mut T: ConvertReturnValue<W>,
+    {
+        let fake: &'static Fake<T> = Box::leak(Box::new(Fake {
+            raw,
+            calls: AtomicUsize::new(0),
+        }));
+        // cef-rs only reads the structure, and the count is atomic
+        let object = std::ptr::from_ref(&fake.raw).cast_mut();
+        (
+            <*mut T as ConvertReturnValue<W>>::wrap_result(object),
+            &fake.calls,
+        )
+    }
+
+    fn fake_browser() -> (Browser, &'static AtomicUsize) {
+        // SAFETY: a CEF structure is plain C data; all zeroes leave every
+        // function out
+        let mut raw: _cef_browser_t = unsafe { std::mem::zeroed() };
+        raw.base.size = std::mem::size_of::<_cef_browser_t>();
+        raw.base.add_ref = Some(add_ref::<_cef_browser_t>);
+        raw.base.release = Some(release::<_cef_browser_t>);
+        raw.get_identifier = Some(identifier);
+        raw.get_host = Some(no_host);
+        leak(raw)
+    }
+
+    fn fake_window() -> (Window, &'static AtomicUsize) {
+        // SAFETY: as in fake_browser
+        let mut raw: _cef_window_t = unsafe { std::mem::zeroed() };
+        // A window is a panel is a view, which starts with the base
+        let base = &mut raw.base.base.base;
+        base.size = std::mem::size_of::<_cef_window_t>();
+        base.add_ref = Some(add_ref::<_cef_window_t>);
+        base.release = Some(release::<_cef_window_t>);
+        raw.close = Some(called::<_cef_window_t>);
+        leak(raw)
+    }
+
+    #[test]
+    fn a_close_request_with_nothing_open_ends_the_application() {
+        // No browser's close is coming, so the request itself ends it; no
+        // loop runs, so nothing is quit
+        let app = AppHandle::detached();
+        close_all(&app, true);
+        assert!(app.should_shutdown());
+    }
+
+    #[test]
+    fn a_closed_browser_leaves_no_window_naming_it() {
+        let app = AppHandle::detached();
+        let (browser, _) = fake_browser();
+        let (window, _) = fake_window();
+        let (id, window_id) = {
+            let mut registry = app.registry();
+            let id = registry
+                .browsers
+                .ensure_registered(&browser, BrowserType::Main, None);
+            let window_id = registry.windows.allocate_id();
+            registry.windows.insert(window_id, window, Some(id));
+            (id, window_id)
+        };
+        assert_eq!(app.find_window_by_browser(id), Some(window_id));
+
+        // What OnBeforeClose does first
+        let closed = app.registry().browser_closed(&browser);
+        let closed = closed.expect("the browser was registered");
+        assert!(closed.last);
+        assert!(closed.stragglers.is_empty());
+
+        // CEF destroys the window later; until then it names no browser
+        assert_eq!(app.window_count(), 1);
+        assert_eq!(app.find_window_by_browser(id), None);
+        assert_eq!(app.browser_for_window(window_id), None);
     }
 
     #[test]

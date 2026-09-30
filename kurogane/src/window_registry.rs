@@ -129,6 +129,22 @@ impl WindowRegistry {
         true
     }
 
+    /// Forgets that a window shows `browser_id`, which has closed. The
+    /// window stays registered until CEF destroys it.
+    pub fn unlink_browser(&mut self, browser_id: BrowserId) {
+        if let Some(id) = self.lookup.remove(&browser_id)
+            && let Some(state) = self.windows.get_mut(&id)
+            && state.browser_id == Some(browser_id)
+        {
+            state.browser_id = None;
+            debug!(
+                "[WindowRegistry] unlinked browser {} from window {}",
+                browser_id.as_u32(),
+                id.as_u32()
+            );
+        }
+    }
+
     pub fn browser_for_window(&self, id: WindowId) -> Option<BrowserId> {
         self.windows.get(&id).and_then(|s| s.browser_id)
     }

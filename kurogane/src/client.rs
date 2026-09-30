@@ -104,51 +104,29 @@ wrap_life_span_handler! {
             };
             debug!("on_before_close cef_id={}", browser.identifier());
 
-            let (browser_id, stragglers) = {
-                let mut reg = self.app.registry();
-                let Some(id) = reg.browsers.find_id_by_browser(browser) else {
-                    return;
-                };
-                let was_app_browser = reg
-                    .browsers
-                    .get(id)
-                    .is_some_and(|state| state.metadata.browser_type != BrowserType::ChromeUi);
-
-                reg.browsers.unregister(id);
-                debug!("Browser {} destroyed", id.as_u32());
-
-                if reg.browsers.is_empty() {
-                    debug!("[BrowserRegistry] last browser removed, quitting message loop");
-
-                    // quit_message_loop() is only meaningful when CEF owns the main loop
-                    // In embedded mode the host event loop owns shutdown and this call is effectively a no-op
-                    // TODO: Move shutdown coordination behind a single runtime lifecycle abstraction instead of mixing quit_message_loop() and shutdown_signal
-
-                    quit_message_loop();
-                }
-
-                // Windows Chromium opened on its own close with the
-                // application's last one rather than keep the process running
-                let stragglers = if was_app_browser && !reg.browsers.has_app_browsers() {
-                    reg.browsers.chrome_ui_browsers()
-                } else {
-                    Vec::new()
-                };
-
-                (id, stragglers)
+            // The browser and its window's link go in one update; the guard
+            // ends with this statement, before anything below calls CEF
+            let closed = self.app.registry().browser_closed(browser);
+            let Some(closed) = closed else {
+                return;
             };
+            debug!("Browser {} destroyed", closed.id.as_u32());
 
             #[cfg(target_os = "macos")]
-            crate::platform::embed::forget_view(browser_id);
+            crate::platform::embed::forget_view(closed.id);
 
-            for straggler in stragglers {
+            for straggler in closed.stragglers {
                 if let Some(host) = straggler.host() {
                     host.close_browser(1);
                 }
             }
 
             // Cancel any pending async handlers for this browser
-            self.app.router().cancel_all_for_browser(browser_id);
+            self.app.router().cancel_all_for_browser(closed.id);
+
+            if closed.last {
+                self.app.all_browsers_closed();
+            }
         }
     }
 }
