@@ -20,7 +20,9 @@ use kurogane_layout::{package_directory, sign_tree, verify_tree};
 
 use crate::tui;
 
-/// Run the frontend build command if configured.
+/// Runs the configured frontend build command.
+///
+/// The command is interpreted by the platform shell.
 fn build_frontend(
     workspace_root: &std::path::Path,
     config: &kurogane_layout::AppConfig,
@@ -28,33 +30,37 @@ fn build_frontend(
     let Some(command) = &config.frontend_build else {
         return Ok(());
     };
+    if command.trim().is_empty() {
+        bail!("empty frontend-build command");
+    }
 
     tui::step("Building frontend...");
 
-    #[cfg(target_os = "windows")]
-    let status = Command::new("cmd")
-        .args(["/C", command])
-        .current_dir(workspace_root)
-        .status()?;
-
-    #[cfg(not(target_os = "windows"))]
-    let status = {
-        let parts: Vec<&str> = command.split_whitespace().collect();
-        let (program, args) = parts
-            .split_first()
-            .ok_or_else(|| anyhow::anyhow!("empty frontend-build command"))?;
-
-        Command::new(*program)
-            .args(args)
-            .current_dir(workspace_root)
-            .status()?
-    };
+    let status = shell(command).current_dir(workspace_root).status()?;
 
     if !status.success() {
         bail!("Frontend build failed: {command}");
     }
 
     Ok(())
+}
+
+/// Runs `command` through `sh -c`.
+#[cfg(not(target_os = "windows"))]
+fn shell(command: &str) -> Command {
+    let mut shell = Command::new("sh");
+    shell.arg("-c").arg(command);
+    shell
+}
+
+/// Runs `command` through `cmd`.
+#[cfg(target_os = "windows")]
+fn shell(command: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+
+    let mut shell = Command::new("cmd");
+    shell.raw_arg(format!("/d /s /c \"{command}\""));
+    shell
 }
 
 /// Output format for the application bundle.
@@ -402,6 +408,25 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stdout_of(command: &str) -> String {
+        let output = shell(command).output().unwrap();
+        assert!(output.status.success(), "{command}: {output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn frontend_build_runs_through_the_shell() {
+        assert_eq!(stdout_of("v='a b' && printf '%s' \"$v\""), "a b");
+        assert_eq!(stdout_of("printf one; printf two"), "onetwo");
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn frontend_build_runs_through_cmd() {
+        assert_eq!(stdout_of("echo a&& echo \"b c\""), "a\r\n\"b c\"\r\n");
+    }
 
     #[test]
     #[cfg(not(target_os = "macos"))]
