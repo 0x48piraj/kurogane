@@ -257,7 +257,7 @@ mod tests {
 
     /// `cmd` and the event `tick` only for `app://app`; everything else denied.
     fn strict_acl() -> CommandAcl {
-        let mut acl = CommandAcl::new();
+        let mut acl = CommandAcl::new(origin("app://app"));
         acl.allow("cmd", [origin("app://app")]).unwrap();
         acl.allow_event("tick", [origin("app://app")]).unwrap();
         acl.deny_unlisted();

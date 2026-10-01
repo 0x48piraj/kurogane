@@ -285,12 +285,13 @@ impl App {
     }
 
     fn with_source(source: Source) -> Self {
+        let acl = crate::acl::CommandAcl::new(resolver::app_origin(&source));
         Self {
             source,
             sync_handlers: HashMap::new(),
             async_handlers: HashMap::new(),
             stream_handlers: HashMap::new(),
-            acl: crate::acl::CommandAcl::new(),
+            acl,
 
             profile_id: None,
             sandbox_mode: SandboxMode::default(),
@@ -831,7 +832,7 @@ impl App {
             sync_handlers,
             async_handlers,
             stream_handlers,
-            mut acl,
+            acl,
             profile_id,
             sandbox_mode,
             persist_session_cookies,
@@ -849,7 +850,6 @@ impl App {
         let rpc = RequestResponseSubsystem::new(sync_handlers, async_handlers);
         let event = EventSubsystem::new();
         let stream = StreamSubsystem::new(stream_handlers);
-        acl.set_app_origin(resolver::app_origin(&source));
         let router = IpcRouter::new(rpc, event, stream, acl);
 
         let ResolvedFrontend {

@@ -752,8 +752,7 @@ impl AppHandle {
 
 #[cfg(test)]
 impl AppHandle {
-    /// A handle to an application CEF never saw: nothing open, no command,
-    /// and the calling thread as its UI thread.
+    /// A handle to an application CEF has not seen; the calling thread is its UI thread.
     pub(crate) fn detached() -> Self {
         use std::collections::HashMap;
 
@@ -761,7 +760,9 @@ impl AppHandle {
             crate::ipc::RequestResponseSubsystem::new(HashMap::new(), HashMap::new()),
             crate::ipc::EventSubsystem::new(),
             crate::ipc::StreamSubsystem::new(HashMap::new()),
-            crate::acl::CommandAcl::new(),
+            // No application origin is associated with a detached handle; only explicitly
+            // permitted names are reachable
+            crate::acl::CommandAcl::new(crate::acl::Origin::OPAQUE),
         );
         Self {
             services: Arc::new(RuntimeServices::new(
