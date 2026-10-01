@@ -131,6 +131,15 @@ impl Scope {
     pub(crate) fn roots(&self) -> &[Root] {
         &self.roots
     }
+
+    /// Whether a deny glob reads the inverted fold (a `?` or a class).
+    pub(crate) fn unfolds(&self) -> bool {
+        self.roots.iter().any(|root| {
+            root.deny
+                .iter()
+                .any(|rule| matches!(rule, DenyRule::Glob(glob) if glob.unfolds()))
+        })
+    }
 }
 
 /// One allow root.
@@ -384,6 +393,26 @@ mod tests {
         .unwrap();
         assert!(denied(&scope, &d.path().join("a/b/secret.key")));
         assert!(!denied(&scope, &d.path().join("a/b/public.txt")));
+    }
+
+    #[test]
+    fn a_scope_reads_the_inverted_fold_only_for_question_marks_and_classes() {
+        let d = tempfile::tempdir().unwrap();
+        let unfolds = |globs: &[&str]| {
+            build(|s| {
+                s.allow_directory_recursive(d.path());
+                s.deny_path(d.path().join("vault"));
+                for glob in globs {
+                    s.deny_glob(*glob);
+                }
+            })
+            .unwrap()
+            .unfolds()
+        };
+        assert!(!unfolds(&[]));
+        assert!(!unfolds(&["**/*.key", "**/.git"]));
+        assert!(unfolds(&["**/*.key", "secret?.txt"]));
+        assert!(unfolds(&["[Tt]emp*"]));
     }
 
     #[test]

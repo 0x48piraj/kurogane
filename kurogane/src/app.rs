@@ -437,6 +437,7 @@ impl App {
             }
         };
 
+        fs.prepare_matching();
         for (command, handler) in crate::capability::commands::handlers(fs) {
             let name = command.name();
             self.guard_unique_name(name);

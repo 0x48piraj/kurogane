@@ -20,6 +20,8 @@
 //!
 //! Modules:
 //! - `policy`: capability bits and the `fs.*` command set.
+//! - `fold`: how each platform's filesystems compare names, and the inverse
+//!   glob classes match through.
 //! - `path`: validated names, request parsing and comparison keys.
 //! - `scope`: allow roots and deny rules.
 //! - `safe`: platform-specific kernel-confined opening.
@@ -30,6 +32,7 @@
 mod authorized;
 pub(crate) mod commands;
 mod error;
+mod fold;
 // The `app://` asset scheme validates each URL segment as a Name
 pub(crate) mod path;
 pub(crate) mod policy;

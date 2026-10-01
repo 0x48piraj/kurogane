@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::acl::Origin;
 use crate::capability::error::{Denial, FsConfigError, FsError};
+use crate::capability::fold::Rules;
 use crate::capability::path::{parse_request, Key, Location, Name, RelPath, Request};
 use crate::capability::policy::FsAccess;
 use crate::capability::safe::{self, Create, Dir, DirEntry, EntryKind};
@@ -195,6 +196,21 @@ impl Filesystem {
 
     pub fn builder() -> FilesystemBuilder {
         FilesystemBuilder::new()
+    }
+
+    /// Starts building the inverted fold on a thread of its own when a deny
+    /// glob reads it (a `?` or a class), so it is ready before the page can
+    /// send a request. A request that came sooner would wait only for the
+    /// rest; one that needs no such glob never waits.
+    pub(crate) fn prepare_matching(&self) {
+        if self.scopes.iter().any(Scope::unfolds) {
+            // Failing to start leaves it to the first match, as without this
+            let _ = std::thread::Builder::new()
+                .name("kurogane-fold".to_owned())
+                .spawn(|| {
+                    Rules::NATIVE.inverse();
+                });
+        }
     }
 
     /// Every capability `origin` holds across its grants; `NONE` without one.

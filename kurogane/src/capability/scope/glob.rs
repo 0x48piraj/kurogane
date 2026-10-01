@@ -26,9 +26,11 @@
 //! These matching rules preserve the behavior required to avoid the
 //! traversal issue addressed by CVE-2022-46171.
 
+use std::cell::OnceCell;
 use std::ffi::OsStr;
 
-use crate::capability::path::{fold, is_starter, unfold, unfold_starters, Key, MAX_FOLD_STARTERS};
+use crate::capability::fold::{is_starter, Inverse, Rules, MAX_FOLD_STARTERS};
+use crate::capability::path::{fold, Key};
 
 /// The most parts (components and `**`) a pattern may have: a `u64` holds
 /// one bit per part plus the accepting position.
@@ -45,6 +47,8 @@ const DOT: u32 = '.' as u32;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Glob {
     parts: Vec<GlobPart>,
+    /// How the names it matches were folded.
+    rules: Rules,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +95,12 @@ pub(crate) enum Residual {
 
 impl Glob {
     pub(crate) fn parse(pattern: &str) -> Result<Glob, &'static str> {
+        Glob::parse_under(Rules::NATIVE, pattern)
+    }
+
+    /// Parses `pattern` to match keys folded as `rules` fold them: another
+    /// platform's for tests, which run every platform's rules on every host.
+    pub(crate) fn parse_under(rules: Rules, pattern: &str) -> Result<Glob, &'static str> {
         if pattern.starts_with('/') {
             return Err("patterns are relative to the scope's allow roots");
         }
@@ -105,7 +115,7 @@ impl Glob {
                     parts.push(GlobPart::AnyDepth);
                 }
             } else {
-                parts.push(GlobPart::Component(parse_component(component)?));
+                parts.push(GlobPart::Component(parse_component(rules, component)?));
             }
         }
         if parts.is_empty() {
@@ -114,7 +124,16 @@ impl Glob {
         if parts.len() > MAX_PARTS {
             return Err("pattern has too many components");
         }
-        Ok(Glob { parts })
+        Ok(Glob { parts, rules })
+    }
+
+    /// Whether matching reads the inverted fold: the pattern has a `?` or a
+    /// class.
+    pub(crate) fn unfolds(&self) -> bool {
+        self.parts.iter().any(|part| {
+            matches!(part, GlobPart::Component(c)
+                if c.tokens.iter().any(|t| matches!(t, Token::One | Token::Class(_))))
+        })
     }
 
     /// True when the pattern matches `rel` or one of its ancestors.
@@ -167,7 +186,7 @@ impl Glob {
             }
             match part {
                 GlobPart::AnyDepth => next |= 1 << i,
-                GlobPart::Component(c) if c.matches(&units) => next |= 1 << (i + 1),
+                GlobPart::Component(c) if c.matches(&units, self.rules) => next |= 1 << (i + 1),
                 GlobPart::Component(_) => {}
             }
         }
@@ -178,7 +197,7 @@ impl Glob {
 impl ComponentGlob {
     /// Simulates the token automaton over `name`; `live[i]` means "token `i`
     /// is next", `live[len]` that the whole component matched.
-    fn matches(&self, name: &[u32]) -> bool {
+    fn matches(&self, name: &[u32], rules: Rules) -> bool {
         if name.first() == Some(&DOT) && !self.literal_dot {
             return false;
         }
@@ -188,6 +207,7 @@ impl ComponentGlob {
         // Where a `?` or class lands past a character whose fold spans
         // several base characters: (the last unit it consumes, the position)
         let mut ahead: Vec<(usize, usize)> = Vec::new();
+        let inverse = Unfolder::new(rules);
         live[0] = true;
         self.close(&mut live);
         for (at, &unit) in name.iter().enumerate() {
@@ -200,11 +220,11 @@ impl ComponentGlob {
                     Token::Any => next[i] = true,
                     Token::One => next[i + 1] = true,
                     Token::Lit(lit) if *lit == unit => next[i + 1] = true,
-                    Token::Class(class) if class.matches(unit) => next[i + 1] = true,
+                    Token::Class(class) if class.matches(unit, &inverse) => next[i + 1] = true,
                     Token::Lit(_) | Token::Class(_) => {}
                 }
                 if matches!(token, Token::One | Token::Class(_)) {
-                    reach_spanning(token, name, at, i + 1, &mut ahead);
+                    reach_spanning(&inverse, token, name, at, i + 1, &mut ahead);
                 }
             }
             // A combining mark belongs to the character before it: after `?`
@@ -242,12 +262,34 @@ impl ComponentGlob {
     }
 }
 
+/// The inverted fold of a glob's rules for one name's match: looked up on
+/// the first lookup that needs it, so a pattern without `?` or a class never
+/// builds it, and once per name rather than once per lookup.
+struct Unfolder {
+    rules: Rules,
+    inverse: OnceCell<&'static Inverse>,
+}
+
+impl Unfolder {
+    fn new(rules: Rules) -> Self {
+        Unfolder {
+            rules,
+            inverse: OnceCell::new(),
+        }
+    }
+
+    fn get(&self) -> &'static Inverse {
+        self.inverse.get_or_init(|| self.rules.inverse())
+    }
+}
+
 /// Queues where the `?` or class `token`, live at unit `at`, lands by
 /// consuming one character whose fold spans several base characters, as
 /// macOS and Linux fold `ß` to `ss` and a Hangul syllable to its jamo: past
 /// each run of two or three base characters from `at` (the combining marks
 /// between them skipped) that is the fold of a character `token` admits.
 fn reach_spanning(
+    inverse: &Unfolder,
     token: &Token,
     name: &[u32],
     at: usize,
@@ -270,7 +312,7 @@ fn reach_spanning(
         }
         starters[count] = c;
         count += 1;
-        if count > 1 && token.admits_any(unfold_starters(&starters[..count])) {
+        if count > 1 && token.admits_any(inverse.get().unfold_starters(&starters[..count])) {
             ahead.push((last, position));
         }
         if count == MAX_FOLD_STARTERS {
@@ -294,12 +336,12 @@ impl Class {
     /// Whether the folded unit `unit` may stand for a character this class
     /// admits. Over-matches where folding is ambiguous: some character that
     /// folds to `unit` is enough.
-    fn matches(&self, unit: u32) -> bool {
+    fn matches(&self, unit: u32, inverse: &Unfolder) -> bool {
         let Some(folded) = char::from_u32(unit) else {
             // An invalid byte is no character the pattern can name
             return self.negated;
         };
-        unfold(folded).any(|c| self.admits(c))
+        inverse.get().unfold(folded).any(|c| self.admits(c))
     }
 
     fn admits(&self, c: char) -> bool {
@@ -311,14 +353,14 @@ impl Class {
     }
 }
 
-fn parse_component(component: &str) -> Result<ComponentGlob, &'static str> {
+fn parse_component(rules: Rules, component: &str) -> Result<ComponentGlob, &'static str> {
     let mut tokens = Vec::new();
     let mut chars = component.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
             '\\' => {
                 let next = chars.next().ok_or("dangling '\\' at end of a component")?;
-                push_literal(&mut tokens, next);
+                push_literal(rules, &mut tokens, next);
             }
             '*' => {
                 if tokens.last() != Some(&Token::Any) {
@@ -327,7 +369,7 @@ fn parse_component(component: &str) -> Result<ComponentGlob, &'static str> {
             }
             '?' => tokens.push(Token::One),
             '[' => tokens.push(Token::Class(parse_class(&mut chars)?)),
-            other => push_literal(&mut tokens, other),
+            other => push_literal(rules, &mut tokens, other),
         }
     }
     if tokens.len() > MAX_TOKENS {
@@ -387,9 +429,9 @@ fn is_mark(unit: u32) -> bool {
 }
 
 /// A literal character becomes the units of its fold.
-fn push_literal(tokens: &mut Vec<Token>, c: char) {
+fn push_literal(rules: Rules, tokens: &mut Vec<Token>, c: char) {
     let mut buf = [0; 4];
-    let folded = fold(OsStr::new(c.encode_utf8(&mut buf)));
+    let folded = fold(rules, OsStr::new(c.encode_utf8(&mut buf)));
     tokens.extend(decode(&folded).into_iter().map(Token::Lit));
 }
 
@@ -452,17 +494,27 @@ fn decode(bytes: &[u8]) -> Vec<u32> {
 mod tests {
     use super::*;
 
-    fn keys(path: &str) -> Vec<Key> {
+    const EVERY_PLATFORM: [Rules; 3] = [Rules::Uppercase, Rules::Normalized, Rules::Exact];
+
+    fn keys_under(rules: Rules, path: &str) -> Vec<Key> {
         path.split('/')
             .filter(|c| !c.is_empty())
-            .map(|c| Key::of(OsStr::new(c)))
+            .map(|c| Key::under(rules, OsStr::new(c)))
             .collect()
     }
 
-    fn covers(pattern: &str, path: &str) -> bool {
-        Glob::parse(pattern)
+    fn keys(path: &str) -> Vec<Key> {
+        keys_under(Rules::NATIVE, path)
+    }
+
+    fn covers_under(rules: Rules, pattern: &str, path: &str) -> bool {
+        Glob::parse_under(rules, pattern)
             .expect("valid pattern")
-            .covers(&keys(path))
+            .covers(&keys_under(rules, path))
+    }
+
+    fn covers(pattern: &str, path: &str) -> bool {
+        covers_under(Rules::NATIVE, pattern, path)
     }
 
     #[test]
@@ -579,6 +631,23 @@ mod tests {
     }
 
     #[test]
+    fn only_question_marks_and_classes_read_the_inverted_fold() {
+        for (pattern, unfolds) in [
+            ("*.key", false),
+            ("**/.git", false),
+            (r"\?x", false),
+            ("secret?", true),
+            ("**/[Tt]emp*", true),
+        ] {
+            assert_eq!(
+                Glob::parse(pattern).unwrap().unfolds(),
+                unfolds,
+                "{pattern}"
+            );
+        }
+    }
+
+    #[test]
     fn residuals_report_what_remains() {
         let glob = Glob::parse("vault/*.key").unwrap();
         assert_eq!(glob.residual(&keys("vault/a.key")), Residual::Covered);
@@ -609,18 +678,18 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
     #[test]
-    fn windows_matching_is_case_insensitive() {
+    fn uppercase_matching_folds_case() {
+        let covers = |pattern, path| covers_under(Rules::Uppercase, pattern, path);
         assert!(covers("*.key", "SECRET.KEY"));
         assert!(covers("**/.GIT", "a/.git/config"));
         assert!(covers("[a-c].txt", "B.TXT"));
     }
 
-    #[cfg(windows)]
     #[test]
-    fn windows_class_ranges_keep_their_members() {
+    fn uppercase_class_ranges_keep_their_members() {
         // `[A-z]` spans `[\]^_\``; folding the pattern first would shrink it
+        let covers = |pattern, path| covers_under(Rules::Uppercase, pattern, path);
         assert!(covers("x[A-z].txt", "x_.txt"));
         assert!(covers("y[Z-a].txt", "y_.txt"));
         assert!(covers("secret[!a].txt", "secretB.txt"));
@@ -629,33 +698,57 @@ mod tests {
     #[test]
     fn a_decomposed_character_is_one_character() {
         // `e` + COMBINING ACUTE ACCENT is one character for `?` and classes
-        assert!(covers("caf?.txt", "cafe\u{301}.txt"));
-        assert!(covers("caf[a-z].txt", "cafe\u{301}.txt"));
-        assert!(
-            covers("secret?.txt", "secreto\u{308}\u{301}.txt"),
-            "several marks"
-        );
-        assert!(!covers("caf?.txt", "cafee.txt"), "still one base character");
+        for rules in EVERY_PLATFORM {
+            let covers = |pattern, path| covers_under(rules, pattern, path);
+            assert!(covers("caf?.txt", "cafe\u{301}.txt"), "{rules:?}");
+            assert!(covers("caf[a-z].txt", "cafe\u{301}.txt"), "{rules:?}");
+            assert!(
+                covers("secret?.txt", "secreto\u{308}\u{301}.txt"),
+                "several marks, {rules:?}"
+            );
+            assert!(
+                !covers("caf?.txt", "cafee.txt"),
+                "still one base character, {rules:?}"
+            );
+        }
     }
 
     #[test]
     fn a_character_whose_fold_spans_several_is_one_character() {
-        // macOS and Linux fold `ß` to `ss` and `가` to two jamo; Windows
-        // folds neither, and both hold there trivially
-        assert!(covers("secret?.txt", "secret\u{df}.txt"));
-        assert!(covers("key[!a].pem", "key\u{df}.pem"));
-        assert!(covers("note[\u{df}].md", "note\u{df}.md"));
-        assert!(covers("[\u{ac00}-\u{d7a3}].txt", "\u{ac00}.txt"));
-        assert!(covers("??.doc", "\u{be44}\u{bc00}.doc"));
-        assert!(
-            !covers("[\u{df}].txt", "s.txt"),
-            "a class matches a whole fold, not its first character"
-        );
+        // The macOS and Linux rules fold `ß` to `ss` and `가` to two jamo;
+        // the others fold neither, and it holds there trivially
+        for rules in EVERY_PLATFORM {
+            let covers = |pattern, path| covers_under(rules, pattern, path);
+            assert!(covers("secret?.txt", "secret\u{df}.txt"), "{rules:?}");
+            assert!(covers("key[!a].pem", "key\u{df}.pem"), "{rules:?}");
+            assert!(covers("note[\u{df}].md", "note\u{df}.md"), "{rules:?}");
+            assert!(
+                covers("[\u{ac00}-\u{d7a3}].txt", "\u{ac00}.txt"),
+                "{rules:?}"
+            );
+            assert!(covers("??.doc", "\u{be44}\u{bc00}.doc"), "{rules:?}");
+            assert!(
+                !covers("[\u{df}].txt", "s.txt"),
+                "a class matches a whole fold, not its first character, {rules:?}"
+            );
+        }
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn matching_folds_case_and_normalization() {
+    fn exact_matching_compares_names_as_they_are() {
+        let covers = |pattern, path| covers_under(Rules::Exact, pattern, path);
+        assert!(covers("*.key", "secret.key"));
+        assert!(!covers("*.key", "SECRET.KEY"));
+        assert!(!covers("caf\u{e9}.txt", "cafe\u{301}.txt"));
+    }
+
+    #[test]
+    fn normalized_matching_folds_case_and_normalization() {
+        let covers = |pattern, path| covers_under(Rules::Normalized, pattern, path);
+        assert!(
+            covers("stra\u{df}e.txt", "STRA\u{1e9e}E.TXT"),
+            "a capital sharp s"
+        );
         assert!(covers("*.key", "SECRET.KEY"));
         assert!(
             covers("caf\u{e9}.txt", "CAFE\u{301}.TXT"),
