@@ -1,33 +1,37 @@
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 use crate::debug;
 use crate::ipc::browser_state::{ErrorCode, IpcError};
 
 type Callback<T> = Box<dyn FnOnce(Result<T, IpcError>) + Send>;
 
-/// Single-use callback for async request/response IPC.
+/// The answer to one async request.
 ///
-/// If dropped without calling [`resolve`](Responder::resolve), the promise is automatically
+/// Resolving it takes it, so a request is answered once. If dropped without
+/// calling [`resolve`](Responder::resolve), the promise is automatically
 /// rejected ensuring every pending request eventually settles.
 pub struct Responder<T> {
-    callback: Mutex<Option<Callback<T>>>,
+    /// Taken by `resolve` or `map`; whatever `Drop` still finds, it rejects.
+    callback: Option<Callback<T>>,
     cancelled: Arc<AtomicBool>,
 }
 
 impl<T: 'static> Responder<T> {
+    /// A responder that hands its result to `callback`: what the runtime
+    /// gives an async handler, and what a test of one can give it.
     pub fn new(callback: Callback<T>) -> Self {
         Self {
-            callback: Mutex::new(Some(callback)),
+            callback: Some(callback),
             cancelled: Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// Creates a responder controlled by the shared `cancelled` flag.
     /// Once it is set, [`resolve`](Self::resolve) sends nothing.
-    pub fn with_abort(callback: Callback<T>, cancelled: Arc<AtomicBool>) -> Self {
+    pub(crate) fn with_abort(callback: Callback<T>, cancelled: Arc<AtomicBool>) -> Self {
         Self {
-            callback: Mutex::new(Some(callback)),
+            callback: Some(callback),
             cancelled,
         }
     }
@@ -38,14 +42,14 @@ impl<T: 'static> Responder<T> {
         self.cancelled.load(Ordering::SeqCst)
     }
 
-    pub fn resolve(&self, result: Result<T, IpcError>) {
-        let cb = self.callback.lock().unwrap().take();
-        if let Some(cb) = cb {
-            if self.cancelled.load(Ordering::SeqCst) {
+    /// Answers the request, unless it was cancelled meanwhile.
+    pub fn resolve(mut self, result: Result<T, IpcError>) {
+        if let Some(callback) = self.callback.take() {
+            if self.is_cancelled() {
                 debug!("[IPC] dropping response for canceled responder");
                 return;
             }
-            cb(result);
+            callback(result);
         }
     }
 
@@ -57,43 +61,25 @@ impl<T: 'static> Responder<T> {
     ///
     /// The mapped responder shares the cancellation flag with the source.
     /// Cancelling the source or the mapped responder cancels both.
-    pub fn map<U, F>(self, f: F) -> Responder<U>
+    pub fn map<U, F>(mut self, f: F) -> Responder<U>
     where
         U: 'static,
         F: FnOnce(U) -> Result<T, IpcError> + Send + 'static,
     {
-        let inner = self
-            .callback
-            .lock()
-            .unwrap()
-            .take()
-            .expect("responder already resolved");
-        let cancelled = self.cancelled.clone();
-        let f = Mutex::new(Some(f));
+        let callback = self.callback.take().map(|inner| -> Callback<U> {
+            Box::new(move |result: Result<U, IpcError>| inner(result.and_then(f)))
+        });
         Responder {
-            callback: Mutex::new(Some(Box::new(move |result: Result<U, IpcError>| {
-                let mapped = result.and_then(|v| {
-                    f.lock()
-                        .unwrap()
-                        .take()
-                        .expect("responder map called twice")(v)
-                });
-                inner(mapped);
-            }))),
-            cancelled,
+            callback,
+            cancelled: self.cancelled.clone(),
         }
     }
 }
 
 impl<T> Drop for Responder<T> {
     fn drop(&mut self) {
-        let callback = self
-            .callback
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
         // The requester is gone, so there is no response to deliver
-        if let Some(cb) = callback
+        if let Some(cb) = self.callback.take()
             && !self.cancelled.load(Ordering::SeqCst)
         {
             cb(Err(IpcError::with_code(
@@ -107,6 +93,7 @@ impl<T> Drop for Responder<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use std::sync::atomic::AtomicUsize;
 
     type CallRecord = Result<i32, IpcError>;
@@ -148,26 +135,6 @@ mod tests {
         assert_eq!(r[0].as_ref().unwrap_err().code(), code);
     }
 
-    // Once resolved, subsequent resolve calls are ignored
-    #[test]
-    fn resolve_twice_is_noop() {
-        let (responder, call_count, results) = recording_responder();
-        responder.resolve(Ok(1));
-        responder.resolve(Ok(2)); // no-op
-        assert_eq!(call_count.load(Ordering::SeqCst), 1);
-        let r = results.lock().unwrap();
-        assert_eq!(r[0], Ok(1));
-    }
-
-    // The first resolution wins regardless of success or failure
-    #[test]
-    fn resolve_error_then_ok_is_noop() {
-        let (responder, call_count, _) = recording_responder();
-        responder.resolve(Err(IpcError::new("first")));
-        responder.resolve(Ok(999));
-        assert_eq!(call_count.load(Ordering::SeqCst), 1);
-    }
-
     // Dropping an unresolved responder automatically rejects the request
     #[test]
     fn drop_without_resolve_auto_rejects() {
@@ -180,13 +147,13 @@ mod tests {
         assert_eq!(err.code(), ErrorCode::Dropped);
     }
 
-    // Dropping a resolved responder does not invoke the callback again
+    // A resolved responder is not rejected as it goes
     #[test]
-    fn drop_after_resolve_does_not_call_again() {
-        let (responder, call_count, _) = recording_responder();
+    fn a_resolved_responder_is_not_rejected_when_it_drops() {
+        let (responder, call_count, results) = recording_responder();
         responder.resolve(Ok(10));
-        drop(responder);
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
+        assert_eq!(results.lock().unwrap()[0], Ok(10));
     }
 
     // Automatic rejection identifies the responder as having been dropped
@@ -207,61 +174,6 @@ mod tests {
                 .message()
                 .contains("handler dropped responder without resolving")
         );
-    }
-
-    // Concurrent resolution invokes the callback at most once
-    #[test]
-    fn concurrent_resolve_is_safe() {
-        use std::thread;
-
-        let (responder, call_count, results) = recording_responder();
-        let responder = Arc::new(responder);
-        let mut handles = vec![];
-
-        for i in 0..10 {
-            let r = responder.clone();
-            handles.push(thread::spawn(move || {
-                r.resolve(Ok(i));
-            }));
-        }
-
-        for h in handles {
-            h.join().unwrap();
-        }
-
-        assert_eq!(call_count.load(Ordering::SeqCst), 1);
-        let r = results.lock().unwrap();
-        assert_eq!(r.len(), 1);
-        // Result should be one of the Ok(i) values, not corrupted
-        assert!(r[0].is_ok());
-    }
-
-    // Racing resolve against drop still invokes the callback exactly once
-    #[test]
-    fn concurrent_resolve_and_drop_is_safe() {
-        use std::thread;
-
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let cc = call_count.clone();
-
-        let responder = Arc::new(Responder::<i32>::new(Box::new(move |_| {
-            cc.fetch_add(1, Ordering::SeqCst);
-        })));
-
-        let r1 = responder.clone();
-        let h1 = thread::spawn(move || {
-            r1.resolve(Ok(1));
-        });
-
-        let r2 = responder.clone();
-        let h2 = thread::spawn(move || {
-            drop(r2);
-        });
-
-        h1.join().unwrap();
-        h2.join().unwrap();
-
-        assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
 
     // Cancellation prevents a resolved value from reaching the callback
