@@ -652,7 +652,7 @@ impl App {
     ///
     /// The factory is called for each stream a page opens under `name` that
     /// the ACL lets through, so each stream has a handler, and mutable state,
-    /// of its own. [`StreamHandler`](crate::ipc::StreamHandler) describes a
+    /// of its own. [`StreamHandler`](crate::StreamHandler) describes a
     /// stream's life: the handler accepts or refuses the open, then sends.
     ///
     /// A name that is already registered is a configuration error, reported
@@ -660,9 +660,9 @@ impl App {
     ///
     /// # Threads
     ///
-    /// The factory and every [`StreamHandler`](crate::ipc::StreamHandler)
+    /// The factory and every [`StreamHandler`](crate::StreamHandler)
     /// callback run on the UI thread, as for [`App::command`], so they should
-    /// return promptly. A [`StreamResponder`](crate::ipc::StreamResponder)
+    /// return promptly. A [`StreamResponder`](crate::StreamResponder)
     /// may be used from any thread.
     pub fn stream<F, H>(self, name: impl Into<String>, factory: F) -> Self
     where

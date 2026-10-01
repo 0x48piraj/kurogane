@@ -22,9 +22,9 @@ mod chromium_flags;
 mod sandbox;
 mod gpu;
 mod credentials;
-pub mod ipc;
-pub mod bridge;
-pub mod logger;
+mod ipc;
+mod bridge;
+mod logger;
 pub mod capability;
 
 mod platform;
@@ -36,9 +36,7 @@ pub use window_registry::{WindowId, WindowMetadata};
 pub use gpu::GpuMode;
 pub use credentials::CredentialStorage;
 pub use spec::SandboxMode;
-pub use scheme::{
-    CustomScheme, ResolveError, ResolvedAsset, SchemeHandler, resource_handler_from_bytes,
-};
+pub use scheme::{SchemeHandler, resource_handler_from_bytes};
 pub use error::{ConfigError, RuntimeError};
 pub use acl::{Origin, OriginError};
 pub use app::App;
@@ -56,8 +54,6 @@ pub mod __private {
     pub use crate::sandbox::windows::enter;
 }
 
-// Re-export IPC types for public use
-pub use crate::ipc::{ErrorCode, IpcError, Responder};
-pub use app::{
-    PumpRequest, PumpScheduler, ClientAppBrowserDelegate, ClientAppRendererDelegate, SecondInstance,
-};
+// What handlers take and return
+pub use crate::ipc::{BinaryResponder, ErrorCode, IpcError, Responder, StreamHandler, StreamResponder};
+pub use app::{PumpRequest, ClientAppBrowserDelegate, ClientAppRendererDelegate, SecondInstance};

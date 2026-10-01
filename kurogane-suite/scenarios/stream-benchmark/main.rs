@@ -1,5 +1,4 @@
-use kurogane::ipc::{StreamHandler, StreamResponder};
-use kurogane::{App, IpcError};
+use kurogane::{App, IpcError, StreamHandler, StreamResponder};
 
 struct EchoStream;
 

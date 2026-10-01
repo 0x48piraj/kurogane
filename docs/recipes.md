@@ -217,8 +217,7 @@ See:
 A stream carries chunks both ways between a page and a Rust handler. Register a factory with `App::stream`; it makes a handler for each stream a page opens.
 
 ```rust
-use kurogane::ipc::{StreamHandler, StreamResponder};
-use kurogane::{App, IpcError};
+use kurogane::{App, IpcError, StreamHandler, StreamResponder};
 
 struct Upload {
     received: usize,

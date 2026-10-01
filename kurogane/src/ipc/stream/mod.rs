@@ -206,8 +206,7 @@ impl StreamResponder {
 /// A handler that greets the page, then counts the bytes the page writes:
 ///
 /// ```no_run
-/// use kurogane::ipc::{StreamHandler, StreamResponder};
-/// use kurogane::{App, IpcError};
+/// use kurogane::{App, IpcError, StreamHandler, StreamResponder};
 ///
 /// #[derive(Default)]
 /// struct Counter {
