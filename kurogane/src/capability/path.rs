@@ -44,13 +44,10 @@ pub(crate) fn fold(component: &OsStr) -> Vec<u8> {
     for unit in char::decode_utf16(component.encode_wide()) {
         match unit {
             Ok(c) => {
-                let mut upper = c.to_uppercase();
-                let folded = match (upper.next(), upper.next()) {
-                    (Some(u), None) => u,
-                    _ => c,
-                };
                 let mut buf = [0; 4];
-                out.extend_from_slice(folded.encode_utf8(&mut buf).as_bytes());
+                for folded in fold_char(c) {
+                    out.extend_from_slice(folded.encode_utf8(&mut buf).as_bytes());
+                }
             }
             Err(e) => {
                 let u = e.unpaired_surrogate();
@@ -63,6 +60,18 @@ pub(crate) fn fold(component: &OsStr) -> Vec<u8> {
         }
     }
     out
+}
+
+/// The fold of one character: its simple uppercase when that is a single
+/// character, else the character itself. Windows folds each character on its
+/// own, so a name's fold is its characters' folds in order.
+#[cfg(windows)]
+fn fold_char(c: char) -> impl Iterator<Item = char> {
+    let mut upper = c.to_uppercase();
+    std::iter::once(match (upper.next(), upper.next()) {
+        (Some(u), None) => u,
+        _ => c,
+    })
 }
 
 /// Folds a path component for filesystem name matching.
@@ -79,18 +88,30 @@ pub(crate) fn fold(component: &OsStr) -> Vec<u8> {
 /// Non-UTF-8 names are returned unchanged.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn fold(component: &OsStr) -> Vec<u8> {
-    use unicode_normalization::UnicodeNormalization;
-
     let Some(text) = component.to_str() else {
         return component.as_encoded_bytes().to_vec();
     };
-    text.nfd()
+    fold_chars(text.chars()).collect::<String>().into_bytes()
+}
+
+/// The fold as a pipeline over characters. A name goes through it whole:
+/// the last NFD reorders combining marks across characters.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn fold_chars(chars: impl Iterator<Item = char>) -> impl Iterator<Item = char> {
+    use unicode_normalization::UnicodeNormalization;
+
+    chars
+        .nfd()
         .flat_map(char::to_uppercase)
         .flat_map(char::to_lowercase)
         .filter(|&c| !ignorable(c))
         .nfd()
-        .collect::<String>()
-        .into_bytes()
+}
+
+/// The fold of a name made of `c` alone.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn fold_char(c: char) -> impl Iterator<Item = char> {
+    fold_chars(std::iter::once(c))
 }
 
 /// Returns `true` if `c` is a Unicode `Default_Ignorable_Code_Point` stripped during
@@ -124,37 +145,20 @@ pub(crate) fn fold(component: &OsStr) -> Vec<u8> {
     component.as_encoded_bytes().to_vec()
 }
 
-/// Every character whose fold is `folded`, `folded` itself included, so a
-/// pattern written against raw characters (a glob class range) can be
-/// matched against folded names.
-#[cfg(windows)]
-pub(crate) fn unfold(folded: char) -> impl Iterator<Item = char> {
-    use std::collections::HashMap;
-    use std::sync::OnceLock;
-
-    /// Simple uppercase, inverted: every character mapping to each target.
-    static INVERSE: OnceLock<HashMap<char, Vec<char>>> = OnceLock::new();
-    let inverse = INVERSE.get_or_init(|| {
-        let mut inverse: HashMap<char, Vec<char>> = HashMap::new();
-        for c in (0..=0x10_FFFF).filter_map(char::from_u32) {
-            let mut upper = c.to_uppercase();
-            if let (Some(u), None) = (upper.next(), upper.next())
-                && u != c
-            {
-                inverse.entry(u).or_default().push(c);
-            }
-        }
-        inverse
-    });
-    std::iter::once(folded).chain(inverse.get(&folded).into_iter().flatten().copied())
+/// The fold of a name made of `c` alone: names are not folded here.
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+fn fold_char(c: char) -> impl Iterator<Item = char> {
+    std::iter::once(c)
 }
 
-/// Yields `folded` and all Unicode code points whose normalized fold begins with `folded`.
+/// Yields `folded` and all Unicode code points whose fold begins with `folded`.
 ///
-/// Inverts [`fold`] to map decomposed lead characters (e.g., `É` to `e` + U+0301) back to
-/// their source characters for path pattern matching. Matching lead characters is
-/// intentionally conservative; over-matching only denies more.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// Inverts [`fold`] through the per-character fold the platform's `fold` is
+/// built on, so a pattern written against raw characters (a glob class
+/// range) can be matched against folded names: on Windows a character's
+/// simple uppercase, elsewhere the lead of a normalized fold (e.g., `É` to
+/// `e` + U+0301). Matching lead characters is intentionally conservative;
+/// over-matching only denies more.
 pub(crate) fn unfold(folded: char) -> impl Iterator<Item = char> {
     use std::collections::HashMap;
     use std::sync::OnceLock;
@@ -162,14 +166,10 @@ pub(crate) fn unfold(folded: char) -> impl Iterator<Item = char> {
     static INVERSE: OnceLock<HashMap<char, Vec<char>>> = OnceLock::new();
     let inverse = INVERSE.get_or_init(|| {
         let mut inverse: HashMap<char, Vec<char>> = HashMap::new();
-        let mut buf = [0; 4];
         for c in (0..=0x10_FFFF).filter_map(char::from_u32) {
-            let bytes = fold(OsStr::new(c.encode_utf8(&mut buf)));
-            let first = std::str::from_utf8(&bytes)
-                .ok()
-                .and_then(|s| s.chars().next());
-            if let Some(first) = first
-                && (first != c || bytes.len() != c.len_utf8())
+            let mut fold = fold_char(c);
+            if let Some(first) = fold.next()
+                && (first != c || fold.next().is_some())
             {
                 inverse.entry(first).or_default().push(c);
             }
@@ -177,11 +177,6 @@ pub(crate) fn unfold(folded: char) -> impl Iterator<Item = char> {
         inverse
     });
     std::iter::once(folded).chain(inverse.get(&folded).into_iter().flatten().copied())
-}
-
-#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
-pub(crate) fn unfold(folded: char) -> impl Iterator<Item = char> {
-    std::iter::once(folded)
 }
 
 /// One validated path component: not empty, not `.`/`..`, no separator, no
@@ -595,6 +590,31 @@ mod tests {
             r"C:\data\a.b~1",
         ] {
             assert!(!invalid(path), "{path} is not a short-name shape");
+        }
+    }
+
+    // Glob classes match folded names through unfold: a character missing
+    // from it lets a name a deny class covers through, an extra one only
+    // denies more. Both directions, for every character: every character is
+    // among the unfold of its fold's lead, and unfold yields only characters
+    // whose fold that character leads
+    #[test]
+    fn unfold_inverts_fold() {
+        let lead = |c: char| {
+            let mut buf = [0; 4];
+            let folded = fold(OsStr::new(c.encode_utf8(&mut buf)));
+            String::from_utf8(folded).ok()?.chars().next()
+        };
+        for c in (0..=0x10_FFFF).filter_map(char::from_u32) {
+            if let Some(first) = lead(c) {
+                assert!(
+                    unfold(first).any(|x| x == c),
+                    "{c:?} folds to a name led by {first:?}, whose unfold misses it"
+                );
+            }
+            for x in unfold(c).skip(1) {
+                assert_eq!(lead(x), Some(c), "unfold({c:?}) yields {x:?}");
+            }
         }
     }
 
