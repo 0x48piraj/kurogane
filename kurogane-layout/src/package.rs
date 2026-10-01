@@ -10,9 +10,6 @@ use crate::{BundleLayout, ResolvedDistribution};
 pub enum PackageError {
     #[error(transparent)]
     Layout(#[from] crate::BundleError),
-
-    #[error(transparent)]
-    Distribution(#[from] crate::DistributionError),
 }
 
 /// Packages a resolved distribution as a plain directory bundle.

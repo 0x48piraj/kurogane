@@ -4,7 +4,7 @@
 //! distribution, selects the requested package format and coordinates
 //! optional signing.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::env::consts::EXE_SUFFIX;
 use std::ffi::OsString;
 use std::process::Command;
@@ -383,8 +383,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
         extra_resources,
     };
 
-    dist.validate()
-        .map_err(|e| anyhow::anyhow!("distribution validation failed: {e}"))?;
+    dist.validate().context("distribution validation failed")?;
 
     tui::field("binary", tui::format_path(dist.executable.binary()));
 

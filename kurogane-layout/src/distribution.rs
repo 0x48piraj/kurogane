@@ -122,7 +122,7 @@ pub enum DistributionError {
     #[error("resource destination must be a relative path without '..' components: {0}")]
     InvalidResourceDestination(PathBuf),
 
-    #[error("invalid CEF runtime: {0}")]
+    #[error(transparent)]
     InvalidCefRuntime(#[from] crate::cef::CefError),
 }
 

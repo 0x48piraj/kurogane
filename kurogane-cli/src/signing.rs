@@ -240,9 +240,43 @@ pub enum SigningError {
     #[error("signed output was not produced for {}", .0.display())]
     MissingSignedOutput(PathBuf),
 
+    /// A signing program could not be started.
     #[cfg(any(target_os = "windows", target_os = "macos"))]
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    #[error("could not run {program}")]
+    Spawn {
+        program: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// A file operation failed: what was being done, and to which path.
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[error("failed to {action} {}", .path.display())]
+    Io {
+        action: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+impl SigningError {
+    /// An I/O error of the file operation `action` on `path`.
+    fn io(action: &'static str, path: &Path) -> impl FnOnce(std::io::Error) -> Self {
+        let path = path.to_path_buf();
+        move |source| Self::Io {
+            action,
+            path,
+            source,
+        }
+    }
+
+    /// A failure to start `program`.
+    fn spawn(program: &Path) -> impl FnOnce(std::io::Error) -> Self {
+        let program = program.display().to_string();
+        move |source| Self::Spawn { program, source }
+    }
 }
 
 /// Resolves the certificate password from its configured environment variable.
@@ -406,7 +440,8 @@ fn run_custom(path: &Path, command: &[String]) -> Result<(), SigningError> {
 
     let status = Command::new(program)
         .args(expand_custom_args(args, path))
-        .status()?;
+        .status()
+        .map_err(SigningError::spawn(Path::new(program)))?;
 
     if !status.success() {
         return Err(SigningError::CustomCommandFailed {
@@ -564,7 +599,10 @@ pub fn sign_app_bundle(
     let identity = config.identity.as_str();
 
     let run = |args: Vec<OsString>, tool: &str| -> Result<(), SigningError> {
-        let status = Command::new(&codesign).args(&args).status()?;
+        let status = Command::new(&codesign)
+            .args(&args)
+            .status()
+            .map_err(SigningError::spawn(&codesign))?;
 
         if status.success() {
             Ok(())
@@ -580,7 +618,8 @@ pub fn sign_app_bundle(
 
     // Innermost first
     if frameworks.is_dir() {
-        let mut helpers: Vec<PathBuf> = fs::read_dir(&frameworks)?
+        let mut helpers: Vec<PathBuf> = fs::read_dir(&frameworks)
+            .map_err(SigningError::io("list", &frameworks))?
             .filter_map(Result::ok)
             .map(|entry| entry.path())
             .filter(|path| path.extension().is_some_and(|ext| ext == "app"))
@@ -643,7 +682,8 @@ fn sign_with_signtool(
     let status = Command::new(signtool)
         .args(signtool_sign_args(config, password.as_deref()))
         .arg(path)
-        .status()?;
+        .status()
+        .map_err(SigningError::spawn(signtool))?;
 
     if !status.success() {
         return Err(SigningError::ToolFailed {
@@ -677,7 +717,7 @@ fn sign_with_osslsigncode(
                 return Err(SigningError::MissingSignedOutput(path.to_path_buf()));
             }
             if output != path {
-                fs::rename(&output, path)?;
+                fs::rename(&output, path).map_err(SigningError::io("replace", path))?;
             }
             Ok(())
         }
@@ -690,7 +730,7 @@ fn sign_with_osslsigncode(
         }
         Err(e) => {
             let _ = fs::remove_file(&output);
-            Err(e.into())
+            Err(SigningError::spawn(osslsigncode)(e))
         }
     }
 }
@@ -709,8 +749,9 @@ pub fn sign_tree(root: &Path, config: &SignConfig) -> Result<usize, SigningError
     let mut stack = vec![root.to_path_buf()];
 
     while let Some(dir) = stack.pop() {
-        for entry in fs::read_dir(&dir)? {
-            let entry = entry?;
+        let list = SigningError::io("list", &dir);
+        for entry in fs::read_dir(&dir).map_err(list)? {
+            let entry = entry.map_err(SigningError::io("list", &dir))?;
             let path = entry.path();
 
             if path.is_dir() {
@@ -734,8 +775,9 @@ pub fn verify_tree(root: &Path) -> Result<usize, SigningError> {
     let mut stack = vec![root.to_path_buf()];
 
     while let Some(dir) = stack.pop() {
-        for entry in fs::read_dir(&dir)? {
-            let entry = entry?;
+        let list = SigningError::io("list", &dir);
+        for entry in fs::read_dir(&dir).map_err(list)? {
+            let entry = entry.map_err(SigningError::io("list", &dir))?;
             let path = entry.path();
 
             if path.is_dir() {
@@ -754,9 +796,10 @@ pub fn verify_tree(root: &Path) -> Result<usize, SigningError> {
 #[cfg(target_os = "windows")]
 pub fn verify_signature(path: &Path) -> Result<(), SigningError> {
     if let Some(signtool) = find_signtool() {
-        let status = Command::new(signtool)
+        let status = Command::new(&signtool)
             .args(signtool_verify_args(path))
-            .status()?;
+            .status()
+            .map_err(SigningError::spawn(&signtool))?;
         return if status.success() {
             Ok(())
         } else {
@@ -768,9 +811,10 @@ pub fn verify_signature(path: &Path) -> Result<(), SigningError> {
     }
 
     if let Some(osslsigncode) = find_osslsigncode() {
-        let status = Command::new(osslsigncode)
+        let status = Command::new(&osslsigncode)
             .args(osslsigncode_verify_args(path))
-            .status()?;
+            .status()
+            .map_err(SigningError::spawn(&osslsigncode))?;
         return if status.success() {
             Ok(())
         } else {

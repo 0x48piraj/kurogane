@@ -57,8 +57,26 @@ pub enum BundleError {
     #[error(transparent)]
     Cef(#[from] crate::cef::CefError),
 
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    /// A file operation failed: what was being done, and to which path.
+    #[error("failed to {action} {}", .path.display())]
+    Io {
+        action: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+impl BundleError {
+    /// An I/O error of the file operation `action` on `path`.
+    fn io(action: &'static str, path: &Path) -> impl FnOnce(std::io::Error) -> Self {
+        let path = path.to_path_buf();
+        move |source| Self::Io {
+            action,
+            path,
+            source,
+        }
+    }
 }
 
 pub struct BundleLayout {
@@ -77,13 +95,16 @@ impl BundleLayout {
     pub fn prepare(&self) -> Result<(), BundleError> {
         // Cleaning build directory
         if self.root.exists() {
-            fs::remove_dir_all(&self.root)?;
+            fs::remove_dir_all(&self.root).map_err(BundleError::io("clear", &self.root))?;
         }
 
-        fs::create_dir_all(&self.root)?;
+        fs::create_dir_all(&self.root).map_err(BundleError::io("create", &self.root))?;
 
         #[cfg(target_os = "linux")]
-        fs::create_dir_all(self.runtime_dir())?;
+        {
+            let runtime = self.runtime_dir();
+            fs::create_dir_all(&runtime).map_err(BundleError::io("create", &runtime))?;
+        }
 
         Ok(())
     }
@@ -150,7 +171,8 @@ impl BundleLayout {
             return Err(BundleError::MissingFrontend(src.to_path_buf()));
         }
 
-        copy_dir(src, &self.content_dir())?;
+        let content = self.content_dir();
+        copy_dir(src, &content).map_err(BundleError::io("copy the frontend to", &content))?;
         Ok(())
     }
 
@@ -158,7 +180,9 @@ impl BundleLayout {
     ///
     /// Only runtime artifacts are included.
     pub fn install_cef(&self, src: &Path) -> Result<(), BundleError> {
-        copy_dir_filtered(src, &self.cef_dir(), &is_runtime_artifact)?;
+        let cef = self.cef_dir();
+        copy_dir_filtered(src, &cef, &is_runtime_artifact)
+            .map_err(BundleError::io("copy the CEF runtime to", &cef))?;
         Ok(())
     }
 
@@ -187,13 +211,15 @@ exec "$ROOT/{runtime_target}" "$@"
 "#
         );
 
-        fs::write(&launcher, script)?;
+        fs::write(&launcher, script).map_err(BundleError::io("write", &launcher))?;
 
-        let mut perms = fs::metadata(&launcher)?.permissions();
+        let executable = BundleError::io("make executable", &launcher);
+        let mut perms = fs::metadata(&launcher).map_err(executable)?.permissions();
 
         perms.set_mode(0o755);
 
-        fs::set_permissions(&launcher, perms)?;
+        fs::set_permissions(&launcher, perms)
+            .map_err(BundleError::io("make executable", &launcher))?;
 
         Ok(())
     }
@@ -207,17 +233,24 @@ exec "$ROOT/{runtime_target}" "$@"
 
         let exe_name = exe_name(dist)?;
 
-        fs::copy(dist.executable.binary(), self.executable_path(exe_name))?;
+        let executable = self.executable_path(exe_name);
+        fs::copy(dist.executable.binary(), &executable)
+            .map_err(BundleError::io("copy the executable to", &executable))?;
 
         if let Some(library) = dist.executable.library() {
-            fs::copy(library, self.client_library_path(exe_name))?;
+            let installed = self.client_library_path(exe_name);
+            fs::copy(library, &installed).map_err(BundleError::io(
+                "copy the application library to",
+                &installed,
+            ))?;
         }
 
         #[cfg(target_os = "linux")]
         self.write_launcher(exe_name)?;
 
         // The application runs the runtime installed below and no other
-        fs::write(self.marker_path(exe_name), b"")?;
+        let marker = self.marker_path(exe_name);
+        fs::write(&marker, b"").map_err(BundleError::io("write", &marker))?;
 
         self.install_cef(&dist.cef_runtime)?;
 
@@ -227,13 +260,14 @@ exec "$ROOT/{runtime_target}" "$@"
 
         for resource in &dist.extra_resources {
             let dest = self.root.join(&resource.destination);
+            let copy = BundleError::io("copy a resource to", &dest);
             if resource.source.is_dir() {
-                copy_dir(&resource.source, &dest)?;
+                copy_dir(&resource.source, &dest).map_err(copy)?;
             } else {
                 if let Some(parent) = dest.parent() {
-                    fs::create_dir_all(parent)?;
+                    fs::create_dir_all(parent).map_err(BundleError::io("create", parent))?;
                 }
-                fs::copy(&resource.source, &dest)?;
+                fs::copy(&resource.source, &dest).map_err(copy)?;
             }
         }
 
@@ -311,6 +345,26 @@ mod tests {
 
         let exe = layout.executable_path(test_exe_name());
         assert!(exe.exists(), "executable should exist after materialize");
+    }
+
+    #[test]
+    fn a_failed_copy_names_what_it_was_copying_and_where() {
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        std::fs::remove_file(dist.executable.binary()).unwrap();
+        let layout = BundleLayout::new(dir.path().join("out"));
+
+        let err = layout.materialize(&dist).unwrap_err();
+
+        let executable = layout.executable_path(test_exe_name());
+        assert_eq!(
+            err.to_string(),
+            format!("failed to copy the executable to {}", executable.display())
+        );
+        assert!(
+            std::error::Error::source(&err).is_some(),
+            "the operating system's reason stays as the cause"
+        );
     }
 
     #[test]

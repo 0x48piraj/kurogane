@@ -38,7 +38,7 @@ pub fn link_unbundled_angle_libraries(
     runtime: &Path,
     dest: &Path,
 ) -> Result<Vec<&'static str>, CefError> {
-    fs::create_dir_all(dest)?;
+    fs::create_dir_all(dest).map_err(CefError::io("create", dest))?;
 
     let mut linked = Vec::new();
 
@@ -85,13 +85,13 @@ fn link_when_stale(source: &Path, destination: &Path) -> Result<bool, CefError> 
                 return Ok(false);
             }
 
-            fs::remove_file(destination)?;
+            fs::remove_file(destination).map_err(CefError::io("replace", destination))?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
+        Err(error) => return Err(CefError::io("inspect", destination)(error)),
     }
 
-    std::os::unix::fs::symlink(source, destination)?;
+    std::os::unix::fs::symlink(source, destination).map_err(CefError::io("link", destination))?;
 
     Ok(true)
 }

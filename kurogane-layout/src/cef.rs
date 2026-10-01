@@ -76,7 +76,7 @@ pub fn read_provenance(root: &Path) -> Result<Option<CefProvenance>, CefError> {
         return Ok(None);
     }
 
-    let file = fs::File::open(&path)?;
+    let file = fs::File::open(&path).map_err(CefError::io("read", &path))?;
     let archive: ArchiveJson =
         serde_json::from_reader(file).map_err(|e| CefError::InvalidDistribution {
             root: root.to_path_buf(),
@@ -210,8 +210,26 @@ pub enum CefError {
     #[error("invalid CEF runtime at {root}: missing {missing}")]
     InvalidRuntime { root: PathBuf, missing: String },
 
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    /// A file operation failed: what was being done, and to which path.
+    #[error("failed to {action} {}", .path.display())]
+    Io {
+        action: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+impl CefError {
+    /// An I/O error of the file operation `action` on `path`.
+    pub(crate) fn io(action: &'static str, path: &Path) -> impl FnOnce(std::io::Error) -> Self {
+        let path = path.to_path_buf();
+        move |source| Self::Io {
+            action,
+            path,
+            source,
+        }
+    }
 }
 
 /// Resolves and validates a CEF distribution root.
@@ -391,19 +409,21 @@ pub fn materialize_cef_runtime(
     }
 
     if destination.exists() {
-        fs::remove_dir_all(destination)?;
+        fs::remove_dir_all(destination).map_err(CefError::io("clear", destination))?;
     }
 
+    let copy = CefError::io("copy the CEF runtime to", destination);
     let release = distribution_root.join("Release");
     let resources = distribution_root.join("Resources");
 
     if release.is_dir() && resources.is_dir() {
         // Raw official distribution
-        copy_dir_filtered(&release, destination, &is_runtime_artifact)?;
-        copy_dir_filtered(&resources, destination, &is_runtime_artifact)?;
+        copy_dir_filtered(&release, destination, &is_runtime_artifact)
+            .and_then(|()| copy_dir_filtered(&resources, destination, &is_runtime_artifact))
+            .map_err(copy)?;
     } else if distribution_root.join(cef_binary_name()).exists() {
         // Already-flattened distribution
-        copy_dir_filtered(distribution_root, destination, &is_runtime_artifact)?;
+        copy_dir_filtered(distribution_root, destination, &is_runtime_artifact).map_err(copy)?;
     } else {
         return Err(CefError::InvalidDistribution {
             root: distribution_root.to_path_buf(),

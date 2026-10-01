@@ -327,10 +327,13 @@ pub fn build(
             dist.cef_runtime.display()
         );
     }
-    copy_dir(
-        &framework_src,
-        &frameworks_dir(&app_dir).join("Chromium Embedded Framework.framework"),
-    )?;
+    let framework_dest = frameworks_dir(&app_dir).join("Chromium Embedded Framework.framework");
+    copy_dir(&framework_src, &framework_dest).with_context(|| {
+        format!(
+            "failed to copy the CEF framework to {}",
+            framework_dest.display()
+        )
+    })?;
 
     // Validate the placed framework
     validate_cef_runtime(&frameworks_dir(&app_dir))?;
@@ -355,14 +358,22 @@ pub fn build(
 
     // Frontend resources
     if let Some(frontend) = &dist.frontend {
-        copy_dir(frontend, &resources_dir(&app_dir).join(CONTENT_DIR))?;
+        let content = resources_dir(&app_dir).join(CONTENT_DIR);
+        copy_dir(frontend, &content)
+            .with_context(|| format!("failed to copy the frontend to {}", content.display()))?;
     }
 
     // Extra resources
     for resource in &dist.extra_resources {
         let dest = resources_dir(&app_dir).join(&resource.destination);
         if resource.source.is_dir() {
-            copy_dir(&resource.source, &dest)?;
+            copy_dir(&resource.source, &dest).with_context(|| {
+                format!(
+                    "failed to copy {} to {}",
+                    resource.source.display(),
+                    dest.display()
+                )
+            })?;
         } else {
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent)
