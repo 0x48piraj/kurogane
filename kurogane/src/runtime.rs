@@ -1337,6 +1337,10 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
     #[cfg(target_os = "macos")]
     crate::platform::macos::setup_app_delegate();
 
+    // Preserve an existing application or host menu
+    #[cfg(target_os = "macos")]
+    crate::platform::macos::install_default_menu();
+
     // Only install Ctrl+C handler if CEF Views owns the window (non-embedded mode)
     // In embedded mode the host application manages its own lifecycle
     if spec.mode == RuntimeMode::Views {

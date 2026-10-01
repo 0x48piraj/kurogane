@@ -8,12 +8,14 @@ use kurogane_layout::detect_cef_root;
 use objc2::{
     ClassType, MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
-    runtime::{AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject},
+    runtime::{AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject, Sel},
+    sel,
 };
 use objc2_app_kit::{
     NSApp, NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
-    NSApplicationTerminateReply,
+    NSApplicationTerminateReply, NSEventModifierFlags, NSMenu, NSMenuItem, NSRunningApplication,
 };
+use objc2_foundation::NSString;
 
 use crate::error::RuntimeError;
 use crate::platform::macos::application::SimpleApplication;
@@ -135,6 +137,157 @@ pub fn setup_app_delegate() {
     // NSApplication does not retain its delegate. Keep the retained handle alive
     // until process exit so it outlives CEF initialization
     std::mem::forget(delegate);
+}
+
+/// Installs the standard App, Edit and Window menus when no menu exists.
+/// Existing menus are preserved.
+///
+/// Must run on the main thread after CEF initialization.
+pub fn install_default_menu() {
+    let mtm = MainThreadMarker::new().expect("install_default_menu must run on the main thread");
+    let app = NSApp(mtm);
+    if app.mainMenu().is_some_and(|menu| menu.numberOfItems() > 0) {
+        return;
+    }
+
+    let name = app_name();
+    let command = NSEventModifierFlags::Command;
+    let shift = command | NSEventModifierFlags::Shift;
+    let option = command | NSEventModifierFlags::Option;
+    let bar = NSMenu::new(mtm);
+
+    let app_menu = submenu(mtm, &bar, &name);
+    let about = format!("About {name}");
+    add_item(
+        &app_menu,
+        &about,
+        sel!(orderFrontStandardAboutPanel:),
+        "",
+        command,
+    );
+    app_menu.addItem(&NSMenuItem::separatorItem(mtm));
+    add_item(
+        &app_menu,
+        &format!("Hide {name}"),
+        sel!(hide:),
+        "h",
+        command,
+    );
+    add_item(
+        &app_menu,
+        "Hide Others",
+        sel!(hideOtherApplications:),
+        "h",
+        option,
+    );
+    add_item(
+        &app_menu,
+        "Show All",
+        sel!(unhideAllApplications:),
+        "",
+        command,
+    );
+    app_menu.addItem(&NSMenuItem::separatorItem(mtm));
+    add_item(
+        &app_menu,
+        &format!("Quit {name}"),
+        sel!(terminate:),
+        "q",
+        command,
+    );
+
+    let edit = submenu(mtm, &bar, "Edit");
+    add_item(&edit, "Undo", sel!(undo:), "z", command);
+    add_item(&edit, "Redo", sel!(redo:), "z", shift);
+    edit.addItem(&NSMenuItem::separatorItem(mtm));
+    add_item(&edit, "Cut", sel!(cut:), "x", command);
+    add_item(&edit, "Copy", sel!(copy:), "c", command);
+    add_item(&edit, "Paste", sel!(paste:), "v", command);
+    let match_style = option | NSEventModifierFlags::Shift;
+    add_item(
+        &edit,
+        "Paste and Match Style",
+        sel!(pasteAndMatchStyle:),
+        "v",
+        match_style,
+    );
+    add_item(&edit, "Delete", sel!(delete:), "", command);
+    add_item(&edit, "Select All", sel!(selectAll:), "a", command);
+
+    let window = submenu(mtm, &bar, "Window");
+    add_item(&window, "Minimize", sel!(performMiniaturize:), "m", command);
+    add_item(&window, "Zoom", sel!(performZoom:), "", command);
+    window.addItem(&NSMenuItem::separatorItem(mtm));
+    add_item(&window, "Close", sel!(performClose:), "w", command);
+    add_item(
+        &window,
+        "Bring All to Front",
+        sel!(arrangeInFront:),
+        "",
+        command,
+    );
+    // AppKit populates the Window menu with the application's windows
+    app.setWindowsMenu(Some(&window));
+
+    app.setMainMenu(Some(&bar));
+}
+
+/// Quits as the application menu's Quit does.
+/// Sends `terminate:` after the current event, allowing orderly
+/// shutdown to run outside the caller.
+pub fn quit() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        crate::debug!("quit asked off the main thread; ignored");
+        return;
+    };
+    let app = NSApp(mtm);
+    // SAFETY: NSObject's `performSelector:withObject:afterDelay:` takes a
+    // selector, an object (nil) and an `NSTimeInterval` (f64); `terminate:`
+    // takes its one object argument
+    unsafe {
+        let _: () = msg_send![
+            &*app,
+            performSelector: sel!(terminate:),
+            withObject: None::<&AnyObject>,
+            afterDelay: 0.0f64
+        ];
+    }
+}
+
+/// Returns the application display name, falling back to the executable name.
+fn app_name() -> String {
+    if let Some(name) = NSRunningApplication::currentApplication().localizedName() {
+        return name.to_string();
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            exe.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default()
+}
+
+/// Adds a titled submenu to `bar`.
+fn submenu(mtm: MainThreadMarker, bar: &NSMenu, title: &str) -> Retained<NSMenu> {
+    let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str(title));
+    let holder = NSMenuItem::new(mtm);
+    holder.setSubmenu(Some(&menu));
+    bar.addItem(&holder);
+    menu
+}
+
+/// Adds an untargeted menu item with the given action and key equivalent.
+fn add_item(menu: &NSMenu, title: &str, action: Sel, key: &str, modifiers: NSEventModifierFlags) {
+    // SAFETY: Standard AppKit actions are dispatched through the responder chain.
+    let item = unsafe {
+        menu.addItemWithTitle_action_keyEquivalent(
+            &NSString::from_str(title),
+            Some(action),
+            &NSString::from_str(key),
+        )
+    };
+    item.setKeyEquivalentModifierMask(modifiers);
 }
 
 define_class! {

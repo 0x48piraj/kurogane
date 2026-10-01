@@ -7,6 +7,7 @@
 //! To prevent CEF from spawning unmanaged native windows or tabs, this module intercepts
 //! the command pipeline. Kurogane uses a strict allowlist: commands execute ONLY if they
 //! operate on the current page context. All other commands are intentionally swallowed.
+//! On macOS, Chrome's quit command maps ⌘Q to application termination.
 
 use std::ffi::{CStr, c_char, c_int};
 use std::sync::OnceLock;
@@ -89,6 +90,13 @@ fn custom_context_ids() -> Option<(c_int, c_int)> {
     })
 }
 
+/// Returns Chrome's quit command ID on macOS.
+#[cfg(target_os = "macos")]
+fn exit_id() -> Option<c_int> {
+    static ID: OnceLock<Option<c_int>> = OnceLock::new();
+    *ID.get_or_init(|| command_id(c"IDC_EXIT"))
+}
+
 /// Returns whether a Kurogane window runs the command `id`.
 fn allowed(id: c_int, disposition: WindowOpenDisposition) -> bool {
     disposition == WindowOpenDisposition::CURRENT_TAB
@@ -110,6 +118,14 @@ wrap_command_handler! {
             command_id: c_int,
             disposition: WindowOpenDisposition,
         ) -> c_int {
+            // Allow macOS's quit command to terminate the application
+            #[cfg(target_os = "macos")]
+            if Some(command_id) == exit_id() {
+                debug!("[Commands] Chrome's quit command: quitting as the menu's Quit does");
+                crate::platform::macos::quit();
+                return 1;
+            }
+
             if allowed(command_id, disposition) {
                 return 0; // False. Unhandled by wrapper, proceed with default CEF execution.
             }
