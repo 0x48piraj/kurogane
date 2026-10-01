@@ -14,6 +14,8 @@ mod run;
 mod sandbox;
 mod build;
 mod bundle;
+mod config;
+mod signing;
 mod new;
 mod init;
 mod showcase;

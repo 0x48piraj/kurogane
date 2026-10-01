@@ -57,7 +57,7 @@ pub fn run() -> Result<()> {
 
         let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
 
-        match kurogane_layout::PackagingConfig::load(config_dir) {
+        match crate::config::PackagingConfig::load(config_dir) {
             Ok(config) => {
                 if let Some(name) = &config.app.name {
                     tui::field("name", name);

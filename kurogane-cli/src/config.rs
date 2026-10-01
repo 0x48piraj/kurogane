@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::{AppMetadata, ResolvedResource};
+use kurogane_layout::{AppMetadata, ResolvedResource};
 
 /// Name of the project packaging configuration file.
 pub const CONFIG_FILE_NAME: &str = "kurogane.toml";
@@ -86,7 +86,8 @@ pub struct AppConfig {
 
 impl AppConfig {
     /// Applies configured application identity to distribution metadata.
-    pub fn apply_to(&self, metadata: &mut AppMetadata) {
+    /// The icon is a project path, anchored to `project_root`.
+    pub fn apply_to(&self, metadata: &mut AppMetadata, project_root: &Path) {
         if let Some(name) = &self.name {
             metadata.name = name.clone();
         }
@@ -103,7 +104,7 @@ impl AppConfig {
             metadata.copyright = Some(copyright.clone());
         }
         if let Some(icon) = &self.icon {
-            metadata.icon = Some(icon.clone());
+            metadata.icon = Some(anchor_path(project_root, icon));
         }
     }
 }
@@ -521,13 +522,13 @@ future-option = 42
 
     #[test]
     fn apply_to_overrides_only_set_fields() {
-        let mut metadata = crate::AppMetadata {
+        let mut metadata = kurogane_layout::AppMetadata {
             name: "cargo-name".into(),
             ..Default::default()
         };
 
         // Unset configuration leaves metadata untouched
-        AppConfig::default().apply_to(&mut metadata);
+        AppConfig::default().apply_to(&mut metadata, Path::new("/project"));
         assert_eq!(metadata.name, "cargo-name");
         assert!(metadata.publisher.is_none());
 
@@ -537,11 +538,15 @@ future-option = 42
             icon: Some(PathBuf::from("assets/icon.png")),
             ..Default::default()
         };
-        app.apply_to(&mut metadata);
+        app.apply_to(&mut metadata, Path::new("/project"));
 
         assert_eq!(metadata.name, "Config Name");
         assert_eq!(metadata.publisher.as_deref(), Some("Example Corp"));
-        assert_eq!(metadata.icon.as_deref(), Some(Path::new("assets/icon.png")));
+        assert_eq!(
+            metadata.icon,
+            Some(Path::new("/project").join("assets/icon.png")),
+            "the icon is a project path"
+        );
         assert!(metadata.description.is_none());
         assert!(metadata.copyright.is_none());
     }

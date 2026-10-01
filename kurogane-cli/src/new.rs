@@ -41,7 +41,7 @@ pub fn run(
 
     template::write_cargo_config(&project)?;
 
-    let generated_config = kurogane_layout::PackagingConfig::load(&project)?;
+    let generated_config = crate::config::PackagingConfig::load(&project)?;
 
     tui::success("Project created");
     tui::field("name", &name);

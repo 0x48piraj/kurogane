@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use crate::CefError;
 
 /// macOS CEF framework directory name.
-pub(crate) const MACOS_FRAMEWORK: &str = "Chromium Embedded Framework.framework";
+pub const MACOS_FRAMEWORK: &str = "Chromium Embedded Framework.framework";
 
 /// ANGLE libraries required by Chromium's GPU process.
 const ANGLE_REQUIRED: &[&str] = &["libEGL.dylib", "libGLESv2.dylib"];

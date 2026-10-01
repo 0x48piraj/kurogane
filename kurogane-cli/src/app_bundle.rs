@@ -10,9 +10,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use kurogane_layout::{
-    AppMetadata, Executable, SignConfig, copy_dir, sign_app_bundle, validate_cef_runtime,
-};
+use kurogane_layout::{AppMetadata, Executable, copy_dir, validate_cef_runtime};
+use crate::signing::{SignConfig, sign_app_bundle};
 
 use crate::tui;
 

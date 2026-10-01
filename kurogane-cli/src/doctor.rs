@@ -268,7 +268,7 @@ pub fn run(json: bool) -> Result<()> {
     // kurogane.toml loads as the defaults
     let packaging_config = match workspace_root.as_deref() {
         None => None,
-        Some(root) => match kurogane_layout::PackagingConfig::load(root) {
+        Some(root) => match crate::config::PackagingConfig::load(root) {
             Ok(config) => Some((root, config)),
             Err(e) => {
                 tui::error("kurogane.toml could not be loaded");
@@ -280,7 +280,7 @@ pub fn run(json: bool) -> Result<()> {
     };
 
     let check_frontend = |root: &std::path::Path, label: &str, path: &std::path::Path| -> bool {
-        let anchored = kurogane_layout::anchor_path(root, path);
+        let anchored = crate::config::anchor_path(root, path);
         if anchored.exists() {
             tui::success(label);
             tui::field("path", tui::format_path(&anchored));

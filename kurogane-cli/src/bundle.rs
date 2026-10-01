@@ -10,17 +10,17 @@ use std::ffi::OsString;
 use std::process::Command;
 use cargo_metadata::{MetadataCommand, Package, TargetKind};
 use kurogane_layout::{
-    AppConfig, AppMetadata, Executable, PackagingConfig, ResolvedDistribution, anchor_path,
-    materialize_cef_runtime, resolve_cef_for_bundle,
+    AppMetadata, Executable, ResolvedDistribution, materialize_cef_runtime, resolve_cef_for_bundle,
 };
+use crate::config::{AppConfig, PackagingConfig, anchor_path};
 #[cfg(any(target_os = "windows", target_os = "macos"))]
-use kurogane_layout::SignConfig;
+use crate::signing::SignConfig;
 
 use crate::launch::find_target;
 #[cfg(not(target_os = "macos"))]
 use kurogane_layout::package_directory;
 #[cfg(target_os = "windows")]
-use kurogane_layout::{sign_tree, verify_tree};
+use crate::signing::{sign_tree, verify_tree};
 
 use crate::tui;
 
@@ -29,7 +29,7 @@ use crate::tui;
 /// The command is interpreted by the platform shell.
 fn build_frontend(
     workspace_root: &std::path::Path,
-    config: &kurogane_layout::AppConfig,
+    config: &crate::config::AppConfig,
 ) -> Result<()> {
     let Some(command) = &config.frontend_build else {
         return Ok(());
@@ -138,7 +138,7 @@ impl PackageFormat {
 /// Only the source is anchored; the destination is bundle-relative.
 fn resolve_resources(
     project_root: &std::path::Path,
-    configured: &[kurogane_layout::ResourceConfig],
+    configured: &[crate::config::ResourceConfig],
 ) -> Result<Vec<kurogane_layout::ResolvedResource>> {
     configured
         .iter()
@@ -186,13 +186,13 @@ fn resolve_sign_config(
         anyhow::anyhow!(
             "--sign requested but [signing.windows] in {} sets no `certificate`, \
              `certificate-thumbprint` or `custom-command`",
-            kurogane_layout::CONFIG_FILE_NAME
+            crate::config::CONFIG_FILE_NAME
         )
     })?;
 
     // Configured certificate path is project-relative
-    if let SignConfig::Certificate(kurogane_layout::CertificateConfig {
-        source: kurogane_layout::CertificateSource::File { path, .. },
+    if let SignConfig::Certificate(crate::signing::CertificateConfig {
+        source: crate::signing::CertificateSource::File { path, .. },
         ..
     }) = &mut resolved
     {
@@ -216,7 +216,7 @@ fn resolve_sign_config(
     let resolved = SignConfig::from_file_config(&config.signing)?.ok_or_else(|| {
         anyhow::anyhow!(
             "--sign requested but [signing.macos] in {} sets no `identity`",
-            kurogane_layout::CONFIG_FILE_NAME
+            crate::config::CONFIG_FILE_NAME
         )
     })?;
 
@@ -366,25 +366,17 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
     let extra_resources = resolve_resources(project_root, &packaging_config.bundle.resources)?;
 
+    // The package's name and version, then what [app] configures
+    let mut metadata = AppMetadata {
+        name: pkg.name.to_string(),
+        version: pkg.version.to_string(),
+        exe_name,
+        ..Default::default()
+    };
+    packaging_config.app.apply_to(&mut metadata, project_root);
+
     let dist = ResolvedDistribution {
-        metadata: AppMetadata {
-            name: packaging_config
-                .app
-                .name
-                .clone()
-                .unwrap_or_else(|| pkg.name.to_string()),
-            version: pkg.version.to_string(),
-            exe_name,
-            identifier: packaging_config.app.identifier.clone(),
-            publisher: packaging_config.app.publisher.clone(),
-            description: packaging_config.app.description.clone(),
-            copyright: packaging_config.app.copyright.clone(),
-            icon: packaging_config
-                .app
-                .icon
-                .as_ref()
-                .map(|icon| anchor_path(project_root, icon)),
-        },
+        metadata,
         executable,
         frontend,
         cef_runtime,
@@ -517,8 +509,8 @@ mod tests {
         assert!(PackageFormat::from_str("").is_err());
     }
 
-    fn resource(source: &str, destination: Option<&str>) -> kurogane_layout::ResourceConfig {
-        kurogane_layout::ResourceConfig {
+    fn resource(source: &str, destination: Option<&str>) -> crate::config::ResourceConfig {
+        crate::config::ResourceConfig {
             source: source.into(),
             destination: destination.map(str::to_owned),
         }

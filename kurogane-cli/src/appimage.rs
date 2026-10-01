@@ -9,7 +9,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use kurogane_layout::{PackagingConfig, ResolvedDistribution, package_directory};
+use kurogane_layout::{ResolvedDistribution, package_directory};
+use crate::config::PackagingConfig;
 
 use crate::tui;
 
@@ -495,7 +496,7 @@ mod tests {
         let dist = test_distribution(dir.path());
 
         let config = PackagingConfig {
-            linux: kurogane_layout::LinuxPackagingConfig {
+            linux: crate::config::LinuxPackagingConfig {
                 categories: Some(vec!["Development".into()]),
                 terminal: Some(true),
             },

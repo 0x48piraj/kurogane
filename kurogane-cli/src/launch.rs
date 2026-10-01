@@ -15,7 +15,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
-use kurogane_layout::{PackagingConfig, cef_install_dir, validate_cef_runtime};
+use kurogane_layout::{cef_install_dir, validate_cef_runtime};
+use crate::config::PackagingConfig;
 
 use crate::tui;
 

@@ -5,10 +5,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use kurogane_layout::{
-    PackagingConfig, ResolvedDistribution, SignConfig, package_directory, sign_file,
-    verify_signature,
-};
+use kurogane_layout::{ResolvedDistribution, package_directory};
+use crate::config::PackagingConfig;
+use crate::signing::{SignConfig, sign_file, verify_signature};
 
 use crate::tui;
 
@@ -463,7 +462,7 @@ mod tests {
     /// Generates an NSIS script from the supplied packaging configuration.
     fn generated_nsi_with(dir: &Path, config: &PackagingConfig) -> String {
         let mut dist = test_distribution(dir);
-        config.app.apply_to(&mut dist.metadata);
+        config.app.apply_to(&mut dist.metadata, dir);
         let bundle = dir.join("bundle");
         fs::create_dir_all(&bundle).unwrap();
 
@@ -622,7 +621,7 @@ mod tests {
         let dir = tmp();
 
         let config = PackagingConfig {
-            app: kurogane_layout::AppConfig {
+            app: crate::config::AppConfig {
                 publisher: Some("Example Corp".into()),
                 description: Some("A demo application".into()),
                 copyright: Some("(c) 2026 Example Corp".into()),
@@ -647,7 +646,7 @@ mod tests {
         let dir = tmp();
 
         let config = PackagingConfig {
-            windows: kurogane_layout::WindowsPackagingConfig {
+            windows: crate::config::WindowsPackagingConfig {
                 start_menu_shortcut: false,
                 desktop_shortcut: false,
             },
@@ -673,7 +672,7 @@ mod tests {
         let dir = tmp();
 
         let config = PackagingConfig {
-            windows: kurogane_layout::WindowsPackagingConfig {
+            windows: crate::config::WindowsPackagingConfig {
                 start_menu_shortcut: true,
                 desktop_shortcut: false,
             },

@@ -19,7 +19,7 @@ use thiserror::Error;
 
 use crate::config::{MacosSigningConfig, SigningFileConfig, WindowsSigningConfig};
 #[cfg(target_os = "macos")]
-use crate::platform::MACOS_FRAMEWORK;
+use kurogane_layout::MACOS_FRAMEWORK;
 
 /// What a custom command's arguments write for the file to sign.
 const TARGET: &str = "%1";
@@ -941,7 +941,7 @@ mod tests {
         use super::*;
 
         fn tmp() -> tempfile::TempDir {
-            crate::test_fixtures::tmp_dir()
+            kurogane_layout::test_fixtures::tmp_dir()
         }
 
         fn os(input: &[&str]) -> Vec<OsString> {

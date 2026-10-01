@@ -1,6 +1,5 @@
 mod bootstrap;
 mod cef;
-mod config;
 mod discover;
 mod layout;
 mod platform;
@@ -8,7 +7,6 @@ mod profile;
 mod package;
 mod distribution;
 mod bundle;
-mod signing;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_fixtures;
@@ -20,11 +18,6 @@ pub use cef::{
     CefError, CefProvenance, CefSource, ResolvedCef,
 };
 pub use discover::{DetectError, DetectedCef, DiscoveryMode, detect_cef_root_with_version};
-pub use config::{
-    anchor_path, AppConfig, BundleConfig, ConfigError, LinuxPackagingConfig, MacosSigningConfig,
-    PackagingConfig, ResourceConfig, SigningFileConfig, WindowsPackagingConfig,
-    WindowsSigningConfig, CONFIG_FILE_NAME,
-};
 pub use distribution::{
     AppMetadata, DistributionError, Executable, ResolvedDistribution, ResolvedResource,
 };
@@ -38,11 +31,6 @@ pub use package::{PackageError, package_directory};
 pub use profile::{cache_root, profile_dir};
 #[cfg(target_os = "macos")]
 pub use platform::link_unbundled_angle_libraries;
-pub use signing::SigningError;
-#[cfg(target_os = "windows")]
-pub use signing::{
-    CertificateConfig, CertificateSource, SignConfig, sign_file, sign_tree, verify_signature,
-    verify_tree,
-};
+/// The name of CEF's framework inside a macOS runtime or bundle.
 #[cfg(target_os = "macos")]
-pub use signing::{SignConfig, sign_app_bundle};
+pub use platform::MACOS_FRAMEWORK;

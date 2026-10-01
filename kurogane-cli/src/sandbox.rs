@@ -14,9 +14,8 @@ use std::process::{Command, ExitStatus, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
 use cargo_metadata::{Message, Package, TargetKind};
-use kurogane_layout::{
-    AppConfig, Bootstrap, Executable, anchor_path, client_library_path, link_dir, stage_runtime,
-};
+use kurogane_layout::{Bootstrap, Executable, client_library_path, link_dir, stage_runtime};
+use crate::config::{AppConfig, anchor_path};
 
 use crate::launch;
 use crate::tui;
