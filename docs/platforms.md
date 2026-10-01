@@ -57,7 +57,7 @@ Requires CMake and Ninja. `hdiutil` ships with macOS; `--sign` additionally need
 
 `kurogane dev` runs. The runtime resolves the managed Chromium framework, starts the browser, renderer and GPU processes and opens a window.
 
-Distribution is supported via `kurogane bundle --format app`, which produces a macOS `.app` bundle with the CEF framework intact plus a `.dmg` disk image. Optionally sign with `--sign` and a `certificate-identity` (see [Code signing](bundling.md#code-signing)).
+Distribution is supported via `kurogane bundle --format app`, which produces a macOS `.app` bundle with the CEF framework intact plus a `.dmg` disk image. Optionally sign with `--sign` and an `identity` in `[signing.macos]` (see [Code signing](bundling.md#code-signing)).
 
 > [!NOTE]
 > `--format dir` is not a macOS output and is rejected; `--format app` is the default on macOS.

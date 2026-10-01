@@ -21,8 +21,9 @@ pub use cef::{
 };
 pub use discover::{DetectError, DetectedCef, DiscoveryMode, detect_cef_root_with_version};
 pub use config::{
-    anchor_path, AppConfig, BundleConfig, ConfigError, LinuxPackagingConfig, PackagingConfig,
-    ResourceConfig, SigningFileConfig, WindowsPackagingConfig, CONFIG_FILE_NAME,
+    anchor_path, AppConfig, BundleConfig, ConfigError, LinuxPackagingConfig, MacosSigningConfig,
+    PackagingConfig, ResourceConfig, SigningFileConfig, WindowsPackagingConfig,
+    WindowsSigningConfig, CONFIG_FILE_NAME,
 };
 pub use distribution::{
     AppMetadata, DistributionError, Executable, ResolvedDistribution, ResolvedResource,
@@ -37,9 +38,11 @@ pub use package::{PackageError, package_directory};
 pub use profile::{cache_root, profile_dir};
 #[cfg(target_os = "macos")]
 pub use platform::link_unbundled_angle_libraries;
+pub use signing::SigningError;
+#[cfg(target_os = "windows")]
 pub use signing::{
-    CertificateSource, SignConfig, SigningError, osslsigncode_sign_args, sign_artifact, sign_file,
-    sign_tree, signtool_sign_args, signtool_verify_args, verify_signature, verify_tree,
+    CertificateConfig, CertificateSource, SignConfig, sign_file, sign_tree, verify_signature,
+    verify_tree,
 };
 #[cfg(target_os = "macos")]
-pub use signing::{codesign_sign_args, codesign_verify_args, sign_app_bundle};
+pub use signing::{SignConfig, sign_app_bundle};

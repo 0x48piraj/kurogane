@@ -10,13 +10,17 @@ use std::ffi::OsString;
 use std::process::Command;
 use cargo_metadata::{MetadataCommand, Package, TargetKind};
 use kurogane_layout::{
-    AppConfig, AppMetadata, Executable, PackagingConfig, ResolvedDistribution, SignConfig,
-    anchor_path, materialize_cef_runtime, resolve_cef_for_bundle,
+    AppConfig, AppMetadata, Executable, PackagingConfig, ResolvedDistribution, anchor_path,
+    materialize_cef_runtime, resolve_cef_for_bundle,
 };
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use kurogane_layout::SignConfig;
 
 use crate::launch::find_target;
 #[cfg(not(target_os = "macos"))]
-use kurogane_layout::{package_directory, sign_tree, verify_tree};
+use kurogane_layout::package_directory;
+#[cfg(target_os = "windows")]
+use kurogane_layout::{sign_tree, verify_tree};
 
 use crate::tui;
 
@@ -149,7 +153,7 @@ fn resolve_resources(
 /// Signs and verifies all signable artifacts in a staged bundle.
 ///
 /// Warns when the bundle contains no signable artifacts.
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 pub(crate) fn sign_and_verify_tree(root: &std::path::Path, config: &SignConfig) -> Result<()> {
     let signed = sign_tree(root, config)?;
 
@@ -160,13 +164,15 @@ pub(crate) fn sign_and_verify_tree(root: &std::path::Path, config: &SignConfig) 
 
     tui::field("signed", format!("{signed} file(s)"));
 
-    let verified = verify_tree(root, config)?;
+    let verified = verify_tree(root)?;
     tui::field("verified", format!("{verified} file(s)"));
 
     Ok(())
 }
 
-/// Resolves the signing policy for a packaging operation.
+/// The signing `--sign` asks for: every `[signing]` table checked, then
+/// `[signing.windows]` resolved.
+#[cfg(target_os = "windows")]
 fn resolve_sign_config(
     sign_requested: bool,
     config: &PackagingConfig,
@@ -178,24 +184,59 @@ fn resolve_sign_config(
 
     let mut resolved = SignConfig::from_file_config(&config.signing)?.ok_or_else(|| {
         anyhow::anyhow!(
-            "--sign requested but no usable [signing] configuration found in {} \
-             (set `certificate`, `certificate-thumbprint`, `certificate-identity` \
-             or `custom-command`)",
+            "--sign requested but [signing.windows] in {} sets no `certificate`, \
+             `certificate-thumbprint` or `custom-command`",
             kurogane_layout::CONFIG_FILE_NAME
         )
     })?;
 
     // Configured certificate path is project-relative
-    if let Some(kurogane_layout::CertificateSource::File { path, password_env }) =
-        resolved.certificate
+    if let SignConfig::Certificate(kurogane_layout::CertificateConfig {
+        source: kurogane_layout::CertificateSource::File { path, .. },
+        ..
+    }) = &mut resolved
     {
-        resolved.certificate = Some(kurogane_layout::CertificateSource::File {
-            path: anchor_path(project_root, &path),
-            password_env,
-        });
+        *path = anchor_path(project_root, path);
     }
 
     Ok(Some(resolved))
+}
+
+/// The signing `--sign` asks for: every `[signing]` table checked, then
+/// `[signing.macos]` resolved.
+#[cfg(target_os = "macos")]
+fn resolve_sign_config(
+    sign_requested: bool,
+    config: &PackagingConfig,
+) -> Result<Option<SignConfig>> {
+    if !sign_requested {
+        return Ok(None);
+    }
+
+    let resolved = SignConfig::from_file_config(&config.signing)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "--sign requested but [signing.macos] in {} sets no `identity`",
+            kurogane_layout::CONFIG_FILE_NAME
+        )
+    })?;
+
+    Ok(Some(resolved))
+}
+
+/// `--sign` on Linux: the `[signing]` tables are checked, as everywhere,
+/// but a Linux bundle has no binary Kurogane signs.
+#[cfg(target_os = "linux")]
+fn refuse_sign(sign_requested: bool, config: &PackagingConfig) -> Result<()> {
+    if !sign_requested {
+        return Ok(());
+    }
+
+    config.signing.check()?;
+
+    bail!(
+        "--sign: Kurogane signs the binaries of a Windows bundle ([signing.windows]) and \
+         a macOS app ([signing.macos]); a Linux bundle has nothing it signs"
+    )
 }
 
 /// Builds the application in the requested profile.
@@ -364,7 +405,12 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     tui::step("Packaging...");
 
     let output_dir = project_root.join("dist");
+    #[cfg(target_os = "windows")]
     let sign_config = resolve_sign_config(sign, &packaging_config, project_root)?;
+    #[cfg(target_os = "macos")]
+    let sign_config = resolve_sign_config(sign, &packaging_config)?;
+    #[cfg(target_os = "linux")]
+    refuse_sign(sign, &packaging_config)?;
 
     match format {
         #[cfg(not(target_os = "macos"))]
@@ -372,6 +418,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
             // The canonical bundle is the artifact; sign it in place
             let output = package_directory(&dist, &output_dir)?;
 
+            #[cfg(target_os = "windows")]
             if let Some(config) = &sign_config {
                 sign_and_verify_tree(&output, config)?;
             }
@@ -381,7 +428,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
         #[cfg(target_os = "linux")]
         PackageFormat::AppImage => {
-            crate::appimage::build(&dist, &output_dir, &packaging_config, sign_config.as_ref())?;
+            crate::appimage::build(&dist, &output_dir, &packaging_config)?;
         }
 
         #[cfg(target_os = "windows")]

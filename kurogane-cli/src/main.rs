@@ -80,7 +80,8 @@ enum Commands {
         debug: bool,
         #[arg(long, default_value = crate::bundle::DEFAULT_FORMAT)]
         format: String,
-        /// Sign bundle binaries.
+        /// Sign the bundle: a Windows bundle's binaries ([signing.windows]) or a
+        /// macOS app ([signing.macos]); a Linux bundle has nothing to sign.
         #[arg(long)]
         sign: bool,
     },

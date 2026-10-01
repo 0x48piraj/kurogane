@@ -1,19 +1,154 @@
 //! Code signing operations for packaged artifacts.
+//!
+//! `[signing]` has a table per platform that signs. `--sign` checks both
+//! wherever it runs ([`SigningFileConfig::check`]), then resolves this
+//! platform's into a `SignConfig`: a custom command or a certificate for the
+//! PE files of a Windows bundle, signed through signtool or osslsigncode, or
+//! a codesign identity for a macOS `.app`, signed inside-out. A Linux bundle
+//! has nothing Kurogane signs, so Linux compiles the check alone.
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::ffi::OsString;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::fs;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::process::Command;
 use thiserror::Error;
 
-use crate::SigningFileConfig;
+use crate::config::{MacosSigningConfig, SigningFileConfig, WindowsSigningConfig};
 #[cfg(target_os = "macos")]
 use crate::platform::MACOS_FRAMEWORK;
 
-/// Source of the signing certificate.
-///
-/// Represents either a certificate file, a Windows certificate-store thumbprint,
-/// or a macOS codesign identity string.
+/// What a custom command's arguments write for the file to sign.
+const TARGET: &str = "%1";
+
+impl SigningFileConfig {
+    /// Checks every table, whichever platform reads it, so a table that
+    /// would fail where it is used fails wherever `--sign` runs.
+    pub fn check(&self) -> Result<(), SigningError> {
+        self.windows.check()?;
+        self.macos.check()
+    }
+}
+
+impl WindowsSigningConfig {
+    fn check(&self) -> Result<(), SigningError> {
+        if self.certificate.is_some() && self.certificate_thumbprint.is_some() {
+            return Err(SigningError::AmbiguousCertificate);
+        }
+        if let Some(command) = &self.custom_command {
+            // A custom command signs on its own: certificate options beside
+            // it would be ignored
+            let certificate_options = self.certificate.is_some()
+                || self.certificate_thumbprint.is_some()
+                || self.certificate_password_env.is_some()
+                || self.timestamp_url.is_some()
+                || self.digest_algorithm.is_some();
+            if certificate_options {
+                return Err(SigningError::CommandAndCertificate);
+            }
+            if !command.iter().skip(1).any(|arg| arg.contains(TARGET)) {
+                return Err(SigningError::CommandWithoutTarget);
+            }
+        }
+        if self.certificate_password_env.is_some() && self.certificate.is_none() {
+            return Err(SigningError::PasswordWithoutFile);
+        }
+        Ok(())
+    }
+}
+
+impl MacosSigningConfig {
+    fn check(&self) -> Result<(), SigningError> {
+        match &self.identity {
+            Some(identity) if identity.trim().is_empty() => Err(SigningError::EmptyIdentity),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// How a Windows bundle's PE files are signed: by a command of the
+/// application's own, or with a certificate through signtool or
+/// osslsigncode.
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignConfig {
+    /// A signing program and its arguments, run once per file. Every `%1`
+    /// in an argument is replaced by the path of the file to sign.
+    Command(Vec<String>),
+
+    /// A certificate Kurogane signs with.
+    Certificate(CertificateConfig),
+}
+
+/// How a macOS `.app` is signed: with a codesign identity from the keychain.
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignConfig {
+    /// The identity codesign signs with; [`AD_HOC_IDENTITY`] signs ad hoc.
+    pub identity: String,
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+impl SignConfig {
+    /// Checks every `[signing]` table, then resolves this platform's.
+    /// `Ok(None)` when it configures no signing.
+    #[cfg(target_os = "windows")]
+    pub fn from_file_config(file: &SigningFileConfig) -> Result<Option<SignConfig>, SigningError> {
+        file.check()?;
+        let table = &file.windows;
+        if let Some(command) = &table.custom_command {
+            return Ok(Some(SignConfig::Command(command.clone())));
+        }
+        let source = match (&table.certificate, &table.certificate_thumbprint) {
+            (Some(path), _) => CertificateSource::File {
+                path: path.clone(),
+                password_env: table.certificate_password_env.clone(),
+            },
+            (None, Some(thumbprint)) => CertificateSource::Thumbprint(thumbprint.clone()),
+            (None, None) => return Ok(None),
+        };
+        Ok(Some(SignConfig::Certificate(CertificateConfig {
+            source,
+            timestamp_url: table.timestamp_url.clone(),
+            digest: table
+                .digest_algorithm
+                .clone()
+                .unwrap_or_else(|| DEFAULT_DIGEST.to_string()),
+        })))
+    }
+
+    /// Checks every `[signing]` table, then resolves this platform's.
+    /// `Ok(None)` when it configures no signing.
+    #[cfg(target_os = "macos")]
+    pub fn from_file_config(file: &SigningFileConfig) -> Result<Option<SignConfig>, SigningError> {
+        file.check()?;
+        Ok(file
+            .macos
+            .identity
+            .clone()
+            .map(|identity| SignConfig { identity }))
+    }
+}
+
+/// Signing with a certificate: where it comes from, and how signtool or
+/// osslsigncode stamp the signature.
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CertificateConfig {
+    pub source: CertificateSource,
+
+    /// RFC-3161 timestamp authority URL.
+    pub timestamp_url: Option<String>,
+
+    /// Signing digest algorithm.
+    pub digest: String,
+}
+
+/// Where a Windows signing certificate comes from.
+#[cfg(target_os = "windows")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CertificateSource {
     /// A certificate file with an optional password environment variable.
@@ -24,110 +159,102 @@ pub enum CertificateSource {
 
     /// A SHA-1 thumbprint identifying a certificate in the Windows store.
     Thumbprint(String),
-
-    /// A macOS codesign identity.
-    Identity(String),
 }
 
-/// Code signing configuration.
-#[derive(Debug, Clone)]
-pub struct SignConfig {
-    /// Signing tool override.
-    pub tool: Option<PathBuf>,
+/// The digest a certificate signs with unless `digest-algorithm` names one.
+#[cfg(target_os = "windows")]
+const DEFAULT_DIGEST: &str = "sha256";
 
-    /// How the signing certificate is supplied.
-    pub certificate: Option<CertificateSource>,
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum SigningError {
+    #[error(
+        "[signing.windows] sets both `certificate` and `certificate-thumbprint`; choose one \
+         (a certificate file, or a certificate in the Windows certificate store)"
+    )]
+    AmbiguousCertificate,
 
-    /// RFC-3161 timestamp authority URL.
-    pub timestamp_url: Option<String>,
+    #[error(
+        "[signing.windows] sets `custom-command` and certificate options (`certificate`, \
+         `certificate-thumbprint`, `certificate-password-env`, `timestamp-url`, \
+         `digest-algorithm`); a custom command signs on its own, so the options would be \
+         ignored: keep one or the other"
+    )]
+    CommandAndCertificate,
 
-    /// Signing digest algorithm.
-    pub digest_algorithm: String,
+    #[error(
+        "[signing.windows] `custom-command` must name a program and pass `%1`, the file to \
+         sign, in one of its arguments, e.g. [\"signer\", \"sign\", \"%1\"]"
+    )]
+    CommandWithoutTarget,
 
-    /// Custom signing command.
-    /// When set, overrides default tool invocation.
-    pub custom_command: Option<String>,
+    #[error("[signing.windows] `certificate-password-env` applies only to a `certificate` file")]
+    PasswordWithoutFile,
 
-    /// Arguments for the custom signing command.
-    pub custom_args: Vec<String>,
-}
+    #[error(
+        "[signing.macos] `identity` is empty; name a keychain identity such as \
+         \"Developer ID Application: Name (TEAMID)\", or `-` to sign ad hoc"
+    )]
+    EmptyIdentity,
 
-impl Default for SignConfig {
-    fn default() -> Self {
-        Self {
-            tool: None,
-            certificate: None,
-            timestamp_url: None,
-            digest_algorithm: "sha256".to_string(),
-            custom_command: None,
-            custom_args: Vec::new(),
-        }
-    }
-}
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[cfg_attr(
+        target_os = "windows",
+        error("no signing tool found; install signtool.exe (Windows SDK) or osslsigncode")
+    )]
+    #[cfg_attr(
+        target_os = "macos",
+        error("codesign not found; install the Xcode Command Line Tools")
+    )]
+    NoSigningTool,
 
-impl SignConfig {
-    /// Returns whether signing is configured.
-    pub fn is_configured(&self) -> bool {
-        self.certificate.is_some() || self.custom_command.is_some()
-    }
+    #[cfg(target_os = "windows")]
+    #[error(
+        "certificate password environment variable `{env}` is not set; \
+         export it or remove `certificate-password-env` from [signing.windows]"
+    )]
+    MissingCertificatePassword { env: String },
 
-    /// Resolves file configuration into signing settings.
-    ///
-    /// Returns `Ok(None)` when nothing is configured.
-    pub fn from_file_config(file: &SigningFileConfig) -> Result<Option<SignConfig>, SigningError> {
-        let certificate = match (
-            &file.certificate,
-            &file.certificate_thumbprint,
-            &file.certificate_identity,
-        ) {
-            (Some(_), Some(_), _) | (Some(_), _, Some(_)) | (_, Some(_), Some(_)) => {
-                return Err(SigningError::AmbiguousCertificate);
-            }
-            (Some(path), None, None) => Some(CertificateSource::File {
-                path: path.clone(),
-                password_env: file.certificate_password_env.clone(),
-            }),
-            (None, Some(thumbprint), None) => {
-                Some(CertificateSource::Thumbprint(thumbprint.clone()))
-            }
-            (None, None, Some(identity)) => Some(CertificateSource::Identity(identity.clone())),
-            (None, None, None) => None,
-        };
+    #[cfg(target_os = "windows")]
+    #[error(
+        "osslsigncode cannot use a Windows certificate store thumbprint; \
+         set `certificate` to a PKCS#12 or PEM file instead"
+    )]
+    ThumbprintUnsupported,
 
-        let mut config = SignConfig {
-            certificate,
-            timestamp_url: file.timestamp_url.clone(),
-            digest_algorithm: file
-                .digest_algorithm
-                .clone()
-                .unwrap_or_else(|| "sha256".to_string()),
-            custom_command: None,
-            custom_args: Vec::new(),
-            tool: None,
-        };
+    #[cfg(target_os = "windows")]
+    #[error("custom sign command `{command}` failed ({status})")]
+    CustomCommandFailed {
+        command: String,
+        status: std::process::ExitStatus,
+    },
 
-        if let Some(command) = &file.custom_command {
-            let mut parts = command.split_whitespace();
-            config.custom_command = parts.next().map(String::from);
-            config.custom_args = parts.map(String::from).collect();
-        }
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[error("{tool} failed ({status})")]
+    ToolFailed {
+        tool: String,
+        status: std::process::ExitStatus,
+    },
 
-        Ok(config.is_configured().then_some(config))
-    }
+    #[cfg(target_os = "windows")]
+    #[error("signed output was not produced for {}", .0.display())]
+    MissingSignedOutput(PathBuf),
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 /// Resolves the certificate password from its configured environment variable.
 ///
-/// Returns `Ok(None)` when no password is needed; this includes
-/// [`CertificateSource::Identity`] (keychain-managed) and
-/// [`CertificateSource::Thumbprint`] (Windows store).
-fn resolve_password(
-    certificate: Option<&CertificateSource>,
-) -> Result<Option<String>, SigningError> {
-    let Some(CertificateSource::File {
+/// Returns `Ok(None)` when no password is needed: a store thumbprint, or a
+/// file with no password variable.
+#[cfg(target_os = "windows")]
+fn resolve_password(certificate: &CertificateSource) -> Result<Option<String>, SigningError> {
+    let CertificateSource::File {
         password_env: Some(name),
         ..
-    }) = certificate
+    } = certificate
     else {
         return Ok(None);
     };
@@ -137,64 +264,18 @@ fn resolve_password(
         .map_err(|_| SigningError::MissingCertificatePassword { env: name.clone() })
 }
 
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum SigningError {
-    #[error("no signing tool found; install signtool.exe (Windows SDK) or osslsigncode")]
-    NoSigningTool,
-
-    #[error(
-        "no macOS codesign identity configured; set `certificate-identity` in [signing] \
-         (e.g. \"Developer ID Application: Name (TEAMID)\")"
-    )]
-    NoSigningIdentity,
-
-    #[error(
-        "[signing] sets more than one of `certificate`, `certificate-thumbprint` and \
-         `certificate-identity`; choose one (a certificate file, a Windows certificate \
-         store thumbprint, or a macOS codesign identity)"
-    )]
-    AmbiguousCertificate,
-
-    #[error(
-        "certificate password environment variable `{env}` is not set; \
-         export it or remove `certificate-password-env` from [signing]"
-    )]
-    MissingCertificatePassword { env: String },
-
-    #[error(
-        "osslsigncode cannot use a Windows certificate store thumbprint; \
-         set `certificate` to a PKCS#12 or PEM file instead"
-    )]
-    ThumbprintUnsupported,
-
-    #[error("custom sign command failed: {command}")]
-    CustomCommandFailed { command: String },
-
-    #[error("{tool} failed ({status})")]
-    ToolFailed {
-        tool: String,
-        status: std::process::ExitStatus,
-    },
-
-    #[error("signed output was not produced for {}", .0.display())]
-    MissingSignedOutput(PathBuf),
-
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-}
-
 /// Builds `signtool sign` arguments, excluding the tool path and target file.
-pub fn signtool_sign_args(config: &SignConfig, password: Option<&str>) -> Vec<OsString> {
+#[cfg(target_os = "windows")]
+pub fn signtool_sign_args(config: &CertificateConfig, password: Option<&str>) -> Vec<OsString> {
     let mut args = vec![
         OsString::from("sign"),
         OsString::from("/fd"),
-        OsString::from(&config.digest_algorithm),
+        OsString::from(&config.digest),
     ];
 
-    match &config.certificate {
+    match &config.source {
         // Certificate files use `/f`; store certificates use `/sha1`
-        Some(CertificateSource::File { path, .. }) => {
+        CertificateSource::File { path, .. } => {
             args.push(OsString::from("/f"));
             args.push(path.into());
 
@@ -203,20 +284,17 @@ pub fn signtool_sign_args(config: &SignConfig, password: Option<&str>) -> Vec<Os
                 args.push(OsString::from(password));
             }
         }
-        Some(CertificateSource::Thumbprint(thumbprint)) => {
+        CertificateSource::Thumbprint(thumbprint) => {
             args.push(OsString::from("/sha1"));
             args.push(OsString::from(thumbprint));
         }
-        // signtool has no macOS codesign identity; nothing to emit
-        Some(CertificateSource::Identity(_)) => {}
-        None => {}
     }
 
     if let Some(url) = &config.timestamp_url {
         args.push(OsString::from("/tr"));
         args.push(OsString::from(url));
         args.push(OsString::from("/td"));
-        args.push(OsString::from(&config.digest_algorithm));
+        args.push(OsString::from(&config.digest));
     }
 
     args
@@ -225,6 +303,7 @@ pub fn signtool_sign_args(config: &SignConfig, password: Option<&str>) -> Vec<Os
 /// Builds certificate arguments for `osslsigncode`.
 ///
 /// Uses `-pkcs12` for PKCS#12 certificates and `-certs` for PEM/DER certificates.
+#[cfg(target_os = "windows")]
 fn osslsigncode_cert_args(
     certificate: &CertificateSource,
     password: Option<&str>,
@@ -254,17 +333,16 @@ fn osslsigncode_cert_args(
 }
 
 /// Builds arguments for `osslsigncode sign`.
+#[cfg(target_os = "windows")]
 pub fn osslsigncode_sign_args(
-    config: &SignConfig,
+    config: &CertificateConfig,
     password: Option<&str>,
     input: &Path,
     output: &Path,
 ) -> Result<Vec<OsString>, SigningError> {
     let mut args = vec![OsString::from("sign")];
 
-    if let Some(cert) = &config.certificate {
-        args.extend(osslsigncode_cert_args(cert, password)?);
-    }
+    args.extend(osslsigncode_cert_args(&config.source, password)?);
 
     if let Some(url) = &config.timestamp_url {
         args.push(OsString::from("-ts"));
@@ -272,7 +350,7 @@ pub fn osslsigncode_sign_args(
     }
 
     args.push(OsString::from("-h"));
-    args.push(OsString::from(&config.digest_algorithm));
+    args.push(OsString::from(&config.digest));
     args.push(OsString::from("-in"));
     args.push(OsString::from(input));
     args.push(OsString::from("-out"));
@@ -283,6 +361,7 @@ pub fn osslsigncode_sign_args(
 
 /// Builds arguments for `signtool verify` using the default Authenticode
 /// policy and checking all signatures.
+#[cfg(target_os = "windows")]
 pub fn signtool_verify_args(path: &Path) -> Vec<OsString> {
     vec![
         OsString::from("verify"),
@@ -293,6 +372,7 @@ pub fn signtool_verify_args(path: &Path) -> Vec<OsString> {
 }
 
 /// Builds arguments for `osslsigncode verify`.
+#[cfg(target_os = "windows")]
 pub fn osslsigncode_verify_args(path: &Path) -> Vec<OsString> {
     vec![
         OsString::from("verify"),
@@ -301,29 +381,37 @@ pub fn osslsigncode_verify_args(path: &Path) -> Vec<OsString> {
     ]
 }
 
-/// Resolves custom signing arguments for a target artifact.
+/// A custom command's arguments for one file: each `%1` becomes its path.
+#[cfg(target_os = "windows")]
 fn expand_custom_args(args: &[String], path: &Path) -> Vec<OsString> {
+    let path = path.as_os_str();
     args.iter()
         .map(|arg| {
-            if arg == "%1" {
-                OsString::from(path)
-            } else {
-                OsString::from(arg)
+            let mut pieces = arg.split(TARGET);
+            let mut expanded = OsString::from(pieces.next().unwrap_or_default());
+            for piece in pieces {
+                expanded.push(path);
+                expanded.push(piece);
             }
+            expanded
         })
         .collect()
 }
 
-fn run_custom(path: &Path, config: &SignConfig) -> Result<(), SigningError> {
-    let command = config.custom_command.as_deref().unwrap_or_default();
+#[cfg(target_os = "windows")]
+fn run_custom(path: &Path, command: &[String]) -> Result<(), SigningError> {
+    let Some((program, args)) = command.split_first() else {
+        return Err(SigningError::CommandWithoutTarget);
+    };
 
-    let status = Command::new(command)
-        .args(expand_custom_args(&config.custom_args, path))
+    let status = Command::new(program)
+        .args(expand_custom_args(args, path))
         .status()?;
 
     if !status.success() {
         return Err(SigningError::CustomCommandFailed {
-            command: command.to_string(),
+            command: program.clone(),
+            status,
         });
     }
 
@@ -331,13 +419,7 @@ fn run_custom(path: &Path, config: &SignConfig) -> Result<(), SigningError> {
 }
 
 #[cfg(target_os = "windows")]
-fn find_signtool(override_path: Option<&Path>) -> Option<PathBuf> {
-    if let Some(path) = override_path
-        && path.exists()
-    {
-        return Some(path.to_path_buf());
-    }
-
+fn find_signtool() -> Option<PathBuf> {
     // Check KUROGANE_SIGNTOOL_PATH env var
     if let Ok(path) = std::env::var("KUROGANE_SIGNTOOL_PATH") {
         let p = PathBuf::from(path);
@@ -381,6 +463,7 @@ fn find_signtool(override_path: Option<&Path>) -> Option<PathBuf> {
     None
 }
 
+#[cfg(target_os = "windows")]
 fn find_osslsigncode() -> Option<PathBuf> {
     // Check override path
     if let Ok(path) = std::env::var("KUROGANE_OSSLSIGNCODE_PATH") {
@@ -391,29 +474,16 @@ fn find_osslsigncode() -> Option<PathBuf> {
     }
 
     // Try to find osslsigncode in PATH
-    #[cfg(unix)]
+    if let Ok(output) = Command::new("where").arg("osslsigncode").output()
+        && output.status.success()
     {
-        if let Ok(output) = Command::new("which").arg("osslsigncode").output()
-            && output.status.success()
-        {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            return Some(PathBuf::from(path));
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(output) = Command::new("where").arg("osslsigncode").output()
-            && output.status.success()
-        {
-            let path = String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            return Some(PathBuf::from(path));
-        }
+        let path = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        return Some(PathBuf::from(path));
     }
 
     None
@@ -440,17 +510,8 @@ fn find_codesign() -> Option<PathBuf> {
 
 /// The ad-hoc signing identity, which produces a signature bound to no
 /// certificate. Useful locally; never valid for distribution.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub const AD_HOC_IDENTITY: &str = "-";
-
-/// Returns whether the configured identity is ad-hoc.
-#[cfg(any(target_os = "macos", test))]
-pub fn is_ad_hoc(config: &SignConfig) -> bool {
-    matches!(
-        &config.certificate,
-        Some(CertificateSource::Identity(id)) if id == AD_HOC_IDENTITY
-    )
-}
 
 /// Builds `codesign --sign` arguments for a single target (binary or bundle).
 ///
@@ -458,14 +519,10 @@ pub fn is_ad_hoc(config: &SignConfig) -> bool {
 /// one set of options to every nested item. [`sign_app_bundle`] signs
 /// inside-out instead.
 #[cfg(target_os = "macos")]
-pub fn codesign_sign_args(config: &SignConfig, entitlements: Option<&Path>) -> Vec<OsString> {
-    let mut args = vec![OsString::from("--sign")];
+pub fn codesign_sign_args(identity: &str, entitlements: Option<&Path>) -> Vec<OsString> {
+    let mut args = vec![OsString::from("--sign"), OsString::from(identity)];
 
-    if let Some(CertificateSource::Identity(identity)) = &config.certificate {
-        args.push(OsString::from(identity));
-    }
-
-    if is_ad_hoc(config) {
+    if identity == AD_HOC_IDENTITY {
         args.push(OsString::from("--timestamp=none"));
     } else {
         args.push(OsString::from("--timestamp"));
@@ -504,10 +561,7 @@ pub fn sign_app_bundle(
     let Some(codesign) = find_codesign() else {
         return Err(SigningError::NoSigningTool);
     };
-
-    if !matches!(&config.certificate, Some(CertificateSource::Identity(_))) {
-        return Err(SigningError::NoSigningIdentity);
-    }
+    let identity = config.identity.as_str();
 
     let run = |args: Vec<OsString>, tool: &str| -> Result<(), SigningError> {
         let status = Command::new(&codesign).args(&args).status()?;
@@ -536,7 +590,7 @@ pub fn sign_app_bundle(
         helpers.sort();
 
         for helper in helpers {
-            let mut args = codesign_sign_args(config, entitlements);
+            let mut args = codesign_sign_args(identity, entitlements);
             args.push(OsString::from(&helper));
             run(args, "codesign (helper)")?;
         }
@@ -546,45 +600,33 @@ pub fn sign_app_bundle(
     let framework = frameworks.join(MACOS_FRAMEWORK);
 
     if framework.exists() {
-        let mut args = codesign_sign_args(config, None);
+        let mut args = codesign_sign_args(identity, None);
         args.push(OsString::from(&framework));
         run(args, "codesign (framework)")?;
     }
 
     // Then the app itself, which is what the entitlements apply to
-    let mut args = codesign_sign_args(config, entitlements);
+    let mut args = codesign_sign_args(identity, entitlements);
     args.push(OsString::from(app_dir));
     run(args, "codesign")?;
 
     run(codesign_verify_args(app_dir), "codesign verify")
 }
 
-/// Signs a file using the configured signing strategy.
+/// Signs a PE file with the configured method.
+#[cfg(target_os = "windows")]
 pub fn sign_file(path: &Path, config: &SignConfig) -> Result<(), SigningError> {
-    if !config.is_configured() {
-        return Ok(());
-    }
+    let certificate = match config {
+        SignConfig::Command(command) => return run_custom(path, command),
+        SignConfig::Certificate(certificate) => certificate,
+    };
 
-    if config.custom_command.is_some() {
-        return run_custom(path, config);
-    }
-
-    #[cfg(target_os = "windows")]
-    if let Some(signtool) = find_signtool(config.tool.as_deref()) {
-        return sign_with_signtool(path, &signtool, config);
-    }
-
-    #[cfg(target_os = "macos")]
-    if matches!(&config.certificate, Some(CertificateSource::Identity(_))) {
-        let Some(codesign) = find_codesign() else {
-            return Err(SigningError::NoSigningTool);
-        };
-
-        return sign_with_codesign(path, &codesign, config);
+    if let Some(signtool) = find_signtool() {
+        return sign_with_signtool(path, &signtool, certificate);
     }
 
     if let Some(osslsigncode) = find_osslsigncode() {
-        return sign_with_osslsigncode(path, &osslsigncode, config);
+        return sign_with_osslsigncode(path, &osslsigncode, certificate);
     }
 
     Err(SigningError::NoSigningTool)
@@ -594,9 +636,9 @@ pub fn sign_file(path: &Path, config: &SignConfig) -> Result<(), SigningError> {
 fn sign_with_signtool(
     path: &Path,
     signtool: &Path,
-    config: &SignConfig,
+    config: &CertificateConfig,
 ) -> Result<(), SigningError> {
-    let password = resolve_password(config.certificate.as_ref())?;
+    let password = resolve_password(&config.source)?;
 
     let status = Command::new(signtool)
         .args(signtool_sign_args(config, password.as_deref()))
@@ -613,43 +655,18 @@ fn sign_with_signtool(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
-fn sign_with_codesign(
-    path: &Path,
-    codesign: &Path,
-    config: &SignConfig,
-) -> Result<(), SigningError> {
-    // codesign requires an identity after --sign
-    if !matches!(&config.certificate, Some(CertificateSource::Identity(_))) {
-        return Err(SigningError::NoSigningIdentity);
-    }
-
-    let mut args = codesign_sign_args(config, None);
-    args.push(OsString::from(path));
-
-    let status = Command::new(codesign).args(&args).status()?;
-
-    if !status.success() {
-        return Err(SigningError::ToolFailed {
-            tool: "codesign".to_string(),
-            status,
-        });
-    }
-
-    Ok(())
-}
-
+#[cfg(target_os = "windows")]
 fn sign_with_osslsigncode(
     path: &Path,
     osslsigncode: &Path,
-    config: &SignConfig,
+    config: &CertificateConfig,
 ) -> Result<(), SigningError> {
     // Preserve the original until signing succeeds.
     let mut output = path.as_os_str().to_os_string();
     output.push(".kurogane-sign-tmp");
     let output = PathBuf::from(output);
 
-    let password = resolve_password(config.certificate.as_ref())?;
+    let password = resolve_password(&config.source)?;
     let args = osslsigncode_sign_args(config, password.as_deref(), path, &output)?;
 
     let result = Command::new(osslsigncode).args(args).status();
@@ -679,19 +696,15 @@ fn sign_with_osslsigncode(
 }
 
 /// Returns whether a bundle entry is a signable PE artifact.
-///
-/// macOS `.app` bundles are signed as a whole.
+#[cfg(target_os = "windows")]
 pub fn should_sign(path: &Path) -> bool {
     path.extension()
         .is_some_and(|ext| ext == "exe" || ext == "dll")
 }
 
 /// Signs signable artifacts within a bundle.
+#[cfg(target_os = "windows")]
 pub fn sign_tree(root: &Path, config: &SignConfig) -> Result<usize, SigningError> {
-    if !config.is_configured() {
-        return Ok(0);
-    }
-
     let mut signed = 0;
     let mut stack = vec![root.to_path_buf()];
 
@@ -712,19 +725,11 @@ pub fn sign_tree(root: &Path, config: &SignConfig) -> Result<usize, SigningError
     Ok(signed)
 }
 
-/// Signs a packaged artifact.
-pub fn sign_artifact(path: &Path, config: &SignConfig) -> Result<(), SigningError> {
-    sign_file(path, config)
-}
-
 /// Verifies every signable artifact within a bundle.
 ///
 /// The counterpart to [`sign_tree`]. Returns the number of verified artifacts.
-pub fn verify_tree(root: &Path, config: &SignConfig) -> Result<usize, SigningError> {
-    if !config.is_configured() {
-        return Ok(0);
-    }
-
+#[cfg(target_os = "windows")]
+pub fn verify_tree(root: &Path) -> Result<usize, SigningError> {
     let mut verified = 0;
     let mut stack = vec![root.to_path_buf()];
 
@@ -736,7 +741,7 @@ pub fn verify_tree(root: &Path, config: &SignConfig) -> Result<usize, SigningErr
             if path.is_dir() {
                 stack.push(path);
             } else if should_sign(&path) {
-                verify_signature(&path, config)?;
+                verify_signature(&path)?;
                 verified += 1;
             }
         }
@@ -745,14 +750,10 @@ pub fn verify_tree(root: &Path, config: &SignConfig) -> Result<usize, SigningErr
     Ok(verified)
 }
 
-/// Verifies a packaged artifact using the configured signing strategy.
-pub fn verify_signature(path: &Path, config: &SignConfig) -> Result<(), SigningError> {
-    if !config.is_configured() {
-        return Ok(());
-    }
-
-    #[cfg(target_os = "windows")]
-    if let Some(signtool) = find_signtool(config.tool.as_deref()) {
+/// Verifies a signed PE file, however it was signed.
+#[cfg(target_os = "windows")]
+pub fn verify_signature(path: &Path) -> Result<(), SigningError> {
+    if let Some(signtool) = find_signtool() {
         let status = Command::new(signtool)
             .args(signtool_verify_args(path))
             .status()?;
@@ -761,21 +762,6 @@ pub fn verify_signature(path: &Path, config: &SignConfig) -> Result<(), SigningE
         } else {
             Err(SigningError::ToolFailed {
                 tool: "signtool verify".to_string(),
-                status,
-            })
-        };
-    }
-
-    #[cfg(target_os = "macos")]
-    if let Some(codesign) = find_codesign() {
-        let status = Command::new(codesign)
-            .args(codesign_verify_args(path))
-            .status()?;
-        return if status.success() {
-            Ok(())
-        } else {
-            Err(SigningError::ToolFailed {
-                tool: "codesign verify".to_string(),
                 status,
             })
         };
@@ -802,383 +788,36 @@ pub fn verify_signature(path: &Path, config: &SignConfig) -> Result<(), SigningE
 mod tests {
     use super::*;
 
-    fn tmp() -> tempfile::TempDir {
-        crate::test_fixtures::tmp_dir()
+    fn strings(input: &[&str]) -> Vec<String> {
+        input.iter().map(|s| s.to_string()).collect()
     }
 
-    fn os(input: &[&str]) -> Vec<OsString> {
-        input.iter().map(OsString::from).collect()
+    fn check(file: SigningFileConfig) -> Result<(), SigningError> {
+        file.check()
     }
 
-    #[test]
-    fn default_config_is_not_configured() {
-        assert!(!SignConfig::default().is_configured());
-    }
-
-    #[test]
-    fn certificate_config_enables_signing() {
-        let config = SignConfig {
-            certificate: Some(CertificateSource::Thumbprint("thumbprint".into())),
+    fn windows(table: WindowsSigningConfig) -> SigningFileConfig {
+        SigningFileConfig {
+            windows: table,
             ..Default::default()
-        };
-        assert!(config.is_configured());
+        }
+    }
+
+    // --- every table is checked wherever --sign runs ----------------------
+
+    #[test]
+    fn an_empty_signing_section_checks() {
+        assert!(check(SigningFileConfig::default()).is_ok());
     }
 
     #[test]
-    fn custom_command_config_enables_signing() {
-        let config = SignConfig {
-            custom_command: Some("my-sign-tool".to_string()),
-            ..Default::default()
-        };
-        assert!(config.is_configured());
-    }
-
-    #[test]
-    fn timestamp_only_does_not_enable_signing() {
-        let config = SignConfig {
-            timestamp_url: Some("http://timestamp".to_string()),
-            ..Default::default()
-        };
-        assert!(!config.is_configured());
-    }
-
-    #[test]
-    fn should_sign_exe() {
-        assert!(should_sign(Path::new("/some/path/app.exe")));
-    }
-
-    #[test]
-    fn should_sign_dll() {
-        assert!(should_sign(Path::new("/some/path/lib.dll")));
-    }
-
-    #[test]
-    fn should_not_sign_other_files() {
-        assert!(!should_sign(Path::new("/some/readme.txt")));
-        assert!(!should_sign(Path::new("/some/app.AppImage")));
-        assert!(!should_sign(Path::new("/some/binary")));
-    }
-
-    #[test]
-    fn sign_returns_ok_when_not_configured() {
-        let dir = tmp();
-        let path = dir.path().join("app.exe");
-        assert!(sign_file(&path, &SignConfig::default()).is_ok());
-    }
-
-    #[test]
-    fn sign_custom_command_expands_target_path() {
-        let dir = tmp();
-        let target = dir.path().join("app.exe");
-        fs::write(&target, "").unwrap();
-
-        let config = SignConfig {
-            custom_command: Some("echo".to_string()),
-            custom_args: vec!["%1".to_string(), "--flag".to_string()],
-            ..Default::default()
-        };
-
-        assert!(sign_file(&target, &config).is_ok());
-    }
-
-    #[test]
-    fn sign_custom_command_failure_is_propagated() {
-        let dir = tmp();
-        let target = dir.path().join("app.exe");
-        fs::write(&target, "").unwrap();
-
-        let config = SignConfig {
-            custom_command: Some("false".to_string()),
-            ..Default::default()
-        };
-
-        let err = sign_file(&target, &config).unwrap_err();
-        assert!(matches!(err, SigningError::CustomCommandFailed { .. }));
-    }
-
-    #[test]
-    fn expand_custom_args_replaces_placeholder() {
-        let expanded = expand_custom_args(
-            &["%1".into(), "--flag".into(), "/literal %1".into()],
-            Path::new("/bin/app.exe"),
-        );
-
-        assert_eq!(expanded, os(&["/bin/app.exe", "--flag", "/literal %1"]));
-    }
-
-    fn file_cert(path: &str) -> Option<CertificateSource> {
-        Some(CertificateSource::File {
-            path: PathBuf::from(path),
-            password_env: None,
-        })
-    }
-
-    #[test]
-    fn signtool_args_default_to_sha256_without_timestamp() {
-        let config = SignConfig {
-            certificate: Some(CertificateSource::Thumbprint("abc123".into())),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            signtool_sign_args(&config, None),
-            os(&["sign", "/fd", "sha256", "/sha1", "abc123"])
-        );
-    }
-
-    #[test]
-    fn signtool_uses_the_file_flag_for_a_certificate_file() {
-        let config = SignConfig {
-            certificate: file_cert("/certs/codesign.pfx"),
-            ..Default::default()
-        };
-
-        let args = signtool_sign_args(&config, None);
-
-        assert_eq!(
-            args,
-            os(&["sign", "/fd", "sha256", "/f", "/certs/codesign.pfx"])
-        );
-        assert!(
-            !args.contains(&OsString::from("/sha1")),
-            "/sha1 selects a store certificate by thumbprint; a file needs /f"
-        );
-    }
-
-    #[test]
-    fn signtool_passes_the_password_when_one_is_resolved() {
-        let config = SignConfig {
-            certificate: file_cert("/certs/codesign.pfx"),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            signtool_sign_args(&config, Some("hunter2")),
-            os(&[
-                "sign",
-                "/fd",
-                "sha256",
-                "/f",
-                "/certs/codesign.pfx",
-                "/p",
-                "hunter2"
-            ])
-        );
-    }
-
-    #[test]
-    fn signtool_omits_the_password_flag_when_there_is_none() {
-        let config = SignConfig {
-            certificate: file_cert("/certs/codesign.pfx"),
-            ..Default::default()
-        };
-
-        assert!(!signtool_sign_args(&config, None).contains(&OsString::from("/p")));
-    }
-
-    #[test]
-    fn signtool_args_pair_rfc3161_directives() {
-        let config = SignConfig {
-            certificate: Some(CertificateSource::Thumbprint("abc123".into())),
-            timestamp_url: Some("http://ts.example".to_string()),
-            digest_algorithm: "sha1".to_string(),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            signtool_sign_args(&config, None),
-            os(&[
-                "sign",
-                "/fd",
-                "sha1",
-                "/sha1",
-                "abc123",
-                "/tr",
-                "http://ts.example",
-                "/td",
-                "sha1",
-            ])
-        );
-    }
-
-    #[test]
-    fn osslsigncode_uses_in_out_form() {
-        let config = SignConfig {
-            certificate: file_cert("/certs/cert.pfx"),
-            timestamp_url: Some("http://ts.example".to_string()),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            osslsigncode_sign_args(
-                &config,
-                None,
-                Path::new("/dist/app.exe"),
-                Path::new("/dist/app.exe.kurogane-sign-tmp"),
-            )
-            .unwrap(),
-            os(&[
-                "sign",
-                "-pkcs12",
-                "/certs/cert.pfx",
-                "-ts",
-                "http://ts.example",
-                "-h",
-                "sha256",
-                "-in",
-                "/dist/app.exe",
-                "-out",
-                "/dist/app.exe.kurogane-sign-tmp",
-            ])
-        );
-    }
-
-    #[test]
-    fn osslsigncode_selects_certs_flag_for_pem_chains() {
-        let config = SignConfig {
-            certificate: file_cert("/certs/chain.pem"),
-            ..Default::default()
-        };
-
-        let args = osslsigncode_sign_args(&config, None, Path::new("/a.exe"), Path::new("/b.tmp"))
-            .unwrap();
-
-        assert!(
-            args.windows(2).any(|w| w[0] == "-certs"),
-            "PEM chain must use -certs"
-        );
-        assert!(
-            !args.contains(&OsString::from("-pkcs12")),
-            "PEM chain must not use -pkcs12"
-        );
-    }
-
-    #[test]
-    fn osslsigncode_p12_extension_also_uses_pkcs12() {
-        assert_eq!(
-            osslsigncode_cert_args(&file_cert("/certs/store.P12").unwrap(), None).unwrap(),
-            os(&["-pkcs12", "/certs/store.P12"])
-        );
-    }
-
-    #[test]
-    fn osslsigncode_passes_the_password_for_pkcs12() {
-        assert_eq!(
-            osslsigncode_cert_args(&file_cert("/certs/store.pfx").unwrap(), Some("hunter2"))
-                .unwrap(),
-            os(&["-pkcs12", "/certs/store.pfx", "-pass", "hunter2"])
-        );
-    }
-
-    #[test]
-    fn osslsigncode_rejects_a_store_thumbprint() {
-        let err = osslsigncode_cert_args(&CertificateSource::Thumbprint("ABCD".into()), None)
-            .unwrap_err();
-
-        assert!(
-            matches!(err, SigningError::ThumbprintUnsupported),
-            "osslsigncode has no certificate store, got: {err}"
-        );
-    }
-
-    #[test]
-    fn verify_args_are_conservative() {
-        assert_eq!(
-            signtool_verify_args(Path::new("/app.exe")),
-            os(&["verify", "/pa", "/all", "/app.exe"])
-        );
-        assert_eq!(
-            osslsigncode_verify_args(Path::new("/app.exe")),
-            os(&["verify", "-in", "/app.exe"])
-        );
-    }
-
-    #[test]
-    fn from_file_config_maps_certificate_and_digest() {
-        let file = SigningFileConfig {
-            certificate: Some("/certs/codesign.pfx".into()),
-            timestamp_url: Some("http://ts.example".into()),
-            digest_algorithm: Some("sha512".into()),
-            ..Default::default()
-        };
-
-        let config = SignConfig::from_file_config(&file).unwrap().unwrap();
-
-        assert_eq!(config.certificate, file_cert("/certs/codesign.pfx"));
-        assert_eq!(config.timestamp_url.as_deref(), Some("http://ts.example"));
-        assert_eq!(config.digest_algorithm, "sha512");
-        assert!(config.is_configured());
-    }
-
-    #[test]
-    fn from_file_config_splits_whitespace_command() {
-        let file = SigningFileConfig {
-            custom_command: Some("signtool sign /fd sha256 extra.bin".into()),
-            ..Default::default()
-        };
-
-        let config = SignConfig::from_file_config(&file).unwrap().unwrap();
-
-        assert_eq!(config.custom_command.as_deref(), Some("signtool"));
-        assert_eq!(
-            config.custom_args,
-            vec![
-                "sign".to_string(),
-                "/fd".to_string(),
-                "sha256".to_string(),
-                "extra.bin".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn from_file_config_defaults_digest_and_none_when_unconfigured() {
-        assert!(
-            SignConfig::from_file_config(&SigningFileConfig::default())
-                .unwrap()
-                .is_none()
-        );
-
-        let file = SigningFileConfig {
-            certificate: Some("/c.pfx".into()),
-            ..Default::default()
-        };
-        let config = SignConfig::from_file_config(&file).unwrap().unwrap();
-        assert_eq!(config.digest_algorithm, "sha256");
-    }
-
-    #[test]
-    fn from_file_config_carries_the_password_variable_name_not_the_secret() {
-        let file = SigningFileConfig {
-            certificate: Some("/c.pfx".into()),
-            certificate_password_env: Some("KUROGANE_CERT_PASSWORD".into()),
-            ..Default::default()
-        };
-
-        let config = SignConfig::from_file_config(&file).unwrap().unwrap();
-
-        assert_eq!(
-            config.certificate,
-            Some(CertificateSource::File {
-                path: PathBuf::from("/c.pfx"),
-                password_env: Some("KUROGANE_CERT_PASSWORD".into()),
-            })
-        );
-        assert!(
-            !format!("{config:?}").contains("hunter2"),
-            "only the variable name is stored, never the secret"
-        );
-    }
-
-    #[test]
-    fn from_file_config_rejects_both_certificate_forms() {
-        let file = SigningFileConfig {
+    fn a_certificate_file_and_a_thumbprint_are_refused_together() {
+        let err = check(windows(WindowsSigningConfig {
             certificate: Some("/c.pfx".into()),
             certificate_thumbprint: Some("ABCD".into()),
             ..Default::default()
-        };
-
-        let err = SignConfig::from_file_config(&file).unwrap_err();
+        }))
+        .unwrap_err();
 
         assert!(
             matches!(err, SigningError::AmbiguousCertificate),
@@ -1187,216 +826,522 @@ mod tests {
     }
 
     #[test]
-    fn from_file_config_maps_a_thumbprint() {
-        let file = SigningFileConfig {
-            certificate_thumbprint: Some("ABCD1234".into()),
+    fn a_custom_command_beside_a_certificate_option_is_refused() {
+        let command = Some(strings(&["signer", "%1"]));
+        for table in [
+            WindowsSigningConfig {
+                certificate: Some("/c.pfx".into()),
+                ..Default::default()
+            },
+            WindowsSigningConfig {
+                certificate_thumbprint: Some("ABCD".into()),
+                ..Default::default()
+            },
+            WindowsSigningConfig {
+                certificate_password_env: Some("PASSWORD".into()),
+                ..Default::default()
+            },
+            WindowsSigningConfig {
+                timestamp_url: Some("http://ts.example".into()),
+                ..Default::default()
+            },
+            WindowsSigningConfig {
+                digest_algorithm: Some("sha512".into()),
+                ..Default::default()
+            },
+        ] {
+            let table = WindowsSigningConfig {
+                custom_command: command.clone(),
+                ..table
+            };
+            let err = check(windows(table.clone())).unwrap_err();
+            assert!(
+                matches!(err, SigningError::CommandAndCertificate),
+                "the command would sign and the option be ignored: {table:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_custom_command_must_name_the_file_to_sign() {
+        for command in [
+            &[][..],
+            &["signer"][..],
+            &["%1"][..],
+            &["signer", "--all"][..],
+        ] {
+            let err = check(windows(WindowsSigningConfig {
+                custom_command: Some(strings(command)),
+                ..Default::default()
+            }))
+            .unwrap_err();
+            assert!(
+                matches!(err, SigningError::CommandWithoutTarget),
+                "{command:?}: {err}"
+            );
+        }
+        let placed = check(windows(WindowsSigningConfig {
+            custom_command: Some(strings(&[r"C:\Program Files\Signer\sign.exe", "--file=%1"])),
+            ..Default::default()
+        }));
+        assert!(placed.is_ok(), "%1 may sit inside an argument: {placed:?}");
+    }
+
+    #[test]
+    fn a_password_variable_needs_a_certificate_file() {
+        for table in [
+            WindowsSigningConfig::default(),
+            WindowsSigningConfig {
+                certificate_thumbprint: Some("ABCD".into()),
+                ..Default::default()
+            },
+        ] {
+            let table = WindowsSigningConfig {
+                certificate_password_env: Some("PASSWORD".into()),
+                ..table
+            };
+            let err = check(windows(table)).unwrap_err();
+            assert!(
+                matches!(err, SigningError::PasswordWithoutFile),
+                "got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_identity_is_refused() {
+        let err = check(SigningFileConfig {
+            macos: MacosSigningConfig {
+                identity: Some(" ".into()),
+            },
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert!(matches!(err, SigningError::EmptyIdentity), "got: {err}");
+    }
+
+    #[test]
+    fn a_table_is_checked_on_every_platform() {
+        // Each platform's resolution checks the other's table too
+        let broken_macos = SigningFileConfig {
+            macos: MacosSigningConfig {
+                identity: Some(String::new()),
+            },
             ..Default::default()
         };
-
-        let config = SignConfig::from_file_config(&file).unwrap().unwrap();
-
-        assert_eq!(
-            config.certificate,
-            Some(CertificateSource::Thumbprint("ABCD1234".into()))
-        );
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        assert!(SignConfig::from_file_config(&broken_macos).is_err());
+        assert!(check(broken_macos).is_err());
     }
 
-    #[test]
-    fn sign_tree_counts_only_pe_files() {
-        let dir = tmp();
-        fs::write(dir.path().join("app.exe"), "").unwrap();
-        fs::write(dir.path().join("notes.txt"), "").unwrap();
-        let nested = dir.path().join("runtime");
-        fs::create_dir_all(&nested).unwrap();
-        fs::write(nested.join("lib.dll"), "").unwrap();
+    // --- Windows: PE files ---------------------------------------------------
 
-        let count = sign_tree(dir.path(), &SignConfig::default()).unwrap();
-        assert_eq!(count, 0, "unconfigured signing signs nothing");
+    #[cfg(target_os = "windows")]
+    mod windows_signing {
+        use super::*;
 
-        let config = SignConfig {
-            custom_command: Some("true".to_string()),
-            ..Default::default()
-        };
-        let count = sign_tree(dir.path(), &config).unwrap();
-        assert_eq!(count, 2, "only app.exe and runtime/lib.dll are signed");
-    }
+        fn tmp() -> tempfile::TempDir {
+            crate::test_fixtures::tmp_dir()
+        }
 
-    fn identify() -> CertificateSource {
-        CertificateSource::Identity("Developer ID Application: Acme (TEAMID1234)".to_string())
-    }
+        fn os(input: &[&str]) -> Vec<OsString> {
+            input.iter().map(OsString::from).collect()
+        }
 
-    #[test]
-    fn identity_config_enables_signing() {
-        let config = SignConfig {
-            certificate: Some(identify()),
-            ..Default::default()
-        };
-        assert!(config.is_configured());
-    }
+        fn certificate(source: CertificateSource) -> CertificateConfig {
+            CertificateConfig {
+                source,
+                timestamp_url: None,
+                digest: DEFAULT_DIGEST.to_string(),
+            }
+        }
 
-    #[test]
-    fn from_file_config_maps_a_macos_identity() {
-        let file = SigningFileConfig {
-            certificate_identity: Some("Developer ID Application: Acme (TEAMID1234)".into()),
-            ..Default::default()
-        };
-
-        let config = SignConfig::from_file_config(&file).unwrap().unwrap();
-
-        assert_eq!(
-            config.certificate,
-            Some(CertificateSource::Identity(
-                "Developer ID Application: Acme (TEAMID1234)".into()
-            ))
-        );
-    }
-
-    #[test]
-    fn from_file_config_rejects_an_identity_with_another_form() {
-        let file = SigningFileConfig {
-            certificate: Some("/c.pfx".into()),
-            certificate_identity: Some("Developer ID Application: Acme (TEAMID)".into()),
-            ..Default::default()
-        };
-
-        let err = SignConfig::from_file_config(&file).unwrap_err();
-
-        assert!(
-            matches!(err, SigningError::AmbiguousCertificate),
-            "a file and an identity are different signing identities, got: {err}"
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn codesign_sign_args_include_identity_timestamp_and_options() {
-        let config = SignConfig {
-            certificate: Some(identify()),
-            ..Default::default()
-        };
-
-        let args = codesign_sign_args(&config, None);
-
-        assert!(args.contains(&OsString::from("--sign")));
-        assert!(args.contains(&OsString::from(
-            "Developer ID Application: Acme (TEAMID1234)"
-        )));
-        assert!(args.contains(&OsString::from("--timestamp")));
-        assert!(args.contains(&OsString::from("--options")));
-        assert!(args.contains(&OsString::from("runtime")));
-        assert!(args.contains(&OsString::from("--force")));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn codesign_sign_args_omit_entitlements_when_none_supplied() {
-        let config = SignConfig {
-            certificate: Some(identify()),
-            ..Default::default()
-        };
-
-        let args = codesign_sign_args(&config, None);
-        assert!(!args.contains(&OsString::from("--entitlements")));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn codesign_sign_args_attach_entitlements_when_supplied() {
-        let config = SignConfig {
-            certificate: Some(identify()),
-            ..Default::default()
-        };
-
-        let args = codesign_sign_args(&config, Some(Path::new("/tmp/ent.plist")));
-        assert!(args.contains(&OsString::from("--entitlements")));
-        assert!(args.contains(&OsString::from("/tmp/ent.plist")));
-    }
-
-    #[test]
-    fn ad_hoc_identity_is_recognised() {
-        let adhoc = SignConfig {
-            certificate: Some(CertificateSource::Identity(AD_HOC_IDENTITY.into())),
-            ..Default::default()
-        };
-        assert!(is_ad_hoc(&adhoc));
-
-        let release = SignConfig {
-            certificate: Some(identify()),
-            ..Default::default()
-        };
-        assert!(
-            !is_ad_hoc(&release),
-            "a Developer ID identity is not ad-hoc signing"
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn ad_hoc_signing_skips_timestamp_and_hardened_runtime() {
-        let config = SignConfig {
-            certificate: Some(CertificateSource::Identity(AD_HOC_IDENTITY.into())),
-            ..Default::default()
-        };
-
-        let args = codesign_sign_args(&config, None);
-
-        // The timestamp authority rejects certificate-less signatures
-        // Requesting one would fail the whole sign
-        assert!(args.contains(&OsString::from("--timestamp=none")));
-        assert!(!args.contains(&OsString::from("--timestamp")));
-        assert!(
-            !args.contains(&OsString::from("runtime")),
-            "a hardened runtime on a dev signature reads as distributable"
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn sign_args_never_request_deep_signing() {
-        let config = SignConfig {
-            certificate: Some(identify()),
-            ..Default::default()
-        };
-
-        // Apple deprecated --deep for signing; nested code is signed first
-        assert!(!codesign_sign_args(&config, None).contains(&OsString::from("--deep")));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn codesign_verify_args_are_conservative() {
-        assert_eq!(
-            codesign_verify_args(Path::new("/MyApp.app")),
-            os(&["--verify", "--deep", "--strict", "/MyApp.app"])
-        );
-    }
-
-    #[test]
-    fn should_sign_ignores_macho_binaries() {
-        let dir = tmp();
-        let macho = dir.path().join("myapp");
-        fs::write(&macho, [0xFE, 0xED, 0xFA, 0xCF, 0x00, 0x01, 0x00, 0x00]).unwrap();
-
-        assert!(!should_sign(&macho));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn codesign_refuses_a_certificate_file() {
-        let dir = tmp();
-        let target = dir.path().join("myapp");
-        fs::write(&target, b"mach-o").unwrap();
-
-        let config = SignConfig {
-            certificate: Some(CertificateSource::File {
-                path: "/c.pfx".into(),
+        fn file_cert(path: &str) -> CertificateSource {
+            CertificateSource::File {
+                path: PathBuf::from(path),
                 password_env: None,
-            }),
-            ..Default::default()
-        };
+            }
+        }
 
-        let err = sign_with_codesign(&target, Path::new("/usr/bin/codesign"), &config).unwrap_err();
+        #[test]
+        fn a_certificate_file_resolves_with_its_options() {
+            let config = SignConfig::from_file_config(&windows(WindowsSigningConfig {
+                certificate: Some("/certs/codesign.pfx".into()),
+                certificate_password_env: Some("KUROGANE_CERT_PASSWORD".into()),
+                timestamp_url: Some("http://ts.example".into()),
+                digest_algorithm: Some("sha512".into()),
+                ..Default::default()
+            }));
 
-        assert!(matches!(err, SigningError::NoSigningIdentity), "got: {err}");
+            assert_eq!(
+                config.unwrap(),
+                Some(SignConfig::Certificate(CertificateConfig {
+                    source: CertificateSource::File {
+                        path: "/certs/codesign.pfx".into(),
+                        password_env: Some("KUROGANE_CERT_PASSWORD".into()),
+                    },
+                    timestamp_url: Some("http://ts.example".into()),
+                    digest: "sha512".into(),
+                }))
+            );
+        }
+
+        #[test]
+        fn a_thumbprint_resolves_with_the_default_digest() {
+            let config = SignConfig::from_file_config(&windows(WindowsSigningConfig {
+                certificate_thumbprint: Some("ABCD1234".into()),
+                ..Default::default()
+            }));
+
+            assert_eq!(
+                config.unwrap(),
+                Some(SignConfig::Certificate(certificate(
+                    CertificateSource::Thumbprint("ABCD1234".into())
+                )))
+            );
+        }
+
+        #[test]
+        fn a_custom_command_resolves_as_its_argument_list() {
+            let command = strings(&[r"C:\Program Files\Signer\sign.exe", "sign", "--file=%1"]);
+            let config = SignConfig::from_file_config(&windows(WindowsSigningConfig {
+                custom_command: Some(command.clone()),
+                ..Default::default()
+            }));
+
+            assert_eq!(
+                config.unwrap(),
+                Some(SignConfig::Command(command)),
+                "a path with a space is one argument"
+            );
+        }
+
+        #[test]
+        fn nothing_configured_resolves_to_none() {
+            assert_eq!(
+                SignConfig::from_file_config(&SigningFileConfig::default()).unwrap(),
+                None
+            );
+            let timestamp_only = windows(WindowsSigningConfig {
+                timestamp_url: Some("http://timestamp".into()),
+                ..Default::default()
+            });
+            assert_eq!(SignConfig::from_file_config(&timestamp_only).unwrap(), None);
+        }
+
+        #[test]
+        fn only_pe_files_are_signed() {
+            assert!(should_sign(Path::new("/some/path/app.exe")));
+            assert!(should_sign(Path::new("/some/path/lib.dll")));
+            assert!(!should_sign(Path::new("/some/readme.txt")));
+            assert!(!should_sign(Path::new("/some/binary")));
+        }
+
+        #[test]
+        fn sign_custom_command_expands_target_path() {
+            let dir = tmp();
+            let target = dir.path().join("app.exe");
+            fs::write(&target, "").unwrap();
+
+            let config = SignConfig::Command(strings(&["echo", "%1", "--flag"]));
+
+            assert!(sign_file(&target, &config).is_ok());
+        }
+
+        #[test]
+        fn sign_custom_command_failure_is_propagated() {
+            let dir = tmp();
+            let target = dir.path().join("app.exe");
+            fs::write(&target, "").unwrap();
+
+            let config = SignConfig::Command(strings(&["false", "%1"]));
+
+            let err = sign_file(&target, &config).unwrap_err();
+            assert!(
+                matches!(err, SigningError::CustomCommandFailed { .. }),
+                "got: {err}"
+            );
+        }
+
+        #[test]
+        fn expand_custom_args_replaces_every_placeholder() {
+            let expanded = expand_custom_args(
+                &strings(&["%1", "--flag", "/file:%1", "%1,%1", "plain"]),
+                Path::new("/bin/app.exe"),
+            );
+
+            assert_eq!(
+                expanded,
+                os(&[
+                    "/bin/app.exe",
+                    "--flag",
+                    "/file:/bin/app.exe",
+                    "/bin/app.exe,/bin/app.exe",
+                    "plain"
+                ])
+            );
+        }
+
+        #[test]
+        fn sign_tree_counts_only_pe_files() {
+            let dir = tmp();
+            fs::write(dir.path().join("app.exe"), "").unwrap();
+            fs::write(dir.path().join("notes.txt"), "").unwrap();
+            let nested = dir.path().join("runtime");
+            fs::create_dir_all(&nested).unwrap();
+            fs::write(nested.join("lib.dll"), "").unwrap();
+
+            let config = SignConfig::Command(strings(&["true", "%1"]));
+            let count = sign_tree(dir.path(), &config).unwrap();
+            assert_eq!(count, 2, "only app.exe and runtime/lib.dll are signed");
+        }
+
+        #[test]
+        fn signtool_args_default_to_sha256_without_timestamp() {
+            let config = certificate(CertificateSource::Thumbprint("abc123".into()));
+
+            assert_eq!(
+                signtool_sign_args(&config, None),
+                os(&["sign", "/fd", "sha256", "/sha1", "abc123"])
+            );
+        }
+
+        #[test]
+        fn signtool_uses_the_file_flag_for_a_certificate_file() {
+            let config = certificate(file_cert("/certs/codesign.pfx"));
+
+            let args = signtool_sign_args(&config, None);
+
+            assert_eq!(
+                args,
+                os(&["sign", "/fd", "sha256", "/f", "/certs/codesign.pfx"])
+            );
+            assert!(
+                !args.contains(&OsString::from("/sha1")),
+                "/sha1 selects a store certificate by thumbprint; a file needs /f"
+            );
+        }
+
+        #[test]
+        fn signtool_passes_the_password_when_one_is_resolved() {
+            let config = certificate(file_cert("/certs/codesign.pfx"));
+
+            assert_eq!(
+                signtool_sign_args(&config, Some("hunter2")),
+                os(&[
+                    "sign",
+                    "/fd",
+                    "sha256",
+                    "/f",
+                    "/certs/codesign.pfx",
+                    "/p",
+                    "hunter2"
+                ])
+            );
+        }
+
+        #[test]
+        fn signtool_omits_the_password_flag_when_there_is_none() {
+            let config = certificate(file_cert("/certs/codesign.pfx"));
+
+            assert!(!signtool_sign_args(&config, None).contains(&OsString::from("/p")));
+        }
+
+        #[test]
+        fn signtool_args_pair_rfc3161_directives() {
+            let config = CertificateConfig {
+                timestamp_url: Some("http://ts.example".to_string()),
+                digest: "sha1".to_string(),
+                ..certificate(CertificateSource::Thumbprint("abc123".into()))
+            };
+
+            assert_eq!(
+                signtool_sign_args(&config, None),
+                os(&[
+                    "sign",
+                    "/fd",
+                    "sha1",
+                    "/sha1",
+                    "abc123",
+                    "/tr",
+                    "http://ts.example",
+                    "/td",
+                    "sha1",
+                ])
+            );
+        }
+
+        #[test]
+        fn osslsigncode_uses_in_out_form() {
+            let config = CertificateConfig {
+                timestamp_url: Some("http://ts.example".to_string()),
+                ..certificate(file_cert("/certs/cert.pfx"))
+            };
+
+            assert_eq!(
+                osslsigncode_sign_args(
+                    &config,
+                    None,
+                    Path::new("/dist/app.exe"),
+                    Path::new("/dist/app.exe.kurogane-sign-tmp"),
+                )
+                .unwrap(),
+                os(&[
+                    "sign",
+                    "-pkcs12",
+                    "/certs/cert.pfx",
+                    "-ts",
+                    "http://ts.example",
+                    "-h",
+                    "sha256",
+                    "-in",
+                    "/dist/app.exe",
+                    "-out",
+                    "/dist/app.exe.kurogane-sign-tmp",
+                ])
+            );
+        }
+
+        #[test]
+        fn osslsigncode_selects_certs_flag_for_pem_chains() {
+            let config = certificate(file_cert("/certs/chain.pem"));
+
+            let args =
+                osslsigncode_sign_args(&config, None, Path::new("/a.exe"), Path::new("/b.tmp"))
+                    .unwrap();
+
+            assert!(
+                args.windows(2).any(|w| w[0] == "-certs"),
+                "PEM chain must use -certs"
+            );
+            assert!(
+                !args.contains(&OsString::from("-pkcs12")),
+                "PEM chain must not use -pkcs12"
+            );
+        }
+
+        #[test]
+        fn osslsigncode_p12_extension_also_uses_pkcs12() {
+            assert_eq!(
+                osslsigncode_cert_args(&file_cert("/certs/store.P12"), None).unwrap(),
+                os(&["-pkcs12", "/certs/store.P12"])
+            );
+        }
+
+        #[test]
+        fn osslsigncode_passes_the_password_for_pkcs12() {
+            assert_eq!(
+                osslsigncode_cert_args(&file_cert("/certs/store.pfx"), Some("hunter2")).unwrap(),
+                os(&["-pkcs12", "/certs/store.pfx", "-pass", "hunter2"])
+            );
+        }
+
+        #[test]
+        fn osslsigncode_rejects_a_store_thumbprint() {
+            let err = osslsigncode_cert_args(&CertificateSource::Thumbprint("ABCD".into()), None)
+                .unwrap_err();
+            assert!(
+                matches!(err, SigningError::ThumbprintUnsupported),
+                "osslsigncode has no certificate store, got: {err}"
+            );
+        }
+
+        #[test]
+        fn verify_args_are_conservative() {
+            assert_eq!(
+                signtool_verify_args(Path::new("/app.exe")),
+                os(&["verify", "/pa", "/all", "/app.exe"])
+            );
+            assert_eq!(
+                osslsigncode_verify_args(Path::new("/app.exe")),
+                os(&["verify", "-in", "/app.exe"])
+            );
+        }
+    }
+
+    // --- macOS: a .app -------------------------------------------------------
+
+    #[cfg(target_os = "macos")]
+    mod macos_signing {
+        use super::*;
+
+        const DEVELOPER_ID: &str = "Developer ID Application: Acme (TEAMID1234)";
+
+        fn os(input: &[&str]) -> Vec<OsString> {
+            input.iter().map(OsString::from).collect()
+        }
+
+        #[test]
+        fn an_identity_resolves() {
+            let config = SignConfig::from_file_config(&SigningFileConfig {
+                macos: MacosSigningConfig {
+                    identity: Some(DEVELOPER_ID.into()),
+                },
+                ..Default::default()
+            });
+            assert_eq!(
+                config.unwrap(),
+                Some(SignConfig {
+                    identity: DEVELOPER_ID.into()
+                })
+            );
+            assert_eq!(
+                SignConfig::from_file_config(&SigningFileConfig::default()).unwrap(),
+                None
+            );
+        }
+
+        #[test]
+        fn codesign_sign_args_include_identity_timestamp_and_options() {
+            let args = codesign_sign_args(DEVELOPER_ID, None);
+
+            assert!(args.contains(&OsString::from("--sign")));
+            assert!(args.contains(&OsString::from(DEVELOPER_ID)));
+            assert!(args.contains(&OsString::from("--timestamp")));
+            assert!(args.contains(&OsString::from("--options")));
+            assert!(args.contains(&OsString::from("runtime")));
+            assert!(args.contains(&OsString::from("--force")));
+        }
+
+        #[test]
+        fn codesign_sign_args_omit_entitlements_when_none_supplied() {
+            let args = codesign_sign_args(DEVELOPER_ID, None);
+            assert!(!args.contains(&OsString::from("--entitlements")));
+        }
+
+        #[test]
+        fn codesign_sign_args_attach_entitlements_when_supplied() {
+            let args = codesign_sign_args(DEVELOPER_ID, Some(Path::new("/tmp/ent.plist")));
+            assert!(args.contains(&OsString::from("--entitlements")));
+            assert!(args.contains(&OsString::from("/tmp/ent.plist")));
+        }
+
+        #[test]
+        fn ad_hoc_signing_skips_timestamp_and_hardened_runtime() {
+            let args = codesign_sign_args(AD_HOC_IDENTITY, None);
+
+            // The timestamp authority rejects certificate-less signatures
+            // Requesting one would fail the whole sign
+            assert!(args.contains(&OsString::from("--timestamp=none")));
+            assert!(!args.contains(&OsString::from("--timestamp")));
+            assert!(
+                !args.contains(&OsString::from("runtime")),
+                "a hardened runtime on a dev signature reads as distributable"
+            );
+        }
+
+        #[test]
+        fn sign_args_never_request_deep_signing() {
+            // Apple deprecated --deep for signing; nested code is signed first
+            assert!(!codesign_sign_args(DEVELOPER_ID, None).contains(&OsString::from("--deep")));
+        }
+
+        #[test]
+        fn codesign_verify_args_are_conservative() {
+            assert_eq!(
+                codesign_verify_args(Path::new("/MyApp.app")),
+                os(&["--verify", "--deep", "--strict", "/MyApp.app"])
+            );
+        }
     }
 }

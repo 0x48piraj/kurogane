@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use kurogane_layout::{
-    PackagingConfig, ResolvedDistribution, SignConfig, package_directory, sign_artifact,
+    PackagingConfig, ResolvedDistribution, SignConfig, package_directory, sign_file,
     verify_signature,
 };
 
@@ -375,8 +375,8 @@ pub fn build(
             bail!("installer {} was not produced", installer_path.display());
         }
 
-        sign_artifact(&installer_path, sign_config)?;
-        verify_signature(&installer_path, sign_config)?;
+        sign_file(&installer_path, sign_config)?;
+        verify_signature(&installer_path)?;
         tui::field("signature", "verified");
     }
 

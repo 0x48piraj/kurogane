@@ -167,25 +167,45 @@ impl Default for WindowsPackagingConfig {
     }
 }
 
-/// Code signing configuration.
+/// Code signing, one table per platform that signs: each bundler reads its
+/// own, and `--sign` checks both wherever it runs.
 ///
-/// A certificate is supplied as a file (`certificate`), a Windows certificate
-/// store thumbprint (`certificate-thumbprint`), or a macOS codesign identity
-/// (`certificate-identity`). At most one of the three forms may be set.
+/// A key a table does not take, such as the older flat `[signing]` keys, is
+/// an error naming it, never ignored.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SigningFileConfig {
+    /// `[signing.windows]`: the PE files of a Windows bundle and installer.
+    pub windows: WindowsSigningConfig,
+    /// `[signing.macos]`: a macOS `.app`.
+    pub macos: MacosSigningConfig,
+}
+
+/// `[signing.windows]`: a certificate, as a file (`certificate`) or a Windows
+/// certificate store thumbprint (`certificate-thumbprint`), or instead a
+/// signing program of the application's own (`custom-command`).
 ///
 /// Passwords are never stored here: `certificate-password-env` names the
 /// environment variable the password is read from, so CI keeps it in secrets
 /// and it stays out of version control naturally.
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default, rename_all = "kebab-case")]
-pub struct SigningFileConfig {
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct WindowsSigningConfig {
     pub certificate: Option<PathBuf>,
     pub certificate_thumbprint: Option<String>,
-    pub certificate_identity: Option<String>,
     pub certificate_password_env: Option<String>,
     pub timestamp_url: Option<String>,
     pub digest_algorithm: Option<String>,
-    pub custom_command: Option<String>,
+    /// A program and its arguments; `%1` in an argument is the file to sign.
+    pub custom_command: Option<Vec<String>>,
+}
+
+/// `[signing.macos]`: the codesign identity a `.app` is signed with, from the
+/// keychain; `-` signs ad hoc.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MacosSigningConfig {
+    pub identity: Option<String>,
 }
 
 #[cfg(test)]
@@ -218,7 +238,8 @@ mod tests {
 
         assert_eq!(config.app.name, None);
         assert!(config.linux.categories.is_none());
-        assert!(config.signing.certificate.is_none());
+        assert!(config.signing.windows.certificate.is_none());
+        assert!(config.signing.macos.identity.is_none());
     }
 
     #[test]
@@ -255,11 +276,13 @@ terminal = true
 start-menu-shortcut = false
 desktop-shortcut = false
 
-[signing]
+[signing.windows]
 certificate = "certs/codesign.pfx"
 timestamp-url = "http://timestamp.digicert.com"
 digest-algorithm = "sha256"
-custom-command = "signtool sign /fd sha256"
+
+[signing.macos]
+identity = "Developer ID Application: Example Corp (TEAMID1234)"
 "#,
         );
 
@@ -317,70 +340,121 @@ custom-command = "signtool sign /fd sha256"
         assert!(!config.windows.start_menu_shortcut);
         assert!(!config.windows.desktop_shortcut);
 
+        let windows = &config.signing.windows;
         assert_eq!(
-            config.signing.certificate,
+            windows.certificate,
             Some(PathBuf::from("certs/codesign.pfx"))
         );
         assert_eq!(
-            config.signing.timestamp_url.as_deref(),
+            windows.timestamp_url.as_deref(),
             Some("http://timestamp.digicert.com")
         );
-        assert_eq!(config.signing.digest_algorithm.as_deref(), Some("sha256"));
+        assert_eq!(windows.digest_algorithm.as_deref(), Some("sha256"));
         assert_eq!(
-            config.signing.custom_command.as_deref(),
-            Some("signtool sign /fd sha256")
+            config.signing.macos.identity.as_deref(),
+            Some("Developer ID Application: Example Corp (TEAMID1234)")
         );
     }
 
     #[test]
-    fn signing_accepts_a_store_thumbprint_and_password_variable() {
+    fn signing_takes_a_table_per_platform() {
         let dir = tempfile::tempdir().unwrap();
         write_config(
             dir.path(),
             r#"
-[signing]
+[signing.windows]
 certificate-thumbprint = "AB12CD34"
 certificate-password-env = "KUROGANE_CERT_PASSWORD"
+timestamp-url = "http://timestamp.digicert.com"
+
+[signing.macos]
+identity = "Developer ID Application: Acme (TEAMID1234)"
 "#,
         );
 
         let config = PackagingConfig::load(dir.path()).unwrap();
 
+        let windows = &config.signing.windows;
+        assert_eq!(windows.certificate_thumbprint.as_deref(), Some("AB12CD34"));
         assert_eq!(
-            config.signing.certificate_thumbprint.as_deref(),
-            Some("AB12CD34")
-        );
-        assert_eq!(
-            config.signing.certificate_password_env.as_deref(),
+            windows.certificate_password_env.as_deref(),
             Some("KUROGANE_CERT_PASSWORD")
         );
-        assert!(
-            config.signing.certificate.is_none(),
-            "a thumbprint is not a certificate file"
+        assert_eq!(
+            windows.timestamp_url.as_deref(),
+            Some("http://timestamp.digicert.com")
+        );
+        assert!(windows.certificate.is_none(), "a thumbprint is not a file");
+        assert_eq!(
+            config.signing.macos.identity.as_deref(),
+            Some("Developer ID Application: Acme (TEAMID1234)")
         );
     }
 
     #[test]
-    fn signing_accepts_a_macos_identity() {
+    fn a_custom_command_is_an_argument_list() {
         let dir = tempfile::tempdir().unwrap();
         write_config(
             dir.path(),
             r#"
-[signing]
-certificate-identity = "Developer ID Application: Acme (TEAMID1234)"
+[signing.windows]
+custom-command = ['C:\Program Files\Signer\sign.exe', "sign", "%1"]
 "#,
         );
 
         let config = PackagingConfig::load(dir.path()).unwrap();
 
         assert_eq!(
-            config.signing.certificate_identity.as_deref(),
-            Some("Developer ID Application: Acme (TEAMID1234)")
+            config.signing.windows.custom_command,
+            Some(vec![
+                r"C:\Program Files\Signer\sign.exe".to_string(),
+                "sign".to_string(),
+                "%1".to_string(),
+            ])
         );
-        assert!(
-            config.signing.certificate.is_none() && config.signing.certificate_thumbprint.is_none(),
-            "an identity is neither a certificate file nor a thumbprint"
-        );
+    }
+
+    #[test]
+    fn signing_keys_outside_their_table_are_refused_where_they_are_written() {
+        for (written, key, line) in [
+            // The flat table before per-platform tables
+            (
+                "[signing]\ncertificate = \"c.pfx\"\n",
+                "certificate",
+                "line 2",
+            ),
+            // A key of the other platform
+            (
+                "[signing.windows]\nidentity = \"Developer ID Application\"\n",
+                "identity",
+                "line 2",
+            ),
+            (
+                "[signing.macos]\ncertificate = \"c.pfx\"\n",
+                "certificate",
+                "line 2",
+            ),
+            // A command line where an argument list belongs
+            (
+                "[signing.windows]\ncustom-command = \"signtool sign %1\"\n",
+                "custom-command",
+                "line 2",
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            write_config(dir.path(), written);
+
+            let err = PackagingConfig::load(dir.path()).unwrap_err();
+
+            let ConfigError::Parse(_, cause) = &err else {
+                panic!("{written:?} is a parse error, got: {err}");
+            };
+            let cause = cause.to_string();
+            assert!(
+                cause.contains(key) && cause.contains(line),
+                "{written:?}: the error names the key and its line: {cause}"
+            );
+        }
     }
 
     #[test]
