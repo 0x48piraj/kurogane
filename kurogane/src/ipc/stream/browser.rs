@@ -20,7 +20,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use crate::debug;
-use crate::ipc::browser_state::{ErrorCode, IpcContext};
+use crate::ipc::browser_state::{ErrorCode, IpcContext, IpcError};
 use crate::ipc::envelope::{
     Envelope, STREAM_OPEN, STREAM_DATA, STREAM_END, STREAM_ERROR, STREAM_CANCEL, decode_cmd_payload,
 };
@@ -82,14 +82,20 @@ impl StreamSubsystem {
             Some(v) => v,
             None => {
                 debug!("[Stream Browser] invalid open payload");
-                let _ = responder.error_with_code("invalid open payload", ErrorCode::Buffer);
+                let _ = responder.error(IpcError::with_code(
+                    "invalid open payload",
+                    ErrorCode::Buffer,
+                ));
                 return false;
             }
         };
 
         let Ok(metadata) = std::str::from_utf8(metadata_bytes) else {
             debug!("[Stream Browser] open metadata is not UTF-8");
-            let _ = responder.error_with_code("stream metadata is not UTF-8", ErrorCode::Buffer);
+            let _ = responder.error(IpcError::with_code(
+                "stream metadata is not UTF-8",
+                ErrorCode::Buffer,
+            ));
             return false;
         };
 
@@ -100,7 +106,7 @@ impl StreamSubsystem {
                     "[Stream Browser] no factory '{}' for stream open",
                     handler_name
                 );
-                let _ = responder.error(&format!("no handler registered for '{handler_name}'"));
+                let _ = responder.error(format!("no handler registered for '{handler_name}'"));
                 return false;
             }
         };
@@ -116,7 +122,7 @@ impl StreamSubsystem {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
                 debug!("[Stream Browser] on_open error: {}", e);
-                let _ = responder.error(&e);
+                let _ = responder.error(e);
                 return false;
             }
             Err(_) => {
@@ -150,13 +156,14 @@ impl StreamSubsystem {
         let failure = match opened {
             Ok(Ok(())) => None,
             Ok(Err(e)) => Some(e),
-            Err(_) => Some("handler panicked".to_owned()),
+            Err(_) => Some(IpcError::new("handler panicked")),
         };
-        if let Some(e) = &failure {
+        let failed = failure.is_some();
+        if let Some(e) = failure {
             debug!("[Stream Browser] on_opened error: {}", e);
             let _ = responder.error(e);
         }
-        if failure.is_some() || entry.is_closed() {
+        if failed || entry.is_closed() {
             // Over already: a responder the handler kept stops here too
             entry.close();
             return true;
@@ -193,7 +200,7 @@ impl StreamSubsystem {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
                 debug!("[Stream Browser] on_chunk error: {}", e);
-                let _ = responder.error(&e);
+                let _ = responder.error(e);
                 entry.close();
             }
             Err(_) => {
@@ -234,7 +241,7 @@ impl StreamSubsystem {
             }
             Ok(Err(e)) => {
                 debug!("[Stream Browser] on_end error: {}", e);
-                let _ = responder_clone.error(&e);
+                let _ = responder_clone.error(e);
             }
             Err(_) => {
                 debug!("[Stream Browser] on_end handler panicked");

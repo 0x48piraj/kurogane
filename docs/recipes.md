@@ -217,16 +217,17 @@ See:
 A stream carries chunks both ways between a page and a Rust handler. Register a factory with `App::stream`; it makes a handler for each stream a page opens.
 
 ```rust
-use kurogane::App;
 use kurogane::ipc::{StreamHandler, StreamResponder};
+use kurogane::{App, IpcError};
 
 struct Upload {
     received: usize,
 }
 
 impl StreamHandler for Upload {
-    // Accept or refuse; an Err rejects the page's openStream
-    fn on_open(&mut self, metadata: &str) -> Result<(), String> {
+    // Accept or refuse; an Err rejects the page's openStream with its
+    // message and code
+    fn on_open(&mut self, metadata: &str) -> Result<(), IpcError> {
         if metadata.is_empty() {
             return Err("name the upload".into());
         }
@@ -235,16 +236,16 @@ impl StreamHandler for Upload {
 
     // The page holds the stream now: send, end, fail, or hand a clone of
     // the responder to a thread of your own
-    fn on_opened(&mut self, responder: &StreamResponder) -> Result<(), String> {
+    fn on_opened(&mut self, responder: &StreamResponder) -> Result<(), IpcError> {
         responder.send_data(b"ready")
     }
 
-    fn on_chunk(&mut self, data: &[u8], _: &StreamResponder) -> Result<(), String> {
+    fn on_chunk(&mut self, data: &[u8], _: &StreamResponder) -> Result<(), IpcError> {
         self.received += data.len();
         Ok(())
     }
 
-    fn on_end(&mut self, _: &str, responder: StreamResponder) -> Result<(), String> {
+    fn on_end(&mut self, _: &str, responder: StreamResponder) -> Result<(), IpcError> {
         responder.end(&self.received.to_string())
     }
 }
@@ -266,7 +267,7 @@ stream.write(new TextEncoder().encode("hello"));
 stream.end();
 ```
 
-The first `end` or `error` a handler sends closes the stream; later sends return `Err("stream closed")`. When the page calls `end()` and `on_end` sends neither, the runtime ends the stream with `""`, so the page always hears back. Handlers run on the UI thread; a `StreamResponder` can be cloned and used from any thread.
+Handlers and sends fail with an `IpcError`, as commands do; a string converts into one. The first `end` or `error` a handler sends closes the stream; later sends fail with `stream closed`. When the page calls `end()` and `on_end` sends neither, the runtime ends the stream with `""`, so the page always hears back. Handlers run on the UI thread; a `StreamResponder` can be cloned and used from any thread.
 
 ## Adding Chromium flags
 

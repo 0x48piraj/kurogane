@@ -1013,7 +1013,7 @@ mod tests {
     struct NoopStream;
 
     impl crate::ipc::StreamHandler for NoopStream {
-        fn on_chunk(&mut self, _: &[u8], _: &crate::ipc::StreamResponder) -> Result<(), String> {
+        fn on_chunk(&mut self, _: &[u8], _: &crate::ipc::StreamResponder) -> Result<(), IpcError> {
             Ok(())
         }
     }

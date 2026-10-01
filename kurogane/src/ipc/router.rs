@@ -85,8 +85,7 @@ fn refuse_opening(frame: &Frame, envelope: &Envelope, error: IpcError) {
     match opens(envelope) {
         Some(Opens::Invocation) => RequestResponseSubsystem::reject(frame, envelope, error),
         Some(Opens::Stream) => {
-            let responder = StreamResponder::new(frame.clone(), envelope.correlation_id);
-            let _ = responder.error_with_code(error.message(), error.code());
+            let _ = StreamResponder::unbound(frame.clone(), envelope.correlation_id).error(error);
         }
         Some(Opens::Subscription) => EventSubsystem::refuse(frame, envelope, &error),
         None => {}
