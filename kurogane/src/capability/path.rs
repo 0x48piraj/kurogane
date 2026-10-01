@@ -13,8 +13,10 @@
 //!
 //! [`parse_request`] is the only entry point for renderer-supplied paths.
 
+use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, Prefix};
+use std::sync::OnceLock;
 
 use crate::capability::error::{Denial, FsError};
 
@@ -100,8 +102,13 @@ pub(crate) fn fold(component: &OsStr) -> Vec<u8> {
 fn fold_chars(chars: impl Iterator<Item = char>) -> impl Iterator<Item = char> {
     use unicode_normalization::UnicodeNormalization;
 
+    // Lowered before it is raised: `ẞ` uppercases to itself and lowercases to
+    // `ß`, which only uppercasing folds to `ss`, as `ß` itself folds. Every
+    // character then folds as with case mapped twice over, and folding again
+    // changes nothing (`the_fold_is_stable`)
     chars
         .nfd()
+        .flat_map(char::to_lowercase)
         .flat_map(char::to_uppercase)
         .flat_map(char::to_lowercase)
         .filter(|&c| !ignorable(c))
@@ -151,32 +158,81 @@ fn fold_char(c: char) -> impl Iterator<Item = char> {
     std::iter::once(c)
 }
 
-/// Yields `folded` and all Unicode code points whose fold begins with `folded`.
+/// Yields `folded` and every character whose fold is `folded`, alone or
+/// followed by combining marks.
 ///
 /// Inverts [`fold`] through the per-character fold the platform's `fold` is
 /// built on, so a pattern written against raw characters (a glob class
 /// range) can be matched against folded names: on Windows a character's
 /// simple uppercase, elsewhere the lead of a normalized fold (e.g., `É` to
-/// `e` + U+0301). Matching lead characters is intentionally conservative;
-/// over-matching only denies more.
+/// `e` + U+0301). Matching the lead whatever marks follow it is
+/// conservative; over-matching only denies more. A character whose fold has
+/// several base characters is found through [`unfold_starters`] instead.
 pub(crate) fn unfold(folded: char) -> impl Iterator<Item = char> {
-    use std::collections::HashMap;
-    use std::sync::OnceLock;
+    let leads = &inverse().leads;
+    std::iter::once(folded).chain(leads.get(&folded).into_iter().flatten().copied())
+}
 
-    static INVERSE: OnceLock<HashMap<char, Vec<char>>> = OnceLock::new();
-    let inverse = INVERSE.get_or_init(|| {
-        let mut inverse: HashMap<char, Vec<char>> = HashMap::new();
+/// The characters whose fold has the base characters `starters`, combining
+/// marks aside: on macOS and Linux `ss` for `ß`, the jamo of a Hangul
+/// syllable. Windows folds no character to several.
+pub(crate) fn unfold_starters(starters: &[char]) -> &'static [char] {
+    inverse().starters.get(starters).map_or(&[], Vec::as_slice)
+}
+
+/// The most base characters one character's fold has.
+pub(crate) const MAX_FOLD_STARTERS: usize = 3;
+
+/// Whether `c` is a base character (canonical combining class 0) rather than
+/// a combining mark.
+pub(crate) fn is_starter(c: char) -> bool {
+    unicode_normalization::char::canonical_combining_class(c) == 0
+}
+
+/// [`fold_char`] inverted, built once on first use.
+struct Inverse {
+    /// The lead of a fold with at most one base character, to the characters
+    /// with that fold.
+    leads: HashMap<char, Vec<char>>,
+    /// The base characters of a fold with several, to the characters with
+    /// that fold.
+    starters: HashMap<Vec<char>, Vec<char>>,
+}
+
+fn inverse() -> &'static Inverse {
+    static INVERSE: OnceLock<Inverse> = OnceLock::new();
+    INVERSE.get_or_init(|| {
+        let mut inverse = Inverse {
+            leads: HashMap::new(),
+            starters: HashMap::new(),
+        };
         for c in (0..=0x10_FFFF).filter_map(char::from_u32) {
             let mut fold = fold_char(c);
-            if let Some(first) = fold.next()
-                && (first != c || fold.next().is_some())
-            {
-                inverse.entry(first).or_default().push(c);
+            let Some(lead) = fold.next() else {
+                continue;
+            };
+            // Allocates only for the folds with a second base character. A
+            // fold never puts a mark before its first base character
+            // (`unfold_inverts_fold`), so the lead is one
+            let mut starters = Vec::new();
+            let mut more = false;
+            for f in fold {
+                more = true;
+                if is_starter(f) {
+                    if starters.is_empty() {
+                        starters.push(lead);
+                    }
+                    starters.push(f);
+                }
+            }
+            if !starters.is_empty() {
+                inverse.starters.entry(starters).or_default().push(c);
+            } else if lead != c || more {
+                inverse.leads.entry(lead).or_default().push(c);
             }
         }
         inverse
-    });
-    std::iter::once(folded).chain(inverse.get(&folded).into_iter().flatten().copied())
+    })
 }
 
 /// One validated path component: not empty, not `.`/`..`, no separator, no
@@ -593,28 +649,86 @@ mod tests {
         }
     }
 
-    // Glob classes match folded names through unfold: a character missing
-    // from it lets a name a deny class covers through, an extra one only
-    // denies more. Both directions, for every character: every character is
-    // among the unfold of its fold's lead, and unfold yields only characters
-    // whose fold that character leads
+    // Glob classes and `?` match folded names through unfold and
+    // unfold_starters: a character missing from them lets a name a deny rule
+    // covers through, an extra one only denies more. Both directions, for
+    // every character: a fold with one base character is found by its lead
+    // alone, one with several by its base characters alone, and the tables
+    // yield nothing else
     #[test]
     fn unfold_inverts_fold() {
-        let lead = |c: char| {
+        let fold_of = |c: char| -> Vec<char> {
             let mut buf = [0; 4];
             let folded = fold(OsStr::new(c.encode_utf8(&mut buf)));
-            String::from_utf8(folded).ok()?.chars().next()
+            String::from_utf8(folded)
+                .expect("a character folds to text")
+                .chars()
+                .collect()
         };
+        let starters_of = |fold: &[char]| -> Vec<char> {
+            fold.iter().copied().filter(|&f| is_starter(f)).collect()
+        };
+
         for c in (0..=0x10_FFFF).filter_map(char::from_u32) {
-            if let Some(first) = lead(c) {
+            let fold = fold_of(c);
+            // An ignorable code point folds to nothing
+            let Some(&lead) = fold.first() else {
+                continue;
+            };
+            let starters = starters_of(&fold);
+            assert!(
+                starters.is_empty() || is_starter(lead),
+                "{c:?} folds to {fold:?}, a mark before its first base character"
+            );
+            assert!(
+                starters.len() <= MAX_FOLD_STARTERS,
+                "{c:?} folds to {fold:?}"
+            );
+            if starters.len() > 1 {
                 assert!(
-                    unfold(first).any(|x| x == c),
-                    "{c:?} folds to a name led by {first:?}, whose unfold misses it"
+                    unfold_starters(&starters).contains(&c),
+                    "{c:?} folds to {fold:?}, whose base characters miss it"
+                );
+                assert!(
+                    !unfold(lead).skip(1).any(|x| x == c),
+                    "{c:?} folds to {fold:?}, and its lead alone finds it"
+                );
+            } else {
+                assert!(
+                    unfold(lead).any(|x| x == c),
+                    "{c:?} folds to {fold:?}, whose lead misses it"
                 );
             }
             for x in unfold(c).skip(1) {
-                assert_eq!(lead(x), Some(c), "unfold({c:?}) yields {x:?}");
+                let fold = fold_of(x);
+                assert_eq!(fold.first(), Some(&c), "unfold({c:?}) yields {x:?}");
+                assert!(
+                    starters_of(&fold).len() <= 1,
+                    "unfold({c:?}) yields {x:?}, whose fold has several base characters"
+                );
             }
+        }
+        for (starters, chars) in &inverse().starters {
+            for &x in chars {
+                assert_eq!(
+                    starters_of(&fold_of(x)),
+                    *starters,
+                    "unfold_starters({starters:?}) yields {x:?}"
+                );
+            }
+        }
+    }
+
+    // A filesystem folds a name to a fixed point, so a name and its fold are
+    // one name there: folding a fold must change nothing, or the two get
+    // different keys and a deny on one misses the other
+    #[test]
+    fn the_fold_is_stable() {
+        for c in (0..=0x10_FFFF).filter_map(char::from_u32) {
+            let mut buf = [0; 4];
+            let once = fold(OsStr::new(c.encode_utf8(&mut buf)));
+            let text = std::str::from_utf8(&once).expect("a character folds to text");
+            assert_eq!(fold(OsStr::new(text)), once, "{c:?} folds to {text:?}");
         }
     }
 
@@ -647,6 +761,7 @@ mod tests {
             "variation selector"
         );
         assert_eq!(key("stra\u{df}e"), key("STRASSE"), "full case folding");
+        assert_eq!(key("STRA\u{1e9e}E"), key("stra\u{df}e"), "capital sharp s");
         assert_ne!(key("secret"), key("secrets"));
     }
 }

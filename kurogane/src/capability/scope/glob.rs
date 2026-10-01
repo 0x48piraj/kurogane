@@ -6,9 +6,10 @@
 //! unless the pattern component starts with a literal `.` (`\.env` is one),
 //! and `**/.git` can exclude `.git` from a recursive allow.
 //!
-//! `?` and `[...]` consume one whole character. Names are decoded strictly:
-//! a byte that does not start a valid character is one unit of its own,
-//! which `?`, `*` and negated classes match and no literal does.
+//! `?` and `[...]` consume one whole character, even one whose fold spans
+//! several (`ß` folds to `ss` on macOS and Linux). Names are decoded
+//! strictly: a byte that does not start a valid character is one unit of its
+//! own, which `?`, `*` and negated classes match and no literal does.
 //!
 //! Case follows the platform: literals are compared through the same fold as
 //! [`Key`] values (case-insensitive on Windows, macOS and Linux); class
@@ -27,7 +28,7 @@
 
 use std::ffi::OsStr;
 
-use crate::capability::path::{fold, unfold, Key};
+use crate::capability::path::{fold, is_starter, unfold, unfold_starters, Key, MAX_FOLD_STARTERS};
 
 /// The most parts (components and `**`) a pattern may have: a `u64` holds
 /// one bit per part plus the accepting position.
@@ -184,9 +185,12 @@ impl ComponentGlob {
         let len = self.tokens.len();
         let mut live = vec![false; len + 1];
         let mut next = vec![false; len + 1];
+        // Where a `?` or class lands past a character whose fold spans
+        // several base characters: (the last unit it consumes, the position)
+        let mut ahead: Vec<(usize, usize)> = Vec::new();
         live[0] = true;
         self.close(&mut live);
-        for &unit in name {
+        for (at, &unit) in name.iter().enumerate() {
             next.fill(false);
             for (i, token) in self.tokens.iter().enumerate() {
                 if !live[i] {
@@ -199,6 +203,9 @@ impl ComponentGlob {
                     Token::Class(class) if class.matches(unit) => next[i + 1] = true,
                     Token::Lit(_) | Token::Class(_) => {}
                 }
+                if matches!(token, Token::One | Token::Class(_)) {
+                    reach_spanning(token, name, at, i + 1, &mut ahead);
+                }
             }
             // A combining mark belongs to the character before it: after `?`
             // or a class the mark may be absorbed too, so a decomposed `é`
@@ -210,8 +217,14 @@ impl ComponentGlob {
                     }
                 }
             }
+            ahead.retain(|&(last, position)| {
+                if last == at {
+                    next[position] = true;
+                }
+                last != at
+            });
             self.close(&mut next);
-            if !next.contains(&true) {
+            if !next.contains(&true) && ahead.is_empty() {
                 return false;
             }
             std::mem::swap(&mut live, &mut next);
@@ -229,6 +242,54 @@ impl ComponentGlob {
     }
 }
 
+/// Queues where the `?` or class `token`, live at unit `at`, lands by
+/// consuming one character whose fold spans several base characters, as
+/// macOS and Linux fold `ß` to `ss` and a Hangul syllable to its jamo: past
+/// each run of two or three base characters from `at` (the combining marks
+/// between them skipped) that is the fold of a character `token` admits.
+fn reach_spanning(
+    token: &Token,
+    name: &[u32],
+    at: usize,
+    position: usize,
+    ahead: &mut Vec<(usize, usize)>,
+) {
+    let mut starters = ['\0'; MAX_FOLD_STARTERS];
+    let mut count = 0;
+    for (last, &unit) in name.iter().enumerate().skip(at) {
+        // An invalid byte is no character's fold
+        let Some(c) = char::from_u32(unit) else {
+            return;
+        };
+        if !is_starter(c) {
+            if count == 0 {
+                // A fold starts with a base character
+                return;
+            }
+            continue;
+        }
+        starters[count] = c;
+        count += 1;
+        if count > 1 && token.admits_any(unfold_starters(&starters[..count])) {
+            ahead.push((last, position));
+        }
+        if count == MAX_FOLD_STARTERS {
+            return;
+        }
+    }
+}
+
+impl Token {
+    /// Whether this `?` or class admits one of `chars`.
+    fn admits_any(&self, chars: &[char]) -> bool {
+        match self {
+            Token::One => !chars.is_empty(),
+            Token::Class(class) => chars.iter().any(|&c| class.admits(c)),
+            Token::Lit(_) | Token::Any => false,
+        }
+    }
+}
+
 impl Class {
     /// Whether the folded unit `unit` may stand for a character this class
     /// admits. Over-matches where folding is ambiguous: some character that
@@ -238,7 +299,11 @@ impl Class {
             // An invalid byte is no character the pattern can name
             return self.negated;
         };
-        unfold(folded).any(|c| self.contains(c) != self.negated)
+        unfold(folded).any(|c| self.admits(c))
+    }
+
+    fn admits(&self, c: char) -> bool {
+        self.contains(c) != self.negated
     }
 
     fn contains(&self, c: char) -> bool {
@@ -571,6 +636,21 @@ mod tests {
             "several marks"
         );
         assert!(!covers("caf?.txt", "cafee.txt"), "still one base character");
+    }
+
+    #[test]
+    fn a_character_whose_fold_spans_several_is_one_character() {
+        // macOS and Linux fold `ß` to `ss` and `가` to two jamo; Windows
+        // folds neither, and both hold there trivially
+        assert!(covers("secret?.txt", "secret\u{df}.txt"));
+        assert!(covers("key[!a].pem", "key\u{df}.pem"));
+        assert!(covers("note[\u{df}].md", "note\u{df}.md"));
+        assert!(covers("[\u{ac00}-\u{d7a3}].txt", "\u{ac00}.txt"));
+        assert!(covers("??.doc", "\u{be44}\u{bc00}.doc"));
+        assert!(
+            !covers("[\u{df}].txt", "s.txt"),
+            "a class matches a whole fold, not its first character"
+        );
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
