@@ -337,12 +337,18 @@ impl App {
     ///
     /// An origin is `scheme://host[:port]`, as `location.origin` reports it
     /// (`app://app` for the bundled frontend, or the development server's origin);
-    /// parse one with [`Origin::parse`]. Calls for the same name accumulate.
+    /// parse one with [`Origin::parse`]. Calls for the same name accumulate and
+    /// the list replaces the default below, name the application's own origin
+    /// too if its pages call `name`.
     ///
-    /// Until the first `permit`, `permit_all` or `deny_unlisted`, everything is
-    /// reachable from every origin, exactly as before. A refused invocation is
-    /// rejected with [`ErrorCode::Acl`](crate::ErrorCode::Acl); a refused stream
-    /// open fails the stream.
+    /// A name without a rule is reachable from the application's own origin
+    /// only: `app://app` for [`App::new`], the start URL's origin for
+    /// [`App::url`]. A page of any other origin, whether it arrived in a popup,
+    /// an iframe or a window navigated away, reaches only the names a rule gives
+    /// it. An opaque document (`about:blank`, `data:`, a sandboxed frame)
+    /// reaches only names made public with [`App::permit_all`]. A refused
+    /// invocation is rejected with [`ErrorCode::Acl`](crate::ErrorCode::Acl); a
+    /// refused stream open fails the stream.
     ///
     /// Naming a capability command such as `fs.read_file` (granted through
     /// [`Filesystem`](crate::capability::Filesystem)) or the opaque origin is
@@ -358,7 +364,8 @@ impl App {
         self
     }
 
-    /// Makes the command or stream `name` callable from any origin.
+    /// Makes the command or stream `name` callable from any origin, the
+    /// opaque origin included.
     ///
     /// Naming a capability command is a configuration error, reported by
     /// [`App::build`].
@@ -370,7 +377,9 @@ impl App {
     }
 
     /// Restricts subscriptions to the event `name` to the given origins.
-    /// Calls for the same event accumulate.
+    /// Calls for the same event accumulate. Without a rule, an event is
+    /// subscribable from the application's own origin only, as a command is
+    /// (see [`App::permit`]).
     ///
     /// A refused subscription is removed and reported to the `onError` of
     /// `kurogane.on(name, callback, onError)` with code `-4`. Naming the
@@ -386,14 +395,16 @@ impl App {
         self
     }
 
-    /// Makes the event `name` subscribable from any origin.
+    /// Makes the event `name` subscribable from any origin, the opaque origin
+    /// included.
     pub fn permit_event_all(mut self, name: impl Into<String>) -> Self {
         self.acl.allow_event_all(name);
         self
     }
 
-    /// Switches to deny-by-default. Only commands, streams and events with a
-    /// configured rule ([`App::permit`], [`App::permit_all`],
+    /// Switches to deny-by-default: a name without a rule is refused to every
+    /// origin, the application's own included. Only commands, streams and
+    /// events with a configured rule ([`App::permit`], [`App::permit_all`],
     /// [`App::permit_event`], [`App::permit_event_all`]) stay reachable, only
     /// from their permitted origins. Capability commands stay authorized by
     /// their grants.
@@ -820,7 +831,7 @@ impl App {
             sync_handlers,
             async_handlers,
             stream_handlers,
-            acl,
+            mut acl,
             profile_id,
             sandbox_mode,
             persist_session_cookies,
@@ -838,6 +849,7 @@ impl App {
         let rpc = RequestResponseSubsystem::new(sync_handlers, async_handlers);
         let event = EventSubsystem::new();
         let stream = StreamSubsystem::new(stream_handlers);
+        acl.set_app_origin(resolver::app_origin(&source));
         let router = IpcRouter::new(rpc, event, stream, acl);
 
         let ResolvedFrontend {

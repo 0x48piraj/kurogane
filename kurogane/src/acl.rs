@@ -7,8 +7,10 @@
 //! - Policy is data: name to rule, for commands (commands and streams share a
 //!   namespace) and, separately, for events. Unlisted names follow one
 //!   default.
-//! - With no rules and the default untouched, everything is allowed, exactly
-//!   as before the ACL existed.
+//! - By default an unlisted name is reachable only from the application's own
+//!   origin, the origin of its start page. A page of any other origin, in a
+//!   popup, an iframe or a window navigated away, reaches only what a rule
+//!   names; the opaque origin reaches no unlisted name.
 //! - Rules match [`Origin`] values (`scheme://host[:port]`); the opaque origin can
 //!   never be listed.
 //! - Commands owned by a native capability (the `fs.*` family) are
@@ -152,27 +154,40 @@ enum AclRule {
 }
 
 /// Behavior for names without a rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DefaultPolicy {
-    /// Reachable from any origin (the behavior before the ACL existed).
-    #[default]
-    AllowAll,
+    /// Reachable from the application's own origin only.
+    AppOrigin,
     /// Reachable from no origin.
     Deny,
 }
 
 /// Immutable permission table for commands, streams and events, built
 /// before startup.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct CommandAcl {
     commands: HashMap<String, AclRule>,
     events: HashMap<String, AclRule>,
     default: DefaultPolicy,
+    /// The origin of the application's start page. Opaque until
+    /// [`CommandAcl::set_app_origin`] and an opaque one admits nothing.
+    app_origin: Origin,
 }
 
 impl CommandAcl {
     pub(crate) fn new() -> Self {
-        Self::default()
+        Self {
+            commands: HashMap::new(),
+            events: HashMap::new(),
+            default: DefaultPolicy::AppOrigin,
+            app_origin: Origin::OPAQUE,
+        }
+    }
+
+    /// Names the application's own origin; the only one an unlisted name
+    /// admits by default.
+    pub(crate) fn set_app_origin(&mut self, origin: Origin) {
+        self.app_origin = origin;
     }
 
     /// Allows `origins` to invoke the command or open the stream `name`,
@@ -258,7 +273,11 @@ impl CommandAcl {
         match rule {
             Some(AclRule::Allow(origins)) => origins.contains(origin),
             Some(AclRule::AllowAll | AclRule::Capability) => true,
-            None => self.default == DefaultPolicy::AllowAll,
+            // Two opaque origins compare equal and neither is this application
+            None => match self.default {
+                DefaultPolicy::AppOrigin => !origin.is_opaque() && *origin == self.app_origin,
+                DefaultPolicy::Deny => false,
+            },
         }
     }
 }
@@ -344,11 +363,31 @@ mod tests {
     }
 
     #[test]
-    fn no_policy_allows_everything() {
-        let acl = CommandAcl::new();
-        assert!(acl.allows("anything", &origin("https://evil.example")));
-        assert!(acl.allows("anything", &Origin::OPAQUE));
-        assert!(acl.allows_event("anything", &Origin::OPAQUE));
+    fn an_unlisted_name_admits_only_the_app_origin() {
+        let app = origin("app://app");
+        let mut acl = CommandAcl::new();
+        assert!(!acl.allows("anything", &app), "no app origin named yet");
+
+        acl.set_app_origin(app.clone());
+        assert!(acl.allows("anything", &app));
+        assert!(acl.allows_event("anything", &app));
+        for other in [
+            origin("https://evil.example"),
+            origin("app://other"),
+            origin("rt://app"),
+            Origin::OPAQUE,
+        ] {
+            assert!(!acl.allows("anything", &other), "{other}");
+            assert!(!acl.allows_event("anything", &other), "{other}");
+        }
+    }
+
+    #[test]
+    fn an_opaque_app_origin_admits_nothing() {
+        let mut acl = CommandAcl::new();
+        acl.set_app_origin(Origin::from_url("file:///frontend/index.html"));
+        assert!(!acl.allows("anything", &Origin::OPAQUE));
+        assert!(!acl.allows_event("anything", &Origin::OPAQUE));
     }
 
     #[test]
@@ -360,15 +399,16 @@ mod tests {
         assert!(acl.allows("cmd", &origin("http://localhost:5173")));
         assert!(!acl.allows("cmd", &origin("https://evil.example")));
         assert!(!acl.allows("cmd", &Origin::OPAQUE));
-        assert!(
-            acl.allows("other", &origin("https://evil.example")),
-            "default still allows"
-        );
+
+        acl.set_app_origin(origin("app://app"));
+        assert!(acl.allows("other", &origin("app://app")), "unlisted");
+        assert!(!acl.allows("other", &origin("https://evil.example")));
     }
 
     #[test]
     fn deny_unlisted_blocks_unknown_names() {
         let mut acl = CommandAcl::new();
+        acl.set_app_origin(origin("app://app"));
         acl.allow_all("ping").unwrap();
         acl.allow("cmd", [origin("app://app")]).unwrap();
         acl.deny_unlisted();
@@ -386,18 +426,23 @@ mod tests {
         let app = origin("app://app");
         let evil = origin("https://evil.example");
         let mut acl = CommandAcl::new();
-        acl.allow_event("tick", [app.clone()]).unwrap();
-        assert!(acl.allows_event("tick", &app));
-        assert!(!acl.allows_event("tick", &evil));
-        assert!(acl.allows_event("other", &evil), "default still allows");
+        acl.set_app_origin(app.clone());
+        acl.allow_event("tick", [evil.clone()]).unwrap();
+        assert!(acl.allows_event("tick", &evil));
         assert!(
-            acl.allows("tick", &evil),
+            !acl.allows_event("tick", &app),
+            "the rule replaces the default"
+        );
+        assert!(!acl.allows_event("other", &evil), "unlisted");
+        assert!(
+            acl.allows("tick", &app) && !acl.allows("tick", &evil),
             "an event rule is not a command rule"
         );
 
         acl.deny_unlisted();
         acl.allow_event_all("public");
         assert!(acl.allows_event("public", &evil));
+        assert!(acl.allows_event("public", &Origin::OPAQUE));
         assert!(!acl.allows_event("other", &app));
         assert!(!acl.allows("tick", &app));
     }
@@ -431,8 +476,9 @@ mod tests {
     #[test]
     fn the_opaque_origin_cannot_be_permitted() {
         let mut acl = CommandAcl::new();
+        acl.set_app_origin(origin("app://app"));
         assert_eq!(
-            acl.allow("cmd", [origin("app://app"), Origin::OPAQUE]),
+            acl.allow("cmd", [origin("https://x.example"), Origin::OPAQUE]),
             Err(ConfigError::OpaqueOrigin("cmd".to_owned()))
         );
         assert_eq!(
@@ -440,8 +486,9 @@ mod tests {
             Err(ConfigError::OpaqueOrigin("tick".to_owned()))
         );
         assert!(
-            acl.allows("cmd", &origin("https://evil.example")),
-            "nothing was recorded"
+            acl.allows("cmd", &origin("app://app"))
+                && !acl.allows("cmd", &origin("https://x.example")),
+            "nothing was recorded: cmd is still unlisted"
         );
     }
 }
