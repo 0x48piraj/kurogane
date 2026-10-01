@@ -38,31 +38,37 @@ fn throw(exception: Option<&mut CefString>, message: &str) -> i32 {
     1
 }
 
-// Memory pinning helper
-#[inline(always)]
-fn with_array_buffer<R>(ptr: *const u8, len: usize, f: impl FnOnce(&[u8]) -> R) -> R {
-    // SAFETY:
-    //
-    // ptr originates from V8 ArrayBuffer backing store.
-    //
-    // This is safe because:
-    //
-    // 1. V8 guarantees the backing store is valid for the duration of
-    //    this callback (inside a V8 handler).
-    //
-    // 2. The slice is only exposed through the closure f, preventing it
-    //    from escaping this function (imposed by Rust lifetimes).
-    //
-    // 3. All uses must be synchronous. The data MUST NOT:
-    //    - be stored
-    //    - be sent across threads
-    //    - outlive this function
-    //
-    // After this function returns, V8 may move or free ArrayBuffer memory.
-    // Any use beyond this scope is undefined behavior.
-    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
-
-    f(slice)
+/// A message whose payload is `header`, then `buffer`'s bytes: `None` when
+/// a non-empty buffer has no memory or the message cannot be built.
+///
+/// The only reader of an ArrayBuffer's memory. The bytes are borrowed just
+/// to build the message, which copies them, so no JavaScript, which could
+/// detach or resize the buffer, runs while they are borrowed.
+fn buffer_message(
+    name: &str,
+    envelope: &Envelope,
+    header: &[u8],
+    buffer: &V8Value,
+) -> Option<ProcessMessage> {
+    let len = buffer.array_buffer_byte_length();
+    let bytes: &[u8] = if len == 0 {
+        &[]
+    } else {
+        let data = buffer.array_buffer_data() as *const u8;
+        if data.is_null() {
+            return None;
+        }
+        // SAFETY: V8 keeps an ArrayBuffer's `len` bytes at `data` until
+        // JavaScript detaches or resizes it, and `buffer` keeps it alive. No
+        // JavaScript runs before the slice's last use: building the message
+        // only copies it
+        unsafe { std::slice::from_raw_parts(data, len) }
+    };
+    if header.is_empty() {
+        build_message(name, envelope, bytes)
+    } else {
+        build_message_parts(name, envelope, &[header, bytes])
+    }
 }
 
 /// Encode [cmd_len:u16 LE][cmd_bytes] into a Vec.
@@ -434,36 +440,21 @@ wrap_v8_handler! {
             debug!("[IPC Renderer] JS invoke: '{}' (id={}, binary={})", cmd, id, binary.is_some());
 
             if let Some(buffer) = binary {
-                let ptr = buffer.array_buffer_data();
-                let len = buffer.array_buffer_byte_length();
+                let envelope = Envelope {
+                    version: ENVELOPE_VERSION,
+                    subsystem: SUB_RPC,
+                    opcode: RPC_INVOKE,
+                    flags,
+                    correlation_id: id as u32,
+                    payload_kind: PAYLOAD_BINARY,
+                };
 
-                if ptr.is_null() {
+                if let Some(mut msg) = buffer_message("kurogane_rpc", &envelope, &cmd_header, buffer) {
+                    frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+                } else {
                     state().forget(id);
-                    return throw(exception, "ArrayBuffer has null data");
-                }
-
-                let mut build_failed = false;
-                with_array_buffer(ptr as *const u8, len, |data| {
-                    let envelope = Envelope {
-                        version: ENVELOPE_VERSION,
-                        subsystem: SUB_RPC,
-                        opcode: RPC_INVOKE,
-                        flags,
-                        correlation_id: id as u32,
-                        payload_kind: PAYLOAD_BINARY,
-                    };
-
-                    if let Some(mut msg) = build_message_parts("kurogane_rpc", &envelope, &[&cmd_header, data]) {
-                        frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
-                    } else {
-                        build_failed = true;
-                        state().forget(id);
-                        let reject_msg = rejection(ErrorCode::Buffer.wire(), "Failed to build IPC message");
-                        promise.reject_promise(Some(&reject_msg));
-                    }
-                });
-
-                if build_failed {
+                    let reject_msg = rejection(ErrorCode::Buffer.wire(), "Failed to build IPC message");
+                    promise.reject_promise(Some(&reject_msg));
                     if let Some(ret) = retval { *ret = Some(promise_for_retval); }
                     return 1;
                 }
@@ -906,13 +897,6 @@ wrap_v8_handler! {
                 }
             };
 
-            let ptr = buffer.array_buffer_data();
-            let len = buffer.array_buffer_byte_length();
-
-            if ptr.is_null() {
-                return throw(exception, "writeStream: ArrayBuffer has null data");
-            }
-
             let context = match v8_context_get_current_context() {
                 Some(ctx) => ctx,
                 None => {
@@ -933,20 +917,18 @@ wrap_v8_handler! {
                 return 1;
             }
 
-            with_array_buffer(ptr as *const u8, len, |data| {
-                let envelope = Envelope {
-                    version: ENVELOPE_VERSION,
-                    subsystem: SUB_STREAM,
-                    opcode: STREAM_DATA,
-                    flags,
-                    correlation_id: stream_id as u32,
-                    payload_kind: PAYLOAD_BINARY,
-                };
+            let envelope = Envelope {
+                version: ENVELOPE_VERSION,
+                subsystem: SUB_STREAM,
+                opcode: STREAM_DATA,
+                flags,
+                correlation_id: stream_id as u32,
+                payload_kind: PAYLOAD_BINARY,
+            };
 
-                if let Some(mut msg) = build_message("kurogane_stream", &envelope, data) {
-                    frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
-                }
-            });
+            if let Some(mut msg) = buffer_message("kurogane_stream", &envelope, &[], buffer) {
+                frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+            }
 
             if let Some(ret) = retval {
                 *ret = v8_value_create_uint(1);
