@@ -17,7 +17,7 @@ pub use cef::{
     materialize_cef_runtime, read_provenance, resolve_cef_for_bundle, validate_cef_runtime,
     CefError, CefProvenance, CefSource, ResolvedCef,
 };
-pub use discover::{DetectError, DetectedCef, DiscoveryMode, detect_cef_root_with_version};
+pub use discover::{DetectError, DetectedCef, DiscoveryMode, cef_override, detect_cef_root};
 pub use distribution::{
     AppMetadata, DistributionError, Executable, ResolvedDistribution, ResolvedResource,
 };

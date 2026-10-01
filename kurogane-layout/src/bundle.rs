@@ -49,6 +49,11 @@ pub enum BundleError {
     #[error("content/index.html missing at {0}")]
     MissingContentIndex(PathBuf),
 
+    /// Without it the application would not know it is a bundle, and would
+    /// look for Chromium outside it.
+    #[error("bundle marker missing at {0}")]
+    MissingMarker(PathBuf),
+
     #[error(transparent)]
     Cef(#[from] crate::cef::CefError),
 
@@ -116,6 +121,13 @@ impl BundleLayout {
 
     pub fn launcher_path(&self, exe_name: &OsStr) -> PathBuf {
         self.root.join(exe_name)
+    }
+
+    /// Path of the marker that tells the application it runs from this
+    /// bundle, beside the executable.
+    pub fn marker_path(&self, exe_name: &OsStr) -> PathBuf {
+        self.executable_path(exe_name)
+            .with_file_name(crate::layout::BUNDLE_MARKER)
     }
 
     #[cfg(target_os = "windows")]
@@ -204,6 +216,9 @@ exec "$ROOT/{runtime_target}" "$@"
         #[cfg(target_os = "linux")]
         self.write_launcher(exe_name)?;
 
+        // The application runs the runtime installed below and no other
+        fs::write(self.marker_path(exe_name), b"")?;
+
         self.install_cef(&dist.cef_runtime)?;
 
         if let Some(frontend) = &dist.frontend {
@@ -233,6 +248,12 @@ exec "$ROOT/{runtime_target}" "$@"
 
         if !exe.exists() {
             return Err(BundleError::MissingExecutable(exe));
+        }
+
+        let marker = self.marker_path(exe_name);
+
+        if !marker.is_file() {
+            return Err(BundleError::MissingMarker(marker));
         }
 
         if dist.executable.library().is_some() {
@@ -314,6 +335,37 @@ mod tests {
             cef_dir.join("libcef.dll").exists(),
             "libcef.dll should be present"
         );
+    }
+
+    #[test]
+    fn a_bundle_is_marked_to_run_the_runtime_it_installed() {
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let layout = BundleLayout::new(dir.path().join("out"));
+
+        layout.materialize(&dist).unwrap();
+
+        let exe = layout.executable_path(test_exe_name());
+        assert_eq!(
+            crate::layout::bundle_cef_root_for(&exe),
+            Some(layout.cef_dir())
+        );
+    }
+
+    #[test]
+    fn a_bundle_without_its_marker_fails_verification() {
+        let dir = crate::test_fixtures::tmp_dir();
+        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let layout = BundleLayout::new(dir.path().join("out"));
+        layout.materialize(&dist).unwrap();
+
+        let marker = layout.marker_path(test_exe_name());
+        fs::remove_file(&marker).unwrap();
+
+        assert!(matches!(
+            layout.verify(&dist),
+            Err(BundleError::MissingMarker(path)) if path == marker
+        ));
     }
 
     #[test]

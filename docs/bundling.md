@@ -93,6 +93,8 @@ The bundler resolves the CEF distribution with an override-first policy:
 
 Chromium resolution prefers `CEF_PATH` when it is set, but an invalid override is an error rather than a fallback. Otherwise Kurogane uses the managed installation.
 
+This decides only what is copied into the bundle: the bundled application then runs that copy and nothing else (see [Windows directory](#windows-directory---format-dir)).
+
 > [!IMPORTANT]
 > Release bundles require a verifiable Chromium distribution. A local CEF checkout without `archive.json` will not be packaged.
 
@@ -237,6 +239,7 @@ dist/
 ├── myapp                      # launcher script
 ├── runtime/
 │   ├── myapp                  # actual binary (RUNPATH $ORIGIN/cef)
+│   ├── kurogane-bundle        # marker: run only the runtime below
 │   └── cef/                   # flat Chromium runtime
 │       ├── libcef.so
 │       ├── locales/
@@ -295,6 +298,7 @@ Kurogane sets `no_sandbox = 1` on Linux, so `chrome-sandbox` ships as an inert f
 ```
 dist/
 ├── myapp.exe                  # binary (beside libcef.dll)
+├── kurogane-bundle            # marker: run only the runtime here
 ├── libcef.dll
 ├── chrome_elf.dll
 ├── locales/
@@ -306,6 +310,8 @@ dist/
 ```
 
 Windows places Chromium beside the executable because the Windows loader searches the executable directory for DLL dependencies automatically.
+
+The empty `kurogane-bundle` file marks the directory as a bundle, on every platform but macOS, where the `.app` itself does: a bundled application runs only the Chromium runtime inside its bundle, never `CEF_PATH` or the managed installation, and reports the bundle incomplete when that runtime is gone. Keep it beside the executable.
 
 > [!IMPORTANT]
 > **Keep the Chromium runtime dependencies together.** On Windows, Chromium's runtime DLLs must be discoverable by the Windows loader, typically by placing them alongside the application executable (or on `PATH`).
@@ -332,6 +338,7 @@ squashfs-root/
     │   ├── myapp                    # launcher script
     │   ├── runtime/
     │   │   ├── myapp                # binary (RUNPATH $ORIGIN/cef)
+    │   │   ├── kurogane-bundle      # marker
     │   │   └── cef/                 # Chromium runtime
     │   ├── content/                 # frontend (if present)
     │   └── <extra resources>

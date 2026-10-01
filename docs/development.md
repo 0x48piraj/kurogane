@@ -87,7 +87,7 @@ Chromium is supplied as a managed runtime, separate from your crate and gives yo
 - `kurogane doctor` inspects your setup: expected Chromium version, installed versions, frontend source/distribution, and container/CI detection.
 - `kurogane list` shows available profiles and versions; `kurogane info` prints your project's configured manifest.
 
-Chromium resolution prefers a `CEF_PATH` override when set, falling back to the managed installation. See [Bundling](bundling.md#chromium-resolution) for the resolution and provenance rules.
+`kurogane dev`, `run` and `build` prefer a `CEF_PATH` override when set, falling back to the managed installation, and start your application with `CEF_PATH` pointing at it. A bundled application uses only the runtime inside its bundle, never `CEF_PATH`. See [Bundling](bundling.md#chromium-resolution) for the bundler's resolution and provenance rules.
 
 ## Advanced workflows
 

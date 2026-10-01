@@ -4,7 +4,7 @@ use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::sync::{OnceLock, Weak};
 
-use kurogane_layout::detect_cef_root_with_version;
+use kurogane_layout::detect_cef_root;
 use objc2::{
     ClassType, MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
@@ -91,14 +91,12 @@ fn promote_unbundled(app: &NSApplication) {
 fn load_framework() -> Result<(), RuntimeError> {
     // The library loader assumes an app-bundle layout
     // (<exe>/../Frameworks/...), which is unavailable in non-bundled dev runs
-    let detected = detect_cef_root_with_version(None).map_err(crate::runtime::cef_not_found)?;
+    let detected = detect_cef_root().map_err(crate::runtime::cef_not_found)?;
 
     let path = detected.root.join(cef::sys::FRAMEWORK_PATH);
-    let invalid =
-        |source: Box<dyn std::error::Error + Send + Sync>| RuntimeError::InvalidCefInstallation {
-            path: path.clone(),
-            source,
-        };
+    let invalid = |source: Box<dyn std::error::Error + Send + Sync>| {
+        crate::runtime::unusable_cef(detected.mode, path.clone(), source)
+    };
     let canonical = path.canonicalize().map_err(|e| invalid(Box::new(e)))?;
     let framework =
         CString::new(canonical.as_os_str().as_bytes()).map_err(|e| invalid(Box::new(e)))?;

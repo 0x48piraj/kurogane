@@ -28,6 +28,12 @@ pub enum RuntimeError {
         path: PathBuf,
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+    /// The application runs from a bundle whose Chromium runtime at `path`
+    /// is missing or incomplete; `source` says why. A bundle runs no other.
+    IncompleteBundle {
+        path: PathBuf,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 
     /// The path to the running executable could not be determined.
     ExecutableUnavailable(std::io::Error),
@@ -137,10 +143,11 @@ impl Display for RuntimeError {
             RuntimeError::CefNotInstalled => write!(
                 f,
                 concat!(
-                    "Chromium is not installed.\n\n",
-                    "Install it with:\n\n",
-                    "  kurogane install\n\n",
-                    "Then run your application again."
+                    "No Chromium runtime was found: none is bundled beside the ",
+                    "executable, and CEF_PATH names none.\n\n",
+                    "Start the application with:\n\n",
+                    "  kurogane run\n\n",
+                    "which installs Chromium when it is missing and points CEF_PATH at it."
                 )
             ),
 
@@ -149,8 +156,19 @@ impl Display for RuntimeError {
                 concat!(
                     "Chromium installation is invalid:\n\n",
                     "  {}\n\n",
-                    "Try reinstalling Chromium:\n\n",
-                    "  kurogane install"
+                    "In development, start the application with:\n\n",
+                    "  kurogane run\n\n",
+                    "which installs Chromium when it is missing and points CEF_PATH at it."
+                ),
+                path.display()
+            ),
+
+            RuntimeError::IncompleteBundle { path, .. } => write!(
+                f,
+                concat!(
+                    "This application's Chromium runtime is missing or incomplete:\n\n",
+                    "  {}\n\n",
+                    "Reinstall the application."
                 ),
                 path.display()
             ),
@@ -241,7 +259,8 @@ impl std::error::Error for RuntimeError {
             RuntimeError::ExecutableUnavailable(source) => Some(source),
 
             RuntimeError::InvalidFrontendUrl { source, .. }
-            | RuntimeError::InvalidCefInstallation { source, .. } => Some(&**source),
+            | RuntimeError::InvalidCefInstallation { source, .. }
+            | RuntimeError::IncompleteBundle { source, .. } => Some(&**source),
 
             RuntimeError::InvalidFilesystem(error) => Some(error),
 
@@ -332,6 +351,10 @@ mod tests {
                 source: denied(),
             },
             RuntimeError::InvalidCefInstallation {
+                path: "cef".into(),
+                source: Box::new(denied()),
+            },
+            RuntimeError::IncompleteBundle {
                 path: "cef".into(),
                 source: Box::new(denied()),
             },

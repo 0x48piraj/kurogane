@@ -235,6 +235,38 @@ pub fn bundled_helper_path_for(exe: &Path) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+/// The file `kurogane bundle` leaves beside a bundle's executable. Such an
+/// application runs the Chromium runtime inside its bundle and no other.
+pub(crate) const BUNDLE_MARKER: &str = "kurogane-bundle";
+
+/// The Chromium runtime of the bundle `exe` belongs to, whether or not it is
+/// still in place, or `None` when `exe` belongs to no bundle.
+///
+/// A bundle is a directory `kurogane bundle` made, which it marks with
+/// [`BUNDLE_MARKER`] beside the executable, or a macOS application bundle.
+pub(crate) fn bundle_cef_root_for(exe: &Path) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(contents) = app_bundle_contents(exe) {
+            return Some(contents.join("Frameworks"));
+        }
+    }
+
+    let dir = exe.parent()?;
+
+    if !dir.join(BUNDLE_MARKER).is_file() {
+        return None;
+    }
+
+    // Linux keeps the runtime in `cef/` beside the executable; Windows and
+    // macOS directory bundles keep it beside the executable itself
+    if cfg!(target_os = "linux") {
+        Some(dir.join("cef"))
+    } else {
+        Some(dir.to_path_buf())
+    }
+}
+
 pub fn bundled_cef_root() -> Result<Option<PathBuf>, std::io::Error> {
     let exe = std::env::current_exe()?;
 
@@ -429,6 +461,41 @@ mod tests {
         assert_eq!(
             bundled_resource_root_for(Path::new("/proj/target/release/myapp")),
             None
+        );
+    }
+
+    #[test]
+    fn the_marker_beside_an_executable_names_its_bundle_s_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(BUNDLE_MARKER), b"").unwrap();
+
+        // The runtime itself may be gone: the marker alone decides
+        let expected = if cfg!(target_os = "linux") {
+            dir.path().join("cef")
+        } else {
+            dir.path().to_path_buf()
+        };
+        assert_eq!(
+            bundle_cef_root_for(&dir.path().join("myapp")),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn a_runtime_beside_an_unmarked_executable_is_no_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("libcef.dll"), b"").unwrap();
+        std::fs::create_dir(dir.path().join("cef")).unwrap();
+
+        assert_eq!(bundle_cef_root_for(&dir.path().join("myapp")), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_macos_application_bundle_needs_no_marker() {
+        assert_eq!(
+            bundle_cef_root_for(Path::new("/Apps/MyApp.app/Contents/MacOS/myapp")),
+            Some(PathBuf::from("/Apps/MyApp.app/Contents/Frameworks"))
         );
     }
 }

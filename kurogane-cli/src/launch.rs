@@ -15,10 +15,23 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
-use kurogane_layout::{cef_install_dir, validate_cef_runtime};
+use kurogane_layout::{cef_install_dir, cef_override, validate_cef_runtime};
 use crate::config::PackagingConfig;
 
 use crate::tui;
+
+/// Where `kurogane dev`, `run` and `build` look for CEF, and where that
+/// comes from: the distribution `CEF_PATH` names, else the managed
+/// installation.
+pub(crate) fn dev_cef_root() -> (PathBuf, &'static str) {
+    match cef_override() {
+        Some(root) => (root, "CEF_PATH"),
+        None => (
+            cef_install_dir(env!("KUROGANE_CEF_VERSION")),
+            "managed install",
+        ),
+    }
+}
 
 /// Resolve the CEF runtime, installing it if necessary.
 ///
@@ -27,9 +40,7 @@ use crate::tui;
 pub(crate) fn ensure_cef_runtime() -> Result<PathBuf> {
     let version = env!("KUROGANE_CEF_VERSION");
 
-    let cef = std::env::var_os("CEF_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| cef_install_dir(version));
+    let (cef, _) = dev_cef_root();
 
     tui::step("Checking Chromium engine");
 

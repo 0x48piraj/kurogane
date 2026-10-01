@@ -1,28 +1,39 @@
 //! Runtime CEF discovery.
 //!
-//! This module resolves the CEF runtime used by a running application,
-//! following the configured precedence between environment overrides,
-//! bundled runtimes and managed installations.
+//! Each command has its own rule for where CEF is, and they share one
+//! reader of `CEF_PATH`, [`cef_override`]:
+//!
+//! - a running application ([`detect_cef_root`]): a bundle's own runtime and
+//!   no other; outside a bundle, a runtime beside the executable, else
+//!   `CEF_PATH`;
+//! - `kurogane dev`, `run` and `build`: `CEF_PATH`, else the managed
+//!   installation, which they then pass on as `CEF_PATH`;
+//! - `kurogane bundle` ([`crate::resolve_cef_for_bundle`]): `CEF_PATH`, else
+//!   the managed installation, each with verified provenance, copied into
+//!   the bundle.
 
 use std::path::PathBuf;
 use thiserror::Error;
 
-use crate::cef::{CefProvenance, read_provenance};
-use crate::{bundled_cef_root, installed_cef_root};
+use crate::bundled_cef_root;
+use crate::layout::bundle_cef_root_for;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiscoveryMode {
-    EnvironmentOverride,
+    /// The runtime inside the bundle the executable belongs to.
     Bundled,
-    Installed,
+    /// A runtime beside an executable that belongs to no bundle, such as the
+    /// copy cef-dll-sys leaves in Cargo's target directory on Windows.
+    BesideExecutable,
+    EnvironmentOverride,
 }
 
 impl std::fmt::Display for DiscoveryMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::EnvironmentOverride => write!(f, "Environment override"),
             Self::Bundled => write!(f, "Bundled"),
-            Self::Installed => write!(f, "Installed"),
+            Self::BesideExecutable => write!(f, "Beside the executable"),
+            Self::EnvironmentOverride => write!(f, "Environment override"),
         }
     }
 }
@@ -31,8 +42,6 @@ impl std::fmt::Display for DiscoveryMode {
 pub struct DetectedCef {
     pub root: PathBuf,
     pub mode: DiscoveryMode,
-    /// Provenance when available.
-    pub provenance: Option<CefProvenance>,
 }
 
 #[derive(Debug, Error)]
@@ -45,36 +54,55 @@ pub enum DetectError {
     CurrentExe(#[from] std::io::Error),
 }
 
-/// Resolves the active CEF runtime using discovery precedence rules.
-pub fn detect_cef_root_with_version(version: Option<&str>) -> Result<DetectedCef, DetectError> {
-    // Environment override
-    if let Ok(path) = std::env::var("CEF_PATH") {
-        let root = PathBuf::from(path);
+/// The CEF distribution `CEF_PATH` names, when it is set and not empty.
+pub fn cef_override() -> Option<PathBuf> {
+    std::env::var_os("CEF_PATH")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+}
 
-        if root.exists() {
-            return Ok(DetectedCef {
-                root,
-                mode: DiscoveryMode::EnvironmentOverride,
-                provenance: None,
-            });
-        }
-    }
+/// Resolves the CEF runtime of the running application.
+///
+/// A bundle `kurogane bundle` made runs the runtime inside it and no other,
+/// whatever `CEF_PATH` a user has set: it loads the libcef it shipped with,
+/// so resources and locales must come from that same tree. When that runtime
+/// is gone the bundle is reported incomplete rather than run on another.
+///
+/// Any other executable uses a runtime beside it, else the one `CEF_PATH`
+/// names, as `kurogane dev` and `run` set it.
+pub fn detect_cef_root() -> Result<DetectedCef, DetectError> {
+    let exe = std::env::current_exe()?;
+    detect(
+        bundle_cef_root_for(&exe),
+        bundled_cef_root()?,
+        cef_override(),
+    )
+}
 
-    // Bundled runtime (next to executable)
-    if let Some(root) = bundled_cef_root()? {
+fn detect(
+    bundle: Option<PathBuf>,
+    beside: Option<PathBuf>,
+    overridden: Option<PathBuf>,
+) -> Result<DetectedCef, DetectError> {
+    // Not checked for presence: the caller's validation says what is missing
+    if let Some(root) = bundle {
         return Ok(DetectedCef {
             root,
             mode: DiscoveryMode::Bundled,
-            provenance: None,
         });
     }
 
-    // Managed installation
-    if let Some(root) = version.and_then(installed_cef_root) {
+    if let Some(root) = beside {
         return Ok(DetectedCef {
-            provenance: read_provenance(&root).ok().flatten(),
             root,
-            mode: DiscoveryMode::Installed,
+            mode: DiscoveryMode::BesideExecutable,
+        });
+    }
+
+    if let Some(root) = overridden.filter(|root| root.exists()) {
+        return Ok(DetectedCef {
+            root,
+            mode: DiscoveryMode::EnvironmentOverride,
         });
     }
 
@@ -85,75 +113,81 @@ pub fn detect_cef_root_with_version(version: Option<&str>) -> Result<DetectedCef
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::Path;
-    use std::sync::Mutex;
 
     fn tmp() -> tempfile::TempDir {
         crate::test_fixtures::tmp_dir()
     }
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    #[test]
+    fn a_bundle_runs_its_own_runtime_whatever_the_override() {
+        let dir = tmp();
+        let bundled = dir.path().join("bundled");
+        let overridden = dir.path().join("override");
+        fs::create_dir(&bundled).unwrap();
+        fs::create_dir(&overridden).unwrap();
 
-    fn with_cef_path<T>(path: Option<&Path>, f: impl FnOnce() -> T) -> T {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let original = std::env::var_os("CEF_PATH");
+        let detected = detect(Some(bundled.clone()), None, Some(overridden)).unwrap();
 
-        // SAFETY: CEF_PATH access is serialized by ENV_LOCK
-        unsafe {
-            match path {
-                Some(path) => std::env::set_var("CEF_PATH", path),
-                None => std::env::remove_var("CEF_PATH"),
-            }
-        }
-
-        let result = f();
-
-        // SAFETY: CEF_PATH access is serialized by ENV_LOCK
-        unsafe {
-            match original {
-                Some(value) => std::env::set_var("CEF_PATH", value),
-                None => std::env::remove_var("CEF_PATH"),
-            }
-        }
-
-        result
+        assert_eq!(detected.mode, DiscoveryMode::Bundled);
+        assert_eq!(detected.root, bundled);
     }
 
     #[test]
-    fn env_override_takes_precedence() {
+    fn a_bundle_whose_runtime_is_gone_falls_back_to_nothing() {
+        let dir = tmp();
+        let gone = dir.path().join("gone");
+        let beside = dir.path().join("beside");
+        let overridden = dir.path().join("override");
+        fs::create_dir(&beside).unwrap();
+        fs::create_dir(&overridden).unwrap();
+
+        let detected = detect(Some(gone.clone()), Some(beside), Some(overridden)).unwrap();
+
+        assert_eq!(detected.mode, DiscoveryMode::Bundled);
+        assert_eq!(detected.root, gone);
+    }
+
+    #[test]
+    fn a_runtime_beside_the_executable_takes_precedence_over_the_override() {
+        let dir = tmp();
+        let beside = dir.path().join("beside");
+        let overridden = dir.path().join("override");
+        fs::create_dir(&beside).unwrap();
+        fs::create_dir(&overridden).unwrap();
+
+        let detected = detect(None, Some(beside.clone()), Some(overridden)).unwrap();
+
+        assert_eq!(detected.mode, DiscoveryMode::BesideExecutable);
+        assert_eq!(detected.root, beside);
+    }
+
+    #[test]
+    fn the_override_serves_an_application_without_a_bundle() {
         let dir = tmp();
         let cef = dir.path().join("cef");
         fs::create_dir(&cef).unwrap();
 
-        let detected = with_cef_path(Some(&cef), || detect_cef_root_with_version(None).unwrap());
+        let detected = detect(None, None, Some(cef.clone())).unwrap();
 
         assert_eq!(detected.mode, DiscoveryMode::EnvironmentOverride);
         assert_eq!(detected.root, cef);
     }
 
     #[test]
-    fn env_override_with_invalid_path_is_skipped() {
+    fn a_missing_override_is_skipped() {
         let dir = tmp();
         let nonexistent = dir.path().join("nonexistent");
 
-        let result = with_cef_path(Some(&nonexistent), || detect_cef_root_with_version(None));
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn version_none_skips_installed_check() {
-        let result = with_cef_path(None, || detect_cef_root_with_version(None));
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn nonexistent_version_returns_not_found() {
-        let result = with_cef_path(None, || {
-            detect_cef_root_with_version(Some("0.0.0-nonexistent-version"))
-        });
+        let result = detect(None, None, Some(nonexistent));
 
         assert!(matches!(result, Err(DetectError::NotFound)));
+    }
+
+    #[test]
+    fn nothing_bundled_and_no_override_is_not_found() {
+        assert!(matches!(
+            detect(None, None, None),
+            Err(DetectError::NotFound)
+        ));
     }
 }

@@ -22,9 +22,9 @@ pub fn run() -> Result<()> {
 
     tui::info("Environment");
 
-    match std::env::var("CEF_PATH") {
-        Ok(v) => tui::field("CEF_PATH", v),
-        Err(_) => tui::field("CEF_PATH", "not set"),
+    match kurogane_layout::cef_override() {
+        Some(path) => tui::field("CEF_PATH", path.display()),
+        None => tui::field("CEF_PATH", "not set"),
     }
 
     tui::blank();

@@ -11,7 +11,7 @@ use crate::browser_registry::{BrowserId, BrowserMetadata, BrowserType};
 use crate::registry::Registry;
 use crate::window_registry::{WindowId, WindowMetadata};
 use crate::window::{Placement, open_browser_window};
-use kurogane_layout::{DetectError, detect_cef_root_with_version, validate_cef_runtime, profile_dir};
+use kurogane_layout::{DetectError, DiscoveryMode, detect_cef_root, validate_cef_runtime, profile_dir};
 use crate::ipc::IpcRouter;
 use crate::ipc::transport::message::RendererSandbox;
 use crate::spec::{RuntimeMode, RuntimeSpec, SandboxMode};
@@ -37,13 +37,11 @@ fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeEr
         source: e,
     })?;
 
-    let detected = detect_cef_root_with_version(None).map_err(cef_not_found)?;
+    let detected = detect_cef_root().map_err(cef_not_found)?;
 
-    let invalid =
-        |source: Box<dyn std::error::Error + Send + Sync>| RuntimeError::InvalidCefInstallation {
-            path: detected.root.clone(),
-            source,
-        };
+    let invalid = |source: Box<dyn std::error::Error + Send + Sync>| {
+        unusable_cef(detected.mode, detected.root.clone(), source)
+    };
     validate_cef_runtime(&detected.root).map_err(|e| invalid(Box::new(e)))?;
     let cef_root = detected
         .root
@@ -88,6 +86,22 @@ pub(crate) fn cef_not_found(error: DetectError) -> RuntimeError {
         DetectError::CurrentExe(source) => RuntimeError::ExecutableUnavailable(source),
         // Not found and whatever a newer layout crate adds, leaves no runtime
         _ => RuntimeError::CefNotInstalled,
+    }
+}
+
+/// Names a Chromium runtime that cannot be used: a bundle's own leaves the
+/// bundle incomplete, since a bundle runs no other; any other is an invalid
+/// installation.
+pub(crate) fn unusable_cef(
+    mode: DiscoveryMode,
+    path: std::path::PathBuf,
+    source: Box<dyn std::error::Error + Send + Sync>,
+) -> RuntimeError {
+    match mode {
+        DiscoveryMode::Bundled => RuntimeError::IncompleteBundle { path, source },
+        DiscoveryMode::BesideExecutable | DiscoveryMode::EnvironmentOverride => {
+            RuntimeError::InvalidCefInstallation { path, source }
+        }
     }
 }
 

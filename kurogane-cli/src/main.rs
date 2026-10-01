@@ -144,13 +144,13 @@ enum Commands {
     Info,
 }
 
-/// Whether `--ci` was asked for, by flag or by environment.
+/// Whether `--ci` was asked for, by flag or by the `CI` variable's value.
 ///
 /// The flag takes precedence, `CI` enables non-interactive execution
 /// unless its value is empty, `0`, or `false`. `CI` is parsed manually
 /// because Clap's `env` bool parser rejects values such as `CI=1`.
-fn ci_requested(flag: bool) -> bool {
-    flag || std::env::var_os("CI").is_some_and(|value| {
+fn ci_requested(flag: bool, ci: Option<&std::ffi::OsStr>) -> bool {
+    flag || ci.is_some_and(|value| {
         let value = value.to_string_lossy();
         let value = value.trim();
 
@@ -169,7 +169,7 @@ fn main() -> anyhow::Result<()> {
 
     // Keep prompting and consent separate.
     // `--ci` means "do not ask"; `--yes` means "approve"
-    let unattended = is_unattended(ci_requested(cli.ci));
+    let unattended = is_unattended(ci_requested(cli.ci, std::env::var_os("CI").as_deref()));
     let consent = |yes: bool| template::Consent {
         hooks: yes,
         non_interactive: unattended,
@@ -212,49 +212,26 @@ fn main() -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    /// `CI` is read directly, so these cases are asserted against the values
-    /// providers actually set rather than clap's bool grammar.
-    ///
-    /// Access is serialized because environment variables are process-global.
-    fn with_ci<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
-        use std::sync::Mutex;
-        static LOCK: Mutex<()> = Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-        let original = std::env::var_os("CI");
-        // SAFETY: CI access is serialized by LOCK
-        unsafe {
-            match value {
-                Some(v) => std::env::set_var("CI", v),
-                None => std::env::remove_var("CI"),
-            }
-        }
-        let result = f();
-        // SAFETY: CI access is serialized by LOCK
-        unsafe {
-            match original {
-                Some(v) => std::env::set_var("CI", v),
-                None => std::env::remove_var("CI"),
-            }
-        }
-        result
+    /// `CI`'s value as providers set it, rather than clap's bool grammar.
+    fn ci(value: Option<&str>) -> Option<&std::ffi::OsStr> {
+        value.map(std::ffi::OsStr::new)
     }
 
     #[test]
     fn the_flag_alone_is_enough() {
-        assert!(with_ci(None, || ci_requested(true)));
+        assert!(ci_requested(true, ci(None)));
     }
 
     #[test]
     fn unset_ci_stays_interactive() {
-        assert!(!with_ci(None, || ci_requested(false)));
+        assert!(!ci_requested(false, ci(None)));
     }
 
     #[test]
     fn common_truthy_ci_values_are_detected() {
         for value in ["true", "1", "yes", "TRUE"] {
             assert!(
-                with_ci(Some(value), || ci_requested(false)),
+                ci_requested(false, ci(Some(value))),
                 "CI={value} should be non-interactive"
             );
         }
@@ -264,7 +241,7 @@ mod tests {
     fn explicitly_falsey_ci_values_stay_interactive() {
         for value in ["", "0", "false", "FALSE"] {
             assert!(
-                !with_ci(Some(value), || ci_requested(false)),
+                !ci_requested(false, ci(Some(value))),
                 "CI={value} should remain interactive"
             );
         }

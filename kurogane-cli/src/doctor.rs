@@ -7,7 +7,7 @@
 use anyhow::Result;
 use cargo_metadata::MetadataCommand;
 use kurogane_layout::{
-    detect_cef_root_with_version, install_root, installed_cef_root, read_provenance,
+    CefSource, install_root, installed_cef_root, read_provenance, resolve_cef_for_bundle,
     validate_cef_runtime,
 };
 
@@ -155,35 +155,20 @@ pub fn run(json: bool) -> Result<()> {
 
     tui::section("Runtime Resolution");
 
-    match detect_cef_root_with_version(Some(version)) {
-        Ok(detected) => match validate_cef_runtime(&detected.root) {
-            Ok(_) => {
-                tui::success("Active runtime resolved");
+    // What `kurogane dev`, `run` and `build` start the application with
+    let (dev, source) = crate::launch::dev_cef_root();
+    match validate_cef_runtime(&dev) {
+        Ok(_) => {
+            tui::success("dev, run and build use");
+            tui::field("path", tui::format_path(&dev));
+            tui::field("source", source);
+        }
 
-                tui::field("path", tui::format_path(&detected.root));
-
-                tui::field("mode", detected.mode.to_string());
-
-                if let Some(p) = &detected.provenance {
-                    tui::field("provenance", p.artifact.clone());
-                } else {
-                    tui::warn("Provenance unknown (no archive.json)");
-                }
-            }
-
-            Err(e) => {
-                tui::error("Resolved runtime invalid");
-
-                tui::field("reason", e);
-
-                fail += 1;
-            }
-        },
-
-        Err(_) => {
-            tui::warn("No usable Chromium runtime found");
-
-            tui::info("Applications may fail to launch outside managed environments");
+        Err(e) => {
+            tui::warn("dev, run and build find no usable runtime; they install one");
+            tui::field("path", tui::format_path(&dev));
+            tui::field("source", source);
+            tui::field("reason", e);
 
             warn += 1;
         }
@@ -191,18 +176,35 @@ pub fn run(json: bool) -> Result<()> {
 
     tui::blank();
 
-    // Check CEF_PATH env
-    match std::env::var("CEF_PATH") {
-        Ok(v) => {
-            tui::success("Environment override");
-            tui::field("CEF_PATH", v);
+    // What `kurogane bundle` packages, with verified provenance
+    match resolve_cef_for_bundle(version) {
+        Ok(resolved) => {
+            tui::success("bundle packages");
+            tui::field("path", tui::format_path(&resolved.root));
+            tui::field(
+                "source",
+                match resolved.source {
+                    CefSource::EnvironmentOverride => "CEF_PATH",
+                    CefSource::ManagedCache => "managed install",
+                },
+            );
+
+            if let Some(p) = &resolved.provenance {
+                tui::field("provenance", p.artifact.clone());
+            }
         }
 
-        Err(_) => {
-            tui::info("No CEF_PATH override");
-            tui::field("default", "managed install");
+        Err(e) => {
+            tui::warn("bundle has no runtime it can package");
+            tui::field("reason", e);
+
+            warn += 1;
         }
     }
+
+    tui::blank();
+
+    tui::info("A bundled application uses only the runtime inside its bundle");
 
     tui::section("Toolchain");
 

@@ -237,7 +237,7 @@ fn resolve_provenanced_root(
 pub fn resolve_cef_for_bundle(version: &str) -> Result<ResolvedCef, CefError> {
     resolve_cef(
         version,
-        || std::env::var("CEF_PATH").ok(),
+        crate::cef_override(),
         crate::layout::installed_cef_root,
     )
 }
@@ -250,13 +250,12 @@ pub fn resolve_cef_for_bundle(version: &str) -> Result<ResolvedCef, CefError> {
 /// back to the managed installation.
 fn resolve_cef(
     version: &str,
-    override_path: impl Fn() -> Option<String>,
+    override_path: Option<PathBuf>,
     installed_root: impl Fn(&str) -> Option<PathBuf>,
 ) -> Result<ResolvedCef, CefError> {
     // Environment override takes precedence; a set-but-broken override is an
     // error rather than a silent fallback to the managed installation
-    if let Some(path) = override_path() {
-        let root = PathBuf::from(path);
+    if let Some(root) = override_path {
         if !root.exists() {
             return Err(CefError::OverrideMissing(root));
         }
@@ -878,7 +877,7 @@ mod tests {
 
     #[test]
     fn resolution_fails_without_managed_install_or_override() {
-        let err = resolve_cef("0.0.0-nonexistent", || None, |_| None).unwrap_err();
+        let err = resolve_cef("0.0.0-nonexistent", None, |_| None).unwrap_err();
         assert!(matches!(err, CefError::NotFound { .. }));
     }
 
@@ -888,11 +887,9 @@ mod tests {
         let fake = dir.path().join("dev-cef");
         crate::test_fixtures::cef_runtime(&fake); // looks like CEF but has no archive.json
 
-        let err = resolve_cef(
-            "1.2.3",
-            || Some(fake.to_string_lossy().into_owned()),
-            |_| panic!("managed lookup must not run when override is set"),
-        )
+        let err = resolve_cef("1.2.3", Some(fake.clone()), |_| {
+            panic!("managed lookup must not run when override is set")
+        })
         .unwrap_err();
 
         assert!(matches!(err, CefError::UnverifiableOverride(_)));
@@ -908,11 +905,9 @@ mod tests {
         )
         .unwrap();
 
-        let err = resolve_cef(
-            "1.2.3",
-            || Some(fake.to_string_lossy().into_owned()),
-            |_| panic!("managed lookup must not run when override is set"),
-        )
+        let err = resolve_cef("1.2.3", Some(fake.clone()), |_| {
+            panic!("managed lookup must not run when override is set")
+        })
         .unwrap_err();
 
         assert!(matches!(err, CefError::VersionMismatch { .. }));
@@ -931,11 +926,9 @@ mod tests {
         )
         .unwrap();
 
-        let resolved = resolve_cef(
-            "1.2.3",
-            || Some(fake.to_string_lossy().into_owned()),
-            |_| panic!("managed lookup must not run when override is set"),
-        )
+        let resolved = resolve_cef("1.2.3", Some(fake.clone()), |_| {
+            panic!("managed lookup must not run when override is set")
+        })
         .unwrap();
 
         assert_eq!(resolved.source, CefSource::EnvironmentOverride);
@@ -963,7 +956,7 @@ mod tests {
         let dir = tmp();
         let managed = managed_provenance_fixture(dir.path());
 
-        let resolved = resolve_cef("1.2.3", || None, |_| Some(managed.clone())).unwrap();
+        let resolved = resolve_cef("1.2.3", None, |_| Some(managed.clone())).unwrap();
 
         assert_eq!(resolved.source, CefSource::ManagedCache);
         assert_eq!(resolved.root, managed);
@@ -975,7 +968,7 @@ mod tests {
         let dir = tmp();
         let managed = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
 
-        let err = resolve_cef("1.2.3", || None, |_| Some(managed.clone())).unwrap_err();
+        let err = resolve_cef("1.2.3", None, |_| Some(managed.clone())).unwrap_err();
 
         assert!(
             matches!(err, CefError::UnverifiableManaged(ref p) if p == &managed),
@@ -988,7 +981,7 @@ mod tests {
         let dir = tmp();
         let managed = managed_provenance_fixture(dir.path());
 
-        let err = resolve_cef("127.1.1", || None, |_| Some(managed.clone())).unwrap_err();
+        let err = resolve_cef("127.1.1", None, |_| Some(managed.clone())).unwrap_err();
 
         assert!(
             matches!(err, CefError::VersionMismatch { .. }),
@@ -1014,7 +1007,7 @@ mod tests {
         )
         .unwrap();
 
-        let err = resolve_cef("1.2.3", || None, |_| Some(managed.clone())).unwrap_err();
+        let err = resolve_cef("1.2.3", None, |_| Some(managed.clone())).unwrap_err();
 
         assert!(
             matches!(err, CefError::PlatformMismatch { .. }),
@@ -1028,11 +1021,9 @@ mod tests {
         let override_root = managed_provenance_fixture(&dir.path().join("ovr"));
         let managed_root = managed_provenance_fixture(&dir.path().join("mgr"));
 
-        let resolved = resolve_cef(
-            "1.2.3",
-            || Some(override_root.to_string_lossy().into_owned()),
-            |_| Some(managed_root.clone()),
-        )
+        let resolved = resolve_cef("1.2.3", Some(override_root.clone()), |_| {
+            Some(managed_root.clone())
+        })
         .unwrap();
 
         assert_eq!(resolved.source, CefSource::EnvironmentOverride);
@@ -1045,11 +1036,9 @@ mod tests {
         let managed_root = managed_provenance_fixture(&dir.path().join("mgr"));
         let missing = dir.path().join("does-not-exist");
 
-        let err = resolve_cef(
-            "1.2.3",
-            || Some(missing.to_string_lossy().into_owned()),
-            |_| Some(managed_root.clone()),
-        )
+        let err = resolve_cef("1.2.3", Some(missing.clone()), |_| {
+            Some(managed_root.clone())
+        })
         .unwrap_err();
 
         assert!(
