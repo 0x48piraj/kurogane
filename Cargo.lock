@@ -1930,7 +1930,6 @@ dependencies = [
 name = "kurogane-suite"
 version = "0.0.5"
 dependencies = [
- "cef",
  "git2",
  "kurogane",
  "raw-window-handle",

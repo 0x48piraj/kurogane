@@ -46,6 +46,8 @@ pub use resources::resource_dir;
 /// The window-handle traits [`AppInstance::create_child_browser`] takes, at
 /// the version Kurogane uses: a host passes its window as it is.
 pub use raw_window_handle;
+/// cef-rs, at the revision Kurogane is built with.
+pub use cef;
 
 /// What Kurogane's macros expand to. Not a public API.
 #[doc(hidden)]

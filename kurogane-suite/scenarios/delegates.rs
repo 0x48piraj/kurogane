@@ -1,5 +1,5 @@
-use cef::*;
 use kurogane::App;
+use kurogane::cef::*;
 
 struct BrowserDelegate;
 
@@ -54,7 +54,7 @@ impl kurogane::ClientAppRendererDelegate for RendererDelegate {
         _stack_trace: Option<&V8StackTrace>,
     ) {
         if let Some(exception) = exception {
-            let msg: cef::CefString = (&exception.message()).into();
+            let msg: CefString = (&exception.message()).into();
             println!("[renderer delegate] uncaught exception: {}", msg);
         }
     }

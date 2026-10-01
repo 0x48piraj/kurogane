@@ -489,7 +489,6 @@ For detailed examples and guidance, see:
 Browser delegates expose browser-process lifecycle hooks.
 
 ```rust
-use cef::*;
 use kurogane::App;
 
 struct BrowserDelegate;
@@ -522,8 +521,8 @@ See:
 Renderer delegates expose renderer-process lifecycle hooks.
 
 ```rust
-use cef::*;
 use kurogane::App;
+use kurogane::cef::{Browser, Frame, V8Context};
 
 struct RendererDelegate;
 
