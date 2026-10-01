@@ -45,7 +45,15 @@ fn main() {
         .start()
         .expect("Kurogane failed to initialize");
 
-    let event_loop = EventLoop::new().unwrap();
+    // Keep Kurogane's application menu instead of winit's default menu
+    #[cfg(target_os = "macos")]
+    let event_loop = {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+        EventLoop::builder().with_default_menu(false).build()
+    };
+    #[cfg(not(target_os = "macos"))]
+    let event_loop = EventLoop::new();
+    let event_loop = event_loop.unwrap();
 
     // Continuously iterate the event loop
     event_loop.set_control_flow(ControlFlow::Poll);

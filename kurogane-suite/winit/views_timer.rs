@@ -72,7 +72,15 @@ fn main() {
         .start()
         .expect("Kurogane failed to initialize");
 
-    let event_loop = EventLoop::new().expect("failed to create event loop");
+    // Keep Kurogane's application menu instead of winit's default menu
+    #[cfg(target_os = "macos")]
+    let event_loop = {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+        EventLoop::builder().with_default_menu(false).build()
+    };
+    #[cfg(not(target_os = "macos"))]
+    let event_loop = EventLoop::new();
+    let event_loop = event_loop.expect("failed to create event loop");
 
     // Initialize the fixed-interval pumping schedule
     event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + PUMP_INTERVAL));

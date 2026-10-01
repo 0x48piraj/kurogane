@@ -129,6 +129,16 @@ fn main() {
         .start()
         .expect("Kurogane failed to initialize");
 
+    // Keep Kurogane's application menu instead of winit's default menu
+    #[cfg(target_os = "macos")]
+    let event_loop = {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+        EventLoop::<Instant>::with_user_event()
+            .with_default_menu(false)
+            .build()
+            .unwrap()
+    };
+    #[cfg(not(target_os = "macos"))]
     // Enable user events so the scheduler's deadlines reach the event loop
     let event_loop = EventLoop::<Instant>::with_user_event().build().unwrap();
     let _ = wake.set(event_loop.create_proxy());

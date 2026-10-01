@@ -12,7 +12,13 @@
 //! Browser shutdown is asynchronous.
 //! After requesting browser closure the host must continue
 //! pumping Chromium until on_before_close has completed and all
-//! browser instances have been destroyed.
+//! browser instances have been destroyed: until should_shutdown().
+//! The host's own close is not the only way there; on macOS, Quit
+//! (Kurogane's menu, or the Dock's) closes every browser too.
+//!
+//! On macOS the event loop keeps Kurogane's App, Edit and Window
+//! menus (with_default_menu(false)): winit's own has no Edit menu,
+//! so Cmd+C, Cmd+V and Cmd+A would reach no web view.
 
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -32,7 +38,6 @@ struct EmbeddedDriver {
     handle: kurogane::AppInstance,
     window: Option<Window>,
     browser: Option<kurogane::BrowserHandle>,
-    closing: bool,
     /// The earliest deadline CEF asked for, and never later than
     /// MAX_PUMP_DELAY after the last pump
     next_pump: Instant,
@@ -76,8 +81,6 @@ impl ApplicationHandler<Instant> for EmbeddedDriver {
         println!("window event: {:?}", event);
         match event {
             WindowEvent::CloseRequested => {
-                self.closing = true;
-
                 // Begin asynchronous browser shutdown; the window stays until
                 // every browser has closed
                 self.handle.handle().close_all_browsers(true);
@@ -101,8 +104,9 @@ impl ApplicationHandler<Instant> for EmbeddedDriver {
             self.handle.pump();
         }
 
-        if self.closing && self.handle.handle().browser_count() == 0 {
-            // Shutdown after the final browser has been destroyed
+        if self.handle.should_shutdown() {
+            // Shutdown after the final browser has been destroyed, whatever
+            // closed it
             self.window = None;
             self.handle.shutdown();
             event_loop.exit();
@@ -153,7 +157,15 @@ fn main() {
         use winit::platform::x11::EventLoopBuilderExtX11;
         EventLoop::<Instant>::with_user_event().with_x11().build()
     };
-    #[cfg(not(target_os = "linux"))]
+    // Keep Kurogane's application menu instead of winit's default menu
+    #[cfg(target_os = "macos")]
+    let event_loop = {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+        EventLoop::<Instant>::with_user_event()
+            .with_default_menu(false)
+            .build()
+    };
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let event_loop = EventLoop::<Instant>::with_user_event().build();
     let event_loop = event_loop.unwrap();
     let _ = wake.set(event_loop.create_proxy());
@@ -162,7 +174,6 @@ fn main() {
         handle,
         window: None,
         browser: None,
-        closing: false,
         // At once: requests made before the proxy was set went nowhere
         next_pump: Instant::now(),
     };

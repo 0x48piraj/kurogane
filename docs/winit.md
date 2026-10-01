@@ -156,6 +156,7 @@ impl ApplicationHandler<Instant> for ViewsDriver {
 * **Threading Contract:** Chromium may call Kurogane's `App::scheduler` callback from any thread. Crossing this boundary requires [`EventLoopProxy::send_event`](https://docs.rs/winit/latest/winit/event_loop/struct.EventLoopProxy.html) to thread-safely wake the `winit` event loop.
 * **Startup:** a scheduler turns on Chromium's external message pump, so the application starts with `App::start` (or `App::start_embedded`) and pumps from its own loop. `App::run` refuses one: Chromium's own loop cannot run under an external pump. On Linux, `pump()` also dispatches glib's default main context, where Chromium reads its X11 and Wayland events (input, a window's close, resizes) and which nothing else runs under an external pump, so the host's loop needs no glib of its own.
 * **Startup order:** Kurogane starts before winit's event loop is built: on macOS it installs the `NSApplication` subclass CEF needs, which must happen before winit creates the application. The proxy exists only once the event loop does, so the scheduler reads it through a `OnceLock`, and the loop's first pump, at once, covers requests made before.
+* **macOS menus:** when it starts, Kurogane installs the standard App, Edit and Window menus into an empty menu bar (a menu set before is kept). winit's event loop replaces them at launch with an App menu alone, which has no Edit menu, so ⌘C, ⌘V and ⌘A reach no web view. Build the loop with `EventLoopBuilderExtMacOS::with_default_menu(false)` to keep Kurogane's, as every example in [`kurogane-suite/winit`](../kurogane-suite/winit) does, or install a menu of your own. Quit (⌘Q, or the Dock's) closes Kurogane's browsers; the loop exits once `should_shutdown()` turns true.
 
 **Use when:** building a production application where resource optimization, battery life and frame-accurate animation fidelity are critical. This follows the external-message-pump architecture recommended for host-managed event loops in Chromium's own [documentation on external message pumps](https://chromiumembedded.github.io/cef/general_usage#message-loop-integration).
 
@@ -175,7 +176,13 @@ let event_loop = {
     use winit::platform::x11::EventLoopBuilderExtX11;
     EventLoop::<Instant>::with_user_event().with_x11().build()?
 };
-#[cfg(not(target_os = "linux"))]
+// On macOS the loop keeps Kurogane's App, Edit and Window menus
+#[cfg(target_os = "macos")]
+let event_loop = {
+    use winit::platform::macos::EventLoopBuilderExtMacOS;
+    EventLoop::<Instant>::with_user_event().with_default_menu(false).build()?
+};
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 let event_loop = EventLoop::<Instant>::with_user_event().build()?;
 ```
 
@@ -223,7 +230,7 @@ sequenceDiagram
     C->>C: OnBeforeClose
 
     C-->>H: Browser unregistered
-    H->>H: browser_count() == 0
+    H->>H: should_shutdown()
 
     H->>C: shutdown()
     H->>W: event_loop.exit()
@@ -247,16 +254,15 @@ sequenceDiagram
     Note right of Chromium: Browser removed from registry<br/>browser_count() drops
 ```
 
-Closing a browser never asks the host's window to close. The window stays open, with any other browsers in it. The host decides when to close its window and keeps pumping until `browser_count()` is 0 before it calls `AppInstance::shutdown`.
+Closing a browser never asks the host's window to close. The window stays open, with any other browsers in it. The host decides when to close its window and keeps pumping until `should_shutdown()` turns true, once the last browser has closed, before it calls `AppInstance::shutdown`.
 
-The correct pattern is to decouple window-close intent from event-loop exit:
+The correct pattern is to decouple window-close intent from event-loop exit and exit on `should_shutdown()` rather than on a flag owned by the host. The host window is not the only way the browsers can end. On macOS, Quit closes them all without a `CloseRequested` event.
 
 ```rust
 fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
     if let WindowEvent::CloseRequested = event {
         // Do NOT exit the event loop here: ask the browsers to close and let
         // Chromium drive the shutdown sequence while the loop keeps pumping
-        self.closing = true;
         self.handle.handle().close_all_browsers(true);
     }
 }
@@ -264,8 +270,8 @@ fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, event: WindowEvent)
 fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
     // ... pump at the deadline, as in the reactive loop ...
 
-    if self.closing && self.handle.handle().browser_count() == 0 {
-        // OnBeforeClose has run for every browser: now the window can go
+    if self.handle.should_shutdown() {
+        // All browsers have closed and the window can now be released
         self.window = None;
         self.handle.shutdown();
         event_loop.exit();
