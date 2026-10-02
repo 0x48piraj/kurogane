@@ -194,6 +194,39 @@ Compare origins (`request.origin()`), not URL strings: `https://accounts.example
 
 The hook runs on the UI thread before the window exists, so it must not block. A hook that panics refuses the window.
 
+### Where a window may go
+
+A page can also take the window it is in somewhere else: a link, `location = …`, a form, a redirect on the way. A window shows only what was let into it:
+
+* the application's own origin;
+* every origin the application loaded there itself: the start URL, `create_window`, `BrowserHandle::navigate`, and the redirects they lead to;
+* the origin `on_new_window` opened a popup to;
+* every origin `App::on_navigation` let in before.
+
+Within those a page navigates freely, so a site the application opened can be browsed, reloaded and gone back in. A navigation anywhere else is answered like a new window: an `http` or `https` link the user clicked opens in the system browser, and anything else is refused, the window staying on its page. Frames inside a page are not guarded; `App::permit` decides what a frame of another origin reaches.
+
+`App::on_navigation` changes that per navigation, for example for a sign-in provider the page sends the user to:
+
+```rust
+use kurogane::{App, NavigationDecision, Origin};
+
+let sign_in = Origin::parse("https://accounts.example.com").unwrap();
+
+App::url("https://app.example.com")
+    .on_navigation(move |navigation, _app| {
+        if navigation.origin() == &sign_in {
+            // Lets the provider into this window; it sends the user back
+            // to app.example.com, which the window may always show
+            NavigationDecision::Allow
+        } else {
+            NavigationDecision::Default
+        }
+    })
+    .run_or_exit();
+```
+
+`Allow` loads the page and lets its origin into that window from then on; `Deny`, `OpenExternal` and `Default` answer as for new windows. The application's own loads, going back and forward, and frames never reach the hook. It runs on the UI thread before the navigation starts; a hook that panics refuses the navigation.
+
 ## One instance per profile
 
 Your app keeps its settings and browsing data between launches. Starting the app again while it is already open brings the existing app window to the front instead of opening another one.

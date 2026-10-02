@@ -14,7 +14,9 @@ mod registry;
 mod window;
 mod client;
 mod hooks;
+mod destination;
 mod new_window;
+mod navigation;
 mod external;
 mod chrome_commands;
 mod scheme;
@@ -60,3 +62,4 @@ pub mod __private {
 pub use crate::ipc::{BinaryResponder, ErrorCode, IpcError, Responder, StreamHandler, StreamResponder};
 pub use app::{PumpRequest, ClientAppBrowserDelegate, ClientAppRendererDelegate, SecondInstance};
 pub use new_window::{NewWindowDecision, NewWindowRequest};
+pub use navigation::{NavigationDecision, NavigationRequest};

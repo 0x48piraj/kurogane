@@ -1,5 +1,6 @@
 //! What happens when a page asks for a window of its own: `window.open`, a
-//! `target=_blank` link, a form that targets a new window.
+//! `target=_blank` link, a form that targets a new window, a link clicked
+//! into a new tab or window (Ctrl or Cmd, the middle button, Shift).
 //!
 //! CEF asks before it creates the window. The application's
 //! [`App::on_new_window`](crate::App::on_new_window) hook answers first;
@@ -13,6 +14,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use tracing::{debug, error};
 
 use crate::acl::Origin;
+use crate::destination::{Outcome, document_origin, external_or_refused, is_chromium_page};
 use crate::runtime::AppHandle;
 
 /// A page's request for a new window, passed to
@@ -87,17 +89,6 @@ pub enum NewWindowDecision {
     OpenExternal,
 }
 
-/// What becomes of a request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Outcome {
-    /// An application window opens.
-    Open,
-    /// The system browser opens the URL; no window opens.
-    External,
-    /// Nothing opens.
-    Refuse,
-}
-
 /// Asks the application's hook, then applies its answer. Runs on CEF's UI
 /// thread inside `OnBeforePopup` or `OnOpenURLFromTab`, with no lock held. A
 /// hook that panics refuses the window: an error in the application's policy
@@ -156,44 +147,12 @@ fn resolve(
                 // Pages cannot open these; Chromium's own UI can, DevTools'
                 Outcome::Open
             } else {
-                external_or_refused(request)
+                external_or_refused(&request.url, request.user_gesture)
             }
         }
         NewWindowDecision::Allow => Outcome::Open,
         NewWindowDecision::Deny => Outcome::Refuse,
-        NewWindowDecision::OpenExternal => external_or_refused(request),
-    }
-}
-
-/// The system browser for a web link the user clicked, otherwise nothing:
-/// a page alone never starts another program.
-fn external_or_refused(request: &NewWindowRequest) -> Outcome {
-    if request.user_gesture && crate::external::is_web_link(&request.url) {
-        Outcome::External
-    } else {
-        Outcome::Refuse
-    }
-}
-
-/// Whether `url` is one of Chromium's own pages.
-fn is_chromium_page(url: &str) -> bool {
-    url::Url::parse(url)
-        .is_ok_and(|url| matches!(url.scheme(), "chrome" | "chrome-untrusted" | "devtools"))
-}
-
-/// The origin of the document a window loading `url` shows, for an opener
-/// of `opener`. An empty URL, `about:blank` and `about:srcdoc` inherit the
-/// opener's; a `blob:` URL has the origin it was made in.
-fn document_origin(url: &str, opener: &Origin) -> Origin {
-    if url.is_empty() {
-        return opener.clone();
-    }
-    match url::Url::parse(url) {
-        Ok(parsed) if parsed.scheme() == "about" && matches!(parsed.path(), "blank" | "srcdoc") => {
-            opener.clone()
-        }
-        Ok(parsed) if parsed.scheme() == "blob" => Origin::from_url(parsed.path()),
-        _ => Origin::from_url(url),
+        NewWindowDecision::OpenExternal => external_or_refused(&request.url, request.user_gesture),
     }
 }
 

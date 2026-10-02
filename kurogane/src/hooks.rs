@@ -7,6 +7,7 @@
 //! released. CEF releases the spec when it shuts down, which ends the hooks
 //! and any handle they hold; a hook asked for after that is not there.
 
+use crate::navigation::{NavigationDecision, NavigationRequest};
 use crate::new_window::{NewWindowDecision, NewWindowRequest};
 use crate::runtime::AppHandle;
 
@@ -14,8 +15,13 @@ use crate::runtime::AppHandle;
 pub(crate) type NewWindowHook =
     Box<dyn Fn(&NewWindowRequest, &AppHandle) -> NewWindowDecision + Send + Sync>;
 
+/// What [`App::on_navigation`](crate::App::on_navigation) stores.
+pub(crate) type NavigationHook =
+    Box<dyn Fn(&NavigationRequest, &AppHandle) -> NavigationDecision + Send + Sync>;
+
 /// The hooks the application registered.
 #[derive(Default)]
 pub(crate) struct Hooks {
     pub new_window: Option<NewWindowHook>,
+    pub navigation: Option<NavigationHook>,
 }

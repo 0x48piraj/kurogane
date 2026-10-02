@@ -5,9 +5,17 @@ use tracing::{debug, warn};
 use crate::runtime::AppHandle;
 use crate::browser_registry::BrowserType;
 use crate::chrome_commands::KuroganeCommandHandler;
+use crate::destination::{Outcome, is_blank, is_chromium_page};
 use crate::ipc::FrameId;
-use crate::new_window::{self, NewWindowRequest, Outcome};
+use crate::navigation::{self, NavigationRequest};
+use crate::new_window::{self, NewWindowRequest};
 use crate::window::{Placement, PopupGeometry, open_browser_window};
+
+/// A load the application made itself, through CreateBrowser, LoadURL or
+/// LoadRequest, and the redirects it leads to (cef_types.h)
+const DIRECT_LOAD: u32 = sys::cef_transition_type_t::TT_DIRECT_LOAD_FLAG as u32;
+/// Back or forward through the browser's history (cef_types.h)
+const FORWARD_BACK: u32 = sys::cef_transition_type_t::TT_FORWARD_BACK_FLAG as u32;
 
 //
 // LifeSpanHandler
@@ -59,6 +67,8 @@ wrap_life_span_handler! {
             if let Some(state) = opener.and_then(|id| reg.browsers.get_mut(id)) {
                 let requested = popup_features.and_then(PopupGeometry::requested);
                 state.pending_popups.push(popup_id, requested);
+                // Let into the popup by its first navigation (crate::navigation)
+                state.opens_popup(popup_id, request.origin().clone());
             }
             0 // Allow the popup
         }
@@ -68,6 +78,7 @@ wrap_life_span_handler! {
             let opener = browser.and_then(|browser| reg.browsers.find_id_by_browser(browser));
             if let Some(state) = opener.and_then(|id| reg.browsers.get_mut(id)) {
                 state.pending_popups.abort(popup_id);
+                state.popup_aborted(popup_id);
             }
         }
 
@@ -176,6 +187,31 @@ wrap_life_span_handler! {
     }
 }
 
+/// The transition of `request`, as the bits CEF returns: the source in the
+/// low byte, qualifier flags above it (cef_types.h, cef_transition_type_t).
+///
+/// cef-rs binds that type as a Rust enum, but CEF returns a source ORed with
+/// qualifiers, which no variant names, and holding such a value in the enum
+/// is undefined behaviour. So `ImplRequest::transition_type` is never
+/// called: CEF's function is called as returning the integer it does.
+fn transition(request: &Request) -> u32 {
+    let raw = request.get_raw();
+    type GetTransitionType = unsafe extern "C" fn(*mut sys::_cef_request_t) -> i32;
+    // SAFETY: `raw` is the live request CEF passed to this callback, borrowed
+    // as the call's `self` like every method cef-rs calls (no reference is
+    // taken or released). The slot's C type returns cef_transition_type_t, a
+    // C enum: a 32-bit integer on every platform CEF supports, so reading it
+    // through an `i32` return type is the same call; only the Rust enum
+    // cef-rs declares cannot hold the value.
+    unsafe {
+        let Some(get) = (*raw).get_transition_type else {
+            return 0;
+        };
+        let get: GetTransitionType = std::mem::transmute(get);
+        get(raw) as u32
+    }
+}
+
 /// A page's request, made in `frame`, for a window showing `target_url`.
 fn new_window_request(
     frame: Option<&mut Frame>,
@@ -229,6 +265,83 @@ wrap_request_handler! {
     }
 
     impl RequestHandler {
+        // Where a page may take the window it is in (crate::navigation)
+        fn on_before_browse(
+            &self,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            request: Option<&mut Request>,
+            user_gesture: i32,
+            is_redirect: i32,
+        ) -> i32 {
+            let (Some(browser), Some(frame), Some(request)) = (browser, frame, request) else {
+                return 0;
+            };
+            let url = CefString::from(&request.url()).to_string();
+            let transition = transition(request);
+            debug!(
+                "[nav] main={} url={url} transition={transition:#010x} gesture={user_gesture} redirect={is_redirect}",
+                frame.is_main()
+            );
+            // Frames inside a page are not guarded: the ACL keeps another
+            // origin's frame from the bridge
+            if frame.is_main() == 0 {
+                return 0;
+            }
+            let from = CefString::from(&frame.url()).to_string();
+            let navigation = NavigationRequest::new(url, &from, user_gesture != 0, is_redirect != 0);
+            let origin = navigation.origin().clone();
+
+            // What this browser may show; the guard ends before the hook runs
+            let (id, admitted) = {
+                let mut reg = self.app.registry();
+                let id = reg.browsers.find_id_by_browser(browser);
+                let state = id.and_then(|id| reg.browsers.get(id));
+                let kind = state.map(|state| state.metadata.browser_type);
+                let opener = state.and_then(|state| state.metadata.opener_id);
+                // Chromium's own browsers are not the application's to guard
+                if matches!(kind, Some(BrowserType::DevTools | BrowserType::ChromeUi)) {
+                    return 0;
+                }
+                // The application's own loads and their redirects; pages
+                // cannot set this flag
+                if transition & DIRECT_LOAD != 0 {
+                    if let Some(state) = id.and_then(|id| reg.browsers.get_mut(id)) {
+                        state.admit(origin);
+                    }
+                    return 0;
+                }
+                // History holds only pages that were let in
+                if transition & FORWARD_BACK != 0 {
+                    return 0;
+                }
+                let admitted = (!origin.is_opaque() && origin == *self.app.app_origin())
+                    || is_blank(navigation.url())
+                    || is_chromium_page(navigation.url())
+                    || state.is_some_and(|state| state.admits(&origin))
+                    || (kind == Some(BrowserType::Popup)
+                        && opener
+                            .and_then(|opener| reg.browsers.get_mut(opener))
+                            .is_some_and(|opener| opener.take_popup_origin(&origin)));
+                (id, admitted)
+            };
+
+            match navigation::decide(&self.app, &navigation, admitted) {
+                Outcome::Open => {
+                    let mut reg = self.app.registry();
+                    if let Some(state) = id.and_then(|id| reg.browsers.get_mut(id)) {
+                        state.admit(origin);
+                    }
+                    0
+                }
+                Outcome::External => {
+                    crate::external::open(navigation.url());
+                    1
+                }
+                Outcome::Refuse => 1,
+            }
+        }
+
         // A link opened in a new tab or window comes here, never to
         // OnBeforePopup. Unanswered, Chromium opens it in a tabbed browser
         // window of its own (Chrome style) or in the source browser itself

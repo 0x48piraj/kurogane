@@ -159,6 +159,8 @@ The graph sits behind one lock. Only the UI thread changes it, and any thread ma
 
 A page cannot give itself a window. Before CEF creates a popup, or opens a link clicked into a new tab, Kurogane asks the application's `on_new_window` hook and then applies its own policy: a page of the application's own origin gets a window, a web link the user clicked goes to the system browser, and anything else is refused. Chromium's own tabbed browser window never opens.
 
+A page cannot take its window anywhere either. Each browser keeps the origins let into it: those the application loaded there itself (CEF marks such a load, and the redirects it leads to, with a flag a page cannot set), the origin `on_new_window` opened a popup to, and those the `on_navigation` hook allowed. A page navigates freely within those and the application's own origin; anywhere else the hook and Kurogane's policy decide, as for a new window.
+
 Application hooks follow one convention. Each takes a typed request and the `AppHandle`, runs on the UI thread with no lock held, and answers with a decision whose `Default` leaves the choice to Kurogane. A hook that panics gets the safe answer, never an unwinding into CEF. The startup spec owns the hooks and the runtime state every `AppHandle` shares only points to them, so a hook that keeps a handle creates no cycle: CEF releases the spec at shutdown.
 
 ## Custom protocol (`app://`)

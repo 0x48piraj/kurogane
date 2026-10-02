@@ -24,6 +24,7 @@ use crate::gpu::GpuMode;
 use crate::capability::{FilesystemBuilder, FsConfigError};
 use crate::acl::Origin;
 use crate::hooks::Hooks;
+use crate::navigation::{NavigationDecision, NavigationRequest};
 use crate::new_window::{NewWindowDecision, NewWindowRequest};
 
 mod resolver;
@@ -794,6 +795,54 @@ impl App {
         self
     }
 
+    /// Decides where a page may take the window it is in: a link, a
+    /// `location` assignment, a form, and every redirect on the way.
+    ///
+    /// A window shows only what was let into it: the application's own
+    /// origin, the origins the application loaded there itself (the start
+    /// page, [`AppInstance::create_window`](crate::AppInstance::create_window),
+    /// [`BrowserHandle::navigate`](crate::BrowserHandle::navigate), and the
+    /// redirects they lead to), the origin
+    /// [`on_new_window`](App::on_new_window) opened a popup to, and the
+    /// origins this hook allowed into it before. Without a hook, or when it
+    /// answers [`NavigationDecision::Default`], a navigation to one of those
+    /// proceeds; to any other origin, an `http` or `https` link the user
+    /// clicked opens in the system's default browser and anything else is
+    /// refused, the window staying on its page. The application's own loads,
+    /// going back and forward, and frames inside a page never reach the
+    /// hook.
+    ///
+    /// [`NavigationDecision::Allow`] loads the page and lets its origin into
+    /// that window from then on, for example a sign-in provider the page
+    /// sends the user to. [`NavigationDecision::Deny`] and
+    /// [`NavigationDecision::OpenExternal`] narrow Kurogane's answer.
+    /// Compare origins, not strings.
+    ///
+    /// Runs on the UI thread before the navigation starts, so it must not
+    /// block. A hook that panics refuses the navigation. A later call
+    /// replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, NavigationDecision, Origin};
+    /// let sign_in = Origin::parse("https://accounts.example.com").unwrap();
+    /// App::url("https://app.example.com")
+    ///     .on_navigation(move |navigation, _| {
+    ///         if navigation.origin() == &sign_in {
+    ///             NavigationDecision::Allow
+    ///         } else {
+    ///             NavigationDecision::Default
+    ///         }
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_navigation<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&NavigationRequest, &AppHandle) -> NavigationDecision + Send + Sync + 'static,
+    {
+        self.hooks.navigation = Some(Box::new(f));
+        self
+    }
+
     /// Sets the Chromium process sandbox policy.
     ///
     /// Defaults to [`SandboxMode::Disabled`].
@@ -1033,6 +1082,10 @@ mod tests {
             .on_new_window(|_: &NewWindowRequest, handle: &AppHandle| {
                 handle.shutdown();
                 NewWindowDecision::Default
+            })
+            .on_navigation(|_: &NavigationRequest, handle: &AppHandle| {
+                handle.shutdown();
+                NavigationDecision::Default
             });
 
         assert!(ends(|h| {
@@ -1065,6 +1118,12 @@ mod tests {
         let hook = app.hooks.new_window.as_ref().expect("registered");
         assert!(ends(|h| {
             hook(&request, h);
+        }));
+        let navigation =
+            NavigationRequest::new("app://app/b.html".into(), "app://app/", false, false);
+        let hook = app.hooks.navigation.as_ref().expect("registered");
+        assert!(ends(|h| {
+            hook(&navigation, h);
         }));
     }
 
