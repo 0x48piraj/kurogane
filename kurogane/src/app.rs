@@ -24,6 +24,7 @@ use crate::gpu::GpuMode;
 use crate::capability::{FilesystemBuilder, FsConfigError};
 use crate::acl::Origin;
 use crate::chrome_commands::{ChromeCommandRequest, CommandDecision};
+use crate::downloads::{DownloadDecision, DownloadRequest};
 use crate::hooks::Hooks;
 use crate::keys::{KeyDecision, KeyPress};
 use crate::navigation::{NavigationDecision, NavigationRequest};
@@ -919,6 +920,50 @@ impl App {
         self
     }
 
+    /// Decides where a file a page downloads is saved: a link the server
+    /// answers with an attachment, a link with a `download` attribute, a
+    /// `blob:` or `data:` export.
+    ///
+    /// Without a hook, or when it answers [`DownloadDecision::Default`], the
+    /// user is asked with the system's Save As dialog, the suggested name
+    /// filled in, and nothing is saved if they cancel: no page writes to
+    /// the disk unless the user picked the place. A window shows one
+    /// dialog at a time. Chromium's own behaviour, saving silently into the
+    /// Downloads folder with nothing on screen, is never used.
+    /// [`DownloadDecision::SaveTo`] saves at an absolute path the
+    /// application chose, without asking, for example its own exports into
+    /// a folder of its own; [`DownloadDecision::Deny`] saves nothing.
+    ///
+    /// Every download a page starts reaches the hook, several at once
+    /// included: Chromium's prompt for multiple downloads never shows.
+    ///
+    /// Runs on the UI thread before the download starts, so it must not
+    /// block. A hook that panics refuses the download. Downloads from
+    /// DevTools are not asked about and always ask the user. A later call
+    /// replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, DownloadDecision, Origin};
+    /// let exports = std::env::temp_dir().join("my-app-exports");
+    /// let own = Origin::parse("app://app").unwrap();
+    /// App::new("./dist")
+    ///     .on_download(move |download, _| {
+    ///         if download.origin() == &own {
+    ///             DownloadDecision::SaveTo(exports.join(download.suggested_name()))
+    ///         } else {
+    ///             DownloadDecision::Deny
+    ///         }
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_download<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&DownloadRequest, &AppHandle) -> DownloadDecision + Send + Sync + 'static,
+    {
+        self.hooks.download = Some(Box::new(f));
+        self
+    }
+
     /// Sets the Chromium process sandbox policy.
     ///
     /// Defaults to [`SandboxMode::Disabled`].
@@ -1170,6 +1215,10 @@ mod tests {
             .on_chrome_command(|_: &ChromeCommandRequest, handle: &AppHandle| {
                 handle.shutdown();
                 CommandDecision::Default
+            })
+            .on_download(|_: &DownloadRequest, handle: &AppHandle| {
+                handle.shutdown();
+                DownloadDecision::Default
             });
 
         assert!(ends(|h| {
@@ -1218,6 +1267,17 @@ mod tests {
         let hook = app.hooks.chrome_command.as_ref().expect("registered");
         assert!(ends(|h| {
             hook(&command, h);
+        }));
+        let download = DownloadRequest::new(
+            "app://app/a.txt".into(),
+            "app://app/",
+            "a.txt".into(),
+            "text/plain".into(),
+            None,
+        );
+        let hook = app.hooks.download.as_ref().expect("registered");
+        assert!(ends(|h| {
+            hook(&download, h);
         }));
     }
 

@@ -268,6 +268,50 @@ App::new("dist")
 
 Both hooks run on the UI thread, `on_key` for every key press, so keep them quick. A panicking `on_key` lets the key through; a panicking `on_chrome_command` refuses the command. DevTools' own windows reach neither hook. A browser embedded in your own window (`create_child_browser`) reaches `on_key`; Chromium runs no commands there, so `on_chrome_command` is never asked.
 
+## Downloads
+
+When a page downloads a file (a link the server answers with an attachment, a link with a `download` attribute, a `blob:` or `data:` export), Kurogane asks the user where to save it with the system's Save As dialog, the suggested name filled in. If they cancel, nothing is saved. A window shows one dialog at a time: a page that downloads several files asks about each in turn. Chromium alone would save every file into the Downloads folder without a word, since Kurogane's windows have no download bubble to show it.
+
+`App::on_download` decides per download instead, for example to save the application's own exports without asking:
+
+```rust
+use kurogane::{App, DownloadDecision, Origin};
+
+let exports = std::env::temp_dir().join("my-app-exports");
+let own = Origin::parse("app://app").unwrap();
+
+App::new("dist")
+    .on_download(move |download, _app| {
+        if download.origin() == &own {
+            // The app's own exports go straight into its folder
+            DownloadDecision::SaveTo(exports.join(download.suggested_name()))
+        } else {
+            // Nothing a site brings in is saved
+            DownloadDecision::Deny
+        }
+    })
+    .run_or_exit();
+```
+
+* `SaveTo` saves at that absolute path, without asking, and replaces a file already there. Its folder is created when missing; if that fails, or the path is relative, nothing is saved.
+* `Prompt` asks the user, as without a hook.
+* `Deny` saves nothing.
+* `Default` leaves the download to Kurogane: the user is asked.
+
+`download.origin()` is the origin of the page the download comes from, not of the file: a page of the application's own may export a `blob:` or link to a file anywhere. `suggested_name()` is a file name only; Chromium has already removed any folder a page tried to put in it, so joining it onto a folder of your own stays in that folder.
+
+A page may download several files at once, without a click for each: every one of them still reaches `on_download` or the Save As dialog, so Chromium's own "download multiple files" prompt never shows. The hook runs on the UI thread before the download starts, so it must not block. A hook that panics refuses the download. Downloads from DevTools never reach it and always ask the user.
+
+A `download` link to one of the application's own files (`<a href="report.pdf" download>`) does nothing: Chromium does not download from `app://` that way. Fetch the file and download it as a `blob:` instead, which reaches the hook like any other download:
+
+```js
+const response = await fetch('report.pdf');
+const link = document.createElement('a');
+link.href = URL.createObjectURL(await response.blob());
+link.download = 'report.pdf';
+link.click();
+```
+
 ## One instance per profile
 
 Your app keeps its settings and browsing data between launches. Starting the app again while it is already open brings the existing app window to the front instead of opening another one.

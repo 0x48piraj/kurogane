@@ -8,6 +8,7 @@
 //! and any handle they hold; a hook asked for after that is not there.
 
 use crate::chrome_commands::{ChromeCommandRequest, CommandDecision};
+use crate::downloads::{DownloadDecision, DownloadRequest};
 use crate::keys::{KeyDecision, KeyPress};
 use crate::navigation::{NavigationDecision, NavigationRequest};
 use crate::new_window::{NewWindowDecision, NewWindowRequest};
@@ -28,6 +29,10 @@ pub(crate) type KeyHook = Box<dyn Fn(&KeyPress, &AppHandle) -> KeyDecision + Sen
 pub(crate) type ChromeCommandHook =
     Box<dyn Fn(&ChromeCommandRequest, &AppHandle) -> CommandDecision + Send + Sync>;
 
+/// What [`App::on_download`](crate::App::on_download) stores.
+pub(crate) type DownloadHook =
+    Box<dyn Fn(&DownloadRequest, &AppHandle) -> DownloadDecision + Send + Sync>;
+
 /// The hooks the application registered.
 #[derive(Default)]
 pub(crate) struct Hooks {
@@ -35,4 +40,5 @@ pub(crate) struct Hooks {
     pub navigation: Option<NavigationHook>,
     pub key: Option<KeyHook>,
     pub chrome_command: Option<ChromeCommandHook>,
+    pub download: Option<DownloadHook>,
 }

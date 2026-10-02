@@ -1,11 +1,14 @@
 //! Browser client implementation.
 
+use std::path::Path;
+
 use cef::*;
 use tracing::{debug, warn};
 use crate::runtime::AppHandle;
-use crate::browser_registry::BrowserType;
+use crate::browser_registry::{BrowserId, BrowserType};
 use crate::chrome_commands::KuroganeCommandHandler;
 use crate::destination::{Outcome, is_blank, is_chromium_page};
+use crate::downloads::{self, Answer, DownloadRequest, SavePrompt};
 use crate::ipc::FrameId;
 use crate::keys::{self, KeyDecision, KeyPress};
 use crate::navigation::{self, NavigationRequest};
@@ -485,6 +488,276 @@ fn pre_key_event(
 }
 
 //
+// DOWNLOAD HANDLER
+//
+wrap_download_handler! {
+    pub struct KuroganeDownloadHandler {
+        app: AppHandle,
+    }
+
+    impl DownloadHandler {
+        // CEF's own answer, which leaves the decision to OnBeforeDownload;
+        // cef-rs's default 0 would cancel every download
+        fn can_download(
+            &self,
+            _browser: Option<&mut Browser>,
+            _url: Option<&CefString>,
+            _request_method: Option<&CefString>,
+        ) -> i32 {
+            1
+        }
+
+        // Where the file goes (crate::downloads). Returning 0 would let
+        // Chromium save it silently into the Downloads folder, so every
+        // path answers 1
+        fn on_before_download(
+            &self,
+            browser: Option<&mut Browser>,
+            download_item: Option<&mut DownloadItem>,
+            suggested_name: Option<&CefString>,
+            callback: Option<&mut BeforeDownloadCallback>,
+        ) -> i32 {
+            let (Some(browser), Some(item), Some(callback)) = (browser, download_item, callback) else {
+                return 1;
+            };
+            let page_url = browser
+                .main_frame()
+                .map(|frame| CefString::from(&frame.url()).to_string())
+                .unwrap_or_default();
+            // The guard ends with the block, before the hook runs
+            let (id, ask) = {
+                let reg = self.app.registry();
+                let id = reg.browsers.find_id_by_browser(browser);
+                let kind = id.and_then(|id| reg.browsers.get(id)).map(|state| state.metadata.browser_type);
+                // Chromium's own browsers, DevTools' included, are not the application's
+                (id, !matches!(kind, Some(BrowserType::DevTools | BrowserType::ChromeUi)))
+            };
+            let request = DownloadRequest::new(
+                CefString::from(&item.url()).to_string(),
+                &page_url,
+                suggested_name.map(CefString::to_string).unwrap_or_default(),
+                CefString::from(&item.mime_type()).to_string(),
+                id,
+            );
+            match downloads::decide(&self.app, &request, ask) {
+                // One dialog per browser at a time (downloads::Downloads);
+                // the guard ends with the statement, before CEF is called
+                Answer::Prompt => {
+                    let prompt = SavePrompt {
+                        proceed: callback.clone(),
+                        name: request.suggested_name().to_owned(),
+                    };
+                    let now = match id {
+                        Some(id) => match self.app.registry().browsers.get_mut(id) {
+                            Some(state) => state.downloads.ask(item.id(), prompt),
+                            None => Some(prompt),
+                        },
+                        None => Some(prompt),
+                    };
+                    if let Some(prompt) = now {
+                        ask_where(&self.app, browser, id, item.id(), prompt);
+                    }
+                }
+                Answer::SaveTo(path) => {
+                    let path = CefString::from(path.to_string_lossy().as_ref());
+                    callback.cont(Some(&path), 0);
+                }
+                // Never continued, so nothing is written to its place; CEF
+                // would keep it pending, and its next update cancels it (a
+                // browser never registered keeps it pending until it closes)
+                Answer::Refuse => {
+                    if let Some(id) = id
+                        && let Some(state) = self.app.registry().browsers.get_mut(id)
+                    {
+                        state.downloads.refuse(item.id());
+                    }
+                }
+            }
+            1
+        }
+
+        fn on_download_updated(
+            &self,
+            browser: Option<&mut Browser>,
+            download_item: Option<&mut DownloadItem>,
+            callback: Option<&mut DownloadItemCallback>,
+        ) {
+            let Some(item) = download_item else {
+                return;
+            };
+            let path = CefString::from(&item.full_path()).to_string();
+            debug!(
+                "[download] {} complete={} canceled={} interrupted={} reason={:?} path={path}",
+                item.id(),
+                item.is_complete(),
+                item.is_canceled(),
+                item.is_interrupted(),
+                item.interrupt_reason(),
+            );
+            let cancelled = item.is_canceled() != 0;
+            let ended = cancelled || item.is_complete() != 0 || item.is_interrupted() != 0;
+            // A refused download is cancelled; one asking the user keeps
+            // what cancels it, should the user dismiss its dialog
+            // (downloads::Downloads). The guard ends with the block
+            let cancel = browser.and_then(|browser| {
+                let mut reg = self.app.registry();
+                let id = reg.browsers.find_id_by_browser(browser)?;
+                let state = reg.browsers.get_mut(id)?;
+                state.downloads.update(item.id(), callback.as_deref().cloned(), ended)
+            });
+            if let Some(cancel) = cancel {
+                debug!("[download] {} refused: cancelling", item.id());
+                cancel.cancel();
+            }
+        }
+    }
+}
+
+/// Asks the user where to save download `id` of `browser` with a Save As
+/// dialog Kurogane opens itself (downloads::Downloads says why not CEF's), the
+/// suggested name and its extension filled in.
+fn ask_where(
+    app: &AppHandle,
+    browser: &Browser,
+    browser_id: Option<BrowserId>,
+    id: u32,
+    prompt: SavePrompt,
+) {
+    let Some(host) = browser.host() else {
+        answered(app, browser_id, id, false);
+        return;
+    };
+    let mut filters = CefStringList::new();
+    if let Some(extension) = Path::new(&prompt.name).extension() {
+        filters.append(&format!(".{}", extension.to_string_lossy()));
+    }
+    let name = CefString::from(prompt.name.as_str());
+    let mut answer = KuroganeSaveDialog::new(
+        app.clone(),
+        browser_id,
+        id,
+        prompt.proceed,
+        prompt.name,
+        page_of(browser),
+    );
+    host.run_file_dialog(
+        FileDialogMode::SAVE,
+        None,
+        Some(&name),
+        Some(&mut filters),
+        Some(&mut answer),
+    );
+}
+
+/// The document `browser` shows, by its main frame, which a navigation to
+/// another document replaces.
+fn page_of(browser: &Browser) -> String {
+    browser
+        .main_frame()
+        .map(|frame| CefString::from(&frame.identifier()).to_string())
+        .unwrap_or_default()
+}
+
+/// The dialog of download `id` was answered, `saved` with a place: a
+/// dismissal cancels the download, and the browser's next waiting download
+/// asks. The guard ends with the statement, before CEF is called.
+fn answered(app: &AppHandle, browser_id: Option<BrowserId>, id: u32, saved: bool) {
+    let (cancel, next) = browser_id
+        .and_then(|browser_id| {
+            let mut reg = app.registry();
+            let state = reg.browsers.get_mut(browser_id)?;
+            let (cancel, next) = state.downloads.answered(id, saved);
+            Some((cancel, next.map(|next| (state.browser.clone(), next))))
+        })
+        .unwrap_or_default();
+    if let Some(cancel) = cancel {
+        cancel.cancel();
+    }
+    if let Some((browser, (next, prompt))) = next {
+        ask_where(app, &browser, browser_id, next, prompt);
+    }
+}
+
+wrap_run_file_dialog_callback! {
+    pub struct KuroganeSaveDialog {
+        app: AppHandle,
+        browser_id: Option<BrowserId>,
+        download: u32,
+        proceed: BeforeDownloadCallback,
+        name: String,
+        // The document the dialog opened over (page_of)
+        page: String,
+    }
+
+    impl RunFileDialogCallback {
+        // The place the user chose, without CEF's own dialog
+        fn on_file_dialog_dismissed(&self, file_paths: Option<&mut CefStringList>) {
+            let chosen = file_paths.and_then(|paths| {
+                // A borrowed list, which the copy does not free
+                let paths: *mut sys::_cef_string_list_t = paths.into();
+                CefStringList::from(paths).into_iter().next()
+            });
+            if let Some(path) = &chosen {
+                self.proceed.cont(Some(&CefString::from(path.as_str())), 0);
+                answered(&self.app, self.browser_id, self.download, true);
+                return;
+            }
+            // Chromium drops a dialog's answer, a chosen place too, once the
+            // document it opened over is replaced: then the user is asked
+            // again rather than the download cancelled. The guard ends with
+            // the statement
+            let browser = self
+                .browser_id
+                .and_then(|id| self.app.registry().browsers.get(id).map(|state| state.browser.clone()));
+            match browser {
+                Some(browser) if page_of(&browser) != self.page => {
+                    debug!("[download] {} asked again: its page was replaced", self.download);
+                    let prompt = SavePrompt {
+                        proceed: self.proceed.clone(),
+                        name: self.name.clone(),
+                    };
+                    ask_where(&self.app, &browser, self.browser_id, self.download, prompt);
+                }
+                _ => answered(&self.app, self.browser_id, self.download, false),
+            }
+        }
+    }
+}
+
+//
+// PERMISSION HANDLER
+//
+wrap_permission_handler! {
+    pub struct KuroganePermissionHandler;
+
+    impl PermissionHandler {
+        // Chromium's prompt for a page's further downloads without a click,
+        // which holds them until the user answers (crate::downloads). Every
+        // other prompt is left to CEF's default, its own prompt
+        fn on_show_permission_prompt(
+            &self,
+            _browser: Option<&mut Browser>,
+            _prompt_id: u64,
+            requesting_origin: Option<&CefString>,
+            requested_permissions: u32,
+            callback: Option<&mut PermissionPromptCallback>,
+        ) -> i32 {
+            let Some(callback) = callback.filter(|_| downloads::grants_prompt(requested_permissions)) else {
+                return 0;
+            };
+            debug!(
+                "multiple downloads granted to {}",
+                requesting_origin.map(CefString::to_string).unwrap_or_default()
+            );
+            callback.cont(PermissionRequestResult::from(
+                sys::cef_permission_request_result_t::CEF_PERMISSION_RESULT_ACCEPT,
+            ));
+            1
+        }
+    }
+}
+
+//
 // LOAD HANDLER
 //
 wrap_load_handler! {
@@ -550,8 +823,16 @@ wrap_client! {
             Some(KuroganeCommandHandler::new(self.app.clone()))
         }
 
+        fn download_handler(&self) -> Option<DownloadHandler> {
+            Some(KuroganeDownloadHandler::new(self.app.clone()))
+        }
+
         fn load_handler(&self) -> Option<LoadHandler> {
             Some(KuroganeLoadHandler::new(self.app.clone()))
+        }
+
+        fn permission_handler(&self) -> Option<PermissionHandler> {
+            Some(KuroganePermissionHandler::new())
         }
 
         // Only for an application that asks to see keys

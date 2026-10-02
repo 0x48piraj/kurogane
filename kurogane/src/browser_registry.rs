@@ -1,7 +1,8 @@
 use std::collections::HashMap;
-use cef::{Browser, ImplBrowser, RequestContext};
+use cef::{Browser, DownloadItemCallback, ImplBrowser, RequestContext};
 use tracing::debug;
 use crate::acl::Origin;
+use crate::downloads::{Downloads, SavePrompt};
 use crate::window::PendingPopups;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -56,6 +57,9 @@ pub(crate) struct BrowserState {
     /// each was opened to: the popup's own navigation there takes the entry
     /// and lets that origin into the popup
     popup_origins: Vec<(i32, Origin)>,
+    /// This browser's downloads Kurogane holds: asking the user, one Save
+    /// As dialog at a time, or refused; they go with the browser
+    pub downloads: Downloads<SavePrompt, DownloadItemCallback>,
 }
 
 impl BrowserState {
@@ -167,6 +171,7 @@ impl BrowserRegistry {
             pending_popups: PendingPopups::default(),
             admitted: Vec::new(),
             popup_origins: Vec::new(),
+            downloads: Downloads::default(),
         };
         debug!(
             "[BrowserRegistry] registered browser {} (type={:?})",

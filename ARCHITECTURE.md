@@ -163,6 +163,8 @@ A page cannot take its window anywhere either. Each browser keeps the origins le
 
 Chromium's commands pass Kurogane's allowlist first (page-local commands only), then the application's `on_chrome_command` hook, which may refuse what the allowlist lets run and never run what it refuses. Keys reach the `on_key` hook before Chromium turns them into commands, so a key press it consumes never becomes one.
 
+A page cannot write to the disk on its own. Every download stops at Kurogane's download handler before a byte is saved: the application's `on_download` hook may name the file's place, ask the user or refuse; otherwise the user is asked with the system's Save As dialog, one dialog per window at a time. Chromium's prompt for several downloads is answered by Kurogane and never shows, and its bubble of finished downloads is turned off.
+
 Application hooks follow one convention. Each takes a typed request and the `AppHandle`, runs on the UI thread with no lock held, and answers with a decision whose `Default` leaves the choice to Kurogane. A hook that panics gets the safe answer, never an unwinding into CEF. The startup spec owns the hooks and the runtime state every `AppHandle` shares only points to them, so a hook that keeps a handle creates no cycle: CEF releases the spec at shutdown.
 
 ## Custom protocol (`app://`)
