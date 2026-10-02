@@ -645,7 +645,9 @@ impl AppHandle {
     /// This end cannot be cancelled and no browser may open after it begins.
     /// Popups are refused, [`AppInstance::create_window`] and
     /// [`AppInstance::create_child_browser`] return [`RuntimeError::ShuttingDown`]
-    /// and any browser CEF is already creating is closed as it appears.
+    /// and any browser CEF is already creating is closed as it appears. No
+    /// context menu opens either, not even the one whose
+    /// [`App::on_context_menu`](crate::App::on_context_menu) hook began the end.
     pub fn shutdown(&self) {
         debug!("AppHandle::shutdown: closing every browser");
         self.request(Close::Everything { force: true });
@@ -1299,7 +1301,7 @@ impl AppInstance {
             },
         );
 
-        let mut client = KuroganeClient::new(self.handle.clone(), BrowserType::Main);
+        let mut client = KuroganeClient::new(self.handle.clone(), BrowserType::Main, None);
 
         let mut rc = request_context;
         let browser = browser_host_create_browser_sync(

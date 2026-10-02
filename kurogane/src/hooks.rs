@@ -8,6 +8,7 @@
 //! and any handle they hold; a hook asked for after that is not there.
 
 use crate::chrome_commands::{ChromeCommandRequest, CommandDecision};
+use crate::context_menu::{ContextMenu, ContextMenuCommand};
 use crate::downloads::{DownloadDecision, DownloadRequest};
 use crate::keys::{KeyDecision, KeyPress};
 use crate::navigation::{NavigationDecision, NavigationRequest};
@@ -38,6 +39,13 @@ pub(crate) type DownloadHook =
 pub(crate) type PermissionHook =
     Box<dyn Fn(&PermissionRequest, &AppHandle) -> PermissionDecision + Send + Sync>;
 
+/// What [`App::on_context_menu`](crate::App::on_context_menu) stores.
+pub(crate) type ContextMenuHook = Box<dyn Fn(&mut ContextMenu, &AppHandle) + Send + Sync>;
+
+/// What [`App::on_context_menu_command`](crate::App::on_context_menu_command)
+/// stores.
+pub(crate) type ContextMenuCommandHook = Box<dyn Fn(&ContextMenuCommand, &AppHandle) + Send + Sync>;
+
 /// The hooks the application registered.
 #[derive(Default)]
 pub(crate) struct Hooks {
@@ -47,4 +55,6 @@ pub(crate) struct Hooks {
     pub chrome_command: Option<ChromeCommandHook>,
     pub download: Option<DownloadHook>,
     pub permission: Option<PermissionHook>,
+    pub context_menu: Option<ContextMenuHook>,
+    pub context_menu_command: Option<ContextMenuCommandHook>,
 }

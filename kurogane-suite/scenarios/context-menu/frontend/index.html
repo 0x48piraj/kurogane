@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Right-click menus</title>
+    <meta charset="utf-8">
+    <style>
+      :root { --bg: #eff1f5; --fg: #4c4f69; --dim: #6c6f85; --box: #e6e9ef; --accent: #1e66f5; }
+      :root.dark { --bg: #1e1e2e; --fg: #cdd6f4; --dim: #a6adc8; --box: #313244; --accent: #89b4fa; }
+      body { font-family: system-ui, sans-serif; padding: 24px; background: var(--bg); color: var(--fg); font-size: 15px; }
+      body.size-0 { font-size: 13px; } body.size-2 { font-size: 19px; }
+      h1 { font-size: 1.4em; margin: 0 0 16px; }
+      table { border-collapse: collapse; margin-bottom: 16px; }
+      td { padding: 8px 16px 8px 0; vertical-align: middle; }
+      td:last-child { color: var(--dim); }
+      a { color: var(--accent); }
+      input { font: inherit; padding: 4px 6px; width: 260px; }
+      .own { background: var(--box); padding: 14px; border-radius: 8px; width: 240px; cursor: context-menu; }
+      #menu { position: fixed; display: none; background: var(--box); border-radius: 8px; padding: 4px 0;
+              box-shadow: 0 4px 16px #0006; min-width: 160px; }
+      #menu div { padding: 6px 14px; cursor: pointer; } #menu div:hover { background: var(--accent); color: var(--bg); }
+      pre { background: var(--box); padding: 12px; border-radius: 8px; min-height: 60px; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>Right-click menus</h1>
+    <table>
+      <tr><td>The page, here</td>
+          <td>Dark theme (a check item), Text size (a submenu), Reload; Inspect in a debug build</td></tr>
+      <tr><td><input value="Some text, with a mispelled word"></td>
+          <td>Kurogane's editing items (spelling suggestions on the misspelled word), then Insert a greeting</td></tr>
+      <tr><td>Select these words, then right-click them</td>
+          <td>Copy (Kurogane's)</td></tr>
+      <tr><td><a href="https://example.com/">a link to example.com</a></td>
+          <td>Copy link address</td></tr>
+      <tr><td><img id="image" width="48" height="48" alt="a square"></td>
+          <td>Copy image address</td></tr>
+      <tr><td><div class="own" id="own">This box draws its own menu</div></td>
+          <td>the page's own menu: it calls preventDefault() on contextmenu, so none of Kurogane's opens</td></tr>
+    </table>
+    <pre id="output"></pre>
+    <div id="menu"><div data-say="first">The page's first item</div><div data-say="second">The page's second item</div></div>
+    <script>
+      const output = document.getElementById('output');
+      const log = message => { output.textContent += message + '\n'; };
+
+      // A small image of the page's own, for its menu
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 48;
+      const paint = canvas.getContext('2d');
+      paint.fillStyle = '#1e66f5';
+      paint.fillRect(0, 0, 48, 48);
+      document.getElementById('image').src = canvas.toDataURL();
+
+      // What the application's menu items asked for
+      window.kurogane.on('menu-choice', payload => {
+        const choice = typeof payload === 'string' ? JSON.parse(payload) : payload;
+        if ('dark' in choice) {
+          document.documentElement.classList.toggle('dark', choice.dark);
+          log(`dark theme ${choice.dark ? 'on' : 'off'}`);
+        } else if ('size' in choice) {
+          document.body.className = 'size-' + choice.size;
+          log(`text size ${['small', 'normal', 'large'][choice.size]}`);
+        } else if ('copy' in choice) {
+          navigator.clipboard.writeText(choice.copy || '').then(
+            () => log(`copied ${choice.copy}`),
+            e => log(`could not copy: ${e.message}`));
+        } else if ('insert' in choice) {
+          const field = document.activeElement;
+          if (field && field.setRangeText) {
+            field.setRangeText(choice.insert, field.selectionStart, field.selectionEnd, 'end');
+            log('inserted a greeting');
+          }
+        }
+      });
+
+      // A box that draws its own menu instead of Kurogane's
+      const menu = document.getElementById('menu');
+      document.getElementById('own').addEventListener('contextmenu', event => {
+        event.preventDefault();
+        menu.style.left = event.clientX + 'px';
+        menu.style.top = event.clientY + 'px';
+        menu.style.display = 'block';
+      });
+      menu.addEventListener('click', event => {
+        log(`the page's own menu: ${event.target.dataset.say} item`);
+        menu.style.display = 'none';
+      });
+      document.addEventListener('click', event => { if (!menu.contains(event.target)) menu.style.display = 'none'; });
+    </script>
+  </body>
+</html>

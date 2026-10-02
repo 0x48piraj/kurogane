@@ -3,6 +3,8 @@ use cef::{Browser, DownloadItemCallback, ImplBrowser, RequestContext};
 use tracing::debug;
 use crate::acl::Origin;
 use crate::downloads::{Downloads, SavePrompt};
+use crate::context_menu::OpenMenu;
+use crate::ipc::FrameId;
 use crate::permissions::PendingPermissions;
 use crate::window::PendingPopups;
 
@@ -64,6 +66,13 @@ pub(crate) struct BrowserState {
     /// This browser's permission requests waiting for the application's
     /// answer (see [`crate::permissions`]); its close denies them
     pub permissions: PendingPermissions,
+    /// The last context menu this browser showed: what its items run
+    /// (see [`crate::context_menu`])
+    pub context_menu: Option<OpenMenu>,
+    /// The frames whose document's own origin is opaque (a sandboxed
+    /// document), as their renderer reports them
+    /// ([`crate::context_menu::opaque_document`])
+    pub opaque_documents: Vec<FrameId>,
 }
 
 impl BrowserState {
@@ -177,6 +186,8 @@ impl BrowserRegistry {
             popup_origins: Vec::new(),
             downloads: Downloads::default(),
             permissions: PendingPermissions::default(),
+            context_menu: None,
+            opaque_documents: Vec::new(),
         };
         debug!(
             "[BrowserRegistry] registered browser {} (type={:?})",

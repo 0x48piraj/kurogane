@@ -7,6 +7,7 @@ use tracing::{debug, warn};
 use crate::runtime::AppHandle;
 use crate::browser_registry::{BrowserId, BrowserType};
 use crate::chrome_commands::KuroganeCommandHandler;
+use crate::context_menu;
 use crate::destination::{Outcome, is_blank, is_chromium_page};
 use crate::downloads::{self, Answer, DownloadRequest, SavePrompt};
 use crate::ipc::FrameId;
@@ -30,6 +31,8 @@ wrap_life_span_handler! {
         app: AppHandle,
         // What the browsers of this client are, popups aside
         browser_type: BrowserType,
+        // For DevTools, the browser it inspects
+        inspects: Option<BrowserId>,
     }
 
     impl LifeSpanHandler {
@@ -87,18 +90,25 @@ wrap_life_span_handler! {
             }
         }
 
-        // DevTools that Chrome's own command opens gets a client of its own
-        // too; BrowserHandle::show_devtools does not come through here.
+        // Every DevTools window comes through here, Chrome's command and
+        // BrowserHandle::show_devtools alike, in a window and in an embedded
+        // browser, and gets a client of its own that names the browser it
+        // inspects. One opened without a client would otherwise get CEF's
+        // default client, Kurogane's for the windows Chromium opens on its
+        // own, and register as one of those
         fn on_before_dev_tools_popup(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             _window_info: Option<&mut WindowInfo>,
             client: Option<&mut Option<Client>>,
             _settings: Option<&mut BrowserSettings>,
             _extra_info: Option<&mut Option<DictionaryValue>>,
             _use_default_window: Option<&mut i32>,
         ) {
-            own_client(client, &self.app, self.browser_type);
+            let inspects = browser.and_then(|browser| self.app.registry().browsers.find_id_by_browser(browser));
+            if let Some(client) = client {
+                *client = Some(KuroganeClient::new(self.app.clone(), self.browser_type, inspects));
+            }
         }
 
         fn on_after_created(&self, browser: Option<&mut Browser>) {
@@ -114,6 +124,8 @@ wrap_life_span_handler! {
             // not promise which of the two sees it first, and the first
             // registers it
             let (browser_type, opener) = match self.browser_type {
+                // DevTools, with the browser it inspects
+                _ if self.inspects.is_some() => (BrowserType::DevTools, self.inspects),
                 // Whatever Chromium opens on its own stays that kind
                 BrowserType::ChromeUi => (BrowserType::ChromeUi, None),
                 _ if browser.is_popup() != 0 => {
@@ -250,7 +262,8 @@ fn opens_new_window(disposition: WindowOpenDisposition) -> bool {
 }
 
 /// Puts a new client in `client`, in place of the one CEF passes in for a
-/// popup or DevTools browser (its opener's).
+/// popup (its opener's). DevTools gets one of its own the same way
+/// (`on_before_dev_tools_popup`).
 ///
 /// cef-rs keeps the reference CEF passes with that client when a handler
 /// leaves it unchanged, so the opener's client, and the application's state
@@ -261,7 +274,7 @@ fn own_client(client: Option<&mut Option<Client>>, app: &AppHandle, browser_type
     if let Some(client) = client
         && client.is_some()
     {
-        *client = Some(KuroganeClient::new(app.clone(), browser_type));
+        *client = Some(KuroganeClient::new(app.clone(), browser_type, None));
     }
 }
 
@@ -849,6 +862,54 @@ fn app_browser(app: &AppHandle, browser: Option<&Browser>) -> (Option<BrowserId>
 }
 
 //
+// CONTEXT MENU HANDLER
+//
+wrap_context_menu_handler! {
+    pub struct KuroganeContextMenuHandler {
+        app: AppHandle,
+    }
+
+    impl ContextMenuHandler {
+        // Kurogane's menu replaces Chromium's (crate::context_menu), in the
+        // application's browsers; DevTools' keep their own
+        fn on_before_context_menu(
+            &self,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            params: Option<&mut ContextMenuParams>,
+            model: Option<&mut MenuModel>,
+        ) {
+            let (Some(browser), Some(params), Some(model)) = (browser, params, model) else {
+                return;
+            };
+            let (id, ask) = app_browser(&self.app, Some(browser));
+            if ask {
+                context_menu::build(&self.app, browser, frame.as_deref(), id, params, model);
+            }
+        }
+
+        // Only what Kurogane put in the menu runs
+        fn on_context_menu_command(
+            &self,
+            browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _params: Option<&mut ContextMenuParams>,
+            command_id: i32,
+            _event_flags: EventFlags,
+        ) -> i32 {
+            let Some(browser) = browser else {
+                return 1;
+            };
+            let (id, ask) = app_browser(&self.app, Some(browser));
+            if !ask {
+                return 0;
+            }
+            context_menu::chosen(&self.app, browser, id, command_id) as i32
+        }
+    }
+}
+
+//
 // LOAD HANDLER
 //
 wrap_load_handler! {
@@ -907,6 +968,8 @@ wrap_client! {
         app: AppHandle,
         // What the browsers of this client are, popups aside
         browser_type: BrowserType,
+        // For DevTools, the browser it inspects (on_before_dev_tools_popup)
+        inspects: Option<BrowserId>,
     }
 
     impl Client {
@@ -926,6 +989,10 @@ wrap_client! {
             Some(KuroganePermissionHandler::new(self.app.clone()))
         }
 
+        fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
+            Some(KuroganeContextMenuHandler::new(self.app.clone()))
+        }
+
         // Only for an application that asks to see keys
         fn keyboard_handler(&self) -> Option<KeyboardHandler> {
             let wanted = self.app.hooks().is_some_and(|hooks| hooks.key.is_some());
@@ -939,7 +1006,7 @@ wrap_client! {
         }
 
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
-            Some(KuroganeLifeSpanHandler::new(self.app.clone(), self.browser_type))
+            Some(KuroganeLifeSpanHandler::new(self.app.clone(), self.browser_type, self.inspects))
         }
 
         fn on_process_message_received(
@@ -971,7 +1038,9 @@ wrap_client! {
             }));
             match handled {
                 Ok(true) => 1,
-                Ok(false) => 0,
+                // Not IPC: a document's opacity, which IPC's own messages
+                // carry with them, so their path never comes here
+                Ok(false) => context_menu::opaque_document(&self.app, browser, frame, msg) as i32,
                 Err(_) => {
                     debug!("[IPC Browser] dispatch panicked; message dropped");
                     1
@@ -1016,7 +1085,7 @@ mod tests {
     #[test]
     fn a_new_browser_gets_a_client_of_its_own() {
         let app = AppHandle::detached();
-        let opener = KuroganeClient::new(app.clone(), BrowserType::Main);
+        let opener = KuroganeClient::new(app.clone(), BrowserType::Main, None);
 
         // What CEF passes in: the opener's client, with a reference of its own
         let mut passed = Some(opener.clone());

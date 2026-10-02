@@ -79,6 +79,10 @@ name = "new-window"
 path = "scenarios/new-window/main.rs"
 
 [[example]]
+name = "context-menu"
+path = "scenarios/context-menu/main.rs"
+
+[[example]]
 name = "multi-window"
 path = "scenarios/multi-window.rs"
 

@@ -24,6 +24,7 @@ use crate::gpu::GpuMode;
 use crate::capability::{FilesystemBuilder, FsConfigError};
 use crate::acl::Origin;
 use crate::chrome_commands::{ChromeCommandRequest, CommandDecision};
+use crate::context_menu::{ContextMenu, ContextMenuCommand};
 use crate::downloads::{DownloadDecision, DownloadRequest};
 use crate::permissions::{PermissionDecision, PermissionRequest};
 use crate::hooks::Hooks;
@@ -1022,6 +1023,73 @@ impl App {
         F: Fn(&PermissionRequest, &AppHandle) -> PermissionDecision + Send + Sync + 'static,
     {
         self.hooks.permission = Some(Box::new(f));
+        self
+    }
+
+    /// Edits the menu a right-click opens.
+    ///
+    /// Kurogane builds the same menu in a window and in an embedded
+    /// browser, never Chromium's own: in a text field the editing items
+    /// (Undo, Redo, Cut, Copy, Paste, Paste as plain text, Select all),
+    /// under Chromium's spelling suggestions on a misspelled word; Copy on
+    /// a selection; nothing elsewhere; and Inspect last in a debug build.
+    /// The hook gets that [`ContextMenu`](crate::ContextMenu), with what
+    /// was right-clicked ([`ContextMenu::target`](crate::ContextMenu::target):
+    /// a link, an image, a selection, a text field), and may add, remove or
+    /// reorder its items: Kurogane's own
+    /// ([`StandardItem`](crate::StandardItem)), the application's
+    /// ([`MenuItem::new`](crate::MenuItem::new), whose choice goes to
+    /// [`on_context_menu_command`](App::on_context_menu_command)),
+    /// separators and submenus. A menu left empty does not show.
+    ///
+    /// A standard item whose command
+    /// [`on_chrome_command`](App::on_chrome_command) refuses is left out,
+    /// and asked about again when chosen. Separators at an edge or next to
+    /// another, and submenus left empty, are not shown. A page that draws
+    /// its own menu calls `preventDefault()` on the `contextmenu` event, and
+    /// no menu of Kurogane's opens.
+    ///
+    /// Runs on the UI thread as the menu opens, so it must not block. A
+    /// hook that panics leaves Kurogane's menu. DevTools' menus are not
+    /// asked about. A later call replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, MenuItem};
+    /// App::new("./dist")
+    ///     .on_context_menu(|menu, _| {
+    ///         if menu.target().link_url().is_some() {
+    ///             menu.push(MenuItem::new("copy-link", "Copy link"));
+    ///         }
+    ///     })
+    ///     .on_context_menu_command(|command, _| {
+    ///         if command.id() == "copy-link" {
+    ///             println!("copy {:?}", command.target().link_url());
+    ///         }
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_context_menu<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&mut ContextMenu, &AppHandle) + Send + Sync + 'static,
+    {
+        self.hooks.context_menu = Some(Box::new(f));
+        self
+    }
+
+    /// Runs an item of the application's that the user chose from a
+    /// context menu ([`MenuItem::new`](crate::MenuItem::new) in
+    /// [`on_context_menu`](App::on_context_menu)), with what the menu was
+    /// opened on. An item chosen after the document the menu was opened on
+    /// went away, a page that navigated while its menu stayed open, runs
+    /// nothing.
+    ///
+    /// Runs on the UI thread, so it must not block. A hook that panics is
+    /// logged. A later call replaces an earlier one.
+    pub fn on_context_menu_command<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&ContextMenuCommand, &AppHandle) + Send + Sync + 'static,
+    {
+        self.hooks.context_menu_command = Some(Box::new(f));
         self
     }
 

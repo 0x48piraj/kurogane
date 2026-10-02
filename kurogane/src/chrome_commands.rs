@@ -2,7 +2,9 @@
 //!
 //! A Kurogane window omits standard browser UI (tab strips, toolbars, app menus).
 //! However, the underlying CEF framework still processes default Chrome shortcuts
-//! (e.g., Ctrl+N, Ctrl+T) and context menus.
+//! (e.g., Ctrl+N, Ctrl+T). The context menu is Kurogane's own
+//! (`crate::context_menu`), whose standard items ask the application as
+//! these commands do.
 //!
 //! To prevent CEF from spawning unmanaged native windows or tabs, this module intercepts
 //! the command pipeline. Kurogane uses a strict allowlist: commands execute ONLY if they
@@ -150,7 +152,7 @@ unsafe extern "C" {
 }
 
 /// Resolves a stable command name to its dynamic runtime ID.
-fn command_id(name: &CStr) -> Option<c_int> {
+pub(crate) fn command_id(name: &CStr) -> Option<c_int> {
     // SAFETY: `name` is a valid, null-terminated C-string. The FFI boundary
     // guarantees read-only access and the backing memory outlives the call.
     let id = unsafe { cef_id_for_command_id_name(name.as_ptr()) };
@@ -211,27 +213,28 @@ fn verdict(id: c_int, disposition: WindowOpenDisposition) -> Verdict {
     Verdict::Refuse
 }
 
+/// Whether the application refuses `command` in `browser`, from a key
+/// shortcut or the context menu (`crate::context_menu`).
+pub(crate) fn refuses(app: &AppHandle, command: ChromeCommand, browser: Option<BrowserId>) -> bool {
+    decide(app, command, browser) == CommandDecision::Refuse
+}
+
 /// Asks the application's hook about `command` in `browser`. A hook that
 /// panics refuses the command: the hook is there to restrict what runs.
-fn decide(
-    app: &AppHandle,
-    command: ChromeCommand,
-    browser: Option<&mut Browser>,
-) -> CommandDecision {
+fn decide(app: &AppHandle, command: ChromeCommand, browser: Option<BrowserId>) -> CommandDecision {
     let Some(hooks) = app.hooks() else {
         return CommandDecision::Default;
     };
     let Some(hook) = hooks.chrome_command.as_ref() else {
         return CommandDecision::Default;
     };
-    let (browser, kind) = {
-        let reg = app.registry();
-        let id = browser.and_then(|browser| reg.browsers.find_id_by_browser(browser));
-        let kind = id
-            .and_then(|id| reg.browsers.get(id))
-            .map(|state| state.metadata.browser_type);
-        (id, kind)
-    };
+    // The guard ends with the statement
+    let kind = browser.and_then(|id| {
+        app.registry()
+            .browsers
+            .get(id)
+            .map(|state| state.metadata.browser_type)
+    });
     // Chromium's own browsers, DevTools' included, are not the application's
     if matches!(kind, Some(BrowserType::DevTools | BrowserType::ChromeUi)) {
         return CommandDecision::Default;
@@ -271,7 +274,11 @@ wrap_command_handler! {
             }
 
             match verdict(command_id, disposition) {
-                Verdict::Ask(command) => match decide(&self.app, command, browser) {
+                Verdict::Ask(command) => match decide(
+                    &self.app,
+                    command,
+                    browser.and_then(|browser| self.app.registry().browsers.find_id_by_browser(browser)),
+                ) {
                     CommandDecision::Default => {
                         debug!("[Commands] {command:?} ({command_id}) runs");
                         0 // Unhandled: CEF runs the command

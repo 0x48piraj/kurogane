@@ -22,6 +22,7 @@ mod downloads;
 mod permissions;
 mod external;
 mod chrome_commands;
+mod context_menu;
 mod scheme;
 mod error;
 mod fs;
@@ -70,3 +71,7 @@ pub use keys::{Key, KeyDecision, KeyPress, Modifiers};
 pub use chrome_commands::{ChromeCommand, ChromeCommandRequest, CommandDecision};
 pub use downloads::{DownloadDecision, DownloadRequest};
 pub use permissions::{Permission, PermissionDecision, PermissionRequest, PermissionResponder};
+pub use context_menu::{
+    AppItem, ContextMenu, ContextMenuCommand, ContextMenuTarget, MediaKind, MenuItem, StandardItem,
+    Submenu,
+};

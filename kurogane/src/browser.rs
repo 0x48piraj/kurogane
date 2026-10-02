@@ -112,7 +112,7 @@ impl KuroganeBrowserProcessHandler {
     /// CEF requests the handler from multiple threads. Keep one handler and
     /// its state for the lifetime of the process.
     pub(crate) fn create(app: AppHandle, spec: RuntimeSpec) -> BrowserProcessHandler {
-        let chrome_ui_client = KuroganeClient::new(app.clone(), BrowserType::ChromeUi);
+        let chrome_ui_client = KuroganeClient::new(app.clone(), BrowserType::ChromeUi, None);
         Self::new(app, spec, chrome_ui_client)
     }
 }
