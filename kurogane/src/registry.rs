@@ -3,6 +3,7 @@
 use cef::Browser;
 
 use crate::browser_registry::{BrowserId, BrowserRegistry, BrowserType};
+use crate::permissions::Pending;
 use crate::window_registry::WindowRegistry;
 
 /// The open browsers and windows, and which window shows which browser.
@@ -23,6 +24,10 @@ pub(crate) struct Closed {
     pub(crate) stragglers: Vec<Browser>,
     /// No browser is left
     pub(crate) last: bool,
+    /// The browser's permission requests still waiting for an answer, to
+    /// deny: CEF answers a page's request for a device as its callback
+    /// goes, which must not happen under the lock
+    pub(crate) waiting_permissions: Vec<Pending>,
 }
 
 impl Registry {
@@ -42,6 +47,11 @@ impl Registry {
             .browsers
             .get(id)
             .is_some_and(|state| state.metadata.browser_type != BrowserType::ChromeUi);
+        let waiting_permissions = self
+            .browsers
+            .get_mut(id)
+            .map(|state| state.permissions.take_all())
+            .unwrap_or_default();
 
         self.browsers.unregister(id);
         self.windows.unlink_browser(id);
@@ -58,6 +68,7 @@ impl Registry {
             id,
             stragglers,
             last: self.browsers.is_empty(),
+            waiting_permissions,
         })
     }
 }

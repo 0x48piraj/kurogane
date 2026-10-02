@@ -3,6 +3,7 @@ use cef::{Browser, DownloadItemCallback, ImplBrowser, RequestContext};
 use tracing::debug;
 use crate::acl::Origin;
 use crate::downloads::{Downloads, SavePrompt};
+use crate::permissions::PendingPermissions;
 use crate::window::PendingPopups;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -60,6 +61,9 @@ pub(crate) struct BrowserState {
     /// This browser's downloads Kurogane holds: asking the user, one Save
     /// As dialog at a time, or refused; they go with the browser
     pub downloads: Downloads<SavePrompt, DownloadItemCallback>,
+    /// This browser's permission requests waiting for the application's
+    /// answer (see [`crate::permissions`]); its close denies them
+    pub permissions: PendingPermissions,
 }
 
 impl BrowserState {
@@ -172,6 +176,7 @@ impl BrowserRegistry {
             admitted: Vec::new(),
             popup_origins: Vec::new(),
             downloads: Downloads::default(),
+            permissions: PendingPermissions::default(),
         };
         debug!(
             "[BrowserRegistry] registered browser {} (type={:?})",

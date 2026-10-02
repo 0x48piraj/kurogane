@@ -12,6 +12,7 @@ use crate::downloads::{DownloadDecision, DownloadRequest};
 use crate::keys::{KeyDecision, KeyPress};
 use crate::navigation::{NavigationDecision, NavigationRequest};
 use crate::new_window::{NewWindowDecision, NewWindowRequest};
+use crate::permissions::{PermissionDecision, PermissionRequest};
 use crate::runtime::AppHandle;
 
 /// What [`App::on_new_window`](crate::App::on_new_window) stores.
@@ -33,6 +34,10 @@ pub(crate) type ChromeCommandHook =
 pub(crate) type DownloadHook =
     Box<dyn Fn(&DownloadRequest, &AppHandle) -> DownloadDecision + Send + Sync>;
 
+/// What [`App::on_permission`](crate::App::on_permission) stores.
+pub(crate) type PermissionHook =
+    Box<dyn Fn(&PermissionRequest, &AppHandle) -> PermissionDecision + Send + Sync>;
+
 /// The hooks the application registered.
 #[derive(Default)]
 pub(crate) struct Hooks {
@@ -41,4 +46,5 @@ pub(crate) struct Hooks {
     pub key: Option<KeyHook>,
     pub chrome_command: Option<ChromeCommandHook>,
     pub download: Option<DownloadHook>,
+    pub permission: Option<PermissionHook>,
 }

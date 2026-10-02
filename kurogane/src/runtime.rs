@@ -601,7 +601,7 @@ impl AppHandle {
     /// CefInitialize, since Kurogane never sets `multi_threaded_message_loop`
     /// (cef_types.h:1753-1755). Compares thread ids and asks CEF nothing, so
     /// it holds before CefInitialize and after CefShutdown alike.
-    fn on_ui_thread(&self) -> bool {
+    pub(crate) fn on_ui_thread(&self) -> bool {
         std::thread::current().id() == self.services.ui_thread
     }
 
@@ -776,6 +776,22 @@ impl AppHandle {
     /// closed.
     pub fn browser_for_window(&self, id: WindowId) -> Option<BrowserId> {
         self.registry().windows.browser_for_window(id)
+    }
+
+    /// Forgets the permission answers Chromium remembers for `origin`, so
+    /// the site's next request reaches
+    /// [`App::on_permission`](crate::App::on_permission) again: after the
+    /// application's policy changed, or the user took a permission back.
+    ///
+    /// Chromium remembers its answers to web sites (http, https), granted
+    /// or denied, in the profile, and forgets them nowhere else. Forgetting
+    /// also takes back a grant the site holds now: its notifications stop.
+    /// Applies to the profile of every open browser, an embedded browser's
+    /// own profile included. A call from another thread is posted to the UI
+    /// thread. Does nothing for the opaque origin, or once
+    /// [`AppInstance::shutdown`] has begun.
+    pub fn forget_permissions(&self, origin: &Origin) {
+        crate::permissions::forget_on_ui(self, origin);
     }
 
     /// Creates a BrowserHandle for a registered browser, if it exists.

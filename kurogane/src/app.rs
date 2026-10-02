@@ -25,6 +25,7 @@ use crate::capability::{FilesystemBuilder, FsConfigError};
 use crate::acl::Origin;
 use crate::chrome_commands::{ChromeCommandRequest, CommandDecision};
 use crate::downloads::{DownloadDecision, DownloadRequest};
+use crate::permissions::{PermissionDecision, PermissionRequest};
 use crate::hooks::Hooks;
 use crate::keys::{KeyDecision, KeyPress};
 use crate::navigation::{NavigationDecision, NavigationRequest};
@@ -961,6 +962,66 @@ impl App {
         F: Fn(&DownloadRequest, &AppHandle) -> DownloadDecision + Send + Sync + 'static,
     {
         self.hooks.download = Some(Box::new(f));
+        self
+    }
+
+    /// Decides what a page may use only with consent: a camera, a
+    /// microphone, the screen, the location, notifications, reading the
+    /// clipboard and the rest of [`Permission`](crate::Permission).
+    ///
+    /// Without a hook, or when it answers [`PermissionDecision::Default`],
+    /// the request is denied: no page gets a device or a permission the
+    /// application did not allow. Chromium's own prompt never shows, in a
+    /// window or an embedded browser. [`PermissionDecision::Allow`] grants
+    /// everything the request asks for and [`PermissionDecision::Deny`]
+    /// none of it: a page asking for a camera and a microphone together
+    /// gets both or neither.
+    ///
+    /// To ask the user first, the hook takes a
+    /// [`PermissionResponder`](crate::PermissionResponder) with
+    /// [`PermissionRequest::responder`] and answers
+    /// [`PermissionDecision::Later`]; the page waits until the responder
+    /// allows or denies, from any thread. A responder dropped unanswered
+    /// denies.
+    ///
+    /// Allowing [`Permission::ScreenVideo`](crate::Permission::ScreenVideo)
+    /// lets the page record the whole screen: there is no picker.
+    ///
+    /// Chromium remembers its answer to a web site (http, https), granted or
+    /// denied, in the profile, so the site's later requests get it without
+    /// reaching the hook; [`AppHandle::forget_permissions`] makes them ask
+    /// again. A camera, a microphone and the screen are never remembered.
+    /// For the application's own pages nothing is remembered, so a grant
+    /// that must still hold after the request does not: such a page is told
+    /// yes for notifications and the location, but cannot show a
+    /// notification or read the location.
+    ///
+    /// Runs on the UI thread, so it must not block. A hook that panics
+    /// denies. Requests from DevTools are not asked about and are denied. A
+    /// later call replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, Origin, Permission, PermissionDecision};
+    /// let own = Origin::parse("app://app").unwrap();
+    /// App::new("./dist")
+    ///     .on_permission(move |request, _| {
+    ///         let devices = request
+    ///             .permissions()
+    ///             .iter()
+    ///             .all(|kind| matches!(kind, Permission::Camera | Permission::Microphone));
+    ///         if request.origin() == &own && devices {
+    ///             PermissionDecision::Allow
+    ///         } else {
+    ///             PermissionDecision::Deny
+    ///         }
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_permission<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&PermissionRequest, &AppHandle) -> PermissionDecision + Send + Sync + 'static,
+    {
+        self.hooks.permission = Some(Box::new(f));
         self
     }
 

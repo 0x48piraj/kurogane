@@ -13,6 +13,7 @@ use crate::ipc::FrameId;
 use crate::keys::{self, KeyDecision, KeyPress};
 use crate::navigation::{self, NavigationRequest};
 use crate::new_window::{self, NewWindowRequest};
+use crate::permissions::{self, Answer as PermissionAnswer, Pending, PermissionRequest};
 use crate::window::{Placement, PopupGeometry, open_browser_window};
 
 /// A load the application made itself, through CreateBrowser, LoadURL or
@@ -171,6 +172,10 @@ wrap_life_span_handler! {
                 return;
             };
             debug!("Browser {} destroyed", closed.id.as_u32());
+
+            for waiting in closed.waiting_permissions {
+                waiting.answer(false);
+            }
 
             #[cfg(target_os = "macos")]
             crate::platform::embed::forget_view(closed.id);
@@ -524,14 +529,8 @@ wrap_download_handler! {
                 .main_frame()
                 .map(|frame| CefString::from(&frame.url()).to_string())
                 .unwrap_or_default();
-            // The guard ends with the block, before the hook runs
-            let (id, ask) = {
-                let reg = self.app.registry();
-                let id = reg.browsers.find_id_by_browser(browser);
-                let kind = id.and_then(|id| reg.browsers.get(id)).map(|state| state.metadata.browser_type);
-                // Chromium's own browsers, DevTools' included, are not the application's
-                (id, !matches!(kind, Some(BrowserType::DevTools | BrowserType::ChromeUi)))
-            };
+            // The guard ends with the call, before the hook runs
+            let (id, ask) = app_browser(&self.app, Some(browser));
             let request = DownloadRequest::new(
                 CefString::from(&item.url()).to_string(),
                 &page_url,
@@ -728,33 +727,125 @@ wrap_run_file_dialog_callback! {
 // PERMISSION HANDLER
 //
 wrap_permission_handler! {
-    pub struct KuroganePermissionHandler;
+    pub struct KuroganePermissionHandler {
+        app: AppHandle,
+    }
 
     impl PermissionHandler {
-        // Chromium's prompt for a page's further downloads without a click,
-        // which holds them until the user answers (crate::downloads). Every
-        // other prompt is left to CEF's default, its own prompt
+        // Chromium's prompt: for multiple downloads the download policy's
+        // (crate::downloads), every other the application's
+        // (crate::permissions). Every prompt is answered: returning 0 would
+        // show Chromium's own prompt in a window and leave the request
+        // pending forever in an embedded browser
         fn on_show_permission_prompt(
             &self,
-            _browser: Option<&mut Browser>,
-            _prompt_id: u64,
+            browser: Option<&mut Browser>,
+            prompt_id: u64,
             requesting_origin: Option<&CefString>,
             requested_permissions: u32,
             callback: Option<&mut PermissionPromptCallback>,
         ) -> i32 {
-            let Some(callback) = callback.filter(|_| downloads::grants_prompt(requested_permissions)) else {
+            let origin = requesting_origin.map(CefString::to_string).unwrap_or_default();
+            debug!("[permission] prompt {prompt_id} for {origin}: {requested_permissions:#x}");
+            // CEF always passes one
+            let Some(callback) = callback else {
                 return 0;
             };
-            debug!(
-                "multiple downloads granted to {}",
-                requesting_origin.map(CefString::to_string).unwrap_or_default()
-            );
-            callback.cont(PermissionRequestResult::from(
-                sys::cef_permission_request_result_t::CEF_PERMISSION_RESULT_ACCEPT,
-            ));
+            if downloads::grants_prompt(requested_permissions) {
+                debug!("multiple downloads granted to {origin}");
+                callback.cont(permissions::prompt_result(true));
+                return 1;
+            }
+            let (id, ask) = app_browser(&self.app, browser.as_deref());
+            let request = PermissionRequest::prompt(&self.app, &origin, requested_permissions, id);
+            let allow = match permissions::decide(&self.app, &request, ask) {
+                PermissionAnswer::Allow => true,
+                PermissionAnswer::Deny => false,
+                PermissionAnswer::Later => {
+                    let pending = Pending::Prompt {
+                        callback: callback.clone(),
+                        prompt: prompt_id,
+                    };
+                    match permissions::hold(&self.app, id, request.id(), pending) {
+                        Ok(()) => return 1,
+                        Err(_) => false,
+                    }
+                }
+            };
+            callback.cont(permissions::prompt_result(allow));
             1
         }
+
+        // A camera, a microphone or the screen (crate::permissions). Every
+        // request is answered, as every prompt is
+        fn on_request_media_access_permission(
+            &self,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            requesting_origin: Option<&CefString>,
+            requested_permissions: u32,
+            callback: Option<&mut MediaAccessCallback>,
+        ) -> i32 {
+            let origin = requesting_origin.map(CefString::to_string).unwrap_or_default();
+            debug!("[permission] media for {origin}: {requested_permissions:#x}");
+            // CEF always passes one
+            let Some(callback) = callback else {
+                return 0;
+            };
+            let (id, ask) = app_browser(&self.app, browser.as_deref());
+            let request = PermissionRequest::media(&self.app, &origin, requested_permissions, id);
+            let allow = match permissions::decide(&self.app, &request, ask) {
+                PermissionAnswer::Allow => true,
+                PermissionAnswer::Deny => false,
+                PermissionAnswer::Later => {
+                    let pending = Pending::Media {
+                        callback: callback.clone(),
+                        requested: requested_permissions,
+                        frame: frame.as_deref().cloned(),
+                    };
+                    match permissions::hold(&self.app, id, request.id(), pending) {
+                        Ok(()) => return 1,
+                        Err(_) => false,
+                    }
+                }
+            };
+            callback.cont(if allow { requested_permissions } else { 0 });
+            1
+        }
+
+        // Chromium took its prompt down: answered, or gone with its page,
+        // when a request waiting for the application's answer goes too
+        fn on_dismiss_permission_prompt(
+            &self,
+            browser: Option<&mut Browser>,
+            prompt_id: u64,
+            result: PermissionRequestResult,
+        ) {
+            debug!("[permission] prompt {prompt_id} ended: {result:?}");
+            // The guard ends with the block; what it took goes after it
+            let ended = browser.and_then(|browser| {
+                let mut reg = self.app.registry();
+                let id = reg.browsers.find_id_by_browser(browser)?;
+                reg.browsers.get_mut(id)?.permissions.prompt_ended(prompt_id)
+            });
+            drop(ended);
+        }
     }
+}
+
+/// The id of `browser` and whether it is the application's: Chromium's own
+/// browsers, DevTools' included, are not, and their requests never reach
+/// the application's hooks.
+fn app_browser(app: &AppHandle, browser: Option<&Browser>) -> (Option<BrowserId>, bool) {
+    let reg = app.registry();
+    let id = browser.and_then(|browser| reg.browsers.find_id_by_browser(browser));
+    let kind = id
+        .and_then(|id| reg.browsers.get(id))
+        .map(|state| state.metadata.browser_type);
+    (
+        id,
+        !matches!(kind, Some(BrowserType::DevTools | BrowserType::ChromeUi)),
+    )
 }
 
 //
@@ -832,7 +923,7 @@ wrap_client! {
         }
 
         fn permission_handler(&self) -> Option<PermissionHandler> {
-            Some(KuroganePermissionHandler::new())
+            Some(KuroganePermissionHandler::new(self.app.clone()))
         }
 
         // Only for an application that asks to see keys
