@@ -291,6 +291,20 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
     let packaging_config = PackagingConfig::load(metadata.workspace_root.as_std_path())?;
 
+    // What the bundle is built under and declares, checked before any build
+    let pkg = metadata
+        .root_package()
+        .ok_or_else(|| anyhow::anyhow!("No root package"))?;
+    let app_name = packaging_config
+        .app
+        .name
+        .clone()
+        .unwrap_or_else(|| pkg.name.to_string());
+    kurogane_layout::check_app_name(&app_name)
+        .with_context(|| format!("[app].name in {}", crate::config::CONFIG_FILE_NAME))?;
+    #[cfg(target_os = "macos")]
+    let macos = crate::macos_settings::MacosSettings::resolve(&packaging_config.macos)?;
+
     // Build frontend before cargo build
     build_frontend(metadata.workspace_root.as_std_path(), &packaging_config.app)?;
 
@@ -310,10 +324,6 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
             }
         }
     }
-
-    let pkg = metadata
-        .root_package()
-        .ok_or_else(|| anyhow::anyhow!("No root package"))?;
 
     let profile = if debug { "debug" } else { "release" };
     let kurogane_target = crate::launch::target_dir_in(metadata.target_directory.as_std_path());
@@ -426,9 +436,14 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
         #[cfg(target_os = "macos")]
         PackageFormat::AppBundle => {
-            let app_dir = crate::app_bundle::build(&dist, &output_dir, sign_config.as_ref())?;
-            let name = dist.metadata.name.clone();
-            crate::dmg::build(&app_dir, &output_dir, &name)?;
+            let app_dir =
+                crate::app_bundle::build(&dist, &output_dir, &macos, sign_config.as_ref())?;
+            crate::dmg::build(
+                &app_dir,
+                &output_dir,
+                &dist.metadata.name,
+                sign_config.as_ref(),
+            )?;
             tui::field("output", tui::format_path(&app_dir));
         }
     }

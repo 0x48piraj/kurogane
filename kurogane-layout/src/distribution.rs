@@ -101,6 +101,15 @@ pub enum DistributionError {
     #[error("the application has no executable name to install under")]
     MissingExeName,
 
+    /// A name every package format turns into a file or folder name, and
+    /// some into a script, that cannot be one on every platform.
+    #[error("the {what} {name:?} cannot name a file: {problem}")]
+    InvalidName {
+        what: &'static str,
+        name: String,
+        problem: NameProblem,
+    },
+
     #[error("frontend directory not found: {0}")]
     MissingFrontend(PathBuf),
 
@@ -153,9 +162,12 @@ impl ResolvedDistribution {
             }
         }
 
+        check_app_name(&self.metadata.name)?;
+
         if self.metadata.exe_name.is_empty() {
             return Err(DistributionError::MissingExeName);
         }
+        check_name("executable name", &self.metadata.exe_name)?;
 
         if let Some(frontend) = &self.frontend {
             if !frontend.exists() {
@@ -197,6 +209,90 @@ impl ResolvedDistribution {
         crate::cef::validate_cef_runtime(&self.cef_runtime)?;
         Ok(())
     }
+}
+
+/// Why a name cannot name a file on every platform Kurogane bundles for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum NameProblem {
+    #[error("it is empty")]
+    Empty,
+
+    #[error("it is a relative path")]
+    Relative,
+
+    #[error("it starts or ends with whitespace")]
+    OuterWhitespace,
+
+    #[error("it ends with a dot, which Windows drops")]
+    TrailingDot,
+
+    #[error("it holds a control character")]
+    Control,
+
+    #[error("it holds {0:?}, which a file name cannot hold on every platform")]
+    Reserved(char),
+
+    #[error("Windows reserves it for a device")]
+    Device,
+}
+
+/// Characters a file name cannot hold on Windows; `/` also separates paths
+/// everywhere else.
+const RESERVED: [char; 9] = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+
+/// Names Windows keeps for devices, whatever their extension or case.
+const DEVICES: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// Whether `name` names one file or folder on Windows, macOS and Linux
+/// alike, so a project bundles under the same name everywhere.
+///
+/// Every character else is allowed: `$`, quotes and backticks reach scripts
+/// only quoted for them.
+pub fn portable_file_name(name: &str) -> Result<(), NameProblem> {
+    if name.is_empty() {
+        return Err(NameProblem::Empty);
+    }
+    if name == "." || name == ".." {
+        return Err(NameProblem::Relative);
+    }
+    if name.starts_with(char::is_whitespace) || name.ends_with(char::is_whitespace) {
+        return Err(NameProblem::OuterWhitespace);
+    }
+    if name.ends_with('.') {
+        return Err(NameProblem::TrailingDot);
+    }
+    if name.chars().any(char::is_control) {
+        return Err(NameProblem::Control);
+    }
+    if let Some(reserved) = name.chars().find(|c| RESERVED.contains(c)) {
+        return Err(NameProblem::Reserved(reserved));
+    }
+    let stem = name.split('.').next().unwrap_or(name).trim_end();
+    if DEVICES
+        .iter()
+        .any(|device| device.eq_ignore_ascii_case(stem))
+    {
+        return Err(NameProblem::Device);
+    }
+    Ok(())
+}
+
+/// Checks the application's display name, `[app].name` or the package name,
+/// before anything is built under it.
+pub fn check_app_name(name: &str) -> Result<(), DistributionError> {
+    check_name("application name", name)
+}
+
+fn check_name(what: &'static str, name: &str) -> Result<(), DistributionError> {
+    portable_file_name(name).map_err(|problem| DistributionError::InvalidName {
+        what,
+        name: name.to_string(),
+        problem,
+    })
 }
 
 /// Validates a resource destination within the bundle.
@@ -267,6 +363,86 @@ mod tests {
             dist.validate(),
             Err(DistributionError::MissingExeName)
         ));
+    }
+
+    #[test]
+    fn a_display_name_must_name_one_file_on_every_platform() {
+        for (name, problem) in [
+            ("", NameProblem::Empty),
+            ("..", NameProblem::Relative),
+            (" My App", NameProblem::OuterWhitespace),
+            ("My App\t", NameProblem::OuterWhitespace),
+            ("My App.", NameProblem::TrailingDot),
+            ("My\nApp", NameProblem::Control),
+            ("My\u{7f}App", NameProblem::Control),
+            ("../../outside", NameProblem::Reserved('/')),
+            ("/tmp/app", NameProblem::Reserved('/')),
+            (r"..\outside", NameProblem::Reserved('\\')),
+            ("C:App", NameProblem::Reserved(':')),
+            ("My \"Best\" App", NameProblem::Reserved('"')),
+            ("Why?", NameProblem::Reserved('?')),
+            ("Ben & Jerry <Ltd>", NameProblem::Reserved('<')),
+            ("a|b", NameProblem::Reserved('|')),
+            ("CON", NameProblem::Device),
+            ("nul.tar.gz", NameProblem::Device),
+            ("Com1 .app", NameProblem::Device),
+        ] {
+            assert_eq!(portable_file_name(name), Err(problem), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn shell_and_markup_characters_are_ordinary_in_a_display_name() {
+        // Scripts and plists quote or escape these where they write them
+        for name in [
+            "My App",
+            "Tom's App",
+            "Ca$h",
+            "$(touch mark)",
+            "`touch mark`",
+            "Ben & Jerry",
+            "Price 5$",
+            "Café",
+            "Console",
+            "COM10",
+            "My.App",
+        ] {
+            assert_eq!(portable_file_name(name), Ok(()), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn a_distribution_whose_names_cannot_name_files_is_rejected() {
+        let dir = crate::test_fixtures::tmp_dir();
+        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        dist.metadata.name = "/etc".to_string();
+        assert!(matches!(
+            dist.validate(),
+            Err(DistributionError::InvalidName {
+                what: "application name",
+                problem: NameProblem::Reserved('/'),
+                ..
+            })
+        ));
+
+        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        dist.metadata.exe_name = "a\nb".to_string();
+        let err = dist.validate().unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DistributionError::InvalidName {
+                    what: "executable name",
+                    problem: NameProblem::Control,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        assert_eq!(
+            err.to_string(),
+            "the executable name \"a\\nb\" cannot name a file: it holds a control character"
+        );
     }
 
     #[test]

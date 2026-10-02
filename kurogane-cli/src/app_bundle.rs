@@ -11,6 +11,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use kurogane_layout::{AppMetadata, Executable, copy_dir, validate_cef_runtime};
+use crate::macos_settings::MacosSettings;
+use crate::plist::Dict;
 use crate::signing::{SignConfig, sign_app_bundle};
 
 use crate::tui;
@@ -33,16 +35,6 @@ fn resources_dir(app_dir: &Path) -> std::path::PathBuf {
     app_dir.join("Contents").join("Resources")
 }
 
-/// Escapes a value for an XML `<string>` in `Info.plist`.
-///
-/// Unescaped XML characters produce an invalid plist.
-fn plist_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
 /// The bundle identifier for an application, configured or derived.
 fn bundle_identifier(meta: &AppMetadata) -> String {
     meta.identifier
@@ -50,61 +42,64 @@ fn bundle_identifier(meta: &AppMetadata) -> String {
         .unwrap_or_else(|| default_identifier(&meta.name))
 }
 
-/// Generates `Contents/Info.plist` for the bundle.
-fn write_info_plist(app_dir: &Path, meta: &AppMetadata, exe_name: &str, icon: bool) -> Result<()> {
-    let bundle_identifier = plist_escape(&bundle_identifier(meta));
+/// The keys every `Info.plist` of the bundle carries, the application's and
+/// each helper's: its identity, and what `[macos]` declares.
+fn bundle_plist(
+    name: &str,
+    identifier: &str,
+    executable: &str,
+    version: &str,
+    macos: &MacosSettings,
+) -> Dict {
+    let mut plist = Dict::new();
+    plist
+        .set("CFBundleName", name)
+        .set("CFBundleDisplayName", name)
+        .set("CFBundleIdentifier", identifier)
+        .set("CFBundleExecutable", executable)
+        .set("CFBundlePackageType", "APPL")
+        .set("CFBundleVersion", version)
+        .set("CFBundleShortVersionString", version)
+        .set("NSHighResolutionCapable", true);
+    macos.declare(&mut plist);
+    plist
+}
 
-    let name = plist_escape(&meta.name);
-    let exe = plist_escape(exe_name);
-    let version = plist_escape(&meta.version);
+/// Writes `plist` as `<bundle>/Contents/Info.plist`.
+fn write_plist(bundle: &Path, plist: &Dict) -> Result<()> {
+    let path = bundle.join("Contents").join("Info.plist");
+    let xml = plist
+        .to_xml()
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    fs::write(&path, xml).with_context(|| format!("failed to write {}", path.display()))
+}
+
+/// Generates `Contents/Info.plist` for the bundle.
+fn write_info_plist(
+    app_dir: &Path,
+    meta: &AppMetadata,
+    exe_name: &str,
+    icon: bool,
+    macos: &MacosSettings,
+) -> Result<()> {
+    let mut plist = bundle_plist(
+        &meta.name,
+        &bundle_identifier(meta),
+        exe_name,
+        &meta.version,
+        macos,
+    );
 
     // Reference the icon only when one was actually installed;
     // a dangling CFBundleIconFile leaves the app with no icon at all
-    let icon_entry = if icon {
-        "    <key>CFBundleIconFile</key>\n    <string>AppIcon</string>\n"
-    } else {
-        ""
-    };
+    if icon {
+        plist.set("CFBundleIconFile", "AppIcon");
+    }
+    plist
+        .set("LSApplicationCategoryType", macos.category.as_str())
+        .set("NSSupportsAutomaticGraphicsSwitching", true);
 
-    let plist = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleName</key>
-    <string>{name}</string>
-    <key>CFBundleDisplayName</key>
-    <string>{name}</string>
-    <key>CFBundleIdentifier</key>
-    <string>{bundle_identifier}</string>
-    <key>CFBundleExecutable</key>
-    <string>{exe}</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleVersion</key>
-    <string>{version}</string>
-    <key>CFBundleShortVersionString</key>
-    <string>{version}</string>
-{icon_entry}    <key>LSApplicationCategoryType</key>
-    <string>public.app-category.utilities</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>NSSupportsAutomaticGraphicsSwitching</key>
-    <true/>
-</dict>
-</plist>
-"#,
-        name = name,
-        bundle_identifier = bundle_identifier,
-        exe = exe,
-        version = version,
-        icon_entry = icon_entry,
-    );
-
-    let plist_path = app_dir.join("Contents").join("Info.plist");
-    fs::write(&plist_path, plist)
-        .with_context(|| format!("failed to write {}", plist_path.display()))?;
-    Ok(())
+    write_plist(app_dir, &plist)
 }
 
 /// Returns a fallback bundle identifier for projects without `[app].identifier`.
@@ -132,49 +127,17 @@ const HELPERS: &[(&str, &str)] = &[
     (" (Alerts)", "helper.alerts"),
 ];
 
-/// Writes `Contents/Info.plist` for a helper bundle.
+/// Writes `Contents/Info.plist` for a helper bundle, kept out of the Dock.
 fn write_helper_plist(
     helper_app: &Path,
     name: &str,
     identifier: &str,
     version: &str,
+    macos: &MacosSettings,
 ) -> Result<()> {
-    let plist = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleName</key>
-    <string>{name}</string>
-    <key>CFBundleDisplayName</key>
-    <string>{name}</string>
-    <key>CFBundleIdentifier</key>
-    <string>{identifier}</string>
-    <key>CFBundleExecutable</key>
-    <string>{name}</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleVersion</key>
-    <string>{version}</string>
-    <key>CFBundleShortVersionString</key>
-    <string>{version}</string>
-    <key>LSUIElement</key>
-    <true/>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-</dict>
-</plist>
-"#,
-        name = plist_escape(name),
-        identifier = plist_escape(identifier),
-        version = plist_escape(version),
-    );
-
-    let plist_path = helper_app.join("Contents").join("Info.plist");
-    fs::write(&plist_path, plist)
-        .with_context(|| format!("failed to write {}", plist_path.display()))?;
-
-    Ok(())
+    let mut plist = bundle_plist(name, identifier, name, version, macos);
+    plist.set("LSUIElement", true);
+    write_plist(helper_app, &plist)
 }
 
 /// Installs the helper bundles into `Contents/Frameworks/`.
@@ -184,16 +147,17 @@ fn install_helpers(
     app_name: &str,
     identifier: &str,
     version: &str,
+    macos: &MacosSettings,
 ) -> Result<()> {
     for (suffix, id_suffix) in HELPERS {
         let helper_name = format!("{app_name} Helper{suffix}");
         let helper_app = frameworks.join(format!("{helper_name}.app"));
-        let macos = helper_app.join("Contents").join("MacOS");
+        let helper_macos = macos_dir(&helper_app);
 
-        fs::create_dir_all(&macos)
-            .with_context(|| format!("failed to create directory {}", macos.display()))?;
+        fs::create_dir_all(&helper_macos)
+            .with_context(|| format!("failed to create directory {}", helper_macos.display()))?;
 
-        let helper_exe = macos.join(&helper_name);
+        let helper_exe = helper_macos.join(&helper_name);
 
         fs::copy(executable, &helper_exe).with_context(|| {
             format!(
@@ -210,6 +174,7 @@ fn install_helpers(
             &helper_name,
             &format!("{identifier}.{id_suffix}"),
             version,
+            macos,
         )?;
     }
 
@@ -276,10 +241,12 @@ fn install_icon(resources: &Path, icon: &Path) -> Result<bool> {
     Ok(true)
 }
 
-/// Builds and optionally signs a macOS `.app` bundle.
+/// Builds and optionally signs a macOS `.app` bundle declaring what `macos`
+/// says.
 pub fn build(
     dist: &kurogane_layout::ResolvedDistribution,
     output_dir: &Path,
+    macos: &MacosSettings,
     sign_config: Option<&SignConfig>,
 ) -> Result<std::path::PathBuf> {
     let app_name = dist.metadata.name.clone();
@@ -346,6 +313,7 @@ pub fn build(
         &app_name,
         &bundle_identifier(&dist.metadata),
         &dist.metadata.version,
+        macos,
     )?;
 
     // Icon, before the plist so it can reference it only when present
@@ -354,7 +322,7 @@ pub fn build(
         None => false,
     };
 
-    write_info_plist(&app_dir, &dist.metadata, &exe_name, icon)?;
+    write_info_plist(&app_dir, &dist.metadata, &exe_name, icon, macos)?;
 
     // Frontend resources
     if let Some(frontend) = &dist.frontend {
@@ -394,7 +362,11 @@ pub fn build(
     // rather than sealed into Contents/Resources
     if let Some(config) = sign_config {
         let entitlements = output_dir.join(format!("{app_name}.entitlements.plist"));
-        fs::write(&entitlements, CEF_ENTITLEMENTS)
+        let xml = macos
+            .entitlements()
+            .to_xml()
+            .with_context(|| format!("failed to write {}", entitlements.display()))?;
+        fs::write(&entitlements, xml)
             .with_context(|| format!("failed to write {}", entitlements.display()))?;
 
         let signed = sign_app_bundle(&app_dir, config, Some(&entitlements));
@@ -407,29 +379,16 @@ pub fn build(
     Ok(app_dir)
 }
 
-/// Entitlements required by the embedded Chromium runtime.
-///
-/// CEF needs `allow-jit` for its V8 engine, unsigned executable memory for
-/// generated code and `disable-library-validation` because it loads ANGLE /
-/// SwiftShader dylibs that are not Apple-signed.
-const CEF_ENTITLEMENTS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>com.apple.security.cs.allow-jit</key>
-    <true/>
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-    <key>com.apple.security.cs.disable-library-validation</key>
-    <true/>
-</dict>
-</plist>
-"#;
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::MacosPackagingConfig;
     use kurogane_layout::{AppMetadata, Executable, ResolvedDistribution, ResolvedResource};
+
+    /// What an empty `[macos]` declares.
+    fn settings() -> MacosSettings {
+        MacosSettings::resolve(&MacosPackagingConfig::default()).unwrap()
+    }
 
     fn sample_metadata() -> AppMetadata {
         AppMetadata {
@@ -478,7 +437,7 @@ mod tests {
         };
 
         let output = dir.path().join("dist");
-        let app_dir = build(&dist, &output, None).unwrap();
+        let app_dir = build(&dist, &output, &settings(), None).unwrap();
 
         // Avoid asserting on platform tooling unavailable in every test environment
         assert!(
@@ -516,7 +475,7 @@ mod tests {
         };
 
         let output = dir.path().join("dist");
-        let app_dir = build(&dist, &output, None).unwrap();
+        let app_dir = build(&dist, &output, &settings(), None).unwrap();
         let frameworks = app_dir.join("Contents").join("Frameworks");
 
         for (suffix, id_suffix) in HELPERS {
@@ -540,12 +499,62 @@ mod tests {
     }
 
     #[test]
+    fn every_plist_of_the_bundle_declares_the_macos_and_the_devices() {
+        let dir = tempfile::tempdir().unwrap();
+        let cef = dir.path().join("cef");
+        framework_fixture(&cef);
+        let exe = dir.path().join("target").join("release").join("myapp");
+        write_executable(&exe);
+        let dist = ResolvedDistribution {
+            metadata: sample_metadata(),
+            executable: Executable::Application(exe),
+            frontend: None,
+            cef_runtime: cef,
+            extra_resources: Vec::new(),
+        };
+        let mut macos = MacosPackagingConfig {
+            minimum_system_version: Some("13.0".into()),
+            category: Some("public.app-category.video".into()),
+            ..MacosPackagingConfig::default()
+        };
+        macos.privacy.camera = Some("Calls use your camera.".into());
+
+        let output = dir.path().join("dist");
+        let app_dir = build(
+            &dist,
+            &output,
+            &MacosSettings::resolve(&macos).unwrap(),
+            None,
+        )
+        .unwrap();
+
+        let frameworks = app_dir.join("Contents").join("Frameworks");
+        let plists = std::iter::once(app_dir.clone()).chain(
+            HELPERS
+                .iter()
+                .map(|(suffix, _)| frameworks.join(format!("MyApp Helper{suffix}.app"))),
+        );
+        for bundle in plists {
+            let plist = fs::read_to_string(bundle.join("Contents/Info.plist")).unwrap();
+            for expected in [
+                "<key>LSMinimumSystemVersion</key>\n    <string>13.0</string>",
+                "<key>NSCameraUsageDescription</key>\n    <string>Calls use your camera.</string>",
+                "<key>NSMicrophoneUsageDescription</key>",
+            ] {
+                assert!(plist.contains(expected), "{}: {plist}", bundle.display());
+            }
+        }
+        let app = fs::read_to_string(app_dir.join("Contents/Info.plist")).unwrap();
+        assert!(app.contains("<string>public.app-category.video</string>"));
+    }
+
+    #[test]
     fn info_plist_contains_required_keys() {
         let dir = tempfile::tempdir().unwrap();
         let contents = dir.path().join("Contents");
         fs::create_dir_all(&contents).unwrap();
 
-        write_info_plist(dir.path(), &sample_metadata(), "myapp", false).unwrap();
+        write_info_plist(dir.path(), &sample_metadata(), "myapp", false, &settings()).unwrap();
 
         let plist = fs::read_to_string(contents.join("Info.plist")).unwrap();
         assert!(plist.contains("<key>CFBundleExecutable</key>"));
@@ -572,7 +581,7 @@ mod tests {
         };
 
         let output = dir.path().join("dist");
-        let app_dir = build(&dist, &output, None).unwrap();
+        let app_dir = build(&dist, &output, &settings(), None).unwrap();
         assert!(app_dir.exists());
     }
 
@@ -597,7 +606,7 @@ mod tests {
         };
 
         let output = dir.path().join("dist");
-        let app_dir = build(&dist, &output, None).unwrap();
+        let app_dir = build(&dist, &output, &settings(), None).unwrap();
 
         // Contents/Resources is the bundle resource root
         assert!(
@@ -635,7 +644,7 @@ mod tests {
         };
 
         let output = dir.path().join("dist");
-        let app_dir = build(&dist, &output, None).unwrap();
+        let app_dir = build(&dist, &output, &settings(), None).unwrap();
 
         let mut links = Vec::new();
         let mut stack = vec![app_dir.clone()];
@@ -670,11 +679,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(dir.path().join("Contents")).unwrap();
 
-        write_info_plist(dir.path(), &sample_metadata(), "myapp", false).unwrap();
+        write_info_plist(dir.path(), &sample_metadata(), "myapp", false, &settings()).unwrap();
         let without = fs::read_to_string(dir.path().join("Contents/Info.plist")).unwrap();
         assert!(!without.contains("CFBundleIconFile"));
 
-        write_info_plist(dir.path(), &sample_metadata(), "myapp", true).unwrap();
+        write_info_plist(dir.path(), &sample_metadata(), "myapp", true, &settings()).unwrap();
         let with = fs::read_to_string(dir.path().join("Contents/Info.plist")).unwrap();
         assert!(with.contains("<key>CFBundleIconFile</key>"));
         assert!(with.contains("<string>AppIcon</string>"));
@@ -687,7 +696,7 @@ mod tests {
 
         let mut meta = sample_metadata();
         meta.identifier = Some("com.example.myapp".to_string());
-        write_info_plist(dir.path(), &meta, "myapp", false).unwrap();
+        write_info_plist(dir.path(), &meta, "myapp", false, &settings()).unwrap();
 
         let plist = fs::read_to_string(dir.path().join("Contents/Info.plist")).unwrap();
         assert!(plist.contains("<string>com.example.myapp</string>"));
@@ -716,7 +725,7 @@ mod tests {
         let mut meta = sample_metadata();
         meta.name = "Ben & Jerry <Ltd>".to_string();
 
-        write_info_plist(dir.path(), &meta, "myapp", false).unwrap();
+        write_info_plist(dir.path(), &meta, "myapp", false, &settings()).unwrap();
 
         let plist = fs::read_to_string(dir.path().join("Contents/Info.plist")).unwrap();
 
@@ -747,7 +756,7 @@ mod tests {
         };
 
         let output = dir.path().join("dist");
-        let app_dir = build(&dist, &output, None).unwrap();
+        let app_dir = build(&dist, &output, &settings(), None).unwrap();
         assert!(
             app_dir
                 .join("Contents")

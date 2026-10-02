@@ -36,6 +36,12 @@ mod app_bundle;
 #[cfg(target_os = "macos")]
 mod dmg;
 
+#[cfg(target_os = "macos")]
+mod macos_settings;
+
+#[cfg(target_os = "macos")]
+mod plist;
+
 mod collector;
 mod cache;
 mod template;

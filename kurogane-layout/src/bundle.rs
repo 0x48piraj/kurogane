@@ -191,7 +191,8 @@ impl BundleLayout {
     pub fn write_launcher(&self, exe_name: &OsStr) -> Result<(), BundleError> {
         let launcher = self.launcher_path(exe_name);
 
-        let runtime_target = format!("runtime/{}", exe_name.to_string_lossy());
+        // One quoted word: the name expands nothing in the script
+        let runtime_target = crate::sh_quote(&format!("runtime/{}", exe_name.to_string_lossy()));
 
         // The library path override is the running machine's, so the script
         // reads it when it starts; an unset LD_LIBRARY_PATH gains no empty
@@ -207,7 +208,7 @@ if [ -n "${{KUROGANE_LD_LIBRARY_PATH:-}}" ]; then
     export LD_LIBRARY_PATH="$KUROGANE_LD_LIBRARY_PATH${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"
 fi
 
-exec "$ROOT/{runtime_target}" "$@"
+exec "$ROOT"/{runtime_target} "$@"
 "#
         );
 

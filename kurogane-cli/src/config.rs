@@ -31,6 +31,7 @@ pub struct PackagingConfig {
     pub app: AppConfig,
     pub bundle: BundleConfig,
     pub linux: LinuxPackagingConfig,
+    pub macos: MacosPackagingConfig,
     pub windows: WindowsPackagingConfig,
     pub signing: SigningFileConfig,
 }
@@ -151,6 +152,36 @@ pub struct LinuxPackagingConfig {
     pub terminal: Option<bool>,
 }
 
+/// `[macos]`: what a macOS `.app` declares in its `Info.plist`.
+///
+/// Values are read as written: the macOS bundler checks them when it
+/// builds, so a mistake here never stops `kurogane run` elsewhere. A key the
+/// table does not take is an error naming it.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct MacosPackagingConfig {
+    /// `LSMinimumSystemVersion`, such as `"13.0"`; CEF's own floor when
+    /// unset, and never lower.
+    pub minimum_system_version: Option<String>,
+    /// `LSApplicationCategoryType`, one of Apple's
+    /// `public.app-category.*` values.
+    pub category: Option<String>,
+    /// `[macos.privacy]`: why the application uses each device.
+    pub privacy: MacosPrivacyConfig,
+}
+
+/// `[macos.privacy]`: what macOS shows when a page asks for a device, in
+/// place of Kurogane's generic wording. Every device a page can ask for is
+/// declared, configured or not.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MacosPrivacyConfig {
+    /// `NSCameraUsageDescription`.
+    pub camera: Option<String>,
+    /// `NSMicrophoneUsageDescription`.
+    pub microphone: Option<String>,
+}
+
 /// Windows installer configuration.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
@@ -239,6 +270,8 @@ mod tests {
 
         assert_eq!(config.app.name, None);
         assert!(config.linux.categories.is_none());
+        assert!(config.macos.minimum_system_version.is_none());
+        assert!(config.macos.privacy.camera.is_none());
         assert!(config.signing.windows.certificate.is_none());
         assert!(config.signing.macos.identity.is_none());
     }
@@ -272,6 +305,14 @@ source = "README.md"
 [linux]
 categories = ["Development", "IDE"]
 terminal = true
+
+[macos]
+minimum-system-version = "13.0"
+category = "public.app-category.video"
+
+[macos.privacy]
+camera = "Calls use your camera."
+microphone = "Calls use your microphone."
 
 [windows]
 start-menu-shortcut = false
@@ -337,6 +378,20 @@ identity = "Developer ID Application: Example Corp (TEAMID1234)"
             Some(vec!["Development".into(), "IDE".into()])
         );
         assert_eq!(config.linux.terminal, Some(true));
+
+        assert_eq!(config.macos.minimum_system_version.as_deref(), Some("13.0"));
+        assert_eq!(
+            config.macos.category.as_deref(),
+            Some("public.app-category.video")
+        );
+        assert_eq!(
+            config.macos.privacy.camera.as_deref(),
+            Some("Calls use your camera.")
+        );
+        assert_eq!(
+            config.macos.privacy.microphone.as_deref(),
+            Some("Calls use your microphone.")
+        );
 
         assert!(!config.windows.start_menu_shortcut);
         assert!(!config.windows.desktop_shortcut);
@@ -439,6 +494,44 @@ custom-command = ['C:\Program Files\Signer\sign.exe', "sign", "%1"]
             (
                 "[signing.windows]\ncustom-command = \"signtool sign %1\"\n",
                 "custom-command",
+                "line 2",
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            write_config(dir.path(), written);
+
+            let err = PackagingConfig::load(dir.path()).unwrap_err();
+
+            let ConfigError::Parse(_, cause) = &err else {
+                panic!("{written:?} is a parse error, got: {err}");
+            };
+            let cause = cause.to_string();
+            assert!(
+                cause.contains(key) && cause.contains(line),
+                "{written:?}: the error names the key and its line: {cause}"
+            );
+        }
+    }
+
+    #[test]
+    fn macos_keys_the_tables_do_not_take_are_refused_where_they_are_written() {
+        for (written, key, line) in [
+            // A misspelt key
+            (
+                "[macos]\nminimum-version = \"13.0\"\n",
+                "minimum-version",
+                "line 2",
+            ),
+            // A device the bundler declares nothing for
+            (
+                "[macos.privacy]\nlocation = \"Maps\"\n",
+                "location",
+                "line 2",
+            ),
+            // The Info.plist key itself, not the device
+            (
+                "[macos.privacy]\nNSCameraUsageDescription = \"Calls\"\n",
+                "NSCameraUsageDescription",
                 "line 2",
             ),
         ] {

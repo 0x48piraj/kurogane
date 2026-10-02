@@ -9,7 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use kurogane_layout::{ResolvedDistribution, package_directory};
+use kurogane_layout::{ResolvedDistribution, package_directory, sh_quote};
 use crate::config::PackagingConfig;
 
 use crate::tui;
@@ -158,16 +158,21 @@ fn patch_linuxdeploy(path: &Path) -> Result<()> {
 }
 
 /// Generates the AppRun entrypoint for the canonical Kurogane bundle.
+///
+/// The bundle's path is one quoted word: no character of a name expands or
+/// ends it.
 fn generate_apprun(name: &str, exe_name: &str) -> String {
+    let target = sh_quote(&format!("usr/lib/{name}/{exe_name}"));
     format!(
         r#"#!/bin/sh
 APPDIR="$(dirname "$(readlink -f "$0")")"
-exec "$APPDIR/usr/lib/{name}/{exe_name}" "$@"
+exec "$APPDIR"/{target} "$@"
 "#
     )
 }
 
-/// Generates the desktop entry consumed by AppImage tooling.
+/// Generates the desktop entry consumed by AppImage tooling. Every value is
+/// escaped as the Desktop Entry Specification asks, so none adds a line.
 fn generate_desktop(
     name: &str,
     exe_name: &str,
@@ -178,8 +183,15 @@ fn generate_desktop(
     let categories = if categories.is_empty() {
         "Utility".to_string()
     } else {
-        categories.join(";")
+        categories
+            .iter()
+            .map(|category| desktop_list_item(category))
+            .collect::<Vec<_>>()
+            .join(";")
     };
+    let name = desktop_string(name);
+    let exec = desktop_exec(exe_name);
+    let version = desktop_string(version);
 
     // `Version` is the spec version; the app version uses `X-AppImage-Version`
     format!(
@@ -188,12 +200,62 @@ Type=Application
 Name={name}
 Version=1.0
 X-AppImage-Version={version}
-Exec={exe_name}
+Exec={exec}
 Icon={name}
 Categories={categories};
 Terminal={terminal}
 "#
     )
+}
+
+/// A desktop entry string value: a backslash and the characters a line
+/// cannot hold are written as escapes, and a leading space as `\s`, which
+/// would otherwise be dropped.
+fn desktop_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' => escaped.push_str(r"\\"),
+            '\n' => escaped.push_str(r"\n"),
+            '\t' => escaped.push_str(r"\t"),
+            '\r' => escaped.push_str(r"\r"),
+            c => escaped.push(c),
+        }
+    }
+    if escaped.starts_with(' ') {
+        escaped.replace_range(..1, r"\s");
+    }
+    escaped
+}
+
+/// One value of a desktop entry list, whose separator it escapes too.
+fn desktop_list_item(value: &str) -> String {
+    desktop_string(value).replace(';', r"\;")
+}
+
+/// Characters that make an `Exec=` argument need double quotes.
+const EXEC_RESERVED: &[char] = &[
+    ' ', '\t', '\n', '"', '\'', '\\', '>', '<', '~', '|', '&', ';', '$', '*', '?', '#', '(', ')',
+    '`',
+];
+
+/// The program of an `Exec=` key: `%` doubled, since a single one starts a
+/// field code; double-quoted with `"`, `` ` ``, `$` and `\` escaped when it
+/// holds a reserved character; then escaped as any string value.
+fn desktop_exec(program: &str) -> String {
+    let program = program.replace('%', "%%");
+    if !program.contains(EXEC_RESERVED) {
+        return desktop_string(&program);
+    }
+    let mut quoted = String::from('"');
+    for c in program.chars() {
+        if matches!(c, '"' | '`' | '$' | '\\') {
+            quoted.push('\\');
+        }
+        quoted.push(c);
+    }
+    quoted.push('"');
+    desktop_string(&quoted)
 }
 
 /// Builds the AppDir around the canonical Kurogane directory bundle.
@@ -383,7 +445,49 @@ mod tests {
     fn apprun_targets_bundle_executable() {
         let content = generate_apprun("custom-name", "custom-bin");
 
-        assert!(content.contains("exec \"$APPDIR/usr/lib/custom-name/custom-bin\""));
+        assert!(content.contains("exec \"$APPDIR\"/'usr/lib/custom-name/custom-bin' \"$@\""));
+    }
+
+    /// AppRun reaches the bundled executable with the user's arguments
+    /// intact, whatever the name holds, and runs nothing the name says.
+    #[test]
+    fn apprun_starts_the_bundle_whatever_the_name_holds() {
+        let dir = tmp();
+        // Each command touches `mark` in the folder AppRun starts in
+        for name in [
+            "My \"Best\" App",
+            "Tom's App",
+            "Ca$h",
+            "$(touch mark)App",
+            "`touch mark`",
+            "x\" | touch mark | \"y",
+            "x\" & touch mark & \"y",
+        ] {
+            let app_dir = dir.path().join("AppDir");
+            let _ = fs::remove_dir_all(&app_dir);
+            let bundle = app_dir.join("usr/lib").join(name);
+            fs::create_dir_all(&bundle).unwrap();
+            let stub = bundle.join("my app");
+            fs::write(&stub, "#!/bin/sh\nprintf '%s|' \"$@\"\n").unwrap();
+            fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+            let apprun = app_dir.join("AppRun");
+            fs::write(&apprun, generate_apprun(name, "my app")).unwrap();
+            fs::set_permissions(&apprun, fs::Permissions::from_mode(0o755)).unwrap();
+
+            let output = Command::new(&apprun)
+                .args(["one two", "$HOME", "x'y"])
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+
+            assert!(output.status.success(), "{name:?}: {output:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                "one two|$HOME|x'y|",
+                "{name:?}"
+            );
+            assert!(!dir.path().join("mark").exists(), "{name:?} ran a command");
+        }
     }
 
     #[test]
@@ -446,6 +550,49 @@ mod tests {
 
         assert!(content.contains("Categories=Development;IDE;"));
         assert!(!content.contains("Utility"));
+    }
+
+    #[test]
+    fn no_value_adds_a_line_or_a_key_to_the_desktop_entry() {
+        let categories = vec!["Dev;Exec=evil".to_string(), "IDE\nExec=evil".to_string()];
+        let content = generate_desktop(
+            "My\nExec=evil",
+            "my app",
+            "1.0\nExec=evil",
+            &categories,
+            false,
+        );
+
+        assert_eq!(
+            content
+                .lines()
+                .filter(|line| line.starts_with("Exec="))
+                .count(),
+            1
+        );
+        assert_eq!(
+            content
+                .lines()
+                .filter(|line| line.starts_with("Name="))
+                .count(),
+            1
+        );
+        assert!(content.contains(r"Name=My\nExec=evil"));
+        assert!(content.contains(r"Categories=Dev\;Exec=evil;IDE\nExec=evil;"));
+        assert!(content.contains(r"X-AppImage-Version=1.0\nExec=evil"));
+    }
+
+    #[test]
+    fn desktop_values_follow_the_specification_s_escapes() {
+        assert_eq!(desktop_string(r"a\b"), r"a\\b");
+        assert_eq!(desktop_string(" lead"), r"\slead");
+        assert_eq!(desktop_string("tab\there"), r"tab\there");
+        assert_eq!(desktop_exec("myapp"), "myapp");
+        assert_eq!(desktop_exec("100%"), "100%%");
+        // Quoted, then escaped again as a string: a literal backslash is four
+        assert_eq!(desktop_exec("my app"), "\"my app\"");
+        assert_eq!(desktop_exec("a$b"), r#""a\\$b""#);
+        assert_eq!(desktop_exec(r"a\b"), r#""a\\\\b""#);
     }
 
     #[test]

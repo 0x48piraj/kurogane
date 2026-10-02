@@ -586,6 +586,60 @@ pub fn codesign_verify_args(path: &Path) -> Vec<OsString> {
     ]
 }
 
+/// Builds `codesign --sign` arguments for a disk image: the image is sealed
+/// as one file, with no runtime option or entitlements, which apply to code.
+#[cfg(target_os = "macos")]
+pub fn codesign_image_args(identity: &str) -> Vec<OsString> {
+    let timestamp = if identity == AD_HOC_IDENTITY {
+        "--timestamp=none"
+    } else {
+        "--timestamp"
+    };
+    vec![
+        OsString::from("--sign"),
+        OsString::from(identity),
+        OsString::from(timestamp),
+        OsString::from("--force"),
+    ]
+}
+
+/// Runs codesign with `args`; `tool` names the step in an error.
+#[cfg(target_os = "macos")]
+fn run_codesign(codesign: &Path, args: &[OsString], tool: &str) -> Result<(), SigningError> {
+    let status = Command::new(codesign)
+        .args(args)
+        .status()
+        .map_err(SigningError::spawn(codesign))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(SigningError::ToolFailed {
+            tool: tool.to_string(),
+            status,
+        })
+    }
+}
+
+/// Signs a disk image, then verifies its signature.
+#[cfg(target_os = "macos")]
+pub fn sign_disk_image(image: &Path, config: &SignConfig) -> Result<(), SigningError> {
+    let Some(codesign) = find_codesign() else {
+        return Err(SigningError::NoSigningTool);
+    };
+
+    let mut args = codesign_image_args(&config.identity);
+    args.push(OsString::from(image));
+    run_codesign(&codesign, &args, "codesign (disk image)")?;
+
+    let verify = [
+        OsString::from("--verify"),
+        OsString::from("--strict"),
+        OsString::from(image),
+    ];
+    run_codesign(&codesign, &verify, "codesign verify (disk image)")
+}
+
 /// Signs a `.app` bundle inside-out.
 #[cfg(target_os = "macos")]
 pub fn sign_app_bundle(
@@ -597,22 +651,7 @@ pub fn sign_app_bundle(
         return Err(SigningError::NoSigningTool);
     };
     let identity = config.identity.as_str();
-
-    let run = |args: Vec<OsString>, tool: &str| -> Result<(), SigningError> {
-        let status = Command::new(&codesign)
-            .args(&args)
-            .status()
-            .map_err(SigningError::spawn(&codesign))?;
-
-        if status.success() {
-            Ok(())
-        } else {
-            Err(SigningError::ToolFailed {
-                tool: tool.to_string(),
-                status,
-            })
-        }
-    };
+    let run = |args: Vec<OsString>, tool: &str| run_codesign(&codesign, &args, tool);
 
     let frameworks = app_dir.join("Contents").join("Frameworks");
 
@@ -1385,6 +1424,18 @@ mod tests {
             assert_eq!(
                 codesign_verify_args(Path::new("/MyApp.app")),
                 os(&["--verify", "--deep", "--strict", "/MyApp.app"])
+            );
+        }
+
+        #[test]
+        fn a_disk_image_is_sealed_without_runtime_or_entitlements() {
+            assert_eq!(
+                codesign_image_args(DEVELOPER_ID),
+                os(&["--sign", DEVELOPER_ID, "--timestamp", "--force"])
+            );
+            assert_eq!(
+                codesign_image_args(AD_HOC_IDENTITY),
+                os(&["--sign", "-", "--timestamp=none", "--force"])
             );
         }
     }
