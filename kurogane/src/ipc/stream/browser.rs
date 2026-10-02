@@ -19,7 +19,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use crate::debug;
+use tracing::debug;
 use crate::ipc::browser_state::{ErrorCode, IpcContext, IpcError};
 use crate::ipc::envelope::{
     Envelope, STREAM_OPEN, STREAM_DATA, STREAM_END, STREAM_ERROR, STREAM_CANCEL, decode_cmd_payload,

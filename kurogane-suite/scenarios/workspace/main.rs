@@ -27,6 +27,7 @@ const ORIGIN: &str = "app://app";
 const DENIED: &str = "vault";
 
 fn main() -> Result<(), Box<dyn Error>> {
+    kurogane_suite::logging();
     let home = std::env::temp_dir().join("kurogane-workspace");
     let root = home.join("workspace");
     let dist = home.join("dist");

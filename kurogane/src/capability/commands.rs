@@ -169,8 +169,8 @@ impl Worker {
                 Ok(sender) => self.queue.get_or_init(|| sender),
                 // Never inline: the request arrived on the CEF UI thread
                 Err(e) => {
-                    eprintln!(
-                        "kurogane: cannot start the filesystem worker ({e}); fs.* requests fail until it starts"
+                    tracing::error!(
+                        "cannot start the filesystem worker ({e}); fs.* requests fail until it starts"
                     );
                     return job
                         .responder

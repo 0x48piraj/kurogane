@@ -249,11 +249,8 @@ fn build_executable(
     debug: bool,
     target_dir: &std::path::Path,
 ) -> Result<(Executable, String)> {
-    let profile: &[&str] = if debug {
-        &["--features", "kurogane/debug"]
-    } else {
-        &["--release"]
-    };
+    // Build Kurogane in debug or release mode
+    let profile: &[&str] = if debug { &[] } else { &["--release"] };
 
     if crate::sandbox::uses_bootstrap(app) {
         // The bootstrap is CEF's; only the application's library is built

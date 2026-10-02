@@ -6,7 +6,7 @@ use crate::browser::KuroganeBrowserProcessHandler;
 use crate::ipc::IpcRenderProcessHandler;
 use crate::runtime::AppHandle;
 use crate::spec::RuntimeSpec;
-use crate::debug;
+use tracing::{debug, warn};
 use crate::chromium_flags::ChromiumFlags;
 use crate::credentials::apply_credential_flags;
 use crate::gpu::apply_gpu_flags;
@@ -40,11 +40,6 @@ wrap_app! {
 
             let mut flags = ChromiumFlags::default();
 
-            #[cfg(feature = "debug")]
-            {
-                flags.set_with_value("js-flags", "--expose-gc");
-            }
-
             apply_sandbox_flags(&mut flags, self.spec.sandbox_mode);
             apply_gpu_flags(&mut flags, self.spec.gpu_mode, self.spec.sandbox_mode);
             apply_credential_flags(&mut flags, self.spec.credential_storage);
@@ -54,7 +49,7 @@ wrap_app! {
             flags.extend_user_flags(&self.spec.chromium_flags);
 
             for name in crate::sandbox::sandbox_overrides(&flags, self.spec.sandbox_mode) {
-                eprintln!("kurogane: sandbox_mode(Chromium) is weakened by user flag --{name}");
+                warn!("sandbox_mode(Chromium) is weakened by user flag --{name}");
             }
 
             debug!("Chromium startup flags:\n{}", flags);

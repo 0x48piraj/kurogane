@@ -8,7 +8,7 @@ use cef::*;
 
 use crate::acl::{CommandAcl, Origin};
 use crate::browser_registry::BrowserId;
-use crate::debug;
+use tracing::debug;
 use crate::ipc::browser_state::{ErrorCode, FrameId, IpcContext, IpcError};
 use crate::ipc::envelope::*;
 use crate::ipc::request_response::RequestResponseSubsystem;

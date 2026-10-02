@@ -15,7 +15,7 @@ use kurogane_layout::{DetectError, DiscoveryMode, detect_cef_root, validate_cef_
 use crate::ipc::IpcRouter;
 use crate::ipc::transport::message::RendererSandbox;
 use crate::spec::{RuntimeMode, RuntimeSpec, SandboxMode};
-use crate::debug;
+use tracing::{debug, warn};
 
 struct RuntimeLayout {
     cef_root: std::path::PathBuf,
@@ -252,7 +252,7 @@ fn install_ctrlc_handler(app: &AppHandle) {
     // A host that installed its own handler keeps it; the app still closes
     // normally, only not on Ctrl+C
     if let Err(err) = installed {
-        eprintln!("kurogane: Ctrl+C will not close the app: {err}");
+        warn!("Ctrl+C will not close the app: {err}");
     }
 }
 

@@ -900,10 +900,13 @@ impl App {
     /// Intended for binaries. Libraries embedding the runtime should use run() instead.
     pub fn run_or_exit(self) {
         if let Err(e) = self.run() {
-            eprintln!("\nApplication failed to start:\n{e}\n");
+            use std::io::Write as _;
+            // Report startup failure directly to stderr
+            let mut stderr = std::io::stderr().lock();
+            let _ = writeln!(stderr, "\nApplication failed to start:\n{e}\n");
             let mut cause = std::error::Error::source(&e);
             while let Some(error) = cause {
-                eprintln!("Caused by: {error}");
+                let _ = writeln!(stderr, "Caused by: {error}");
                 cause = error.source();
             }
             std::process::exit(1);

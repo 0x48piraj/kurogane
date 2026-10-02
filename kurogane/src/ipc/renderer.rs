@@ -6,7 +6,7 @@
 use cef::*;
 use std::sync::Arc;
 use crate::app::ClientAppRendererDelegate;
-use crate::debug;
+use tracing::debug;
 use crate::ipc::browser_state::ErrorCode;
 use crate::ipc::envelope::*;
 use crate::ipc::transport::message::{build_message, build_message_parts, receive_from_browser};

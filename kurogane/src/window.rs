@@ -6,7 +6,7 @@
 use cef::*;
 use std::collections::VecDeque;
 
-use crate::debug;
+use tracing::debug;
 use crate::browser_registry::{BrowserId, BrowserType};
 use crate::client::KuroganeClient;
 use crate::error::RuntimeError;

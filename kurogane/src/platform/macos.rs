@@ -237,7 +237,7 @@ pub fn install_default_menu() {
 /// shutdown to run outside the caller.
 pub fn quit() {
     let Some(mtm) = MainThreadMarker::new() else {
-        crate::debug!("quit asked off the main thread; ignored");
+        tracing::debug!("quit asked off the main thread; ignored");
         return;
     };
     let app = NSApp(mtm);

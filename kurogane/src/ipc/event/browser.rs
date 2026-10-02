@@ -6,7 +6,7 @@
 use cef::*;
 
 use crate::acl::Origin;
-use crate::debug;
+use tracing::debug;
 use crate::ipc::browser_state::{still_addressed, IpcContext, IpcError};
 use crate::ipc::envelope::*;
 use crate::ipc::event::EventSubsystem;

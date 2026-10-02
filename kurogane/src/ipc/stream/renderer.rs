@@ -8,7 +8,7 @@
 
 use cef::*;
 
-use crate::debug;
+use tracing::debug;
 use crate::ipc::envelope::*;
 use crate::ipc::renderer_state::state;
 use crate::ipc::utils::{create_array_buffer_from_bytes, rejection};

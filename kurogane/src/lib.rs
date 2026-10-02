@@ -24,7 +24,6 @@ mod gpu;
 mod credentials;
 mod ipc;
 mod bridge;
-mod logger;
 pub mod capability;
 
 mod platform;

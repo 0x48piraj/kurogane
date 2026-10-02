@@ -18,6 +18,7 @@ percent-encoding = "2.3.2"
 ctrlc = { version = "3.5.2", features = ["termination"] }
 unicode-normalization = "0.1.25"
 raw-window-handle = "0.6.2"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3"
@@ -52,9 +53,6 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSView",
 ] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSString"] }
-
-[features]
-debug = []
 
 [lints]
 workspace = true

@@ -1,4 +1,5 @@
 fn main() {
+    kurogane_suite::logging();
     let runtime = kurogane::App::url("https://xkcd.com")
         .start()
         .expect("Kurogane failed to initialize");

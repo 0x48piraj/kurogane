@@ -71,7 +71,7 @@ impl EventSubsystem {
             v.retain(|s| s.frame.is_valid() != 0);
             let removed = before - v.len();
             if removed > 0 {
-                crate::debug!(
+                tracing::debug!(
                     "[EventSubsystem] removed {} subscription(s) with invalid frame",
                     removed
                 );

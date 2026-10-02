@@ -17,6 +17,7 @@ const SETTLE: Duration = Duration::from_secs(2);
 const TIMEOUT: Duration = Duration::from_secs(60);
 
 fn main() -> ExitCode {
+    kurogane_suite::logging();
     let mode = match std::env::var("KUROGANE_SMOKE_SANDBOX").as_deref() {
         Ok("disabled") => SandboxMode::Disabled,
         _ => SandboxMode::Chromium,

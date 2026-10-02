@@ -36,7 +36,7 @@ use mime_guess::MimeGuess;
 use url::Url;
 use crate::fs::CanonicalRoot;
 
-use crate::debug;
+use tracing::{debug, warn};
 
 /// Errors returned when resolving an app:// request.
 /// Each variant maps to an HTTP status code.
@@ -264,7 +264,7 @@ impl Body {
             Err(e) => {
                 let status = e.http_status();
 
-                eprintln!("[kurogane] status={status} url=\"{url}\" reason={e}");
+                warn!("status={status} url=\"{url}\" reason={e}");
 
                 Self {
                     bytes: e.http_repr().to_vec(),

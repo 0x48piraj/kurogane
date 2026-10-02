@@ -5,7 +5,7 @@
 use cef::*;
 
 use crate::browser_registry::BrowserId;
-use crate::debug;
+use tracing::debug;
 use crate::acl::Origin;
 use crate::ipc::browser_state::{effective_origin, FrameId, IpcContext};
 use crate::ipc::envelope::KNOWN_FLAGS;

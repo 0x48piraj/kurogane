@@ -9,7 +9,7 @@ use crate::browser_registry::BrowserType;
 use crate::client::KuroganeClient;
 use crate::window::{Placement, open_browser_window};
 use crate::app::{PumpRequest, SecondInstance};
-use crate::debug;
+use tracing::{debug, error, warn};
 
 wrap_browser_process_handler! {
     pub struct KuroganeBrowserProcessHandler {
@@ -50,7 +50,7 @@ wrap_browser_process_handler! {
             };
             // A CEF callback has nowhere to return the error
             if let Err(error) = open_browser_window(&self.app, &self.spec.start_url, placement) {
-                eprintln!("kurogane: no window will appear:\n{error}");
+                error!("no window will appear: {error}");
             }
         }
 
@@ -124,7 +124,7 @@ impl KuroganeBrowserProcessHandler {
 /// for each one and CEF holds it until the factory is replaced or cleared.
 fn register_scheme_handlers(spec: &RuntimeSpec) {
     let Some(global) = request_context_get_global_context() else {
-        eprintln!("kurogane: no global request context; scheme handlers not registered");
+        error!("no global request context; scheme handlers not registered");
         return;
     };
 
@@ -179,6 +179,6 @@ fn start_without_restoring_session() {
     let mut error = CefString::from("");
 
     if context.set_preference(Some(&name), Some(&mut value), Some(&mut error)) == 0 {
-        eprintln!("kurogane: failed to disable Chromium session restore: {error}");
+        warn!("failed to disable Chromium session restore: {error}");
     }
 }

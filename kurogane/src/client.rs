@@ -1,7 +1,7 @@
 //! Browser client implementation.
 
 use cef::*;
-use crate::debug;
+use tracing::debug;
 use crate::runtime::AppHandle;
 use crate::browser_registry::BrowserType;
 use crate::chrome_commands::KuroganeCommandHandler;

@@ -2,6 +2,7 @@ use kurogane::App;
 use serde_json::Value;
 
 fn main() {
+    kurogane_suite::logging();
     App::new("scenarios/benchmark/frontend")
         .command("echo", |payload: Value, _: &kurogane::AppHandle| {
             Ok(payload)

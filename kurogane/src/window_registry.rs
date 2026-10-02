@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use cef::Window;
 use crate::browser_registry::BrowserId;
-use crate::debug;
+use tracing::debug;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WindowId(u32);

@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 
 use cef::*;
 
-use crate::debug;
+use tracing::debug;
 
 /// Strict allowlist of page-local commands, by their names in `cef_command_ids.h`.
 const ALLOWED: &[&CStr] = &[

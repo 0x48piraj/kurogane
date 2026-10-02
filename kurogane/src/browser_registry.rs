@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use cef::{Browser, ImplBrowser, RequestContext};
-use crate::debug;
+use tracing::debug;
 use crate::window::PendingPopups;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

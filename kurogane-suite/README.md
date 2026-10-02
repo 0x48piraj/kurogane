@@ -9,9 +9,15 @@ These are **not user-facing examples**, they are development tools for verifying
 From the workspace root:
 
 ```bash
-cd tests
+cd kurogane-suite
 
 kurogane run --example <test-name>
+```
+
+Every test prints Kurogane's warnings and errors. For its lifecycle and IPC detail too, set `RUST_LOG` (the tests share one logger, `lib.rs`):
+
+```bash
+RUST_LOG=kurogane=debug kurogane run --example <test-name>
 ```
 
 ## List of tests

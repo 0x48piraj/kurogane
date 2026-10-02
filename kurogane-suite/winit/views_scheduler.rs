@@ -110,6 +110,7 @@ impl PumpStats {
 }
 
 fn main() {
+    kurogane_suite::logging();
     // Kurogane starts before winit: on macOS it installs the NSApplication
     // subclass CEF needs, which must happen before winit creates the
     // application. The scheduler wakes the event loop once it exists

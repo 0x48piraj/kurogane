@@ -67,7 +67,7 @@ mod close {
     use cef::*;
 
     use super::cef_window_handle_t;
-    use crate::debug;
+    use tracing::debug;
 
     /// Destroys `browser`'s own window once the running CEF callback returns.
     ///
