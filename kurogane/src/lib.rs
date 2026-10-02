@@ -17,6 +17,7 @@ mod hooks;
 mod destination;
 mod new_window;
 mod navigation;
+mod keys;
 mod external;
 mod chrome_commands;
 mod scheme;
@@ -63,3 +64,5 @@ pub use crate::ipc::{BinaryResponder, ErrorCode, IpcError, Responder, StreamHand
 pub use app::{PumpRequest, ClientAppBrowserDelegate, ClientAppRendererDelegate, SecondInstance};
 pub use new_window::{NewWindowDecision, NewWindowRequest};
 pub use navigation::{NavigationDecision, NavigationRequest};
+pub use keys::{Key, KeyDecision, KeyPress, Modifiers};
+pub use chrome_commands::{ChromeCommand, ChromeCommandRequest, CommandDecision};

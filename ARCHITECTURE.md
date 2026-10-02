@@ -161,6 +161,8 @@ A page cannot give itself a window. Before CEF creates a popup, or opens a link 
 
 A page cannot take its window anywhere either. Each browser keeps the origins let into it: those the application loaded there itself (CEF marks such a load, and the redirects it leads to, with a flag a page cannot set), the origin `on_new_window` opened a popup to, and those the `on_navigation` hook allowed. A page navigates freely within those and the application's own origin; anywhere else the hook and Kurogane's policy decide, as for a new window.
 
+Chromium's commands pass Kurogane's allowlist first (page-local commands only), then the application's `on_chrome_command` hook, which may refuse what the allowlist lets run and never run what it refuses. Keys reach the `on_key` hook before Chromium turns them into commands, so a key press it consumes never becomes one.
+
 Application hooks follow one convention. Each takes a typed request and the `AppHandle`, runs on the UI thread with no lock held, and answers with a decision whose `Default` leaves the choice to Kurogane. A hook that panics gets the safe answer, never an unwinding into CEF. The startup spec owns the hooks and the runtime state every `AppHandle` shares only points to them, so a hook that keeps a handle creates no cycle: CEF releases the spec at shutdown.
 
 ## Custom protocol (`app://`)

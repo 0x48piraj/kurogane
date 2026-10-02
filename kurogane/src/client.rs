@@ -7,6 +7,7 @@ use crate::browser_registry::BrowserType;
 use crate::chrome_commands::KuroganeCommandHandler;
 use crate::destination::{Outcome, is_blank, is_chromium_page};
 use crate::ipc::FrameId;
+use crate::keys::{self, KeyDecision, KeyPress};
 use crate::navigation::{self, NavigationRequest};
 use crate::new_window::{self, NewWindowRequest};
 use crate::window::{Placement, PopupGeometry, open_browser_window};
@@ -380,6 +381,110 @@ wrap_request_handler! {
 }
 
 //
+// KEYBOARD HANDLER
+//
+// cef-rs types the platform's own event differently on each platform, and
+// its macro takes no attribute on a parameter, so the handler is written
+// once per platform around one body
+#[cfg(target_os = "windows")]
+wrap_keyboard_handler! {
+    pub struct KuroganeKeyboardHandler {
+        app: AppHandle,
+    }
+
+    impl KeyboardHandler {
+        fn on_pre_key_event(
+            &self,
+            browser: Option<&mut Browser>,
+            event: Option<&KeyEvent>,
+            _os_event: Option<&mut sys::MSG>,
+            is_keyboard_shortcut: Option<&mut i32>,
+        ) -> i32 {
+            pre_key_event(&self.app, browser, event, is_keyboard_shortcut)
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+wrap_keyboard_handler! {
+    pub struct KuroganeKeyboardHandler {
+        app: AppHandle,
+    }
+
+    impl KeyboardHandler {
+        fn on_pre_key_event(
+            &self,
+            browser: Option<&mut Browser>,
+            event: Option<&KeyEvent>,
+            _os_event: Option<&mut sys::XEvent>,
+            is_keyboard_shortcut: Option<&mut i32>,
+        ) -> i32 {
+            pre_key_event(&self.app, browser, event, is_keyboard_shortcut)
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+wrap_keyboard_handler! {
+    pub struct KuroganeKeyboardHandler {
+        app: AppHandle,
+    }
+
+    impl KeyboardHandler {
+        fn on_pre_key_event(
+            &self,
+            browser: Option<&mut Browser>,
+            event: Option<&KeyEvent>,
+            _os_event: *mut u8,
+            is_keyboard_shortcut: Option<&mut i32>,
+        ) -> i32 {
+            pre_key_event(&self.app, browser, event, is_keyboard_shortcut)
+        }
+    }
+}
+
+/// A key on its way to a page, before Chromium's own shortcuts see it
+/// (crate::keys). Only its press reaches the application's hook; consuming
+/// the press drops the key's character and release too.
+fn pre_key_event(
+    app: &AppHandle,
+    browser: Option<&mut Browser>,
+    event: Option<&KeyEvent>,
+    _is_keyboard_shortcut: Option<&mut i32>,
+) -> i32 {
+    let (Some(browser), Some(event)) = (browser, event) else {
+        return 0;
+    };
+    if event.type_ != KeyEventType::RAWKEYDOWN {
+        return 0;
+    }
+    // The guard ends with the block, before the hook runs
+    let id = {
+        let reg = app.registry();
+        let id = reg.browsers.find_id_by_browser(browser);
+        let kind = id
+            .and_then(|id| reg.browsers.get(id))
+            .map(|state| state.metadata.browser_type);
+        // Chromium's own browsers, DevTools' included, are not the application's
+        if matches!(kind, Some(BrowserType::DevTools | BrowserType::ChromeUi)) {
+            return 0;
+        }
+        id
+    };
+    let press = KeyPress::new(
+        event.windows_key_code as u32,
+        event.modifiers,
+        event.character,
+        event.focus_on_editable_field != 0,
+        id,
+    );
+    match keys::decide(app, &press) {
+        KeyDecision::Consume => 1,
+        KeyDecision::Default => 0,
+    }
+}
+
+//
 // LOAD HANDLER
 //
 wrap_load_handler! {
@@ -442,11 +547,17 @@ wrap_client! {
 
     impl Client {
         fn command_handler(&self) -> Option<CommandHandler> {
-            Some(KuroganeCommandHandler::new())
+            Some(KuroganeCommandHandler::new(self.app.clone()))
         }
 
         fn load_handler(&self) -> Option<LoadHandler> {
             Some(KuroganeLoadHandler::new(self.app.clone()))
+        }
+
+        // Only for an application that asks to see keys
+        fn keyboard_handler(&self) -> Option<KeyboardHandler> {
+            let wanted = self.app.hooks().is_some_and(|hooks| hooks.key.is_some());
+            wanted.then(|| KuroganeKeyboardHandler::new(self.app.clone()))
         }
 
         // Only OnOpenURLFromTab is answered; every other method keeps CEF's

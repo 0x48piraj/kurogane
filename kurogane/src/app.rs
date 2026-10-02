@@ -23,7 +23,9 @@ use crate::credentials::CredentialStorage;
 use crate::gpu::GpuMode;
 use crate::capability::{FilesystemBuilder, FsConfigError};
 use crate::acl::Origin;
+use crate::chrome_commands::{ChromeCommandRequest, CommandDecision};
 use crate::hooks::Hooks;
+use crate::keys::{KeyDecision, KeyPress};
 use crate::navigation::{NavigationDecision, NavigationRequest};
 use crate::new_window::{NewWindowDecision, NewWindowRequest};
 
@@ -843,6 +845,80 @@ impl App {
         self
     }
 
+    /// Sees each key the user presses in a window of the application's
+    /// before the page and Chromium's own shortcuts do, and may consume it.
+    ///
+    /// The hook is asked about key presses only (the key going down, and
+    /// its repeats while held), never about the release or the character
+    /// it types. [`KeyDecision::Consume`] takes the key from everyone else:
+    /// Chromium's shortcuts do not run (Ctrl+W does not close the window,
+    /// Ctrl+R does not reload) and the page sees neither the key, its
+    /// character nor its release. Compare keys with
+    /// [`Modifiers::primary`](crate::Modifiers::primary) to match Ctrl on
+    /// Windows and Linux and Cmd on macOS in one test, and mind
+    /// [`KeyPress::in_editable_field`](crate::KeyPress::in_editable_field)
+    /// so as not to take keys the user is typing.
+    ///
+    /// Runs on the UI thread for every key press, so it must be quick. A
+    /// hook that panics lets the key through. DevTools' windows are not
+    /// asked about. A later call replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, Key, KeyDecision};
+    /// App::new("./dist")
+    ///     .on_key(|key, _| {
+    ///         // Ctrl+W, Cmd+W on macOS, does not close the window
+    ///         if key.key() == Key::Char('W') && key.modifiers().primary() {
+    ///             KeyDecision::Consume
+    ///         } else {
+    ///             KeyDecision::Default
+    ///         }
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_key<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&KeyPress, &AppHandle) -> KeyDecision + Send + Sync + 'static,
+    {
+        self.hooks.key = Some(Box::new(f));
+        self
+    }
+
+    /// Decides whether one of Chromium's commands runs: one of the page-local
+    /// commands Kurogane lets run, from a key shortcut or the context menu
+    /// (reload, find, print, zoom, editing, closing the window, DevTools).
+    ///
+    /// Kurogane refuses every other command first (new windows, new tabs,
+    /// history, bookmarks: Chromium's browser UI), and the hook is never
+    /// asked about those: it can refuse a command, never allow one.
+    /// [`ChromeCommand`](crate::ChromeCommand) folds Chromium's commands by
+    /// what the user asked for, so refusing
+    /// [`ChromeCommand::DevTools`](crate::ChromeCommand::DevTools) refuses
+    /// the shortcuts and the context menu's Inspect alike. A key the
+    /// [`on_key`](App::on_key) hook consumed never becomes a command.
+    ///
+    /// Runs on the UI thread. A hook that panics refuses the command.
+    /// DevTools' own commands are not asked about. A later call replaces an
+    /// earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, ChromeCommand, CommandDecision};
+    /// App::new("./dist")
+    ///     .on_chrome_command(|request, _| match request.command() {
+    ///         // No DevTools and no reload in the shipped application
+    ///         ChromeCommand::DevTools | ChromeCommand::Reload => CommandDecision::Refuse,
+    ///         _ => CommandDecision::Default,
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_chrome_command<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&ChromeCommandRequest, &AppHandle) -> CommandDecision + Send + Sync + 'static,
+    {
+        self.hooks.chrome_command = Some(Box::new(f));
+        self
+    }
+
     /// Sets the Chromium process sandbox policy.
     ///
     /// Defaults to [`SandboxMode::Disabled`].
@@ -1086,6 +1162,14 @@ mod tests {
             .on_navigation(|_: &NavigationRequest, handle: &AppHandle| {
                 handle.shutdown();
                 NavigationDecision::Default
+            })
+            .on_key(|_: &KeyPress, handle: &AppHandle| {
+                handle.shutdown();
+                KeyDecision::Default
+            })
+            .on_chrome_command(|_: &ChromeCommandRequest, handle: &AppHandle| {
+                handle.shutdown();
+                CommandDecision::Default
             });
 
         assert!(ends(|h| {
@@ -1124,6 +1208,16 @@ mod tests {
         let hook = app.hooks.navigation.as_ref().expect("registered");
         assert!(ends(|h| {
             hook(&navigation, h);
+        }));
+        let press = KeyPress::new(0x57, 0, u16::from(b'w'), false, None);
+        let hook = app.hooks.key.as_ref().expect("registered");
+        assert!(ends(|h| {
+            hook(&press, h);
+        }));
+        let command = ChromeCommandRequest::new(crate::ChromeCommand::Reload, None);
+        let hook = app.hooks.chrome_command.as_ref().expect("registered");
+        assert!(ends(|h| {
+            hook(&command, h);
         }));
     }
 

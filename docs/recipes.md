@@ -227,6 +227,47 @@ App::url("https://app.example.com")
 
 `Allow` loads the page and lets its origin into that window from then on; `Deny`, `OpenExternal` and `Default` answer as for new windows. The application's own loads, going back and forward, and frames never reach the hook. It runs on the UI thread before the navigation starts; a hook that panics refuses the navigation.
 
+## Keyboard shortcuts and Chromium's commands
+
+A Kurogane window runs only Chromium's page-local commands (reload, find, print, zoom, editing, closing the window, DevTools) and refuses the rest (new windows and tabs, history, bookmarks). Two hooks narrow that further.
+
+`App::on_key` sees each key press before Chromium's shortcuts and the page do, and may consume it: then no shortcut runs, and the page sees neither the key, its character nor its release.
+
+```rust
+use kurogane::{App, Key, KeyDecision};
+
+App::new("dist")
+    .on_key(|key, _app| {
+        // Ctrl+W (Cmd+W on macOS) does not close this window
+        if key.key() == Key::Char('W') && key.modifiers().primary() {
+            KeyDecision::Consume
+        } else {
+            KeyDecision::Default
+        }
+    })
+    .run_or_exit();
+```
+
+The hook is asked about presses only, held keys repeating included (`repeat()`), never about releases. `Key` names a key by its place, so Shift+W is still `Key::Char('W')`; `modifiers().primary()` is Ctrl on Windows and Linux and Cmd on macOS. Check `in_editable_field()` before taking keys the user may be typing.
+
+`App::on_chrome_command` is asked about each command the window would run, from a shortcut or the context menu, and may refuse it. It is never asked about a command Kurogane refuses, so it cannot allow one.
+
+```rust
+use kurogane::{App, ChromeCommand, CommandDecision};
+
+App::new("dist")
+    .on_chrome_command(|request, _app| match request.command() {
+        // No DevTools and no reload in the shipped app
+        ChromeCommand::DevTools | ChromeCommand::Reload => CommandDecision::Refuse,
+        _ => CommandDecision::Default,
+    })
+    .run_or_exit();
+```
+
+`ChromeCommand` folds Chromium's commands by what the user asked for: refusing `DevTools` refuses Ctrl+Shift+I, F12 and the context menu's Inspect alike, and refusing `Reload` every kind of reload. A key `on_key` consumed never becomes a command.
+
+Both hooks run on the UI thread, `on_key` for every key press, so keep them quick. A panicking `on_key` lets the key through; a panicking `on_chrome_command` refuses the command. DevTools' own windows reach neither hook. A browser embedded in your own window (`create_child_browser`) reaches `on_key`; Chromium runs no commands there, so `on_chrome_command` is never asked.
+
 ## One instance per profile
 
 Your app keeps its settings and browsing data between launches. Starting the app again while it is already open brings the existing app window to the front instead of opening another one.
