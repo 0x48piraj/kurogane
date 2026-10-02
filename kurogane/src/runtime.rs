@@ -4,9 +4,11 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::acl::Origin;
 use crate::cef_app::KuroganeApp;
 use crate::client::KuroganeClient;
 use crate::error::RuntimeError;
+use crate::hooks::Hooks;
 use crate::browser_registry::{BrowserId, BrowserMetadata, BrowserType};
 use crate::registry::Registry;
 use crate::window_registry::{WindowId, WindowMetadata};
@@ -265,7 +267,13 @@ fn install_ctrlc_handler(app: &AppHandle) {
 /// `force` uses `CloseBrowser(true)`. It also closes unlinked Views windows
 /// directly, whose browser is not created yet or has closed; linked windows
 /// close with their browser.
+///
+/// A forced close cannot be cancelled, so no browser may outlive shutdown.
+/// Cancellable closes provide no equivalent signal from CEF.
 fn close_all(app: &AppHandle, force: bool) {
+    if force {
+        app.services.ending.store(true, Ordering::Release);
+    }
     let no_browsers = app.registry().browsers.is_empty();
     let no_windows = app.registry().windows.count() == 0;
     if no_browsers && no_windows {
@@ -303,6 +311,10 @@ fn close_windows(windows: Vec<Window>) {
 
 /// Asks every live browser to close. UI thread only; [`AppHandle::request`]
 /// brings it there.
+///
+/// A forced close of every open browser begins application shutdown, like
+/// [`AppHandle::shutdown`]. Closing nothing leaves the application running.
+/// Refer [`close_all`].
 fn close_browsers(app: &AppHandle, force: bool) {
     let browsers: Vec<Browser> = {
         let reg = app.registry();
@@ -311,6 +323,9 @@ fn close_browsers(app: &AppHandle, force: bool) {
             .map(|(_, s)| s.browser.clone())
             .collect()
     };
+    if force && !browsers.is_empty() {
+        app.services.ending.store(true, Ordering::Release);
+    }
 
     for browser in browsers {
         if let Some(host) = browser.host() {
@@ -374,14 +389,17 @@ pub(crate) struct RuntimeServices {
     /// AppInstance::run is inside CEF's message loop, the only loop Kurogane
     /// may quit. Only the UI thread reads and writes it
     in_run_loop: AtomicBool,
-    /// Every browser has closed: set by the last OnBeforeClose, or by a
-    /// close request that finds nothing open
+    /// Every browser has closed, set by the final [`OnBeforeClose`].
     ended: AtomicBool,
+    /// A mandatory end has begun
+    ending: AtomicBool,
     /// Set when AppInstance::shutdown begins
     cef_shut_down: AtomicBool,
     /// Whether the renderers run in Chromium's sandbox, which decides
     /// whether the browser copies their shared memory
     renderer_sandbox: RendererSandbox,
+    /// The application's hooks, held by the spec; see [`crate::hooks`]
+    hooks: Weak<Hooks>,
 }
 
 impl RuntimeServices {
@@ -390,6 +408,7 @@ impl RuntimeServices {
         router: IpcRouter,
         ui_thread: std::thread::ThreadId,
         renderer_sandbox: RendererSandbox,
+        hooks: Weak<Hooks>,
     ) -> Self {
         Self {
             router,
@@ -397,8 +416,10 @@ impl RuntimeServices {
             ui_thread,
             in_run_loop: AtomicBool::new(false),
             ended: AtomicBool::new(false),
+            ending: AtomicBool::new(false),
             cef_shut_down: AtomicBool::new(false),
             renderer_sandbox,
+            hooks,
         }
     }
 }
@@ -534,6 +555,23 @@ impl AppHandle {
         self.services.renderer_sandbox
     }
 
+    /// Whether a mandatory end has begun, after which no browser may open:
+    /// a forced close of every browser (see [`close_all`]), or
+    /// [`AppInstance::shutdown`], after which nothing may reach CEF at all.
+    pub(crate) fn is_ending(&self) -> bool {
+        self.services.ending.load(Ordering::Acquire) || self.cef_is_down()
+    }
+
+    /// The application's hooks, none once CEF has released them.
+    pub(crate) fn hooks(&self) -> Option<Arc<Hooks>> {
+        self.services.hooks.upgrade()
+    }
+
+    /// The origin of the application's start page.
+    pub(crate) fn app_origin(&self) -> &Origin {
+        self.services.router.app_origin()
+    }
+
     /// The runtime held weakly, for what lasts as long as the process: the
     /// Ctrl+C handler and the macOS `terminate:` override.
     pub(crate) fn downgrade(&self) -> Weak<RuntimeServices> {
@@ -603,6 +641,11 @@ impl AppHandle {
     /// another thread posts the close to the UI thread. The call does not wait
     /// for the browsers to close. Does nothing once [`AppInstance::shutdown`]
     /// has begun.
+    ///
+    /// This end cannot be cancelled and no browser may open after it begins.
+    /// Popups are refused, [`AppInstance::create_window`] and
+    /// [`AppInstance::create_child_browser`] return [`RuntimeError::ShuttingDown`]
+    /// and any browser CEF is already creating is closed as it appears.
     pub fn shutdown(&self) {
         debug!("AppHandle::shutdown: closing every browser");
         self.request(Close::Everything { force: true });
@@ -677,6 +720,11 @@ impl AppHandle {
     /// application's own window closes without asking that window to close.
     /// A call from another thread is posted to the UI thread. Does nothing
     /// once [`AppInstance::shutdown`] has begun.
+    ///
+    /// With `force`, no page can cancel the close, so a call that finds a
+    /// browser open ends the application as [`AppHandle::shutdown`] does and
+    /// nothing opens after it. Without, a page's `beforeunload` may keep its
+    /// browser and the application, running.
     pub fn close_all_browsers(&self, force: bool) {
         self.request(Close::Browsers { force });
     }
@@ -769,6 +817,7 @@ impl AppHandle {
                 router,
                 std::thread::current().id(),
                 RendererSandbox::Sandboxed,
+                Weak::new(),
             )),
         }
     }
@@ -1002,6 +1051,10 @@ impl BrowserHandle {
 
     /// Open DevTools for this browser.
     pub fn show_devtools(&self) {
+        // DevTools is a browser and cannot open during shutdown.
+        if self.app.is_ending() {
+            return;
+        }
         if let Some(h) = self.host() {
             h.show_dev_tools(None, None, None, None);
         }
@@ -1071,6 +1124,12 @@ impl AppInstance {
     }
 
     /// Creates a new top-level window with an embedded browser.
+    ///
+    /// # Errors
+    ///
+    /// [`RuntimeError::ShuttingDown`] once [`AppHandle::shutdown`] has begun;
+    /// [`RuntimeError::BrowserCreationFailed`] or
+    /// [`RuntimeError::WindowCreationFailed`] when CEF creates neither.
     pub fn create_window(&self, options: WindowOptions) -> Result<WindowId, RuntimeError> {
         let bounds = options.bounds;
         let placement = Placement::Main {
@@ -1158,7 +1217,8 @@ impl AppInstance {
     ///
     /// [`RuntimeError::UnsupportedParentWindow`] when `parent` is not a
     /// Win32 window, an AppKit view or an X11 window (a Wayland surface, for
-    /// one), and [`RuntimeError::BrowserCreationFailed`] when CEF creates no
+    /// one), [`RuntimeError::ShuttingDown`] once [`AppHandle::shutdown`] has
+    /// begun, and [`RuntimeError::BrowserCreationFailed`] when CEF creates no
     /// browser.
     pub fn create_child_browser(
         &self,
@@ -1188,6 +1248,10 @@ impl AppInstance {
         url: &str,
         rc_settings: &cef::RequestContextSettings,
     ) -> Result<BrowserHandle, RuntimeError> {
+        // Nothing reaches CEF once application shutdown begins.
+        if self.handle.is_ending() {
+            return Err(RuntimeError::ShuttingDown);
+        }
         // Without its own context the browser would share the global cookie
         // and cache partition the caller asked to avoid
         let rc = cef::request_context_create_context(Some(rc_settings), None)
@@ -1202,6 +1266,9 @@ impl AppInstance {
         url: &str,
         request_context: Option<cef::RequestContext>,
     ) -> Result<BrowserHandle, RuntimeError> {
+        if self.handle.is_ending() {
+            return Err(RuntimeError::ShuttingDown);
+        }
         let info = WindowInfo {
             runtime_style: RuntimeStyle::ALLOY,
             ..WindowInfo::default()
@@ -1283,6 +1350,7 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
             router,
             ui_thread,
             RendererSandbox::of(spec.sandbox_mode),
+            Arc::downgrade(&spec.hooks),
         )),
     };
 
@@ -1382,6 +1450,35 @@ mod tests {
             // never used as a window
             Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(self.0) })
         }
+    }
+
+    #[test]
+    fn nothing_opens_once_a_mandatory_end_has_begun() {
+        // Cancellable closes do not mark the application as ending
+        let graceful = AppHandle::detached();
+        graceful.request(Close::Everything { force: false });
+        assert!(!graceful.is_ending());
+        // A forced close of every browser that finds none closes and ends nothing
+        graceful.close_all_browsers(true);
+        assert!(!graceful.is_ending());
+
+        // Once CEF has shut down nothing may reach it, a browser least of all
+        let down = AppHandle::detached();
+        down.services.cef_shut_down.store(true, Ordering::SeqCst);
+        assert!(down.is_ending());
+
+        let handle = AppHandle::detached();
+        handle.shutdown();
+        assert!(handle.is_ending());
+        // Refused before any call reaches CEF, which a detached handle has none of
+        let placement = Placement::Main {
+            bounds: Rect::default(),
+            show_state: ShowState::NORMAL,
+        };
+        assert!(matches!(
+            open_browser_window(&handle, "app://app/index.html", placement),
+            Err(RuntimeError::ShuttingDown)
+        ));
     }
 
     #[test]

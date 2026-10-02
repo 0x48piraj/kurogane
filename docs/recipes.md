@@ -106,31 +106,46 @@ Then load it using `fetch()` or `WebAssembly.instantiate`.
 Additional browser windows can be created after startup.
 
 ```rust
+use kurogane::{App, BrowserBounds, WindowOptions, WindowState};
+
+let runtime = App::url("https://example.com")
+    .start()
+    .expect("Kurogane failed to initialize");
+
 runtime
-    .create_window(kurogane::WindowOptions {
+    .create_window(WindowOptions {
         url: "https://github.com".into(),
-        bounds: kurogane::BrowserBounds {
+        bounds: BrowserBounds {
             x: 100,
             y: 100,
             width: 800,
             height: 600,
         },
-        show_state: kurogane::WindowState::Normal,
+        show_state: WindowState::Normal,
     })
     .expect("failed to create window");
+
+runtime.run().expect("Kurogane failed");
 ```
 
 ### Multiple windows
 
 ```rust
-let runtime = kurogane::App::url("https://xkcd.com")
-    .start()
-    .expect("Kurogane failed to initialize");
+use kurogane::{App, BrowserBounds, RuntimeError, WindowOptions, WindowState};
 
-runtime.create_window(/* ... */)?;
-runtime.create_window(/* ... */)?;
+fn main() -> Result<(), RuntimeError> {
+    let runtime = App::url("https://xkcd.com").start()?;
 
-runtime.run()?;
+    for (x, url) in [(100, "https://example.com"), (960, "https://example.org")] {
+        runtime.create_window(WindowOptions {
+            url: url.into(),
+            bounds: BrowserBounds { x, y: 100, width: 800, height: 600 },
+            show_state: WindowState::Normal,
+        })?;
+    }
+
+    runtime.run()
+}
 ```
 
 Each browser runs as a native top-level window. `run()` returns once the last browser has closed; a hidden window's browser counts too.
@@ -141,6 +156,43 @@ See:
 
 * [kurogane-suite/scenarios/multi-window.rs](../kurogane-suite/scenarios/multi-window.rs)
 * [kurogane-suite/scenarios/window-management.rs](../kurogane-suite/scenarios/window-management.rs): windows that start minimized, maximized or hidden
+
+## Links and new windows
+
+When a page asks for a window of its own (`window.open`, a `target="_blank"` link, a form that targets a new window, a link clicked with Ctrl (Cmd on macOS), the middle button or Shift), Kurogane decides before the window exists. Chromium's own tabbed browser window never opens:
+
+* A page of the application's own origin opens in an application window: `app://app` for `App::new`, the start URL's origin for `App::url`. So does a window the page fills in itself (`about:blank`).
+* An `http` or `https` link the user clicked opens in the system's default browser.
+* Anything else is refused: a script opening a website on its own, `mailto:`, `file:` and custom schemes.
+
+`App::on_new_window` changes that per request:
+
+```rust
+use kurogane::{App, NewWindowDecision, Origin};
+
+let sign_in = Origin::parse("https://accounts.example.com").unwrap();
+
+App::new("dist")
+    .on_new_window(move |request, _app| {
+        if request.origin() == &sign_in {
+            // The sign-in page reports back to the page that opened it,
+            // so it has to run inside the app
+            NewWindowDecision::Allow
+        } else {
+            NewWindowDecision::Default
+        }
+    })
+    .run_or_exit();
+```
+
+* `Allow` opens the page in an application window whatever its origin. That page reaches only the commands and events `App::permit` grants its origin.
+* `Deny` refuses the window.
+* `OpenExternal` sends the URL to the system browser, but only an `http` or `https` link the user clicked; anything else is refused, so a page cannot make the app start another program on its own.
+* `Default` leaves the request to Kurogane.
+
+Compare origins (`request.origin()`), not URL strings: `https://accounts.example.com.evil.net` starts with `https://accounts.example.com`.
+
+The hook runs on the UI thread before the window exists, so it must not block. A hook that panics refuses the window.
 
 ## One instance per profile
 
@@ -157,6 +209,8 @@ In these cases, Kurogane sends the new launch to the copy that is already runnin
 A common use is to open the file or link in the existing window:
 
 ```rust
+use kurogane::App;
+
 App::new("dist")
     .on_second_instance(|launch, app| {
         for arg in launch.args() {
@@ -191,14 +245,17 @@ Sometimes two copies really do need to run at the same time. Give each one a dif
 Register commands using `App::command`.
 
 ```rust
-use serde_json::json;
+use kurogane::{App, AppHandle};
+use serde_json::{Value, json};
 
-let runtime = App::url("https://example.com")
-    .command("ping", |payload| {
+App::url("https://example.com")
+    .command("ping", |payload: Value, _: &AppHandle| {
         Ok(json!({"ok": true, "echo": payload}))
     })
-    .start()?;
+    .run_or_exit();
 ```
+
+The closure takes the request and the `AppHandle`. The request can be any type serde can deserialize.
 
 Invoke them from JavaScript:
 
@@ -207,6 +264,8 @@ const result = await window.kurogane.invoke("ping", { message: "hello" });
 ```
 
 Commands exchange JSON values between JavaScript and Rust.
+
+By default only the application's own pages can call a command: those of `app://app` for `App::new`, of the start URL's origin for `App::url` (here `https://example.com`). A page of any other origin, in a popup, an iframe or a window that followed a link, is refused with code `-4` unless `App::permit` names its origin for that command. `App::permit_all` opens a command to every origin, and `App::deny_unlisted` closes every command without a rule, to the application's own pages too. Event subscriptions follow the same rule through `App::permit_event`.
 
 See:
 
@@ -267,6 +326,37 @@ stream.end();
 ```
 
 Handlers and sends fail with an `IpcError`, as commands do; a string converts into one. The first `end` or `error` a handler sends closes the stream; later sends fail with `stream closed`. When the page calls `end()` and `on_end` sends neither, the runtime ends the stream with `""`, so the page always hears back. Handlers run on the UI thread; a `StreamResponder` can be cloned and used from any thread.
+
+## Logging
+
+Kurogane reports what it does through [`tracing`](https://docs.rs/tracing) events: its lifecycle and IPC detail at `debug`, problems at `warn` and `error`. It never writes to stdout or stderr itself, so nothing appears until the application installs a subscriber. With `tracing-subscriber`:
+
+```toml
+[dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+```
+
+```rust
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::LevelFilter;
+
+fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::WARN.into())
+                .from_env_lossy(),
+        )
+        .log_internal_errors(false)
+        .init();
+
+    kurogane::App::new("dist").run_or_exit();
+}
+```
+
+Warnings and errors then print by default, and `RUST_LOG=kurogane=debug kurogane run` adds the detail.
+
+Keep `log_internal_errors(false)`. With the default, a line that cannot be written, because the application's output goes into a program that has exited (`| tee` ended by Ctrl+C), is reported on stderr instead; when stderr is the same closed pipe, that report panics, and a panic inside a CEF callback aborts the application. Any other `tracing` subscriber works the same way.
 
 ## Adding Chromium flags
 

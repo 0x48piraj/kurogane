@@ -13,6 +13,9 @@ mod window_registry;
 mod registry;
 mod window;
 mod client;
+mod hooks;
+mod new_window;
+mod external;
 mod chrome_commands;
 mod scheme;
 mod error;
@@ -56,3 +59,4 @@ pub mod __private {
 // What handlers take and return
 pub use crate::ipc::{BinaryResponder, ErrorCode, IpcError, Responder, StreamHandler, StreamResponder};
 pub use app::{PumpRequest, ClientAppBrowserDelegate, ClientAppRendererDelegate, SecondInstance};
+pub use new_window::{NewWindowDecision, NewWindowRequest};

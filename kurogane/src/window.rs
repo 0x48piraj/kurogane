@@ -340,6 +340,9 @@ pub(crate) fn open_browser_window(
     url: &str,
     placement: Placement,
 ) -> Result<WindowId, RuntimeError> {
+    if app.is_ending() {
+        return Err(RuntimeError::ShuttingDown);
+    }
     let mut client = KuroganeClient::new(app.clone(), BrowserType::Main);
     // The guard ends with the statement, before any CEF call
     let window_id = app.registry().windows.allocate_id();

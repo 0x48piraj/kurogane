@@ -1,12 +1,13 @@
 //! Browser client implementation.
 
 use cef::*;
-use tracing::debug;
+use tracing::{debug, warn};
 use crate::runtime::AppHandle;
 use crate::browser_registry::BrowserType;
 use crate::chrome_commands::KuroganeCommandHandler;
 use crate::ipc::FrameId;
-use crate::window::PopupGeometry;
+use crate::new_window::{self, NewWindowRequest, Outcome};
+use crate::window::{Placement, PopupGeometry, open_browser_window};
 
 //
 // LifeSpanHandler
@@ -19,17 +20,18 @@ wrap_life_span_handler! {
     }
 
     impl LifeSpanHandler {
-        // Give the popup a client of its own, and save the requested
-        // geometry until CEF creates the popup window.
+        // Give the popup a client of its own, decide whether it opens, and
+        // save the requested geometry of one that does until CEF creates
+        // its window.
         fn on_before_popup(
             &self,
             browser: Option<&mut Browser>,
-            _frame: Option<&mut Frame>,
+            frame: Option<&mut Frame>,
             popup_id: i32,
-            _target_url: Option<&CefString>,
+            target_url: Option<&CefString>,
             _target_frame_name: Option<&CefString>,
             _target_disposition: WindowOpenDisposition,
-            _user_gesture: i32,
+            user_gesture: i32,
             popup_features: Option<&PopupFeatures>,
             _window_info: Option<&mut WindowInfo>,
             client: Option<&mut Option<Client>>,
@@ -37,7 +39,20 @@ wrap_life_span_handler! {
             _extra_info: Option<&mut Option<DictionaryValue>>,
             _no_javascript_access: Option<&mut i32>,
         ) -> i32 {
+            // On every path, a cancelled popup's included
             own_client(client, &self.app, self.browser_type);
+
+            // Before the geometry is saved: CEF reports no abort for a popup
+            // cancelled here
+            let request = new_window_request(frame, target_url, user_gesture);
+            match new_window::decide(&self.app, &request) {
+                Outcome::Open => {}
+                Outcome::External => {
+                    crate::external::open(request.url());
+                    return 1;
+                }
+                Outcome::Refuse => return 1,
+            }
 
             let mut reg = self.app.registry();
             let opener = browser.and_then(|browser| reg.browsers.find_id_by_browser(browser));
@@ -95,6 +110,18 @@ wrap_life_span_handler! {
             };
 
             reg.browsers.ensure_registered(browser, browser_type, opener);
+            drop(reg);
+
+            // A browser CEF was already creating when a mandatory end began
+            // (a popup decided before it, a window Chromium opened itself)
+            // closes now: none may outlive that end. Registered first, so its
+            // close is the one that ends the application
+            if self.app.is_ending()
+                && let Some(host) = browser.host()
+            {
+                debug!("closing browser cef_id={}: the application is ending", browser.identifier());
+                host.close_browser(1);
+            }
         }
 
         // CEF calls `do_close` only for Alloy-style browsers. In Kurogane, these are
@@ -149,6 +176,34 @@ wrap_life_span_handler! {
     }
 }
 
+/// A page's request, made in `frame`, for a window showing `target_url`.
+fn new_window_request(
+    frame: Option<&mut Frame>,
+    target_url: Option<&CefString>,
+    user_gesture: i32,
+) -> NewWindowRequest {
+    let opener_url = frame.map(|frame| CefString::from(&frame.url()).to_string());
+    NewWindowRequest::new(
+        target_url.map(CefString::to_string).unwrap_or_default(),
+        opener_url.as_deref().unwrap_or_default(),
+        user_gesture != 0,
+    )
+}
+
+/// Whether a navigation of `disposition` asks for a window of its own: a
+/// new tab or window, as a link clicked with Ctrl (Cmd on macOS), the middle
+/// button or Shift asks. The current tab, a download (Alt) and an ignored
+/// action are not.
+fn opens_new_window(disposition: WindowOpenDisposition) -> bool {
+    ![
+        WindowOpenDisposition::UNKNOWN,
+        WindowOpenDisposition::CURRENT_TAB,
+        WindowOpenDisposition::SAVE_TO_DISK,
+        WindowOpenDisposition::IGNORE_ACTION,
+    ]
+    .contains(&disposition)
+}
+
 /// Puts a new client in `client`, in place of the one CEF passes in for a
 /// popup or DevTools browser (its opener's).
 ///
@@ -162,6 +217,52 @@ fn own_client(client: Option<&mut Option<Client>>, app: &AppHandle, browser_type
         && client.is_some()
     {
         *client = Some(KuroganeClient::new(app.clone(), browser_type));
+    }
+}
+
+//
+// REQUEST HANDLER
+//
+wrap_request_handler! {
+    pub struct KuroganeRequestHandler {
+        app: AppHandle,
+    }
+
+    impl RequestHandler {
+        // A link opened in a new tab or window comes here, never to
+        // OnBeforePopup. Unanswered, Chromium opens it in a tabbed browser
+        // window of its own (Chrome style) or in the source browser itself
+        // (Alloy style). Kurogane decides it as it decides a popup, and
+        // Chromium opens nothing: an allowed page gets an application window
+        // of its own, as create_window makes, with no opener, as a new tab
+        // has none
+        fn on_open_urlfrom_tab(
+            &self,
+            _browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            target_url: Option<&CefString>,
+            target_disposition: WindowOpenDisposition,
+            user_gesture: i32,
+        ) -> i32 {
+            if !opens_new_window(target_disposition) {
+                return 0;
+            }
+            let request = new_window_request(frame, target_url, user_gesture);
+            match new_window::decide(&self.app, &request) {
+                Outcome::Open => {
+                    let placement = Placement::Main {
+                        bounds: Rect::default(),
+                        show_state: ShowState::NORMAL,
+                    };
+                    if let Err(error) = open_browser_window(&self.app, request.url(), placement) {
+                        warn!("no window for {}: {error}", request.url());
+                    }
+                }
+                Outcome::External => crate::external::open(request.url()),
+                Outcome::Refuse => {}
+            }
+            1
+        }
     }
 }
 
@@ -235,6 +336,12 @@ wrap_client! {
             Some(KuroganeLoadHandler::new(self.app.clone()))
         }
 
+        // Only OnOpenURLFromTab is answered; every other method keeps CEF's
+        // default, which cef-rs's defaults return
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(KuroganeRequestHandler::new(self.app.clone()))
+        }
+
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
             Some(KuroganeLifeSpanHandler::new(self.app.clone(), self.browser_type))
         }
@@ -287,6 +394,28 @@ impl Drop for KuroganeClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_tabs_and_windows_are_new_windows_and_nothing_else_is() {
+        for disposition in [
+            WindowOpenDisposition::NEW_FOREGROUND_TAB,
+            WindowOpenDisposition::NEW_BACKGROUND_TAB,
+            WindowOpenDisposition::NEW_WINDOW,
+            WindowOpenDisposition::NEW_POPUP,
+            WindowOpenDisposition::OFF_THE_RECORD,
+            WindowOpenDisposition::SINGLETON_TAB,
+        ] {
+            assert!(opens_new_window(disposition), "{disposition:?}");
+        }
+        for disposition in [
+            WindowOpenDisposition::CURRENT_TAB,
+            WindowOpenDisposition::SAVE_TO_DISK,
+            WindowOpenDisposition::IGNORE_ACTION,
+            WindowOpenDisposition::UNKNOWN,
+        ] {
+            assert!(!opens_new_window(disposition), "{disposition:?}");
+        }
+    }
 
     #[test]
     fn a_new_browser_gets_a_client_of_its_own() {

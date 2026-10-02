@@ -23,6 +23,8 @@ use crate::credentials::CredentialStorage;
 use crate::gpu::GpuMode;
 use crate::capability::{FilesystemBuilder, FsConfigError};
 use crate::acl::Origin;
+use crate::hooks::Hooks;
+use crate::new_window::{NewWindowDecision, NewWindowRequest};
 
 mod resolver;
 
@@ -262,6 +264,7 @@ pub struct App {
     chromium_flags: Vec<ChromiumFlag>,
     scheduler: Option<PumpScheduler>,
     on_second_instance: Option<SecondInstanceHandler>,
+    hooks: Hooks,
     delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
     renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
     scheme_handlers: Vec<CustomScheme>,
@@ -301,6 +304,7 @@ impl App {
             chromium_flags: Vec::new(),
             scheduler: None,
             on_second_instance: None,
+            hooks: Hooks::default(),
             delegates: Vec::new(),
             renderer_delegates: Vec::new(),
             scheme_handlers: Vec::new(),
@@ -743,6 +747,53 @@ impl App {
         self
     }
 
+    /// Decides what happens when a page asks for a window of its own:
+    /// `window.open`, a `target=_blank` link, a form that targets a new
+    /// window, a link clicked with Ctrl (Cmd on macOS), the middle button or
+    /// Shift. An allowed modifier click opens in a new application window,
+    /// never in Chromium's tabbed browser window.
+    ///
+    /// Without a hook, or when it answers [`NewWindowDecision::Default`],
+    /// Kurogane decides: a page of the application's own origin opens in an
+    /// application window, an `http` or `https` link the user clicked opens
+    /// in the system's default browser, and anything else is refused. That
+    /// keeps a website the application never chose out of its windows, and
+    /// a script alone never starts another program.
+    ///
+    /// The hook can widen that, for example
+    /// [`NewWindowDecision::Allow`] for a sign-in page that has to run
+    /// inside the application, or narrow it, with
+    /// [`NewWindowDecision::Deny`] or [`NewWindowDecision::OpenExternal`].
+    /// [`NewWindowDecision::OpenExternal`] opens only an `http` or `https`
+    /// link the user clicked and refuses anything else. Compare origins, not
+    /// strings: `https://trusted.example.evil.net` starts with
+    /// `https://trusted.example`.
+    ///
+    /// Runs on the UI thread, before the window exists, so it must not
+    /// block. A hook that panics refuses the window. A later call replaces an
+    /// earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, NewWindowDecision, Origin};
+    /// let sign_in = Origin::parse("https://accounts.example.com").unwrap();
+    /// App::new("./dist")
+    ///     .on_new_window(move |request, _| {
+    ///         if request.origin() == &sign_in {
+    ///             NewWindowDecision::Allow
+    ///         } else {
+    ///             NewWindowDecision::Default
+    ///         }
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_new_window<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&NewWindowRequest, &AppHandle) -> NewWindowDecision + Send + Sync + 'static,
+    {
+        self.hooks.new_window = Some(Box::new(f));
+        self
+    }
+
     /// Sets the Chromium process sandbox policy.
     ///
     /// Defaults to [`SandboxMode::Disabled`].
@@ -841,6 +892,7 @@ impl App {
             chromium_flags,
             scheduler,
             on_second_instance,
+            hooks,
             delegates,
             renderer_delegates,
             scheme_handlers,
@@ -869,6 +921,7 @@ impl App {
             chromium_flags,
             scheduler,
             on_second_instance,
+            hooks: Arc::new(hooks),
             delegates,
             renderer_delegates,
             scheme_handlers,
@@ -976,7 +1029,11 @@ mod tests {
                 handle.shutdown();
                 NoopStream
             })
-            .on_second_instance(|_: &SecondInstance, handle: &AppHandle| handle.shutdown());
+            .on_second_instance(|_: &SecondInstance, handle: &AppHandle| handle.shutdown())
+            .on_new_window(|_: &NewWindowRequest, handle: &AppHandle| {
+                handle.shutdown();
+                NewWindowDecision::Default
+            });
 
         assert!(ends(|h| {
             app.sync_handlers["json"](b"", h, context()).unwrap();
@@ -1004,6 +1061,11 @@ mod tests {
         };
         let hook = app.on_second_instance.as_ref().expect("registered");
         assert!(ends(|h| hook(&launch, h)));
+        let request = NewWindowRequest::new("about:blank".into(), "app://app/", false);
+        let hook = app.hooks.new_window.as_ref().expect("registered");
+        assert!(ends(|h| {
+            hook(&request, h);
+        }));
     }
 
     #[test]

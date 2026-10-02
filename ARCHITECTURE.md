@@ -157,6 +157,10 @@ Shutdown follows browser lifetime rather than individual window destruction, so 
 
 The graph sits behind one lock. Only the UI thread changes it, and any thread may read it through `AppHandle`. Kurogane lets go of the lock before any CEF call that can call back into it, such as creating or closing a browser or a window: CEF may run those callbacks on the same thread before the call returns.
 
+A page cannot give itself a window. Before CEF creates a popup, or opens a link clicked into a new tab, Kurogane asks the application's `on_new_window` hook and then applies its own policy: a page of the application's own origin gets a window, a web link the user clicked goes to the system browser, and anything else is refused. Chromium's own tabbed browser window never opens.
+
+Application hooks follow one convention. Each takes a typed request and the `AppHandle`, runs on the UI thread with no lock held, and answers with a decision whose `Default` leaves the choice to Kurogane. A hook that panics gets the safe answer, never an unwinding into CEF. The startup spec owns the hooks and the runtime state every `AppHandle` shares only points to them, so a hook that keeps a handle creates no cycle: CEF releases the spec at shutdown.
+
 ## Custom protocol (`app://`)
 
 Local assets are served through a Chromium scheme handler under `app://`. The handler only records the request on CEF's IO thread; the file is resolved and read when CEF opens the response, on a worker thread.

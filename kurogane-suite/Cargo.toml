@@ -75,6 +75,10 @@ name = "popups"
 path = "scenarios/popups/main.rs"
 
 [[example]]
+name = "new-window"
+path = "scenarios/new-window/main.rs"
+
+[[example]]
 name = "multi-window"
 path = "scenarios/multi-window.rs"
 

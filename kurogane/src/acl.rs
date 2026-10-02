@@ -185,6 +185,11 @@ impl CommandAcl {
         }
     }
 
+    /// The origin of the application's start page.
+    pub(crate) fn app_origin(&self) -> &Origin {
+        &self.app_origin
+    }
+
     /// Allows `origins` to invoke the command or open the stream `name`,
     /// merged with an existing rule.
     ///

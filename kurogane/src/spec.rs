@@ -5,6 +5,7 @@ use crate::chromium_flags::ChromiumFlag;
 use crate::fs::CanonicalRoot;
 use crate::credentials::CredentialStorage;
 use crate::gpu::GpuMode;
+use crate::hooks::Hooks;
 use crate::scheme::CustomScheme;
 use std::sync::Arc;
 
@@ -53,6 +54,8 @@ pub(crate) struct RuntimeSpec {
     pub chromium_flags: Vec<ChromiumFlag>,
     pub scheduler: Option<PumpScheduler>,
     pub on_second_instance: Option<SecondInstanceHandler>,
+    /// The only strong reference to the hooks; see [`crate::hooks`]
+    pub hooks: Arc<Hooks>,
     pub delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
     pub renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
     pub scheme_handlers: Vec<CustomScheme>,

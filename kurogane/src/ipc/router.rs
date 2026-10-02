@@ -125,6 +125,12 @@ impl IpcRouter {
         }
     }
 
+    /// The origin of the application's start page, which the ACL admits to
+    /// every name without a rule.
+    pub(crate) fn app_origin(&self) -> &Origin {
+        self.acl.app_origin()
+    }
+
     /// Route a message received from the renderer (browser-side dispatch).
     pub fn route_browser(
         &self,

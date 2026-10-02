@@ -46,6 +46,12 @@ pub enum RuntimeError {
     BrowserCreationFailed,
     WindowCreationFailed,
 
+    /// The application is ending and no browser may open after
+    /// [`AppHandle::shutdown`](crate::AppHandle::shutdown), a forced
+    /// [`AppHandle::close_all_browsers`](crate::AppHandle::close_all_browsers), or
+    /// [`AppInstance::shutdown`](crate::AppInstance::shutdown) has begun.
+    ShuttingDown,
+
     /// The window given to
     /// [`AppInstance::create_child_browser`](crate::AppInstance::create_child_browser)
     /// cannot parent a browser: CEF embeds only in a Win32 window, an AppKit
@@ -207,6 +213,11 @@ impl Display for RuntimeError {
                 )
             ),
 
+            RuntimeError::ShuttingDown => write!(
+                f,
+                "The application is shutting down and opens no browser any more."
+            ),
+
             RuntimeError::UnsupportedParentWindow => write!(
                 f,
                 concat!(
@@ -271,6 +282,7 @@ impl std::error::Error for RuntimeError {
             | RuntimeError::CefNotInstalled
             | RuntimeError::BrowserCreationFailed
             | RuntimeError::WindowCreationFailed
+            | RuntimeError::ShuttingDown
             | RuntimeError::UnsupportedParentWindow
             | RuntimeError::SandboxUnsupported { .. }
             | RuntimeError::SandboxUnavailable { .. }
