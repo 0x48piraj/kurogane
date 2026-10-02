@@ -295,6 +295,7 @@ mod tests {
     use super::*;
 
     use crate::capability::path::{parse_request, Request};
+    use crate::capability::test_support::tempdir;
 
     fn build(f: impl FnOnce(&mut ScopeBuilder)) -> Result<Scope, FsConfigError> {
         let mut builder = ScopeBuilder::default();
@@ -317,7 +318,7 @@ mod tests {
 
     #[test]
     fn extent_limits_depth_for_non_recursive_roots() {
-        let d = tempfile::tempdir().unwrap();
+        let d = tempdir();
         let scope = build(|s| {
             s.allow_directory(d.path());
         })
@@ -332,7 +333,7 @@ mod tests {
 
     #[test]
     fn recursive_roots_reach_any_depth_and_never_a_sibling() {
-        let d = tempfile::tempdir().unwrap();
+        let d = tempdir();
         let scope = build(|s| {
             s.allow_directory_recursive(d.path());
         })
@@ -348,7 +349,7 @@ mod tests {
 
     #[test]
     fn deny_path_covers_its_subtree_on_component_boundaries() {
-        let d = tempfile::tempdir().unwrap();
+        let d = tempdir();
         std::fs::create_dir(d.path().join("secret")).unwrap();
         let scope = build(|s| {
             s.allow_directory_recursive(d.path());
@@ -362,7 +363,7 @@ mod tests {
 
     #[test]
     fn deny_path_may_name_a_missing_entry() {
-        let d = tempfile::tempdir().unwrap();
+        let d = tempdir();
         let scope = build(|s| {
             s.allow_directory_recursive(d.path());
             s.deny_path(d.path().join("later"));
@@ -373,7 +374,7 @@ mod tests {
 
     #[test]
     fn deny_path_with_glob_characters_stays_literal() {
-        let d = tempfile::tempdir().unwrap();
+        let d = tempdir();
         let scope = build(|s| {
             s.allow_directory_recursive(d.path());
             s.deny_path(d.path().join("[1]"));
@@ -385,7 +386,7 @@ mod tests {
 
     #[test]
     fn deny_glob_applies_beneath_each_root() {
-        let d = tempfile::tempdir().unwrap();
+        let d = tempdir();
         let scope = build(|s| {
             s.allow_directory_recursive(d.path());
             s.deny_glob("**/*.key");
@@ -397,7 +398,7 @@ mod tests {
 
     #[test]
     fn a_scope_reads_the_inverted_fold_only_for_question_marks_and_classes() {
-        let d = tempfile::tempdir().unwrap();
+        let d = tempdir();
         let unfolds = |globs: &[&str]| {
             build(|s| {
                 s.allow_directory_recursive(d.path());
@@ -417,8 +418,8 @@ mod tests {
 
     #[test]
     fn configuration_errors_are_reported() {
-        let d = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
+        let d = tempdir();
+        let outside = tempdir();
         let err = build(|s| {
             s.allow_directory(d.path());
             s.deny_path(outside.path());
@@ -440,7 +441,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_requests_match_roots_case_insensitively() {
-        let d = tempfile::tempdir().unwrap();
+        let d = tempdir();
         std::fs::create_dir(d.path().join("Secret")).unwrap();
         let scope = build(|s| {
             s.allow_directory_recursive(d.path());
