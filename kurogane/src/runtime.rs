@@ -1081,7 +1081,7 @@ impl AppInstance {
             },
             show_state: options.show_state.into(),
         };
-        open_browser_window(&self.handle, &options.url, placement)
+        open_browser_window(&self.handle, &options.url, placement, Vec::new())
     }
 
     /// Takes ownership and blocks on the CEF message loop.
