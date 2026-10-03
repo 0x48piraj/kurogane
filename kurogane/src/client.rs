@@ -471,7 +471,7 @@ fn pre_key_event(
     app: &AppHandle,
     browser: Option<&mut Browser>,
     event: Option<&KeyEvent>,
-    _is_keyboard_shortcut: Option<&mut i32>,
+    is_keyboard_shortcut: Option<&mut i32>,
 ) -> i32 {
     let (Some(browser), Some(event)) = (browser, event) else {
         return 0;
@@ -499,9 +499,23 @@ fn pre_key_event(
         event.focus_on_editable_field != 0,
         id,
     );
-    match keys::decide(app, &press) {
+    answer_key(keys::decide(app, &press), is_keyboard_shortcut)
+}
+
+/// What `on_pre_key_event` answers CEF for `decision`: whether the key is
+/// handled, and in `is_keyboard_shortcut` whether it is a shortcut, which
+/// CEF holds until the page has seen the key and runs only if the page lets
+/// it through.
+fn answer_key(decision: KeyDecision, is_keyboard_shortcut: Option<&mut i32>) -> i32 {
+    match decision {
         KeyDecision::Consume => 1,
         KeyDecision::Default => 0,
+        KeyDecision::PageFirst => {
+            if let Some(shortcut) = is_keyboard_shortcut {
+                *shortcut = 1;
+            }
+            0
+        }
     }
 }
 
@@ -1105,5 +1119,24 @@ mod tests {
         let mut none: Option<Client> = None;
         own_client(Some(&mut none), &app, BrowserType::Main);
         assert!(none.is_none());
+    }
+
+    #[test]
+    fn page_first_keys_are_shortcuts_and_the_rest_are_left_as_cef_set_them() {
+        for (decision, handled, shortcut) in [
+            (KeyDecision::Default, 0, 7),
+            (KeyDecision::Consume, 1, 7),
+            (KeyDecision::PageFirst, 0, 1),
+        ] {
+            // 7 stands for whatever CEF passed in
+            let mut is_keyboard_shortcut = 7;
+            assert_eq!(
+                answer_key(decision, Some(&mut is_keyboard_shortcut)),
+                handled,
+                "{decision:?}"
+            );
+            assert_eq!(is_keyboard_shortcut, shortcut, "{decision:?}");
+            assert_eq!(answer_key(decision, None), handled, "{decision:?}");
+        }
     }
 }

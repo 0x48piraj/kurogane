@@ -862,6 +862,12 @@ impl App {
     /// [`KeyPress::in_editable_field`](crate::KeyPress::in_editable_field)
     /// so as not to take keys the user is typing.
     ///
+    /// [`KeyDecision::PageFirst`] hands the key to the page before
+    /// Chromium's shortcut for it, which then runs only if the page does not
+    /// prevent the key's default. Chromium runs the shortcuts it reserves
+    /// (Ctrl+T, Ctrl+W, Ctrl+Shift+T, Ctrl+1 to Ctrl+9) before the page sees
+    /// the key, so this is how a page gets to bind one of them.
+    ///
     /// Runs on the UI thread for every key press, so it must be quick. A
     /// hook that panics lets the key through. DevTools' windows are not
     /// asked about. A later call replaces an earlier one.
