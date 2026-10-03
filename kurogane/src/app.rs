@@ -21,6 +21,7 @@ use crate::scheme::{CustomScheme, SchemeHandler, validate_scheme_name};
 use crate::chromium_flags::ChromiumFlag;
 use crate::credentials::CredentialStorage;
 use crate::gpu::GpuMode;
+use crate::window::WindowIdentity;
 use crate::capability::{FilesystemBuilder, FsConfigError};
 use crate::acl::Origin;
 
@@ -255,6 +256,7 @@ pub struct App {
     acl: crate::acl::CommandAcl,
 
     profile_id: Option<String>,
+    cache_dir: Option<PathBuf>,
     sandbox_mode: SandboxMode,
     persist_session_cookies: bool,
     gpu_mode: GpuMode,
@@ -265,6 +267,7 @@ pub struct App {
     delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
     renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
     scheme_handlers: Vec<CustomScheme>,
+    window_identity: WindowIdentity,
 
     /// Builder misuse, reported together by `build()` before anything starts.
     problems: Vec<ConfigError>,
@@ -293,6 +296,7 @@ impl App {
             acl: crate::acl::CommandAcl::new(),
 
             profile_id: None,
+            cache_dir: None,
             sandbox_mode: SandboxMode::default(),
             persist_session_cookies: true,
             gpu_mode: GpuMode::Auto,
@@ -303,6 +307,7 @@ impl App {
             delegates: Vec::new(),
             renderer_delegates: Vec::new(),
             scheme_handlers: Vec::new(),
+            window_identity: WindowIdentity::default(),
             problems: Vec::new(),
             filesystem_error: None,
         }
@@ -743,6 +748,40 @@ impl App {
         self
     }
 
+    /// Put the Chromium profile (CEF's cache_path) in this directory instead of
+    /// the one derived from the profile id. The directory is created if
+    /// missing.
+    pub fn cache_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.cache_dir = Some(dir.into());
+        self
+    }
+
+    /// Name the application's first window for the window manager: WM_CLASS
+    /// under X11, app_id under Wayland. It is what a `.desktop` file's
+    /// `StartupWMClass` and per-app compositor rules match on. Linux only;
+    /// other platforms ignore it.
+    pub fn window_class(mut self, class: impl Into<String>) -> Self {
+        self.window_identity.class = Some(class.into());
+        self
+    }
+
+    /// Title of the application's first window. Without it the window carries
+    /// no title.
+    pub fn window_title(mut self, title: impl Into<String>) -> Self {
+        self.window_identity.title = Some(title.into());
+        self
+    }
+
+    /// Icon of the application's first window, as an encoded PNG: the title
+    /// bar, the taskbar button and the app switcher draw it, scaled by the
+    /// platform. Without it Windows draws the executable's icon resource and
+    /// X11 draws nothing; Wayland takes the icon from the desktop entry the
+    /// class names and ignores this.
+    pub fn window_icon(mut self, png: impl Into<Vec<u8>>) -> Self {
+        self.window_identity.icon = Some(png.into());
+        self
+    }
+
     pub fn persist_session_cookies(mut self, value: bool) -> Self {
         self.persist_session_cookies = value;
         self
@@ -822,6 +861,7 @@ impl App {
             stream_handlers,
             acl,
             profile_id,
+            cache_dir,
             sandbox_mode,
             persist_session_cookies,
             gpu_mode,
@@ -832,6 +872,7 @@ impl App {
             delegates,
             renderer_delegates,
             scheme_handlers,
+            window_identity,
             ..
         } = self;
 
@@ -851,6 +892,7 @@ impl App {
             start_url,
             asset_root,
             profile_id,
+            cache_dir,
             persist_session_cookies,
             gpu_mode,
             credential_storage,
@@ -860,6 +902,7 @@ impl App {
             delegates,
             renderer_delegates,
             scheme_handlers,
+            window_identity,
         };
 
         crate::runtime::start(spec, router)
