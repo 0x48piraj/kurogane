@@ -250,6 +250,23 @@ App::new("dist")
 
 The hook is asked about presses only, held keys repeating included (`repeat()`), never about releases. `Key` names a key by its place, so Shift+W is still `Key::Char('W')`; `modifiers().primary()` is Ctrl on Windows and Linux and Cmd on macOS. Check `in_editable_field()` before taking keys the user may be typing.
 
+Chromium runs some shortcuts (Ctrl+T, Ctrl+W, Ctrl+Shift+T, Ctrl+1 to Ctrl+9) before the page sees the key, so a page's own binding for them never fires. `KeyDecision::PageFirst` lets the page handle Ctrl+T before Chromium does: the page gets the key first, and Chromium's shortcut runs only if the page does not call `preventDefault()`.
+
+```rust
+use kurogane::{App, Key, KeyDecision};
+
+App::new("dist")
+    .on_key(|key, _app| {
+        // The page's own Ctrl+T (Cmd+T on macOS) handler runs
+        if key.key() == Key::Char('T') && key.modifiers().primary() {
+            KeyDecision::PageFirst
+        } else {
+            KeyDecision::Default
+        }
+    })
+    .run_or_exit();
+```
+
 `App::on_chrome_command` is asked about each command the window would run, from a shortcut or the context menu, and may refuse it. It is never asked about a command Kurogane refuses, so it cannot allow one.
 
 ```rust
