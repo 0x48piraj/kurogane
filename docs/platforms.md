@@ -12,16 +12,19 @@ No manual setup or environment variables are usually required.
 
 The Kurogane CLI handles Chromium runtime configuration internally.
 
-### Optional (sandbox fallback)
+### Chromium sandbox on Linux
 
-In some restricted Linux environments, Chromium may require the SUID sandbox for renderer and GPU processes.
+Apps run unsandboxed by default. An app that opts in with `SandboxMode::Chromium` needs one of:
 
-If you encounter startup or GPU issues, you may need to run:
+- Unprivileged user namespaces, available on most distributions. Ubuntu 24.04 restricts them through AppArmor; lift the restriction with `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`.
+- The setuid helper shipped with CEF:
 
 ```bash
 sudo chown root:root ~/.local/share/kurogane/cef/{INSTALLED_CEF_VERSION}/chrome-sandbox
 sudo chmod 4755 ~/.local/share/kurogane/cef/{INSTALLED_CEF_VERSION}/chrome-sandbox
 ```
+
+The app checks both at startup and refuses to start, printing these instructions, when neither is usable. AppImages and Nix-store installs cannot use the setuid helper and need user namespaces.
 
 > [!NOTE]
 >  On Linux, GPU diagnostics typically require `mesa-utils` (for `glxinfo`) or equivalent OpenGL utilities:
@@ -34,15 +37,9 @@ sudo chmod 4755 ~/.local/share/kurogane/cef/{INSTALLED_CEF_VERSION}/chrome-sandb
 
 ## Windows
 
-You must build the project inside a **Visual Studio developer environment** so `CMake` can find required build tools (`Ninja` / `MSVC`).
+Install the Visual Studio C++ Build Tools with the Desktop development with C++ workload which includes the Windows SDK.
 
-Open:
-
-```
-x64 Native Tools Command Prompt for VS
-```
-
-Then run:
+For Kurogane app development, kurogane dev, build, and bundle work from any terminal. These commands link the Chromium runtime directly, so they only require the Visual Studio C++ Build Tools.
 
 ```bat
 kurogane new react
@@ -50,6 +47,8 @@ npm --prefix frontend install
 npm --prefix frontend run dev
 kurogane dev
 ```
+
+Building Kurogane itself, or building an app with cargo build, also compiles CEF's C++ wrapper library. These builds require CMake and Ninja on `PATH`, such as when using the **Native Tools Command Prompt for VS**.
 
 ## macOS
 

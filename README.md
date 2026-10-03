@@ -13,11 +13,30 @@ Kurogane is a Rust-native runtime built on [Chromium Embedded Framework (CEF)](h
 
 ### 1. Install Kurogane CLI (one-time)
 
+#### Linux / macOS
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://kurogane-rs.org/install.sh | sh
+```
+
+#### Windows
+
+```powershell
+powershell -c "irm https://kurogane-rs.org/install.ps1|iex"
+```
+
+> Note: See [Installing Kurogane](docs/install.md) for installer options and [install notes](docs/platforms.md) for platform specifics.
+
+### For Rustaceans 🦀
+
+Want the bleeding-edge Kurogane? If you already have Rust installed:
+
 ```bash
 cargo install --git https://github.com/0x48piraj/kurogane kurogane-cli
 ```
 
-> Note: For platform-specific setup and troubleshooting, see [install notes](docs/platforms.md).
+> [!IMPORTANT]
+> This pulls the latest development code, so it may be ahead of the latest release and can come with a few rough edges.
 
 ### 2. Try it
 
