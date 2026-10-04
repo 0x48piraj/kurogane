@@ -31,6 +31,7 @@ use crate::hooks::Hooks;
 use crate::keys::{KeyDecision, KeyPress};
 use crate::navigation::{NavigationDecision, NavigationRequest};
 use crate::new_window::{NewWindowDecision, NewWindowRequest};
+use crate::window_options::WindowOptions;
 
 mod resolver;
 
@@ -262,6 +263,7 @@ pub struct App {
 
     acl: crate::acl::CommandAcl,
 
+    start_window: Option<WindowOptions>,
     profile_id: Option<String>,
     sandbox_mode: SandboxMode,
     persist_session_cookies: bool,
@@ -302,6 +304,7 @@ impl App {
             stream_handlers: HashMap::new(),
             acl,
 
+            start_window: None,
             profile_id: None,
             sandbox_mode: SandboxMode::default(),
             persist_session_cookies: true,
@@ -718,6 +721,27 @@ impl App {
             name,
             Box::new(move |app: &AppHandle| Box::new(factory(app))),
         );
+        self
+    }
+
+    /// How the start window opens: its title, size and place, the size it
+    /// cannot be made smaller than, and its state (see [`WindowOptions`]).
+    ///
+    /// Without it the start window takes its page's title, 800 by 600
+    /// centred on the primary display. An application started
+    /// with [`App::start_embedded`] has no start window, and options given
+    /// to it are [`ConfigError::WindowWhenEmbedded`]; options no window can
+    /// have are [`ConfigError::InvalidWindowOptions`]. A later call replaces
+    /// an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, WindowOptions, WindowState};
+    /// App::new("dist")
+    ///     .window(WindowOptions::new().title("Notes").size(1100, 720).state(WindowState::Maximized))
+    ///     .run_or_exit();
+    /// ```
+    pub fn window(mut self, options: WindowOptions) -> Self {
+        self.start_window = Some(options);
         self
     }
 
@@ -1184,6 +1208,14 @@ impl App {
 
     /// Checks the configuration, then starts the runtime in `mode`.
     fn launch(mut self, mode: RuntimeMode) -> Result<AppInstance, RuntimeError> {
+        if let Some(options) = &self.start_window {
+            if mode == RuntimeMode::Embedded {
+                self.problems.push(ConfigError::WindowWhenEmbedded);
+            } else if let Some(problem) = options.problem() {
+                self.problems
+                    .push(ConfigError::InvalidWindowOptions(problem));
+            }
+        }
         self.check_configuration()?;
 
         let Self {
@@ -1192,6 +1224,7 @@ impl App {
             async_handlers,
             stream_handlers,
             acl,
+            start_window,
             profile_id,
             sandbox_mode,
             persist_session_cookies,
@@ -1221,6 +1254,7 @@ impl App {
             mode,
             sandbox_mode,
             start_url,
+            start_window: start_window.unwrap_or_default(),
             asset_root,
             profile_id,
             persist_session_cookies,

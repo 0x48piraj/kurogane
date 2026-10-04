@@ -426,7 +426,9 @@ impl RuntimeServices {
 
 /// A rectangle: a position and a size.
 ///
-/// In [`WindowOptions::bounds`] it is a window's place on the screen.
+/// In [`WindowOptions::bounds`](crate::WindowOptions::bounds) it is a
+/// window's place on the screen, its frame included, in density-independent
+/// pixels.
 ///
 /// For [`AppInstance::create_child_browser`] and [`BrowserHandle::set_bounds`]
 /// it is a browser's place inside its parent window, in that window's own
@@ -434,68 +436,12 @@ impl RuntimeServices {
 /// client area on Windows and X11; on macOS, points in the parent `NSView`,
 /// whose origin is its top-left corner when the view is flipped (winit's is)
 /// and its bottom-left corner otherwise.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BrowserBounds {
     pub x: i32,
     pub y: i32,
     pub width: i32,
     pub height: i32,
-}
-
-/// Initial visibility state for a newly created window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum WindowState {
-    /// Show the window normally.
-    #[default]
-    Normal,
-
-    /// Create the window minimized.
-    Minimized,
-
-    /// Create the window maximized.
-    Maximized,
-
-    /// Create the window hidden.
-    Hidden,
-}
-
-impl From<WindowState> for cef::ShowState {
-    fn from(state: WindowState) -> Self {
-        match state {
-            WindowState::Normal => cef::ShowState::NORMAL,
-            WindowState::Minimized => cef::ShowState::MINIMIZED,
-            WindowState::Maximized => cef::ShowState::MAXIMIZED,
-            WindowState::Hidden => cef::ShowState::HIDDEN,
-        }
-    }
-}
-
-impl From<cef::ShowState> for WindowState {
-    fn from(state: cef::ShowState) -> Self {
-        match state {
-            cef::ShowState::NORMAL => Self::Normal,
-            cef::ShowState::MINIMIZED => Self::Minimized,
-            cef::ShowState::MAXIMIZED => Self::Maximized,
-            cef::ShowState::HIDDEN => Self::Hidden,
-            other => {
-                debug_assert!(false, "unsupported cef::ShowState: {:?}", other);
-                Self::Normal
-            }
-        }
-    }
-}
-
-/// Options for creating a new top-level browser window.
-#[derive(Debug, Clone)]
-pub struct WindowOptions {
-    /// Initial URL to load.
-    pub url: String,
-
-    /// Initial window position and size.
-    pub bounds: BrowserBounds,
-
-    /// Initial visibility state of the window.
-    pub show_state: WindowState,
 }
 
 /// Shared lifecycle handle for a running Kurogane application.
@@ -1141,25 +1087,28 @@ impl AppInstance {
         self.handle.should_shutdown()
     }
 
-    /// Creates a new top-level window with an embedded browser.
+    /// Opens `url` in a new window of the application's, as `options` say
+    /// (see [`WindowOptions`](crate::WindowOptions)).
     ///
     /// # Errors
     ///
-    /// [`RuntimeError::ShuttingDown`] once [`AppHandle::shutdown`] has begun;
-    /// [`RuntimeError::BrowserCreationFailed`] or
+    /// [`RuntimeError::InvalidWindowOptions`] for options no window can
+    /// have; [`RuntimeError::ShuttingDown`] once [`AppHandle::shutdown`] has
+    /// begun; [`RuntimeError::BrowserCreationFailed`] or
     /// [`RuntimeError::WindowCreationFailed`] when CEF creates neither.
-    pub fn create_window(&self, options: WindowOptions) -> Result<WindowId, RuntimeError> {
-        let bounds = options.bounds;
+    pub fn create_window(
+        &self,
+        url: &str,
+        options: crate::WindowOptions,
+    ) -> Result<WindowId, RuntimeError> {
+        if let Some(problem) = options.problem() {
+            return Err(RuntimeError::InvalidWindowOptions(problem));
+        }
         let placement = Placement::Main {
-            bounds: Rect {
-                x: bounds.x,
-                y: bounds.y,
-                width: bounds.width,
-                height: bounds.height,
-            },
-            show_state: options.show_state.into(),
+            options,
+            start: false,
         };
-        open_browser_window(&self.handle, &options.url, placement)
+        open_browser_window(&self.handle, url, placement)
     }
 
     /// Takes ownership and blocks on the CEF message loop.
@@ -1490,8 +1439,8 @@ mod tests {
         assert!(handle.is_ending());
         // Refused before any call reaches CEF, which a detached handle has none of
         let placement = Placement::Main {
-            bounds: Rect::default(),
-            show_state: ShowState::NORMAL,
+            options: crate::WindowOptions::new(),
+            start: false,
         };
         assert!(matches!(
             open_browser_window(&handle, "app://app/index.html", placement),
@@ -1711,7 +1660,7 @@ mod tests {
                     .browsers
                     .ensure_registered(&browser, BrowserType::Main, None);
                 let window_id = registry.windows.allocate_id();
-                registry.windows.insert(window_id, window, Some(id));
+                registry.windows.insert(window_id, window, Some(id), true);
                 (id, window_id)
             };
             let origin = Origin::parse("app://app").unwrap();
@@ -1956,7 +1905,7 @@ mod tests {
                 .browsers
                 .ensure_registered(&browser, BrowserType::Main, None);
             let window_id = registry.windows.allocate_id();
-            registry.windows.insert(window_id, window, Some(id));
+            registry.windows.insert(window_id, window, Some(id), true);
             (id, window_id)
         };
         assert_eq!(app.find_window_by_browser(id), Some(window_id));

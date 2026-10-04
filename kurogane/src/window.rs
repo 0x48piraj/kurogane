@@ -11,6 +11,7 @@ use crate::browser_registry::{BrowserId, BrowserType};
 use crate::client::KuroganeClient;
 use crate::error::RuntimeError;
 use crate::runtime::AppHandle;
+use crate::window_options::WindowOptions;
 use crate::window_registry::WindowId;
 
 /// Size and position requested by a page for a popup window.
@@ -87,9 +88,9 @@ impl PendingPopups {
 /// Where a new top-level window opens and how it first shows.
 #[derive(Clone, Debug)]
 pub(crate) enum Placement {
-    /// A window of the application's own, at `bounds` (empty lets CEF choose)
-    /// in `show_state`.
-    Main { bounds: Rect, show_state: ShowState },
+    /// A window of the application's own, as its options say: the start
+    /// window, or one from create_window.
+    Main { options: WindowOptions, start: bool },
     /// A popup's window, at the size and position its page asked for;
     /// without one CEF gives the popup its default 800x600 window.
     Popup(Option<PopupGeometry>),
@@ -99,17 +100,29 @@ impl Placement {
     /// The window's size when its bounds are empty; empty lets CEF choose.
     fn preferred_size(&self) -> Size {
         match self {
+            // Always given initial bounds
             Self::Main { .. } => Size::default(),
             Self::Popup(requested) => requested.map(PopupGeometry::size).unwrap_or_default(),
         }
     }
 
-    /// Where the window opens. Empty unless the application or the page
-    /// placed it: CEF then takes the size from preferred_size
-    /// (cef_window_delegate.h:129-134).
+    /// Where the window opens, as the application or the page asked
+    /// (an application's bounds are then brought onto a display, see
+    /// [`on_a_display`]). Empty when nobody placed it: an application window
+    /// is then centred at its size ([`centred`]), and CEF gives a popup the
+    /// size from preferred_size at the origin (0,0) (cef_window_delegate.h,
+    /// GetInitialBounds).
     fn initial_bounds(&self) -> Rect {
         match self {
-            Self::Main { bounds, .. } => bounds.clone(),
+            Self::Main { options, .. } => options
+                .requested_bounds()
+                .map(|b| Rect {
+                    x: b.x,
+                    y: b.y,
+                    width: b.width,
+                    height: b.height,
+                })
+                .unwrap_or_default(),
             Self::Popup(requested) => requested
                 .and_then(PopupGeometry::bounds)
                 .unwrap_or_default(),
@@ -119,9 +132,105 @@ impl Placement {
     /// How the window first shows; a popup shows normally.
     fn show_state(&self) -> ShowState {
         match self {
-            Self::Main { show_state, .. } => *show_state,
+            Self::Main { options, .. } => options.initial_state().into(),
             Self::Popup(_) => ShowState::NORMAL,
         }
+    }
+
+    /// The size the user cannot make the window smaller than; none for a
+    /// popup.
+    fn minimum_size(&self) -> Size {
+        match self {
+            Self::Main { options, .. } => options
+                .minimum()
+                .map(|(width, height)| Size { width, height })
+                .unwrap_or_default(),
+            Self::Popup(_) => Size::default(),
+        }
+    }
+
+    /// Whether the window takes its page's title, as a browser tab does: a
+    /// popup's always does, an application window's unless its options fix
+    /// one.
+    fn follows_title(&self) -> bool {
+        match self {
+            Self::Main { options, .. } => options.fixed_title().is_none(),
+            Self::Popup(_) => true,
+        }
+    }
+}
+
+/// The least of a window, in DIP each way, that must show on a display for
+/// it to stay where it was put: Chromium's rule for its own windows
+/// (chrome/browser/ui/window_sizer, kMinVisibleWidth and kMinVisibleHeight).
+const MIN_VISIBLE: i32 = 30;
+
+/// An application window's size when its options give none, in DIP: the
+/// size CEF gives a window it is asked to size itself.
+const DEFAULT_SIZE: (i32, i32) = (800, 600);
+
+/// A window of `width` by `height` centred on the primary display's work
+/// area, made to fit it. Computed before the window exists, so a window
+/// that opens maximized, minimized or fullscreen restores to it. UI thread.
+fn centred(width: i32, height: i32) -> Rect {
+    match display_get_primary() {
+        Some(display) => centre(width, height, &display.work_area()),
+        None => Rect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        },
+    }
+}
+
+/// A window of `width` by `height` centred on the work area `area`, made to
+/// fit it.
+fn centre(width: i32, height: i32, area: &Rect) -> Rect {
+    let x = area.x + (area.width - width) / 2;
+    let y = area.y + (area.height - height) / 2;
+    fit(
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        },
+        area,
+    )
+}
+
+/// `bounds` on the display that shows most of them, or the nearest one when
+/// none does: made to fit its work area (and then inside it), the title bar
+/// not above it, and moved inside it when less than [`MIN_VISIBLE`] of the
+/// window shows there. UI thread.
+fn on_a_display(bounds: Rect) -> Rect {
+    match display_get_matching_bounds(Some(&bounds), 0) {
+        Some(display) => fit(bounds, &display.work_area()),
+        None => bounds,
+    }
+}
+
+/// `bounds` made to show on the work area `area` (see [`on_a_display`]).
+fn fit(bounds: Rect, area: &Rect) -> Rect {
+    let width = bounds.width.min(area.width);
+    let height = bounds.height.min(area.height);
+    let mut x = bounds.x;
+    let mut y = bounds.y.max(area.y);
+    let shown_x = (x + width).min(area.x + area.width) - x.max(area.x);
+    let shown_y = (y + height).min(area.y + area.height) - y.max(area.y);
+    let lost = shown_x < MIN_VISIBLE.min(width) || shown_y < MIN_VISIBLE.min(height);
+    if lost || width < bounds.width {
+        x = x.clamp(area.x, area.x + area.width - width);
+    }
+    if lost || height < bounds.height {
+        y = y.clamp(area.y, area.y + area.height - height);
+    }
+    Rect {
+        x,
+        y,
+        width,
+        height,
     }
 }
 
@@ -142,13 +251,28 @@ wrap_window_delegate! {
         fn preferred_size(&self, _view: Option<&mut View>) -> Size {
             self.placement.preferred_size()
         }
+
+        fn minimum_size(&self, _view: Option<&mut View>) -> Size {
+            self.placement.minimum_size()
+        }
     }
 
     impl PanelDelegate {}
 
     impl WindowDelegate {
+        // An application window opens where its bounds say, brought onto a
+        // display, or centred at its size
         fn initial_bounds(&self, _window: Option<&mut Window>) -> Rect {
-            self.placement.initial_bounds()
+            match &self.placement {
+                Placement::Main { options, .. } => match options.requested_bounds() {
+                    Some(_) => on_a_display(self.placement.initial_bounds()),
+                    None => {
+                        let (width, height) = options.requested_size().unwrap_or(DEFAULT_SIZE);
+                        centred(width, height)
+                    }
+                },
+                Placement::Popup(_) => self.placement.initial_bounds(),
+            }
         }
 
         fn initial_show_state(&self, _window: Option<&mut Window>) -> ShowState {
@@ -161,23 +285,52 @@ wrap_window_delegate! {
             };
             // Registered before the view is added, which creates a main
             // window's browser; the guard ends with the statement
-            self.app
-                .registry()
-                .windows
-                .insert(self.window_id, window.clone(), self.browser_id);
+            self.app.registry().windows.insert(
+                self.window_id,
+                window.clone(),
+                self.browser_id,
+                self.placement.follows_title(),
+            );
 
             window.add_child_view(Some(&mut (&self.browser_view).into()));
+            if let Placement::Main { options, .. } = &self.placement
+                && let Some(title) = options.fixed_title()
+            {
+                window.set_title(Some(&CefString::from(title)));
+            }
             if self.placement.show_state() != ShowState::HIDDEN {
                 window.show();
             }
-            match self.placement {
-                Placement::Main { .. } => debug!("Window shown"),
+            match &self.placement {
+                Placement::Main { start, .. } => debug!(
+                    "[Window] {} opened at {:?}{}",
+                    self.window_id.as_u32(),
+                    window.bounds_in_screen(),
+                    if *start { " (the start window)" } else { "" }
+                ),
                 Placement::Popup(_) => debug!("Popup window shown at {:?}", window.bounds()),
             }
         }
 
+        fn on_window_bounds_changed(&self, window: Option<&mut Window>, new_bounds: Option<&Rect>) {
+            let (Some(window), Some(bounds)) = (window, new_bounds) else {
+                return;
+            };
+            debug!(
+                "[Window] {} bounds {},{} {}x{} maximized={} minimized={} fullscreen={}",
+                self.window_id.as_u32(),
+                bounds.x,
+                bounds.y,
+                bounds.width,
+                bounds.height,
+                window.is_maximized(),
+                window.is_minimized(),
+                window.is_fullscreen()
+            );
+        }
+
         fn on_window_destroyed(&self, _window: Option<&mut Window>) {
-            debug!("Window destroyed");
+            debug!("[Window] {} destroyed", self.window_id.as_u32());
             self.app.registry().windows.unregister(self.window_id);
         }
 
@@ -206,8 +359,11 @@ wrap_window_delegate! {
         // cefsimple's CanClose does, so the page's unload handlers can run
         fn can_close(&self, _window: Option<&mut Window>) -> ::std::os::raw::c_int {
             if let Some(browser) = self.browser_view.browser() && let Some(host) = browser.host() {
-                return host.try_close_browser();
+                let answer = host.try_close_browser();
+                debug!("[Window] {} can close: {answer}", self.window_id.as_u32());
+                return answer;
             }
+            debug!("[Window] {} can close: no browser", self.window_id.as_u32());
             1
         }
     }
@@ -475,28 +631,135 @@ mod tests {
         assert_eq!(pending.take(), Some(size_only(300, 300)));
     }
 
-    #[test]
-    fn an_application_window_opens_at_its_bounds_in_its_state() {
-        let placement = Placement::Main {
-            bounds: Rect {
-                x: 10,
-                y: 20,
-                width: 800,
-                height: 600,
-            },
-            show_state: ShowState::HIDDEN,
-        };
-        let Rect {
+    fn application(options: WindowOptions) -> Placement {
+        Placement::Main {
+            options,
+            start: false,
+        }
+    }
+
+    fn rect(x: i32, y: i32, width: i32, height: i32) -> Rect {
+        Rect {
             x,
             y,
             width,
             height,
-        } = placement.initial_bounds();
-        assert_eq!((x, y, width, height), (10, 20, 800, 600));
-        // Sized by its bounds, or by CEF when they are empty
+        }
+    }
+
+    fn parts(r: Rect) -> (i32, i32, i32, i32) {
+        (r.x, r.y, r.width, r.height)
+    }
+
+    #[test]
+    fn an_application_window_opens_at_its_bounds_in_its_state() {
+        let placement = application(
+            WindowOptions::new()
+                .bounds(crate::BrowserBounds {
+                    x: 10,
+                    y: 20,
+                    width: 800,
+                    height: 600,
+                })
+                .state(crate::WindowState::Hidden),
+        );
+        assert_eq!(parts(placement.initial_bounds()), (10, 20, 800, 600));
+        // Sized by its bounds, or centred at its size once created
         let Size { width, height } = placement.preferred_size();
         assert_eq!((width, height), (0, 0));
         assert_eq!(placement.show_state(), ShowState::HIDDEN);
+    }
+
+    #[test]
+    fn an_application_window_without_bounds_is_left_to_be_centred() {
+        for options in [WindowOptions::new(), WindowOptions::new().size(1100, 720)] {
+            assert_eq!(parts(application(options).initial_bounds()), (0, 0, 0, 0));
+        }
+    }
+
+    #[test]
+    fn an_application_window_not_placed_is_centred_at_its_size() {
+        let area = rect(0, 0, 1920, 1032);
+        assert_eq!(parts(centre(900, 640, &area)), (510, 196, 900, 640));
+        // A primary display that does not start at the origin
+        assert_eq!(
+            parts(centre(800, 600, &rect(-1920, 0, 1920, 1040))),
+            (-1360, 220, 800, 600)
+        );
+        // Larger than the work area: made to fit it
+        assert_eq!(parts(centre(3000, 2000, &area)), (0, 0, 1920, 1032));
+    }
+
+    #[test]
+    fn an_application_window_has_its_minimum_and_a_popup_none() {
+        let Size { width, height } =
+            application(WindowOptions::new().min_size(640, 480)).minimum_size();
+        assert_eq!((width, height), (640, 480));
+        let Size { width, height } = application(WindowOptions::new()).minimum_size();
+        assert_eq!((width, height), (0, 0));
+        let Size { width, height } = Placement::Popup(Some(size_only(320, 200))).minimum_size();
+        assert_eq!((width, height), (0, 0));
+    }
+
+    #[test]
+    fn a_window_takes_its_page_s_title_unless_its_options_fix_one() {
+        assert!(application(WindowOptions::new()).follows_title());
+        assert!(!application(WindowOptions::new().title("Notes")).follows_title());
+        assert!(Placement::Popup(None).follows_title());
+    }
+
+    #[test]
+    fn a_window_a_display_shows_stays_where_it_was_put() {
+        let area = rect(0, 0, 1920, 1032);
+        // Snapped to the left edge, its invisible border off the screen
+        assert_eq!(
+            parts(fit(rect(-7, 0, 974, 1039), &area)),
+            (-7, 0, 974, 1032)
+        );
+        assert_eq!(
+            parts(fit(rect(200, 150, 900, 600), &area)),
+            (200, 150, 900, 600)
+        );
+        // Mostly off the screen, but 30 DIP of it still show each way
+        assert_eq!(
+            parts(fit(rect(1890, 1002, 900, 600), &area)),
+            (1890, 1002, 900, 600)
+        );
+    }
+
+    #[test]
+    fn a_window_no_display_shows_is_brought_onto_one() {
+        let area = rect(0, 0, 1920, 1032);
+        // A display to the left that is gone
+        assert_eq!(
+            parts(fit(rect(-2500, 100, 900, 600), &area)),
+            (0, 100, 900, 600)
+        );
+        // Less than 30 DIP showing
+        assert_eq!(
+            parts(fit(rect(1900, 100, 900, 600), &area)),
+            (1020, 100, 900, 600)
+        );
+        assert_eq!(
+            parts(fit(rect(100, 1010, 900, 600), &area)),
+            (100, 432, 900, 600)
+        );
+        // The title bar never above the work area
+        assert_eq!(
+            parts(fit(rect(100, -300, 900, 600), &area)),
+            (100, 0, 900, 600)
+        );
+        // Larger than the work area: made to fit it
+        assert_eq!(
+            parts(fit(rect(-50, -50, 3000, 2000), &area)),
+            (0, 0, 1920, 1032)
+        );
+        // A work area that does not start at the origin
+        let right = rect(1920, 0, 1920, 1032);
+        assert_eq!(
+            parts(fit(rect(5000, 200, 800, 600), &right)),
+            (3040, 200, 800, 600)
+        );
     }
 
     #[test]

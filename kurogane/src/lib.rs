@@ -12,6 +12,7 @@ mod browser_registry;
 mod window_registry;
 mod registry;
 mod window;
+mod window_options;
 mod client;
 mod hooks;
 mod destination;
@@ -37,7 +38,8 @@ pub mod capability;
 
 mod platform;
 
-pub use runtime::{AppInstance, AppHandle, BrowserBounds, BrowserHandle, WindowOptions, WindowState};
+pub use runtime::{AppInstance, AppHandle, BrowserBounds, BrowserHandle};
+pub use window_options::{WindowOptions, WindowState};
 pub use runtime::is_browser_process;
 pub use browser_registry::{BrowserId, BrowserMetadata, BrowserType};
 pub use window_registry::{WindowId, WindowMetadata};

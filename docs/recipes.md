@@ -101,48 +101,63 @@ Then load it using `fetch()` or `WebAssembly.instantiate`.
 * Source files are not needed in production
 * You are free to use higher-level tooling if desired
 
-## Creating additional windows
+## Windows
 
-Additional browser windows can be created after startup.
+### The start window
+
+`App::window` says how the window the application opens with looks and where it goes:
 
 ```rust
-use kurogane::{App, BrowserBounds, WindowOptions, WindowState};
+use kurogane::{App, WindowOptions, WindowState};
 
-let runtime = App::url("https://example.com")
-    .start()
-    .expect("Kurogane failed to initialize");
-
-runtime
-    .create_window(WindowOptions {
-        url: "https://github.com".into(),
-        bounds: BrowserBounds {
-            x: 100,
-            y: 100,
-            width: 800,
-            height: 600,
-        },
-        show_state: WindowState::Normal,
-    })
-    .expect("failed to create window");
-
-runtime.run().expect("Kurogane failed");
+App::new("dist")
+    .window(
+        WindowOptions::new()
+            .title("Notes")      // without it, the window takes its page's <title>
+            .size(1100, 720)     // centred on the primary display
+            .min_size(640, 480)
+            .state(WindowState::Maximized),
+    )
+    .run_or_exit();
 ```
 
-### Multiple windows
+Sizes and places are in density-independent pixels (DIP), the window's frame included: 1100 by 720 is 1650 by 1080 pixels on a display at 150%. Without `size` or `bounds` the window opens 800 by 600, centred; a size larger than the display's work area is made to fit it.
+
+The title: a window whose options fix none takes its page's `<title>` and follows it, as a browser tab does, and so does a popup. Whatever the window shows names it in the taskbar and the window switcher, a remote page too; fix a title with `title` to keep it.
+
+The minimum size is the least of the window's content the user can drag it down to, its frame aside. The states are `Normal`, `Minimized`, `Maximized`, `Fullscreen` and `Hidden`; a window opened maximized restores to its size, centred. A hidden window's browser keeps the application running, as any open browser does.
+
+An application started with `App::start_embedded` has no start window: `App::window` given to it fails to start, as do options no window can have (a size of 0, a minimum larger than the size).
+
+### Opening a window where it was
+
+`bounds` places a window exactly, to open it where it was the last time:
 
 ```rust
-use kurogane::{App, BrowserBounds, RuntimeError, WindowOptions, WindowState};
+use kurogane::{App, BrowserBounds, WindowOptions};
+
+let saved = BrowserBounds { x: 200, y: 150, width: 900, height: 600 };
+App::new("dist")
+    .window(WindowOptions::new().bounds(saved))
+    .run_or_exit();
+```
+
+Kept as given, unless no display shows them any more (the display they were on is gone): then the window is brought onto the nearest display, at its size. A window larger than that display's work area is made to fit it. Wayland lets no application place its windows, so there only the size applies.
+
+### More windows
+
+`AppInstance::create_window` opens a page in another window of the application's, with the same options:
+
+```rust
+use kurogane::{App, RuntimeError, WindowOptions};
 
 fn main() -> Result<(), RuntimeError> {
-    let runtime = App::url("https://xkcd.com").start()?;
+    let runtime = App::new("dist").start()?;
 
-    for (x, url) in [(100, "https://example.com"), (960, "https://example.org")] {
-        runtime.create_window(WindowOptions {
-            url: url.into(),
-            bounds: BrowserBounds { x, y: 100, width: 800, height: 600 },
-            show_state: WindowState::Normal,
-        })?;
-    }
+    runtime.create_window(
+        "app://app/settings.html",
+        WindowOptions::new().title("Settings").size(640, 480),
+    )?;
 
     runtime.run()
 }

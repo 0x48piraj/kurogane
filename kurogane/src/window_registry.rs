@@ -22,6 +22,8 @@ pub(crate) struct WindowState {
     pub window: Window,
     pub browser_id: Option<BrowserId>,
     pub metadata: WindowMetadata,
+    /// Whether the window takes its page's title (crate::window)
+    pub follows_title: bool,
 }
 
 pub(crate) struct WindowRegistry {
@@ -45,7 +47,13 @@ impl WindowRegistry {
         id
     }
 
-    pub fn insert(&mut self, id: WindowId, window: Window, browser_id: Option<BrowserId>) {
+    pub fn insert(
+        &mut self,
+        id: WindowId,
+        window: Window,
+        browser_id: Option<BrowserId>,
+        follows_title: bool,
+    ) {
         let state = WindowState {
             window,
             browser_id,
@@ -53,6 +61,7 @@ impl WindowRegistry {
                 id,
                 created_at: std::time::Instant::now(),
             },
+            follows_title,
         };
 
         debug!(
@@ -89,7 +98,6 @@ impl WindowRegistry {
         self.windows.is_empty()
     }
 
-    #[allow(dead_code)]
     pub fn get(&self, id: WindowId) -> Option<&WindowState> {
         self.windows.get(&id)
     }

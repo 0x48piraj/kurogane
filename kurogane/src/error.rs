@@ -46,6 +46,10 @@ pub enum RuntimeError {
     BrowserCreationFailed,
     WindowCreationFailed,
 
+    /// [`AppInstance::create_window`](crate::AppInstance::create_window) was
+    /// given options no window can have, named here.
+    InvalidWindowOptions(&'static str),
+
     /// The application is ending and no browser may open after
     /// [`AppHandle::shutdown`](crate::AppHandle::shutdown), a forced
     /// [`AppHandle::close_all_browsers`](crate::AppHandle::close_all_browsers), or
@@ -213,6 +217,10 @@ impl Display for RuntimeError {
                 )
             ),
 
+            RuntimeError::InvalidWindowOptions(problem) => {
+                write!(f, "Invalid window options: {problem}.")
+            }
+
             RuntimeError::ShuttingDown => write!(
                 f,
                 "The application is shutting down and opens no browser any more."
@@ -282,6 +290,7 @@ impl std::error::Error for RuntimeError {
             | RuntimeError::CefNotInstalled
             | RuntimeError::BrowserCreationFailed
             | RuntimeError::WindowCreationFailed
+            | RuntimeError::InvalidWindowOptions(_)
             | RuntimeError::ShuttingDown
             | RuntimeError::UnsupportedParentWindow
             | RuntimeError::SandboxUnsupported { .. }
@@ -311,6 +320,13 @@ pub enum ConfigError {
     /// [`App::run`](crate::App::run) was given a pump scheduler, which requires
     /// the application to drive CEF's message loop itself.
     SchedulerWithRunLoop,
+    /// [`App::window`](crate::App::window) was given options no window can
+    /// have, named here.
+    InvalidWindowOptions(&'static str),
+    /// [`App::window`](crate::App::window) was given to an application
+    /// started with [`App::start_embedded`](crate::App::start_embedded),
+    /// which has no start window.
+    WindowWhenEmbedded,
 }
 
 impl Display for ConfigError {
@@ -337,6 +353,13 @@ impl Display for ConfigError {
             ConfigError::SchedulerWithRunLoop => f.write_str(
                 "App::scheduler is for an application that pumps CEF from its own loop: \
                  start it with App::start or App::start_embedded, not App::run",
+            ),
+            ConfigError::InvalidWindowOptions(problem) => {
+                write!(f, "App::window: {problem}")
+            }
+            ConfigError::WindowWhenEmbedded => f.write_str(
+                "App::window describes the start window, which an application started \
+                 with App::start_embedded does not have",
             ),
         }
     }

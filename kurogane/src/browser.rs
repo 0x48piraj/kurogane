@@ -46,8 +46,8 @@ wrap_browser_process_handler! {
 
             debug!("Creating main browser with URL: {}", self.spec.start_url);
             let placement = Placement::Main {
-                bounds: Rect::default(),
-                show_state: ShowState::NORMAL,
+                options: self.spec.start_window.clone(),
+                start: true,
             };
             // A CEF callback has nowhere to return the error
             if let Err(error) = open_browser_window(&self.app, &self.spec.start_url, placement) {

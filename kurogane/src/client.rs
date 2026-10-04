@@ -384,10 +384,12 @@ wrap_request_handler! {
             }
             let request = new_window_request(frame, target_url, user_gesture);
             match new_window::decide(&self.app, &request) {
+                // A window of the application's own, as create_window's
+                // with no options
                 Outcome::Open => {
                     let placement = Placement::Main {
-                        bounds: Rect::default(),
-                        show_state: ShowState::NORMAL,
+                        options: crate::WindowOptions::new(),
+                        start: false,
                     };
                     if let Err(error) = open_browser_window(&self.app, request.url(), placement) {
                         warn!("no window for {}: {error}", request.url());
@@ -975,6 +977,40 @@ wrap_load_handler! {
 }
 
 //
+// DISPLAY HANDLER
+//
+// Every other method keeps CEF's default, which cef-rs's defaults return
+wrap_display_handler! {
+    pub struct KuroganeDisplayHandler {
+        app: AppHandle,
+    }
+
+    impl DisplayHandler {
+        // A window takes its page's title, as a browser tab does, unless the
+        // application's options fixed one (crate::window). CEF never titles
+        // a Views window by itself
+        fn on_title_change(&self, browser: Option<&mut Browser>, title: Option<&CefString>) {
+            let (Some(browser), Some(title)) = (browser, title) else {
+                return;
+            };
+            // The guard ends with the statement, before the window is titled
+            let window = {
+                let reg = self.app.registry();
+                reg.browsers
+                    .find_id_by_browser(browser)
+                    .and_then(|id| reg.windows.window_id_for_browser(id))
+                    .and_then(|id| reg.windows.get(id))
+                    .filter(|state| state.follows_title)
+                    .map(|state| state.window.clone())
+            };
+            if let Some(window) = window {
+                window.set_title(Some(title));
+            }
+        }
+    }
+}
+
+//
 // CLIENT
 //
 wrap_client! {
@@ -989,6 +1025,10 @@ wrap_client! {
     impl Client {
         fn command_handler(&self) -> Option<CommandHandler> {
             Some(KuroganeCommandHandler::new(self.app.clone()))
+        }
+
+        fn display_handler(&self) -> Option<DisplayHandler> {
+            Some(KuroganeDisplayHandler::new(self.app.clone()))
         }
 
         fn download_handler(&self) -> Option<DownloadHandler> {

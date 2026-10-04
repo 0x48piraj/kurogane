@@ -153,6 +153,8 @@ Browsers and windows are tracked as separate entities with separate lifetimes.
 
 The runtime maintains an ownership graph with O(1) lookup, derives popup ownership from opener browsers and classifies DevTools browsers separately from application windows.
 
+An application window (the start window, and every `create_window`) is placed before it exists, from its `WindowOptions`: at its bounds, brought onto a display when none shows them, or centred at its size on the primary display. Its title is the one its options fix, or its page's, which a display handler follows; popups follow their page's title too.
+
 Shutdown follows browser lifetime rather than individual window destruction, so DevTools and auxiliary popups do not tear down the application. The last browser's close ends the application: `should_shutdown` turns true and, if `AppInstance::run` is in CEF's message loop, Kurogane asks CEF to end that loop. Kurogane quits no loop it did not start. A closed browser leaves its window's link at once, though CEF may destroy the window later.
 
 The graph sits behind one lock. Only the UI thread changes it, and any thread may read it through `AppHandle`. Kurogane lets go of the lock before any CEF call that can call back into it, such as creating or closing a browser or a window: CEF may run those callbacks on the same thread before the call returns.

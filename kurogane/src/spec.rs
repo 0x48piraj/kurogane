@@ -7,6 +7,7 @@ use crate::credentials::CredentialStorage;
 use crate::gpu::GpuMode;
 use crate::hooks::Hooks;
 use crate::scheme::CustomScheme;
+use crate::window_options::WindowOptions;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +47,8 @@ pub(crate) struct RuntimeSpec {
     pub mode: RuntimeMode,
     pub sandbox_mode: SandboxMode,
     pub start_url: String,
+    /// How the start window opens; unused in embedded mode, which has none
+    pub start_window: WindowOptions,
     pub asset_root: Option<CanonicalRoot>,
     pub profile_id: Option<String>,
     pub persist_session_cookies: bool,
