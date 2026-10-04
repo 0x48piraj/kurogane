@@ -756,7 +756,9 @@ impl App {
     /// tell an application's windows by it: a launcher's icon attaches to
     /// them when its desktop entry names the class (`StartupWMClass` under
     /// X11; under Wayland the entry's file name is the app_id), and the
-    /// compositor's rules for the application match it.
+    /// compositor's rules for the application match it. `kurogane bundle`
+    /// writes `[app].identifier` from `kurogane.toml` as the AppImage's
+    /// `StartupWMClass`: give this the same identifier.
     ///
     /// It names the start window, [`AppInstance::create_window`]'s windows,
     /// popups and DevTools alike; not a browser embedded in the

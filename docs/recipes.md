@@ -184,6 +184,8 @@ App::new("dist").window_class("com.example.notes").run_or_exit();
 
 It names the start window, every `create_window` window, popups and DevTools. Without it CEF names the windows. Windows and macOS have no window class and ignore it; a browser embedded in your own window is in your window, which has your class.
 
+`kurogane bundle` writes `[app].identifier` from `kurogane.toml` into the AppImage's desktop entry as `StartupWMClass`. Give `App::window_class` the same identifier, and the launcher that started the AppImage, or the one an integration tool installs, attaches to its windows. Without an identifier the entry names no class.
+
 ### The window icon
 
 `App::window_icon` gives every window Kurogane opens the application's icon, a PNG:

@@ -173,12 +173,16 @@ exec "$APPDIR"/{target} "$@"
 
 /// Generates the desktop entry consumed by AppImage tooling. Every value is
 /// escaped as the Desktop Entry Specification asks, so none adds a line.
+/// `class` is the window class the application's windows carry
+/// (`[app].identifier`, which `App::window_class` is to match): a launcher
+/// attaches the entry to running windows by it (`StartupWMClass`).
 fn generate_desktop(
     name: &str,
     exe_name: &str,
     version: &str,
     categories: &[String],
     terminal: bool,
+    class: Option<&str>,
 ) -> String {
     let categories = if categories.is_empty() {
         "Utility".to_string()
@@ -192,6 +196,9 @@ fn generate_desktop(
     let name = desktop_string(name);
     let exec = desktop_exec(exe_name);
     let version = desktop_string(version);
+    let class = class
+        .map(|class| format!("StartupWMClass={}\n", desktop_string(class)))
+        .unwrap_or_default();
 
     // `Version` is the spec version; the app version uses `X-AppImage-Version`
     format!(
@@ -204,7 +211,7 @@ Exec={exec}
 Icon={name}
 Categories={categories};
 Terminal={terminal}
-"#
+{class}"#
     )
 }
 
@@ -282,8 +289,17 @@ fn build_appdir(
     // Desktop entry
     let categories = config.linux.categories.as_deref().unwrap_or_default();
     let terminal = config.linux.terminal.unwrap_or(false);
-    let desktop_content =
-        generate_desktop(name, exe_name, &dist.metadata.version, categories, terminal);
+    // Only an identifier the application chose: the default one is no class
+    // the application gave its windows
+    let class = dist.metadata.identifier.as_deref();
+    let desktop_content = generate_desktop(
+        name,
+        exe_name,
+        &dist.metadata.version,
+        categories,
+        terminal,
+        class,
+    );
     let desktop_dir = app_dir.join("usr").join("share").join("applications");
     fs::create_dir_all(&desktop_dir)
         .with_context(|| format!("failed to create directory {}", desktop_dir.display()))?;
@@ -507,19 +523,19 @@ mod tests {
 
     #[test]
     fn desktop_targets_executable() {
-        let content = generate_desktop("custom-name", "custom-bin", "2.0.0", &[], false);
+        let content = generate_desktop("custom-name", "custom-bin", "2.0.0", &[], false, None);
         assert!(content.contains("Exec=custom-bin"));
     }
 
     #[test]
     fn desktop_uses_application_name() {
-        let content = generate_desktop("custom-name", "custom-bin", "2.0.0", &[], false);
+        let content = generate_desktop("custom-name", "custom-bin", "2.0.0", &[], false, None);
         assert!(content.contains("Name=custom-name"));
     }
 
     #[test]
     fn desktop_contains_application_version() {
-        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], false);
+        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], false, None);
         assert!(content.contains("X-AppImage-Version=1.0.0"));
         // Spec version, not app version; appimagetool validates this key
         assert!(content.contains("Version=1.0\n"));
@@ -527,7 +543,7 @@ mod tests {
 
     #[test]
     fn desktop_entry_is_valid_format() {
-        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], false);
+        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], false, None);
         assert!(content.starts_with("[Desktop Entry]"));
         assert!(content.contains("Type=Application"));
         assert!(content.contains("Terminal=false"));
@@ -535,7 +551,7 @@ mod tests {
 
     #[test]
     fn desktop_defaults_match_historical_output() {
-        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], false);
+        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], false, None);
 
         assert_eq!(
             content,
@@ -546,7 +562,7 @@ mod tests {
     #[test]
     fn desktop_categories_override_replaces_utility() {
         let categories = vec!["Development".to_string(), "IDE".to_string()];
-        let content = generate_desktop("myapp", "myapp", "1.0.0", &categories, false);
+        let content = generate_desktop("myapp", "myapp", "1.0.0", &categories, false, None);
 
         assert!(content.contains("Categories=Development;IDE;"));
         assert!(!content.contains("Utility"));
@@ -561,6 +577,7 @@ mod tests {
             "1.0\nExec=evil",
             &categories,
             false,
+            Some("com.example\nExec=evil"),
         );
 
         assert_eq!(
@@ -580,6 +597,22 @@ mod tests {
         assert!(content.contains(r"Name=My\nExec=evil"));
         assert!(content.contains(r"Categories=Dev\;Exec=evil;IDE\nExec=evil;"));
         assert!(content.contains(r"X-AppImage-Version=1.0\nExec=evil"));
+        assert!(content.contains(r"StartupWMClass=com.example\nExec=evil"));
+    }
+
+    #[test]
+    fn desktop_names_the_window_class_only_when_given_one() {
+        let content = generate_desktop(
+            "myapp",
+            "myapp",
+            "1.0.0",
+            &[],
+            false,
+            Some("com.example.notes"),
+        );
+        assert!(content.ends_with("Terminal=false\nStartupWMClass=com.example.notes\n"));
+        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], false, None);
+        assert!(!content.contains("StartupWMClass"));
     }
 
     #[test]
@@ -597,7 +630,7 @@ mod tests {
 
     #[test]
     fn desktop_terminal_flag_is_configurable() {
-        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], true);
+        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], true, None);
 
         assert!(content.contains("Terminal=true"));
     }
@@ -657,6 +690,22 @@ mod tests {
             fs::read_to_string(app_dir.join("usr/share/applications/myapp.desktop")).unwrap();
         assert!(desktop.contains("Categories=Development;"));
         assert!(desktop.contains("Terminal=true"));
+        // No [app].identifier: no class to name
+        assert!(!desktop.contains("StartupWMClass"));
+    }
+
+    #[test]
+    fn appdir_desktop_names_the_identifier_as_the_window_class() {
+        let dir = tmp();
+        let mut dist = test_distribution(dir.path());
+        dist.metadata.identifier = Some("com.example.myapp".to_string());
+        let app_dir = dir.path().join("appdir");
+
+        build_appdir(&dist, &app_dir, &PackagingConfig::default()).unwrap();
+
+        let desktop =
+            fs::read_to_string(app_dir.join("usr/share/applications/myapp.desktop")).unwrap();
+        assert!(desktop.contains("\nStartupWMClass=com.example.myapp\n"));
     }
 
     #[test]
