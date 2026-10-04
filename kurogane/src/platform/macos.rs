@@ -254,18 +254,27 @@ pub fn quit() {
     }
 }
 
-/// Returns the application display name, falling back to the executable name.
+/// Returns the application display name, falling back to the executable name,
+/// then to "Application" so no item reads "Quit " or "About ".
 fn app_name() -> String {
-    if let Some(name) = NSRunningApplication::currentApplication().localizedName() {
-        return name.to_string();
-    }
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| {
+    let localized = NSRunningApplication::currentApplication()
+        .localizedName()
+        .map(|name| name.to_string());
+    let stem = || {
+        std::env::current_exe().ok().and_then(|exe| {
             exe.file_stem()
                 .map(|stem| stem.to_string_lossy().into_owned())
         })
-        .unwrap_or_default()
+    };
+    menu_name(localized, stem)
+}
+
+/// The first non-empty of `localized` and `stem`, else "Application".
+fn menu_name(localized: Option<String>, stem: impl FnOnce() -> Option<String>) -> String {
+    localized
+        .filter(|name| !name.trim().is_empty())
+        .or_else(|| stem().filter(|name| !name.trim().is_empty()))
+        .unwrap_or_else(|| "Application".to_owned())
 }
 
 /// Adds a titled submenu to `bar`.
@@ -409,5 +418,23 @@ mod application {
             #[unsafe(method(isHandlingSendEvent))]
             fn is_handling_send_event(&self) -> bool;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::menu_name;
+
+    #[test]
+    fn the_menu_names_the_application_never_nothing() {
+        let stem = |s: &str| {
+            let s = s.to_owned();
+            move || Some(s)
+        };
+        assert_eq!(menu_name(Some("Notes".into()), stem("notes")), "Notes");
+        assert_eq!(menu_name(None, stem("notes")), "notes");
+        assert_eq!(menu_name(Some("  ".into()), stem("notes")), "notes");
+        assert_eq!(menu_name(None, || None), "Application");
+        assert_eq!(menu_name(Some(String::new()), stem("")), "Application");
     }
 }
