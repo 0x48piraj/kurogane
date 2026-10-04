@@ -33,6 +33,7 @@ use crate::keys::{KeyDecision, KeyPress};
 use crate::navigation::{NavigationDecision, NavigationRequest};
 use crate::new_window::{NewWindowDecision, NewWindowRequest};
 use crate::window::WindowIdentity;
+use crate::window_closing::WindowClosing;
 use crate::window_options::WindowOptions;
 
 mod resolver;
@@ -728,8 +729,9 @@ impl App {
         self
     }
 
-    /// How the start window opens: its title, size and place, the size it
-    /// cannot be made smaller than, and its state (see [`WindowOptions`]).
+    /// How the start window opens: the name the application knows it by,
+    /// its title, size and place, the size it cannot be made smaller than,
+    /// and its state (see [`WindowOptions`]).
     ///
     /// Without it the start window takes its page's title, 800 by 600
     /// centred on the primary display. An application started
@@ -1177,6 +1179,51 @@ impl App {
         F: Fn(&ContextMenuCommand, &AppHandle) + Send + Sync + 'static,
     {
         self.hooks.context_menu_command = Some(Box::new(f));
+        self
+    }
+
+    /// Hears each window of the application's close, with which it is and
+    /// where it was, to open it there again next time.
+    ///
+    /// Asked for the start window, every [`AppInstance::create_window`]
+    /// window and every window a page opened as the application's, once
+    /// each, however it closes: the user, the page, the application, Ctrl+C.
+    /// Not for popups, DevTools or a browser embedded in the application's
+    /// own window. [`WindowClosing::name`](crate::WindowClosing::name) is
+    /// the name the window's options gave it, free for a new window from
+    /// here on, and
+    /// [`WindowClosing::placement`](crate::WindowClosing::placement) where it
+    /// was and how it showed: given back to
+    /// [`WindowOptions::placement`] it opens the window as it was, on a
+    /// display that is still there.
+    ///
+    /// Runs on the UI thread as the window closes, before the application's
+    /// last window ends it: saving a small settings file here is fine,
+    /// anything slow is not. A hook that panics is logged, and the window
+    /// closes as it would. A later call replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, WindowOptions, WindowPlacement};
+    /// # fn load(name: &str) -> Option<WindowPlacement> { None }
+    /// # fn save(name: &str, placement: WindowPlacement) {}
+    /// let mut main = WindowOptions::new().name("main").size(1100, 720);
+    /// if let Some(placement) = load("main") {
+    ///     main = main.placement(placement);
+    /// }
+    /// App::new("dist")
+    ///     .window(main)
+    ///     .on_window_closing(|closing, _| {
+    ///         if let Some(name) = closing.name() {
+    ///             save(name, closing.placement());
+    ///         }
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_window_closing<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&WindowClosing, &AppHandle) + Send + Sync + 'static,
+    {
+        self.hooks.window_closing = Some(Box::new(f));
         self
     }
 
@@ -1657,6 +1704,10 @@ mod tests {
                 App::new("./dist").window(window().size(800, 600).min_size(900, 1)),
                 false
             )[..],
+            [ConfigError::InvalidWindowOptions(_)]
+        ));
+        assert!(matches!(
+            problems(App::new("./dist").window(window().name("")), false)[..],
             [ConfigError::InvalidWindowOptions(_)]
         ));
         for class in ["", "notes\n"] {

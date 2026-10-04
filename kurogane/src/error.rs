@@ -50,6 +50,15 @@ pub enum RuntimeError {
     /// given options no window can have, named here.
     InvalidWindowOptions(&'static str),
 
+    /// A window was asked for under `name`
+    /// ([`WindowOptions::name`](crate::WindowOptions::name)), which the
+    /// open window `window` holds. The name is free once that window's
+    /// close is reported ([`App::on_window_closing`](crate::App::on_window_closing)).
+    WindowNameTaken {
+        name: String,
+        window: crate::window_registry::WindowId,
+    },
+
     /// The application is ending and no browser may open after
     /// [`AppHandle::shutdown`](crate::AppHandle::shutdown), a forced
     /// [`AppHandle::close_all_browsers`](crate::AppHandle::close_all_browsers), or
@@ -221,6 +230,12 @@ impl Display for RuntimeError {
                 write!(f, "Invalid window options: {problem}.")
             }
 
+            RuntimeError::WindowNameTaken { name, window } => write!(
+                f,
+                "The window named {name:?} is still open (window {}); the name is free once it closes.",
+                window.as_u32()
+            ),
+
             RuntimeError::ShuttingDown => write!(
                 f,
                 "The application is shutting down and opens no browser any more."
@@ -291,6 +306,7 @@ impl std::error::Error for RuntimeError {
             | RuntimeError::BrowserCreationFailed
             | RuntimeError::WindowCreationFailed
             | RuntimeError::InvalidWindowOptions(_)
+            | RuntimeError::WindowNameTaken { .. }
             | RuntimeError::ShuttingDown
             | RuntimeError::UnsupportedParentWindow
             | RuntimeError::SandboxUnsupported { .. }

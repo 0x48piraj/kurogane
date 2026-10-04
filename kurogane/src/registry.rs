@@ -4,6 +4,7 @@ use cef::Browser;
 
 use crate::browser_registry::{BrowserId, BrowserRegistry, BrowserType};
 use crate::permissions::Pending;
+use crate::window_closing::Closing;
 use crate::window_registry::WindowRegistry;
 
 /// The open browsers and windows, and which window shows which browser.
@@ -28,6 +29,9 @@ pub(crate) struct Closed {
     /// deny: CEF answers a page's request for a device as its callback
     /// goes, which must not happen under the lock
     pub(crate) waiting_permissions: Vec<Pending>,
+    /// The application window the browser showed, whose close the
+    /// application hears of (crate::window_closing)
+    pub(crate) closing: Option<Closing>,
 }
 
 impl Registry {
@@ -40,9 +44,11 @@ impl Registry {
 
     /// Forgets `browser`, which CEF has closed (OnBeforeClose), and its
     /// window's link to it in the same update, so no reader sees a window
-    /// that names a closed browser. None for a browser never registered.
+    /// that names a closed browser; an application window lets go of its
+    /// name in it too. None for a browser never registered.
     pub(crate) fn browser_closed(&mut self, browser: &Browser) -> Option<Closed> {
         let id = self.browsers.find_id_by_browser(browser)?;
+        let window = self.windows.window_id_for_browser(id);
         let was_app_browser = self
             .browsers
             .get(id)
@@ -55,6 +61,7 @@ impl Registry {
 
         self.browsers.unregister(id);
         self.windows.unlink_browser(id);
+        let closing = window.and_then(|window| self.windows.closing(window));
 
         // Windows Chromium opened on its own close with the application's
         // last one rather than keep the process running
@@ -69,6 +76,7 @@ impl Registry {
             stragglers,
             last: self.browsers.is_empty(),
             waiting_permissions,
+            closing,
         })
     }
 }

@@ -15,6 +15,7 @@ use crate::navigation::{NavigationDecision, NavigationRequest};
 use crate::new_window::{NewWindowDecision, NewWindowRequest};
 use crate::permissions::{PermissionDecision, PermissionRequest};
 use crate::runtime::AppHandle;
+use crate::window_closing::WindowClosing;
 
 /// What [`App::on_new_window`](crate::App::on_new_window) stores.
 pub(crate) type NewWindowHook =
@@ -46,6 +47,9 @@ pub(crate) type ContextMenuHook = Box<dyn Fn(&mut ContextMenu, &AppHandle) + Sen
 /// stores.
 pub(crate) type ContextMenuCommandHook = Box<dyn Fn(&ContextMenuCommand, &AppHandle) + Send + Sync>;
 
+/// What [`App::on_window_closing`](crate::App::on_window_closing) stores.
+pub(crate) type WindowClosingHook = Box<dyn Fn(&WindowClosing, &AppHandle) + Send + Sync>;
+
 /// The hooks the application registered.
 #[derive(Default)]
 pub(crate) struct Hooks {
@@ -57,4 +61,5 @@ pub(crate) struct Hooks {
     pub permission: Option<PermissionHook>,
     pub context_menu: Option<ContextMenuHook>,
     pub context_menu_command: Option<ContextMenuCommandHook>,
+    pub window_closing: Option<WindowClosingHook>,
 }

@@ -121,7 +121,7 @@ App::new("dist")
     .run_or_exit();
 ```
 
-Sizes and places are in density-independent pixels (DIP), the window's frame included: 1100 by 720 is 1650 by 1080 pixels on a display at 150%. Without `size` or `bounds` the window opens 800 by 600, centred; a size larger than the display's work area is made to fit it.
+Sizes and places are in density-independent pixels (DIP), the window's frame included: 1100 by 720 is 1650 by 1080 pixels on a display at 150%. Without `size` or `placement` the window opens 800 by 600, centred; a size larger than the display's work area is made to fit it.
 
 The title: a window whose options fix none takes its page's `<title>` and follows it, as a browser tab does, and so does a popup. Whatever the window shows names it in the taskbar and the window switcher, a remote page too; fix a title with `title` to keep it.
 
@@ -131,18 +131,46 @@ An application started with `App::start_embedded` has no start window: `App::win
 
 ### Opening a window where it was
 
-`bounds` places a window exactly, to open it where it was the last time:
+`App::on_window_closing` hears each of the application's windows close, however it closes: the user, the page, the application, Ctrl+C. It says which window it was, by the name its options gave it, and where it was: its `WindowPlacement`. Save the placement under the name, and give it back next time (`load` and `save` read and write the application's settings):
 
 ```rust
-use kurogane::{App, BrowserBounds, WindowOptions};
+use kurogane::{App, WindowOptions};
 
-let saved = BrowserBounds { x: 200, y: 150, width: 900, height: 600 };
+let mut main = WindowOptions::new().name("main").size(1100, 720);
+if let Some(placement) = load("main") {
+    main = main.placement(placement);
+}
 App::new("dist")
-    .window(WindowOptions::new().bounds(saved))
+    .window(main)
+    .on_window_closing(|closing, _app| {
+        if let Some(name) = closing.name() {
+            save(name, closing.placement());
+        }
+    })
     .run_or_exit();
 ```
 
-Kept as given, unless no display shows them any more (the display they were on is gone): then the window is brought onto the nearest display, at its size. A window larger than that display's work area is made to fit it. Wayland lets no application place its windows, so there only the size applies.
+A `WindowPlacement` is the window's place and size, its frame included, and its state. It is serde data, `{"x":200,"y":150,"width":900,"height":600,"state":"Maximized"}` in JSON, so `load` and `save` can be a `serde_json` call each. A window maximized, minimized or fullscreen reports the place and size it restores to. Its state is `Normal`, `Maximized` or `Fullscreen`, never `Minimized` or `Hidden`: a window minimized as it closes reports how it showed before, so a window maximized and then minimized comes back maximized, and the placement given back always opens a window the user sees. The hook runs once for the start window and each window of the application's, on the UI thread, before the last window ends the application; popups and DevTools are not reported. Writing a small file there is fine, anything slow is not.
+
+`placement` opens the window as it says. The window is kept where it was, unless no display shows that place any more (the display it was on is gone): then it is brought onto the nearest display, at its size. A window larger than that display's work area is made to fit it. Wayland lets no application place its windows, so there only the size applies. `placement` decides the size over `size`, so `size` stays the first run's, and it sets the state as `state` does: of the two, the later call holds.
+
+A placement can be written out too, to put a window exactly somewhere:
+
+```rust
+use kurogane::{WindowOptions, WindowPlacement, WindowState};
+
+let options = WindowOptions::new().placement(WindowPlacement {
+    x: 200,
+    y: 150,
+    width: 900,
+    height: 600,
+    state: WindowState::Normal,
+});
+```
+
+### Naming windows
+
+A name is the application's handle on a window, never shown: `WindowOptions::name` gives it, `App::on_window_closing` gives it back, and `AppHandle::find_window_by_name` finds the open window by it. One open window holds a name at a time: `create_window` with the name of a window still open fails with `RuntimeError::WindowNameTaken`, which says which window holds it. The name is free again once that window's close is reported, and `find_window_by_name` no longer finds it. A window opened without a name, as one a page opens is, reports none.
 
 ### The window class on Linux
 
@@ -182,7 +210,7 @@ fn main() -> Result<(), RuntimeError> {
 
     runtime.create_window(
         "app://app/settings.html",
-        WindowOptions::new().title("Settings").size(640, 480),
+        WindowOptions::new().name("settings").title("Settings").size(640, 480),
     )?;
 
     runtime.run()

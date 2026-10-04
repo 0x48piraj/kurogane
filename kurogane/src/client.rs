@@ -16,6 +16,7 @@ use crate::navigation::{self, NavigationRequest};
 use crate::new_window::{self, NewWindowRequest};
 use crate::permissions::{self, Answer as PermissionAnswer, Pending, PermissionRequest};
 use crate::window::{Placement, PopupGeometry, open_browser_window};
+use crate::window_closing;
 
 /// A load the application made itself, through CreateBrowser, LoadURL or
 /// LoadRequest, and the redirects it leads to (cef_types.h)
@@ -177,8 +178,10 @@ wrap_life_span_handler! {
             };
             debug!("on_before_close cef_id={}", browser.identifier());
 
-            // The browser and its window's link go in one update; the guard
-            // ends with this statement, before anything below calls CEF
+            // The browser, its window's link and an application window's
+            // name go in one update; every way a window closes comes through
+            // here, its window still there. The guard ends with this
+            // statement, before anything below calls CEF
             let closed = self.app.registry().browser_closed(browser);
             let Some(closed) = closed else {
                 return;
@@ -200,6 +203,11 @@ wrap_life_span_handler! {
 
             // Cancel any pending async handlers for this browser
             self.app.router().cancel_all_for_browser(closed.id);
+
+            // Before the last browser ends the application
+            if let Some(closing) = closed.closing {
+                window_closing::report(&self.app, closing);
+            }
 
             if closed.last {
                 self.app.all_browsers_closed();
@@ -387,10 +395,7 @@ wrap_request_handler! {
                 // A window of the application's own, as create_window's
                 // with no options
                 Outcome::Open => {
-                    let placement = Placement::Main {
-                        options: crate::WindowOptions::new(),
-                        start: false,
-                    };
+                    let placement = Placement::Main(crate::WindowOptions::new());
                     if let Err(error) = open_browser_window(&self.app, request.url(), placement) {
                         warn!("no window for {}: {error}", request.url());
                     }

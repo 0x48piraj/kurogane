@@ -428,18 +428,16 @@ impl RuntimeServices {
     }
 }
 
-/// A rectangle: a position and a size.
+/// A browser's place inside its parent window, for
+/// [`AppInstance::create_child_browser`] and [`BrowserHandle::set_bounds`]:
+/// a position and a size in that window's own coordinates, which CEF
+/// applies unconverted. Pixels from the top-left of the client area on
+/// Windows and X11; on macOS, points in the parent `NSView`, whose origin is
+/// its top-left corner when the view is flipped (winit's is) and its
+/// bottom-left corner otherwise.
 ///
-/// In [`WindowOptions::bounds`](crate::WindowOptions::bounds) it is a
-/// window's place on the screen, its frame included, in density-independent
-/// pixels.
-///
-/// For [`AppInstance::create_child_browser`] and [`BrowserHandle::set_bounds`]
-/// it is a browser's place inside its parent window, in that window's own
-/// coordinates, which CEF applies unconverted: pixels from the top-left of the
-/// client area on Windows and X11; on macOS, points in the parent `NSView`,
-/// whose origin is its top-left corner when the view is flipped (winit's is)
-/// and its bottom-left corner otherwise.
+/// A window's place on the screen is a
+/// [`WindowPlacement`](crate::WindowPlacement).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BrowserBounds {
     pub x: i32,
@@ -692,6 +690,16 @@ impl AppHandle {
     /// its window.
     pub fn find_window_by_browser(&self, browser_id: BrowserId) -> Option<WindowId> {
         self.registry().windows.window_id_for_browser(browser_id)
+    }
+
+    /// Look up the open window named `name`
+    /// ([`WindowOptions::name`](crate::WindowOptions::name)).
+    ///
+    /// None once its close has been reported
+    /// ([`App::on_window_closing`](crate::App::on_window_closing)), even
+    /// while CEF is still closing it: the name is free for a new window.
+    pub fn find_window_by_name(&self, name: &str) -> Option<WindowId> {
+        self.registry().windows.window_named(name)
     }
 
     /// Metadata for all live browsers.
@@ -1103,8 +1111,10 @@ impl AppInstance {
     /// # Errors
     ///
     /// [`RuntimeError::InvalidWindowOptions`] for options no window can
-    /// have; [`RuntimeError::ShuttingDown`] once [`AppHandle::shutdown`] has
-    /// begun; [`RuntimeError::BrowserCreationFailed`] or
+    /// have; [`RuntimeError::WindowNameTaken`] when an open window has the
+    /// name the options give; [`RuntimeError::ShuttingDown`] once
+    /// [`AppHandle::shutdown`] has begun;
+    /// [`RuntimeError::BrowserCreationFailed`] or
     /// [`RuntimeError::WindowCreationFailed`] when CEF creates neither.
     pub fn create_window(
         &self,
@@ -1114,11 +1124,7 @@ impl AppInstance {
         if let Some(problem) = options.problem() {
             return Err(RuntimeError::InvalidWindowOptions(problem));
         }
-        let placement = Placement::Main {
-            options,
-            start: false,
-        };
-        open_browser_window(&self.handle, url, placement)
+        open_browser_window(&self.handle, url, Placement::Main(options))
     }
 
     /// Takes ownership and blocks on the CEF message loop.
@@ -1449,14 +1455,30 @@ mod tests {
         handle.shutdown();
         assert!(handle.is_ending());
         // Refused before any call reaches CEF, which a detached handle has none of
-        let placement = Placement::Main {
-            options: crate::WindowOptions::new(),
-            start: false,
-        };
+        let placement = Placement::Main(crate::WindowOptions::new());
         assert!(matches!(
             open_browser_window(&handle, "app://app/index.html", placement),
             Err(RuntimeError::ShuttingDown)
         ));
+    }
+
+    #[test]
+    fn a_name_an_open_window_holds_is_refused_before_anything_opens() {
+        let handle = AppHandle::detached();
+        let held = handle
+            .registry()
+            .windows
+            .allocate_named("main")
+            .expect("no window holds the name yet");
+        // Refused before any call reaches CEF, which a detached handle has none of
+        let placement = Placement::Main(crate::WindowOptions::new().name("main"));
+        match open_browser_window(&handle, "app://app/index.html", placement) {
+            Err(RuntimeError::WindowNameTaken { name, window }) => {
+                assert_eq!((name.as_str(), window), ("main", held));
+            }
+            other => panic!("expected WindowNameTaken, got {other:?}"),
+        }
+        assert_eq!(handle.find_window_by_name("main"), Some(held));
     }
 
     #[test]
@@ -1671,7 +1693,14 @@ mod tests {
                     .browsers
                     .ensure_registered(&browser, BrowserType::Main, None);
                 let window_id = registry.windows.allocate_id();
-                registry.windows.insert(window_id, window, Some(id), true);
+                registry.windows.insert(
+                    window_id,
+                    window,
+                    Some(id),
+                    true,
+                    crate::window_registry::WindowKind::Popup,
+                    crate::WindowState::Normal,
+                );
                 (id, window_id)
             };
             let origin = Origin::parse("app://app").unwrap();
@@ -1916,7 +1945,14 @@ mod tests {
                 .browsers
                 .ensure_registered(&browser, BrowserType::Main, None);
             let window_id = registry.windows.allocate_id();
-            registry.windows.insert(window_id, window, Some(id), true);
+            registry.windows.insert(
+                window_id,
+                window,
+                Some(id),
+                true,
+                crate::window_registry::WindowKind::Popup,
+                crate::WindowState::Normal,
+            );
             (id, window_id)
         };
         assert_eq!(app.find_window_by_browser(id), Some(window_id));
@@ -1926,11 +1962,54 @@ mod tests {
         let closed = closed.expect("the browser was registered");
         assert!(closed.last);
         assert!(closed.stragglers.is_empty());
+        // A popup's window is not the application's to hear of
+        assert!(closed.closing.is_none());
 
         // CEF destroys the window later; until then it names no browser
         assert_eq!(app.window_count(), 1);
         assert_eq!(app.find_window_by_browser(id), None);
         assert_eq!(app.browser_for_window(window_id), None);
+    }
+
+    #[test]
+    fn an_application_window_s_name_is_free_once_its_close_is_reported() {
+        let app = AppHandle::detached();
+        let (browser, _) = fake_browser();
+        let (window, _) = fake_window();
+        let window_id = {
+            let mut registry = app.registry();
+            let id = registry
+                .browsers
+                .ensure_registered(&browser, BrowserType::Main, None);
+            let window_id = registry
+                .windows
+                .allocate_named("main")
+                .expect("no window holds the name yet");
+            assert_eq!(registry.windows.allocate_named("main"), Err(window_id));
+            registry.windows.insert(
+                window_id,
+                window,
+                Some(id),
+                true,
+                crate::window_registry::WindowKind::Application,
+                crate::WindowState::Maximized,
+            );
+            window_id
+        };
+        assert_eq!(app.find_window_by_name("main"), Some(window_id));
+
+        let closed = app.registry().browser_closed(&browser);
+        let closing = closed
+            .and_then(|closed| closed.closing)
+            .expect("an application window's close is reported");
+        assert_eq!(closing.id, window_id);
+        assert_eq!(closing.name.as_deref(), Some("main"));
+        assert_eq!(closing.shown, crate::WindowState::Maximized);
+
+        // The window is still there for CEF to destroy; its name is free
+        assert_eq!(app.window_count(), 1);
+        assert_eq!(app.find_window_by_name("main"), None);
+        assert!(app.registry().windows.allocate_named("main").is_ok());
     }
 
     #[test]
