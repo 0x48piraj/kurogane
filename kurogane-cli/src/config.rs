@@ -117,9 +117,12 @@ pub struct BundleConfig {
     pub resources: Vec<ResourceConfig>,
 }
 
-/// Additional bundle resource configuration.
+/// Additional bundle resource configuration. A key it does not take is
+/// refused, not ignored: a resource bundled otherwise than its entry asks
+/// (a misspelt `destination`, a `preserve-symlinks` no version knows) would
+/// go unnoticed.
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default, rename_all = "kebab-case")]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ResourceConfig {
     pub source: PathBuf,
     pub destination: Option<String>,
@@ -533,6 +536,42 @@ custom-command = ['C:\Program Files\Signer\sign.exe', "sign", "%1"]
                 "[macos.privacy]\nNSCameraUsageDescription = \"Calls\"\n",
                 "NSCameraUsageDescription",
                 "line 2",
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            write_config(dir.path(), written);
+
+            let err = PackagingConfig::load(dir.path()).unwrap_err();
+
+            let ConfigError::Parse(_, cause) = &err else {
+                panic!("{written:?} is a parse error, got: {err}");
+            };
+            let cause = cause.to_string();
+            assert!(
+                cause.contains(key) && cause.contains(line),
+                "{written:?}: the error names the key and its line: {cause}"
+            );
+        }
+    }
+
+    #[test]
+    fn resource_keys_an_entry_does_not_take_are_refused_where_they_are_written() {
+        for (written, key, line) in [
+            (
+                "[[bundle.resources]]
+source = \"assets\"
+preserve-symlinks = true
+",
+                "preserve-symlinks",
+                "line 3",
+            ),
+            (
+                "[[bundle.resources]]
+source = \"assets\"
+destinaton = \"share/assets\"
+",
+                "destinaton",
+                "line 3",
             ),
         ] {
             let dir = tempfile::tempdir().unwrap();
