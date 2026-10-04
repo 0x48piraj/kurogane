@@ -849,24 +849,27 @@ impl App {
     }
 
     /// Sees each key the user presses in a window of the application's
-    /// before the page and Chromium's own shortcuts do, and may consume it.
+    /// before the page and Chromium's own shortcuts do, and decides where it
+    /// goes.
     ///
     /// The hook is asked about key presses only (the key going down, and
     /// its repeats while held), never about the release or the character
-    /// it types. [`KeyDecision::Consume`] takes the key from everyone else:
-    /// Chromium's shortcuts do not run (Ctrl+W does not close the window,
-    /// Ctrl+R does not reload) and the page sees neither the key, its
-    /// character nor its release. Compare keys with
+    /// it types. [`KeyDecision::Default`] lets the key go on in Chromium's
+    /// own order: the shortcuts Chromium reserves (opening, closing and
+    /// switching tabs and windows, such as Ctrl+T and Ctrl+W) take it before
+    /// the page sees it, every other shortcut only after the page, if the
+    /// page does not prevent the key's default. [`KeyDecision::Consume`]
+    /// takes the key from everyone else: Chromium's shortcuts do not run
+    /// (Ctrl+W does not close the window, Ctrl+R does not reload) and the
+    /// page sees neither the key, its character nor its release.
+    /// [`KeyDecision::PageFirst`] gives the page the key first even for a
+    /// reserved shortcut, which then runs only if the page lets it through;
+    /// it is for shortcuts, and lets the page keep one from running (see
+    /// its documentation). Compare keys with
     /// [`Modifiers::primary`](crate::Modifiers::primary) to match Ctrl on
     /// Windows and Linux and Cmd on macOS in one test, and mind
     /// [`KeyPress::in_editable_field`](crate::KeyPress::in_editable_field)
     /// so as not to take keys the user is typing.
-    ///
-    /// [`KeyDecision::PageFirst`] hands the key to the page before
-    /// Chromium's shortcut for it, which then runs only if the page does not
-    /// prevent the key's default. Chromium runs the shortcuts it reserves
-    /// (Ctrl+T, Ctrl+W, Ctrl+Shift+T, Ctrl+1 to Ctrl+9) before the page sees
-    /// the key, so this is how a page gets to bind one of them.
     ///
     /// Runs on the UI thread for every key press, so it must be quick. A
     /// hook that panics lets the key through. DevTools' windows are not

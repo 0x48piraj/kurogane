@@ -231,7 +231,7 @@ App::url("https://app.example.com")
 
 A Kurogane window runs only Chromium's page-local commands (reload, find, print, zoom, editing, closing the window, DevTools) and refuses the rest (new windows and tabs, history, bookmarks). Two hooks narrow that further.
 
-`App::on_key` sees each key press before Chromium's shortcuts and the page do, and may consume it: then no shortcut runs, and the page sees neither the key, its character nor its release.
+`App::on_key` sees each key press before Chromium's shortcuts and the page do, and decides where it goes. `KeyDecision::Default` lets it go on in Chromium's own order (below). `KeyDecision::Consume` takes it: then no shortcut runs, and the page sees neither the key, its character nor its release.
 
 ```rust
 use kurogane::{App, Key, KeyDecision};
@@ -250,14 +250,17 @@ App::new("dist")
 
 The hook is asked about presses only, held keys repeating included (`repeat()`), never about releases. `Key` names a key by its place, so Shift+W is still `Key::Char('W')`; `modifiers().primary()` is Ctrl on Windows and Linux and Cmd on macOS. Check `in_editable_field()` before taking keys the user may be typing.
 
-Chromium runs some shortcuts (Ctrl+T, Ctrl+W, Ctrl+Shift+T, Ctrl+1 to Ctrl+9) before the page sees the key, so a page's own binding for them never fires. `KeyDecision::PageFirst` lets the page handle Ctrl+T before Chromium does: the page gets the key first, and Chromium's shortcut runs only if the page does not call `preventDefault()`.
+Chromium's own order depends on the shortcut. Most shortcuts (Ctrl+F, Ctrl+P, Ctrl+1, F5) reach the page first and run only if the page does not call `preventDefault()`, so a page can already bind them. The shortcuts Chromium reserves, those that open, close and switch tabs and windows (Ctrl+T, Ctrl+N, Ctrl+W, Ctrl+Shift+T, Ctrl+Tab), take the key before the page sees it, so a page's own binding for one never fires. A reserved shortcut with nothing to do lets the key through to the page, such as Ctrl+Tab in a window of one tab, or Ctrl+Shift+T while no tab was closed, but that changes as the session goes on.
+
+`KeyDecision::PageFirst` gives the page a reserved shortcut first, every time: the page gets the key, and Chromium's shortcut runs only if the page does not call `preventDefault()`. A shortcut that runs then goes on as any other: Kurogane still refuses new tabs and windows, and `on_chrome_command` is still asked about closing the window.
 
 ```rust
 use kurogane::{App, Key, KeyDecision};
 
 App::new("dist")
     .on_key(|key, _app| {
-        // The page's own Ctrl+T (Cmd+T on macOS) handler runs
+        // The page's own Ctrl+T handler runs; Chromium's runs only if the
+        // page lets the key through
         if key.key() == Key::Char('T') && key.modifiers().primary() {
             KeyDecision::PageFirst
         } else {
@@ -266,6 +269,8 @@ App::new("dist")
     })
     .run_or_exit();
 ```
+
+`PageFirst` is for shortcuts. Chromium drops the character of a shortcut the page left alone, so a key that types, answered `PageFirst`, types nothing unless the page handles its keydown: answer it for chords such as Ctrl+T, not for every key, and mind AltGr, which arrives as Ctrl+Alt on Windows. It also hands the shortcut to the page: a page that prevents Ctrl+W keeps its window open, and one that hangs holds the key. Chromium reserves these shortcuts so that no page can keep them, so answer `PageFirst` only for windows that show your own pages (`key.browser()`). The window's own close button, and closing it from the application, are not affected. In a browser embedded in your own window, where Chromium runs no shortcuts, `PageFirst` changes nothing but that dropped character.
 
 `App::on_chrome_command` is asked about each command the window would run, from a shortcut or the context menu, and may refuse it. It is never asked about a command Kurogane refuses, so it cannot allow one.
 
@@ -281,7 +286,7 @@ App::new("dist")
     .run_or_exit();
 ```
 
-`ChromeCommand` folds Chromium's commands by what the user asked for: refusing `DevTools` refuses Ctrl+Shift+I, F12 and the context menu's Inspect alike, and refusing `Reload` every kind of reload. A key `on_key` consumed never becomes a command.
+`ChromeCommand` folds Chromium's commands by what the user asked for: refusing `DevTools` refuses Ctrl+Shift+I, F12 and the context menu's Inspect alike, and refusing `Reload` every kind of reload. A key `on_key` consumed never becomes a command, nor does one it gave the page first and the page prevented.
 
 Both hooks run on the UI thread, `on_key` for every key press, so keep them quick. A panicking `on_key` lets the key through; a panicking `on_chrome_command` refuses the command. DevTools' own windows reach neither hook. A browser embedded in your own window (`create_child_browser`) reaches `on_key`; Chromium runs no commands there, so `on_chrome_command` is never asked.
 

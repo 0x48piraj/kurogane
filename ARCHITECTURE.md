@@ -161,7 +161,7 @@ A page cannot give itself a window. Before CEF creates a popup, or opens a link 
 
 A page cannot take its window anywhere either. Each browser keeps the origins let into it: those the application loaded there itself (CEF marks such a load, and the redirects it leads to, with a flag a page cannot set), the origin `on_new_window` opened a popup to, and those the `on_navigation` hook allowed. A page navigates freely within those and the application's own origin; anywhere else the hook and Kurogane's policy decide, as for a new window.
 
-Chromium's commands pass Kurogane's allowlist first (page-local commands only), then the application's `on_chrome_command` hook, which may refuse what the allowlist lets run and never run what it refuses. Keys reach the `on_key` hook before Chromium turns them into commands, so a key press it consumes never becomes one.
+Chromium's commands pass Kurogane's allowlist first (page-local commands only), then the application's `on_chrome_command` hook, which may refuse what the allowlist lets run and never run what it refuses. Keys reach the `on_key` hook before Chromium turns them into commands, so a key press it consumes never becomes one, and one it gives the page first becomes one only if the page lets it through.
 
 A page cannot write to the disk on its own. Every download stops at Kurogane's download handler before a byte is saved: the application's `on_download` hook may name the file's place, ask the user or refuse; otherwise the user is asked with the system's Save As dialog, one dialog per window at a time. Chromium's prompt for several downloads is answered by Kurogane and never shows, and its bubble of finished downloads is turned off.
 

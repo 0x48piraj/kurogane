@@ -3,9 +3,10 @@
 //!
 //! [`App::on_key`](crate::App::on_key) is asked about each key press (the
 //! key going down, repeats included; never its release or the character it
-//! types) and may consume it: then neither the page nor Chromium's
-//! shortcuts (Ctrl+R, Ctrl+W, F5, Ctrl+Shift+I, ...) see the key, nor its
-//! character or release.
+//! types) and says where it goes ([`KeyDecision`]): on, in Chromium's own
+//! order; nowhere, so that neither the page nor Chromium's shortcuts
+//! (Ctrl+R, Ctrl+W, F5, Ctrl+Shift+I, ...) see the key, its character or
+//! its release; or to the page first, even when Chromium would take it.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -197,17 +198,33 @@ impl Modifiers {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum KeyDecision {
-    /// The key goes on: to Chromium's shortcuts, then the page.
+    /// The key goes on in Chromium's own order. Chromium takes the key of a
+    /// shortcut it reserves, one that opens, closes or switches tabs and
+    /// windows (Ctrl+T, Ctrl+N, Ctrl+W), before the page sees it, and the
+    /// page never does. Every other shortcut (Ctrl+F, Ctrl+P, Ctrl+1, F5)
+    /// reaches the page first and runs only if the page does not prevent
+    /// the key's default.
     #[default]
     Default,
     /// The key goes nowhere: neither Chromium's shortcuts nor the page see
     /// it, its character or its release.
     Consume,
     /// The key goes to the page first, and Chromium's shortcut for it runs
-    /// only if the page does not prevent the key's default. Chromium runs
-    /// the shortcuts it reserves (Ctrl+T, Ctrl+W, Ctrl+Shift+T, Ctrl+1 to
-    /// Ctrl+9) before the page sees the key, so a page that binds one of
-    /// them never hears of it otherwise.
+    /// only if the page does not prevent the key's default: the order a
+    /// shortcut Chromium does not reserve has under
+    /// [`Default`](Self::Default), for one it does. A page binds Ctrl+T or
+    /// Ctrl+W for itself this way.
+    ///
+    /// For shortcuts only: a key that types a character, answered
+    /// `PageFirst`, types nothing unless the page handles its keydown, as
+    /// Chromium drops the character of a shortcut the page left alone. Mind
+    /// AltGr, which arrives as Ctrl+Alt on Windows.
+    ///
+    /// The page then decides whether the shortcut runs: one that prevents
+    /// Ctrl+W keeps its window open, and one that hangs holds the key.
+    /// Chromium reserves these shortcuts so that no page can keep them, so
+    /// answer `PageFirst` only for windows that show the application's own
+    /// pages ([`KeyPress::browser`]).
     PageFirst,
 }
 
