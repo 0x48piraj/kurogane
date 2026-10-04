@@ -7,6 +7,7 @@ use crate::credentials::CredentialStorage;
 use crate::gpu::GpuMode;
 use crate::hooks::Hooks;
 use crate::scheme::CustomScheme;
+use crate::window::WindowIdentity;
 use crate::window_options::WindowOptions;
 use std::sync::Arc;
 
@@ -49,6 +50,8 @@ pub(crate) struct RuntimeSpec {
     pub start_url: String,
     /// How the start window opens; unused in embedded mode, which has none
     pub start_window: WindowOptions,
+    /// What the system shows of every window Kurogane opens
+    pub window_identity: WindowIdentity,
     pub asset_root: Option<CanonicalRoot>,
     pub profile_id: Option<String>,
     pub persist_session_cookies: bool,

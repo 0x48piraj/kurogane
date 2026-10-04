@@ -31,6 +31,7 @@ use crate::hooks::Hooks;
 use crate::keys::{KeyDecision, KeyPress};
 use crate::navigation::{NavigationDecision, NavigationRequest};
 use crate::new_window::{NewWindowDecision, NewWindowRequest};
+use crate::window::WindowIdentity;
 use crate::window_options::WindowOptions;
 
 mod resolver;
@@ -264,6 +265,7 @@ pub struct App {
     acl: crate::acl::CommandAcl,
 
     start_window: Option<WindowOptions>,
+    window_identity: WindowIdentity,
     profile_id: Option<String>,
     sandbox_mode: SandboxMode,
     persist_session_cookies: bool,
@@ -305,6 +307,7 @@ impl App {
             acl,
 
             start_window: None,
+            window_identity: WindowIdentity::default(),
             profile_id: None,
             sandbox_mode: SandboxMode::default(),
             persist_session_cookies: true,
@@ -742,6 +745,30 @@ impl App {
     /// ```
     pub fn window(mut self, options: WindowOptions) -> Self {
         self.start_window = Some(options);
+        self
+    }
+
+    /// The class of every window Kurogane opens on Linux: WM_CLASS under
+    /// X11, the app_id under Wayland. The desktop and the window manager
+    /// tell an application's windows by it: a launcher's icon attaches to
+    /// them when its desktop entry names the class (`StartupWMClass` under
+    /// X11; under Wayland the entry's file name is the app_id), and the
+    /// compositor's rules for the application match it.
+    ///
+    /// It names the start window, [`AppInstance::create_window`]'s windows,
+    /// popups and DevTools alike; not a browser embedded in the
+    /// application's own window, whose window is the application's. Without
+    /// it CEF names the windows. Other platforms have no window class and
+    /// ignore it. An empty class, or one with a control character, is
+    /// [`ConfigError::InvalidWindowClass`]. A later call replaces an earlier
+    /// one.
+    ///
+    /// ```no_run
+    /// # use kurogane::App;
+    /// App::new("dist").window_class("com.example.notes").run_or_exit();
+    /// ```
+    pub fn window_class(mut self, class: impl Into<String>) -> Self {
+        self.window_identity.class = Some(class.into());
         self
     }
 
@@ -1216,6 +1243,17 @@ impl App {
                     .push(ConfigError::InvalidWindowOptions(problem));
             }
         }
+        if let Some(class) = &self.window_identity.class {
+            if class.is_empty() {
+                self.problems.push(ConfigError::InvalidWindowClass(
+                    "a window class is not empty",
+                ));
+            } else if class.chars().any(char::is_control) {
+                self.problems.push(ConfigError::InvalidWindowClass(
+                    "a window class has no control character",
+                ));
+            }
+        }
         self.check_configuration()?;
 
         let Self {
@@ -1225,6 +1263,7 @@ impl App {
             stream_handlers,
             acl,
             start_window,
+            window_identity,
             profile_id,
             sandbox_mode,
             persist_session_cookies,
@@ -1255,6 +1294,7 @@ impl App {
             sandbox_mode,
             start_url,
             start_window: start_window.unwrap_or_default(),
+            window_identity,
             asset_root,
             profile_id,
             persist_session_cookies,
@@ -1556,6 +1596,43 @@ mod tests {
             }
             Err(other) => panic!("expected a configuration error, got: {other}"),
             Ok(_) => panic!("a misconfigured app must not start"),
+        }
+    }
+
+    #[test]
+    fn window_settings_no_window_can_have_are_refused_before_anything_starts() {
+        let problems = |app: App, embedded: bool| {
+            let result = if embedded {
+                app.start_embedded()
+            } else {
+                app.build()
+            };
+            match result {
+                Err(RuntimeError::InvalidConfiguration(problems)) => problems,
+                Err(other) => panic!("expected a configuration error, got: {other}"),
+                Ok(_) => panic!("a misconfigured app must not start"),
+            }
+        };
+        let window = || crate::WindowOptions::new().title("x");
+        assert_eq!(
+            problems(App::new("./dist").window(window()), true),
+            vec![ConfigError::WindowWhenEmbedded]
+        );
+        assert!(matches!(
+            problems(
+                App::new("./dist").window(window().size(800, 600).min_size(900, 1)),
+                false
+            )[..],
+            [ConfigError::InvalidWindowOptions(_)]
+        ));
+        for class in ["", "notes\n"] {
+            assert!(
+                matches!(
+                    problems(App::new("./dist").window_class(class), false)[..],
+                    [ConfigError::InvalidWindowClass(_)]
+                ),
+                "{class:?}"
+            );
         }
     }
 

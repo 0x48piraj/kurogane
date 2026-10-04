@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 
 use tracing::debug;
 use crate::browser_registry::{BrowserId, BrowserType};
+use crate::cef_string::owned_by_cef;
 use crate::client::KuroganeClient;
 use crate::error::RuntimeError;
 use crate::runtime::AppHandle;
@@ -83,6 +84,14 @@ impl PendingPopups {
     pub(crate) fn abort(&mut self, popup_id: i32) {
         self.0.retain(|&(id, _)| id != popup_id);
     }
+}
+
+/// What the system shows of every window Kurogane opens, whatever opened
+/// it: the application's identity, plain data given at startup.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WindowIdentity {
+    /// The Linux window class: WM_CLASS under X11, the app_id under Wayland
+    pub class: Option<String>,
 }
 
 /// Where a new top-level window opens and how it first shows.
@@ -277,6 +286,25 @@ wrap_window_delegate! {
 
         fn initial_show_state(&self, _window: Option<&mut Window>) -> ShowState {
             self.placement.show_state()
+        }
+
+        // Asked on Linux only: the names the window manager knows the
+        // window by. Only the class, when the application named one; CEF's
+        // default otherwise. The strings are CEF's own, which cef-rs's write
+        // of this struct back to CEF keeps (crate::cef_string)
+        fn linux_window_properties(
+            &self,
+            _window: Option<&mut Window>,
+            properties: Option<&mut LinuxWindowProperties>,
+        ) -> ::std::os::raw::c_int {
+            let (Some(class), Some(properties)) = (&self.app.window_identity().class, properties) else {
+                return 0;
+            };
+            properties.wayland_app_id = owned_by_cef(class);
+            properties.wm_class_class = owned_by_cef(class);
+            properties.wm_class_name = owned_by_cef(class);
+            debug!("[Window] {} has the class {class}", self.window_id.as_u32());
+            1
         }
 
         fn on_window_created(&self, window: Option<&mut Window>) {

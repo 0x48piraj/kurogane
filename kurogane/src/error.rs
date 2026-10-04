@@ -327,6 +327,9 @@ pub enum ConfigError {
     /// started with [`App::start_embedded`](crate::App::start_embedded),
     /// which has no start window.
     WindowWhenEmbedded,
+    /// [`App::window_class`](crate::App::window_class) was given a class no
+    /// window manager can take, named here.
+    InvalidWindowClass(&'static str),
 }
 
 impl Display for ConfigError {
@@ -361,6 +364,9 @@ impl Display for ConfigError {
                 "App::window describes the start window, which an application started \
                  with App::start_embedded does not have",
             ),
+            ConfigError::InvalidWindowClass(problem) => {
+                write!(f, "App::window_class: {problem}")
+            }
         }
     }
 }

@@ -144,6 +144,18 @@ App::new("dist")
 
 Kept as given, unless no display shows them any more (the display they were on is gone): then the window is brought onto the nearest display, at its size. A window larger than that display's work area is made to fit it. Wayland lets no application place its windows, so there only the size applies.
 
+### The window class on Linux
+
+`App::window_class` gives every window Kurogane opens its class on Linux: `WM_CLASS` under X11, the `app_id` under Wayland. The desktop tells an application's windows by it: a launcher's icon attaches to them when the application's desktop entry names the class (`StartupWMClass=com.example.notes`, or under Wayland a desktop entry named `com.example.notes.desktop`), and a compositor's rules for the application match it.
+
+```rust
+use kurogane::App;
+
+App::new("dist").window_class("com.example.notes").run_or_exit();
+```
+
+It names the start window, every `create_window` window, popups and DevTools. Without it CEF names the windows. Windows and macOS have no window class and ignore it; a browser embedded in your own window is in your window, which has your class.
+
 ### More windows
 
 `AppInstance::create_window` opens a page in another window of the application's, with the same options:

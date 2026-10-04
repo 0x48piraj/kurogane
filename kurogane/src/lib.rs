@@ -13,6 +13,7 @@ mod window_registry;
 mod registry;
 mod window;
 mod window_options;
+mod cef_string;
 mod client;
 mod hooks;
 mod destination;

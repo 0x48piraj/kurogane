@@ -12,7 +12,7 @@ use crate::hooks::Hooks;
 use crate::browser_registry::{BrowserId, BrowserMetadata, BrowserType};
 use crate::registry::Registry;
 use crate::window_registry::{WindowId, WindowMetadata};
-use crate::window::{Placement, open_browser_window};
+use crate::window::{Placement, WindowIdentity, open_browser_window};
 use kurogane_layout::{DetectError, DiscoveryMode, detect_cef_root, validate_cef_runtime, profile_dir};
 use crate::ipc::IpcRouter;
 use crate::ipc::transport::message::RendererSandbox;
@@ -400,6 +400,8 @@ pub(crate) struct RuntimeServices {
     renderer_sandbox: RendererSandbox,
     /// The application's hooks, held by the spec; see [`crate::hooks`]
     hooks: Weak<Hooks>,
+    /// What the system shows of every window Kurogane opens
+    identity: WindowIdentity,
 }
 
 impl RuntimeServices {
@@ -409,6 +411,7 @@ impl RuntimeServices {
         ui_thread: std::thread::ThreadId,
         renderer_sandbox: RendererSandbox,
         hooks: Weak<Hooks>,
+        identity: WindowIdentity,
     ) -> Self {
         Self {
             router,
@@ -420,6 +423,7 @@ impl RuntimeServices {
             cef_shut_down: AtomicBool::new(false),
             renderer_sandbox,
             hooks,
+            identity,
         }
     }
 }
@@ -499,6 +503,11 @@ impl AppHandle {
     /// Whether the renderers run in Chromium's sandbox.
     pub(crate) fn renderer_sandbox(&self) -> RendererSandbox {
         self.services.renderer_sandbox
+    }
+
+    /// What the system shows of every window Kurogane opens.
+    pub(crate) fn window_identity(&self) -> &WindowIdentity {
+        &self.services.identity
     }
 
     /// Whether a mandatory end has begun, after which no browser may open:
@@ -782,6 +791,7 @@ impl AppHandle {
                 std::thread::current().id(),
                 RendererSandbox::Sandboxed,
                 Weak::new(),
+                WindowIdentity::default(),
             )),
         }
     }
@@ -1318,6 +1328,7 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
             ui_thread,
             RendererSandbox::of(spec.sandbox_mode),
             Arc::downgrade(&spec.hooks),
+            spec.window_identity.clone(),
         )),
     };
 
