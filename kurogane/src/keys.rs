@@ -203,6 +203,12 @@ pub enum KeyDecision {
     /// The key goes nowhere: neither Chromium's shortcuts nor the page see
     /// it, its character or its release.
     Consume,
+    /// The key goes to the page first, and Chromium's shortcut for it runs
+    /// only if the page does not prevent the key's default. Chromium runs
+    /// the shortcuts it reserves (Ctrl+T, Ctrl+W, Ctrl+Shift+T, Ctrl+1 to
+    /// Ctrl+9) before the page sees the key, so a page that binds one of
+    /// them never hears of it otherwise.
+    PageFirst,
 }
 
 /// Asks the application's hook about `press`. Runs on CEF's UI thread for
