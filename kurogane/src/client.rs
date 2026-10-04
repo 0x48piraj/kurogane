@@ -15,7 +15,7 @@ use crate::keys::{self, KeyDecision, KeyPress};
 use crate::navigation::{self, NavigationRequest};
 use crate::new_window::{self, NewWindowRequest};
 use crate::permissions::{self, Answer as PermissionAnswer, Pending, PermissionRequest};
-use crate::window::{Placement, PopupGeometry, open_browser_window};
+use crate::window::{Opening, PopupGeometry, open_browser_window};
 use crate::window_closing;
 
 /// A load the application made itself, through CreateBrowser, LoadURL or
@@ -395,8 +395,8 @@ wrap_request_handler! {
                 // A window of the application's own, as create_window's
                 // with no options
                 Outcome::Open => {
-                    let placement = Placement::Main(crate::WindowOptions::new());
-                    if let Err(error) = open_browser_window(&self.app, request.url(), placement) {
+                    let opening = Opening::Application(crate::WindowOptions::new());
+                    if let Err(error) = open_browser_window(&self.app, request.url(), opening) {
                         warn!("no window for {}: {error}", request.url());
                     }
                 }

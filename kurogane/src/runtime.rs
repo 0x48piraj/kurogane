@@ -12,7 +12,7 @@ use crate::hooks::Hooks;
 use crate::browser_registry::{BrowserId, BrowserMetadata, BrowserType};
 use crate::registry::Registry;
 use crate::window_registry::{WindowId, WindowMetadata};
-use crate::window::{Placement, WindowIdentity, open_browser_window};
+use crate::window::{Opening, WindowIdentity, open_browser_window};
 use kurogane_layout::{DetectError, DiscoveryMode, detect_cef_root, validate_cef_runtime, profile_dir};
 use crate::ipc::IpcRouter;
 use crate::ipc::transport::message::RendererSandbox;
@@ -1124,7 +1124,7 @@ impl AppInstance {
         if let Some(problem) = options.problem() {
             return Err(RuntimeError::InvalidWindowOptions(problem));
         }
-        open_browser_window(&self.handle, url, Placement::Main(options))
+        open_browser_window(&self.handle, url, Opening::Application(options))
     }
 
     /// Takes ownership and blocks on the CEF message loop.
@@ -1455,9 +1455,9 @@ mod tests {
         handle.shutdown();
         assert!(handle.is_ending());
         // Refused before any call reaches CEF, which a detached handle has none of
-        let placement = Placement::Main(crate::WindowOptions::new());
+        let opening = Opening::Application(crate::WindowOptions::new());
         assert!(matches!(
-            open_browser_window(&handle, "app://app/index.html", placement),
+            open_browser_window(&handle, "app://app/index.html", opening),
             Err(RuntimeError::ShuttingDown)
         ));
     }
@@ -1471,8 +1471,8 @@ mod tests {
             .allocate_named("main")
             .expect("no window holds the name yet");
         // Refused before any call reaches CEF, which a detached handle has none of
-        let placement = Placement::Main(crate::WindowOptions::new().name("main"));
-        match open_browser_window(&handle, "app://app/index.html", placement) {
+        let opening = Opening::Application(crate::WindowOptions::new().name("main"));
+        match open_browser_window(&handle, "app://app/index.html", opening) {
             Err(RuntimeError::WindowNameTaken { name, window }) => {
                 assert_eq!((name.as_str(), window), ("main", held));
             }

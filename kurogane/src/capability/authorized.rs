@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::acl::Origin;
 use crate::capability::error::{Denial, FsConfigError, FsError};
 use crate::capability::fold::Rules;
-use crate::capability::path::{parse_request, Key, Location, Name, RelPath, Request};
+use crate::capability::path::{parse_request, NameKey, Location, Name, RelPath, Request};
 use crate::capability::policy::FsAccess;
 use crate::capability::safe::{self, Create, Dir, DirEntry, EntryKind};
 use crate::capability::scope::{Residual, Root, Scope, ScopeBuilder};
@@ -459,7 +459,7 @@ impl<'a> AuthorizedFs<'a> {
         let dir = target.root.safe().open_dir(&target.rel)?;
         let here = self.locate(target.root, &safe::location(dir.as_file())?)?;
         let mut visible = dir.entries()?;
-        visible.retain(|entry| !self.denied(&here.join([&Key::of(entry.name())])));
+        visible.retain(|entry| !self.denied(&here.join([&NameKey::of(entry.name())])));
         Ok(visible)
     }
 

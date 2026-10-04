@@ -121,22 +121,22 @@ fn window_icons(png: &[u8]) -> Option<(Image, Image)> {
 
 /// Where a new top-level window opens and how it first shows.
 #[derive(Clone, Debug)]
-pub(crate) enum Placement {
+pub(crate) enum Opening {
     /// A window of the application's own, as its options say: the start
     /// window, one from create_window, or one a page opened as the
     /// application's.
-    Main(WindowOptions),
+    Application(WindowOptions),
     /// A popup's window, at the size and position its page asked for;
     /// without one CEF gives the popup its default 800x600 window.
     Popup(Option<PopupGeometry>),
 }
 
-impl Placement {
+impl Opening {
     /// The window's size when its bounds are empty; empty lets CEF choose.
     fn preferred_size(&self) -> Size {
         match self {
             // Always given initial bounds
-            Self::Main(_) => Size::default(),
+            Self::Application(_) => Size::default(),
             Self::Popup(requested) => requested.map(PopupGeometry::size).unwrap_or_default(),
         }
     }
@@ -149,7 +149,7 @@ impl Placement {
     /// GetInitialBounds).
     fn initial_bounds(&self) -> Rect {
         match self {
-            Self::Main(options) => options.requested_bounds().unwrap_or_default(),
+            Self::Application(options) => options.requested_bounds().unwrap_or_default(),
             Self::Popup(requested) => requested
                 .and_then(PopupGeometry::bounds)
                 .unwrap_or_default(),
@@ -159,7 +159,7 @@ impl Placement {
     /// How the window first shows; a popup shows normally.
     fn show_state(&self) -> ShowState {
         match self {
-            Self::Main(options) => options.initial_state().into(),
+            Self::Application(options) => options.initial_state().into(),
             Self::Popup(_) => ShowState::NORMAL,
         }
     }
@@ -168,7 +168,7 @@ impl Placement {
     /// any: opened minimized or hidden, it comes back normal.
     fn restored_state(&self) -> WindowState {
         match self {
-            Self::Main(options) => options.initial_state().restored(),
+            Self::Application(options) => options.initial_state().restored(),
             Self::Popup(_) => WindowState::Normal,
         }
     }
@@ -177,7 +177,7 @@ impl Placement {
     /// popup.
     fn minimum_size(&self) -> Size {
         match self {
-            Self::Main(options) => options
+            Self::Application(options) => options
                 .minimum()
                 .map(|(width, height)| Size { width, height })
                 .unwrap_or_default(),
@@ -190,14 +190,14 @@ impl Placement {
     /// one.
     fn follows_title(&self) -> bool {
         match self {
-            Self::Main(options) => options.fixed_title().is_none(),
+            Self::Application(options) => options.fixed_title().is_none(),
             Self::Popup(_) => true,
         }
     }
 
     fn kind(&self) -> WindowKind {
         match self {
-            Self::Main(_) => WindowKind::Application,
+            Self::Application(_) => WindowKind::Application,
             Self::Popup(_) => WindowKind::Popup,
         }
     }
@@ -205,7 +205,7 @@ impl Placement {
     /// The name the application gave the window; a popup has none.
     fn name(&self) -> Option<&str> {
         match self {
-            Self::Main(options) => options.window_name(),
+            Self::Application(options) => options.window_name(),
             Self::Popup(_) => None,
         }
     }
@@ -223,16 +223,16 @@ const DEFAULT_SIZE: (i32, i32) = (800, 600);
 /// Where a window opens: an application window where its placement says,
 /// brought onto a display, or centred at its size; a popup where its page
 /// asked, empty for CEF to choose. UI thread.
-fn opening_bounds(placement: &Placement) -> Rect {
-    match placement {
-        Placement::Main(options) => match options.requested_bounds() {
-            Some(_) => on_a_display(placement.initial_bounds()),
+fn opening_bounds(opening: &Opening) -> Rect {
+    match opening {
+        Opening::Application(options) => match options.requested_bounds() {
+            Some(_) => on_a_display(opening.initial_bounds()),
             None => {
                 let (width, height) = options.requested_size().unwrap_or(DEFAULT_SIZE);
                 centred(width, height)
             }
         },
-        Placement::Popup(_) => placement.initial_bounds(),
+        Opening::Popup(_) => opening.initial_bounds(),
     }
 }
 
@@ -311,16 +311,16 @@ wrap_window_delegate! {
         // created when the window adds its view, and on_browser_created
         // links it
         browser_id: Option<BrowserId>,
-        placement: Placement,
+        opening: Opening,
     }
 
     impl ViewDelegate {
         fn preferred_size(&self, _view: Option<&mut View>) -> Size {
-            self.placement.preferred_size()
+            self.opening.preferred_size()
         }
 
         fn minimum_size(&self, _view: Option<&mut View>) -> Size {
-            self.placement.minimum_size()
+            self.opening.minimum_size()
         }
     }
 
@@ -328,11 +328,11 @@ wrap_window_delegate! {
 
     impl WindowDelegate {
         fn initial_bounds(&self, _window: Option<&mut Window>) -> Rect {
-            opening_bounds(&self.placement)
+            opening_bounds(&self.opening)
         }
 
         fn initial_show_state(&self, _window: Option<&mut Window>) -> ShowState {
-            self.placement.show_state()
+            self.opening.show_state()
         }
 
         // Asked on Linux only: the names the window manager knows the
@@ -364,23 +364,23 @@ wrap_window_delegate! {
                 self.window_id,
                 window.clone(),
                 self.browser_id,
-                self.placement.follows_title(),
-                self.placement.kind(),
-                self.placement.restored_state(),
+                self.opening.follows_title(),
+                self.opening.kind(),
+                self.opening.restored_state(),
             );
             // A window that opens maximized, minimized, fullscreen or hidden
             // restores to the bounds it was given, which are not what it
             // answers yet: one CEF opens minimized or hidden is iconic from
             // the start (Windows). A popup to where CEF put it. The guard
             // ends with the statement, after CEF answered
-            let initial = match self.placement {
-                Placement::Main(_) => opening_bounds(&self.placement),
-                Placement::Popup(_) => window.bounds_in_screen(),
+            let initial = match self.opening {
+                Opening::Application(_) => opening_bounds(&self.opening),
+                Opening::Popup(_) => window.bounds_in_screen(),
             };
             self.app.registry().windows.set_restored(self.window_id, initial);
 
             window.add_child_view(Some(&mut (&self.browser_view).into()));
-            if let Placement::Main(options) = &self.placement
+            if let Opening::Application(options) = &self.opening
                 && let Some(title) = options.fixed_title()
             {
                 window.set_title(Some(&CefString::from(title)));
@@ -391,11 +391,11 @@ wrap_window_delegate! {
                 window.set_window_icon(Some(&mut small));
                 window.set_window_app_icon(Some(&mut large));
             }
-            if self.placement.show_state() != ShowState::HIDDEN {
+            if self.opening.show_state() != ShowState::HIDDEN {
                 window.show();
             }
-            match &self.placement {
-                Placement::Main(options) => debug!(
+            match &self.opening {
+                Opening::Application(options) => debug!(
                     "[Window] {} opened at {:?}{}",
                     self.window_id.as_u32(),
                     window.bounds_in_screen(),
@@ -404,7 +404,7 @@ wrap_window_delegate! {
                         .map(|name| format!(", named {name}"))
                         .unwrap_or_default()
                 ),
-                Placement::Popup(_) => debug!("Popup window shown at {:?}", window.bounds()),
+                Opening::Popup(_) => debug!("Popup window shown at {:?}", window.bounds()),
             }
         }
 
@@ -583,7 +583,7 @@ wrap_browser_view_delegate! {
                     pbv.clone(),
                     self.app.clone(),
                     browser_id,
-                    Placement::Popup(requested),
+                    Opening::Popup(requested),
                 );
                 if window_create_top_level(Some(&mut delegate)).is_some() {
                     debug!("[BrowserViewDelegate] popup window created");
@@ -596,7 +596,7 @@ wrap_browser_view_delegate! {
     }
 }
 
-/// Opens `url` in a new browser, in a new top-level window at `placement`.
+/// Opens `url` in a new browser, in a new top-level window as `opening` says.
 /// UI thread, where CEF creates browsers and windows.
 ///
 /// The browser is created when the window adds its view
@@ -606,7 +606,7 @@ wrap_browser_view_delegate! {
 pub(crate) fn open_browser_window(
     app: &AppHandle,
     url: &str,
-    placement: Placement,
+    opening: Opening,
 ) -> Result<WindowId, RuntimeError> {
     if app.is_ending() {
         return Err(RuntimeError::ShuttingDown);
@@ -614,7 +614,7 @@ pub(crate) fn open_browser_window(
     // The guard ends with the block, before any CEF call
     let window_id = {
         let mut reg = app.registry();
-        match placement.name() {
+        match opening.name() {
             Some(name) => reg.windows.allocate_named(name).map_err(|holder| {
                 RuntimeError::WindowNameTaken {
                     name: name.to_owned(),
@@ -624,7 +624,7 @@ pub(crate) fn open_browser_window(
             None => reg.windows.allocate_id(),
         }
     };
-    let opened = create_browser_window(app, url, window_id, placement);
+    let opened = create_browser_window(app, url, window_id, opening);
     if opened.is_err() {
         // No window will hold it; the guard ends with the statement
         app.registry().windows.release_name(window_id);
@@ -638,7 +638,7 @@ fn create_browser_window(
     app: &AppHandle,
     url: &str,
     window_id: WindowId,
-    placement: Placement,
+    opening: Opening,
 ) -> Result<WindowId, RuntimeError> {
     let mut client = KuroganeClient::new(app.clone(), BrowserType::Main, None);
     let mut view_delegate = KuroganeBrowserViewDelegate::new(app.clone(), Some(window_id));
@@ -658,7 +658,7 @@ fn create_browser_window(
     .ok_or(RuntimeError::BrowserCreationFailed)?;
 
     let mut delegate =
-        KuroganeWindowDelegate::new(window_id, browser_view, app.clone(), None, placement);
+        KuroganeWindowDelegate::new(window_id, browser_view, app.clone(), None, opening);
     window_create_top_level(Some(&mut delegate)).ok_or(RuntimeError::WindowCreationFailed)?;
     debug!("Top-level window created");
 
@@ -770,8 +770,8 @@ mod tests {
         assert_eq!(pending.take(), Some(size_only(300, 300)));
     }
 
-    fn application(options: WindowOptions) -> Placement {
-        Placement::Main(options)
+    fn application(options: WindowOptions) -> Opening {
+        Opening::Application(options)
     }
 
     fn rect(x: i32, y: i32, width: i32, height: i32) -> Rect {
@@ -789,20 +789,20 @@ mod tests {
 
     #[test]
     fn an_application_window_opens_at_its_placement_in_its_state() {
-        let placement = application(WindowOptions::new().placement(crate::WindowPlacement {
+        let opening = application(WindowOptions::new().placement(crate::WindowPlacement {
             x: 10,
             y: 20,
             width: 800,
             height: 600,
             state: WindowState::Hidden,
         }));
-        assert_eq!(parts(placement.initial_bounds()), (10, 20, 800, 600));
+        assert_eq!(parts(opening.initial_bounds()), (10, 20, 800, 600));
         // Sized by its placement, or centred at its size once created
-        let Size { width, height } = placement.preferred_size();
+        let Size { width, height } = opening.preferred_size();
         assert_eq!((width, height), (0, 0));
-        assert_eq!(placement.show_state(), ShowState::HIDDEN);
+        assert_eq!(opening.show_state(), ShowState::HIDDEN);
         // Shown later, it shows normally
-        assert_eq!(placement.restored_state(), WindowState::Normal);
+        assert_eq!(opening.restored_state(), WindowState::Normal);
     }
 
     #[test]
@@ -812,7 +812,7 @@ mod tests {
             Some("main")
         );
         assert_eq!(application(WindowOptions::new()).name(), None);
-        assert_eq!(Placement::Popup(None).name(), None);
+        assert_eq!(Opening::Popup(None).name(), None);
     }
 
     #[test]
@@ -842,7 +842,7 @@ mod tests {
         assert_eq!((width, height), (640, 480));
         let Size { width, height } = application(WindowOptions::new()).minimum_size();
         assert_eq!((width, height), (0, 0));
-        let Size { width, height } = Placement::Popup(Some(size_only(320, 200))).minimum_size();
+        let Size { width, height } = Opening::Popup(Some(size_only(320, 200))).minimum_size();
         assert_eq!((width, height), (0, 0));
     }
 
@@ -850,7 +850,7 @@ mod tests {
     fn a_window_takes_its_page_s_title_unless_its_options_fix_one() {
         assert!(application(WindowOptions::new()).follows_title());
         assert!(!application(WindowOptions::new().title("Notes")).follows_title());
-        assert!(Placement::Popup(None).follows_title());
+        assert!(Opening::Popup(None).follows_title());
     }
 
     #[test]
@@ -910,14 +910,14 @@ mod tests {
     #[test]
     fn a_popup_opens_at_what_its_page_asked_for() {
         // A size alone: CEF places the window, at that size
-        let sized = Placement::Popup(Some(size_only(320, 200)));
+        let sized = Opening::Popup(Some(size_only(320, 200)));
         let Rect { width, height, .. } = sized.initial_bounds();
         assert_eq!((width, height), (0, 0));
         let Size { width, height } = sized.preferred_size();
         assert_eq!((width, height), (320, 200));
         assert_eq!(sized.show_state(), ShowState::NORMAL);
 
-        let placed = Placement::Popup(Some(PopupGeometry {
+        let placed = Opening::Popup(Some(PopupGeometry {
             origin: Some((10, 20)),
             ..size_only(320, 200)
         }));
@@ -930,7 +930,7 @@ mod tests {
         assert_eq!((x, y, width, height), (10, 20, 320, 200));
 
         // Nothing asked for: CEF's default window
-        let default = Placement::Popup(None);
+        let default = Opening::Popup(None);
         let Rect { width, height, .. } = default.initial_bounds();
         assert_eq!((width, height), (0, 0));
         let Size { width, height } = default.preferred_size();

@@ -17,7 +17,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::capability::error::FsConfigError;
-use crate::capability::path::{Key, Location, Name, RelPath};
+use crate::capability::path::{NameKey, Location, Name, RelPath};
 use crate::capability::safe::SafeRoot;
 
 mod glob;
@@ -153,12 +153,12 @@ pub(crate) struct Root {
 
 enum DenyRule {
     /// A literal subtree, relative to the root's canonical location.
-    Subtree(Vec<Key>),
+    Subtree(Vec<NameKey>),
     Glob(Glob),
 }
 
 impl DenyRule {
-    fn covers(&self, rel: &[Key]) -> bool {
+    fn covers(&self, rel: &[NameKey]) -> bool {
         match self {
             DenyRule::Subtree(prefix) => rel.starts_with(prefix),
             DenyRule::Glob(glob) => glob.covers(rel),
@@ -204,7 +204,7 @@ impl Root {
     /// Anchors an absolute request at this root; the relative tail and how
     /// specific the matching alias is (longer wins), if the request lies
     /// under an alias within the root's extent.
-    pub(crate) fn anchor(&self, volume: &Key, names: &[Name]) -> Option<(usize, RelPath)> {
+    pub(crate) fn anchor(&self, volume: &NameKey, names: &[Name]) -> Option<(usize, RelPath)> {
         self.aliases
             .iter()
             .filter_map(|alias| Some((alias.keys().len(), alias.relative(volume, names)?)))
@@ -240,7 +240,7 @@ impl Root {
 
     /// The deny subtrees lying strictly beneath `location`, each as the
     /// suffix that remains below it: what a move of `location` carries.
-    pub(crate) fn enclosed_denies<'a>(&'a self, location: &Location) -> Vec<&'a [Key]> {
+    pub(crate) fn enclosed_denies<'a>(&'a self, location: &Location) -> Vec<&'a [NameKey]> {
         let Some(rel) = location.strip(&self.canonical) else {
             return Vec::new();
         };
@@ -285,7 +285,7 @@ fn deny_location(path: &Path) -> Option<Location> {
             let base = Location::parse(&canonical)?;
             return Some(base.join(tail.iter().rev()));
         }
-        tail.push(Key::of(current.file_name()?));
+        tail.push(NameKey::of(current.file_name()?));
         current = current.parent()?;
     }
 }
@@ -452,8 +452,8 @@ mod tests {
         assert!(anchor(&scope, &upper.join("file.txt")).is_some());
         assert!(denied(&scope, &upper.join("SECRET").join("x")));
         assert_eq!(
-            Key::of(std::ffi::OsStr::new("a")),
-            Key::of(std::ffi::OsStr::new("A"))
+            NameKey::of(std::ffi::OsStr::new("a")),
+            NameKey::of(std::ffi::OsStr::new("A"))
         );
     }
 }

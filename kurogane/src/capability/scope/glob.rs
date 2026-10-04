@@ -12,7 +12,7 @@
 //! own, which `?`, `*` and negated classes match and no literal does.
 //!
 //! Case follows the platform: literals are compared through the same fold as
-//! [`Key`] values (case-insensitive on Windows, macOS and Linux); class
+//! [`NameKey`] values (case-insensitive on Windows, macOS and Linux); class
 //! ranges keep the characters the pattern names and match a folded name
 //! character through every character that folds to it. Patterns are relative
 //! to each allow root, use `/` as the separator on every platform and use `\`
@@ -30,7 +30,7 @@ use std::cell::OnceCell;
 use std::ffi::OsStr;
 
 use crate::capability::fold::{is_starter, Inverse, Rules, MAX_FOLD_STARTERS};
-use crate::capability::path::{fold, Key};
+use crate::capability::path::{fold, NameKey};
 
 /// The most parts (components and `**`) a pattern may have: a `u64` holds
 /// one bit per part plus the accepting position.
@@ -137,12 +137,12 @@ impl Glob {
     }
 
     /// True when the pattern matches `rel` or one of its ancestors.
-    pub(crate) fn covers(&self, rel: &[Key]) -> bool {
+    pub(crate) fn covers(&self, rel: &[NameKey]) -> bool {
         self.residual(rel) == Residual::Covered
     }
 
     /// What the pattern still requires beneath `rel`.
-    pub(crate) fn residual(&self, rel: &[Key]) -> Residual {
+    pub(crate) fn residual(&self, rel: &[NameKey]) -> Residual {
         let mut live = self.close(1);
         for key in rel {
             if live & self.accept() != 0 {
@@ -177,7 +177,7 @@ impl Glob {
     }
 
     /// Consumes one component.
-    fn step(&self, live: u64, key: &Key) -> u64 {
+    fn step(&self, live: u64, key: &NameKey) -> u64 {
         let units = decode(key.as_bytes());
         let mut next = 0;
         for (i, part) in self.parts.iter().enumerate() {
@@ -496,14 +496,14 @@ mod tests {
 
     const EVERY_PLATFORM: [Rules; 3] = [Rules::Uppercase, Rules::Normalized, Rules::Exact];
 
-    fn keys_under(rules: Rules, path: &str) -> Vec<Key> {
+    fn keys_under(rules: Rules, path: &str) -> Vec<NameKey> {
         path.split('/')
             .filter(|c| !c.is_empty())
-            .map(|c| Key::under(rules, OsStr::new(c)))
+            .map(|c| NameKey::under(rules, OsStr::new(c)))
             .collect()
     }
 
-    fn keys(path: &str) -> Vec<Key> {
+    fn keys(path: &str) -> Vec<NameKey> {
         keys_under(Rules::NATIVE, path)
     }
 
@@ -665,7 +665,7 @@ mod tests {
     #[test]
     fn invalid_bytes_are_units_of_their_own() {
         use std::os::unix::ffi::OsStrExt;
-        let key = |bytes: &[u8]| Key::of(OsStr::from_bytes(bytes));
+        let key = |bytes: &[u8]| NameKey::of(OsStr::from_bytes(bytes));
         let glob = Glob::parse("?.key").unwrap();
         assert!(
             glob.covers(&[key(b"\xC3.key")]),

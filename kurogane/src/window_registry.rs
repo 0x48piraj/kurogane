@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use cef::{Rect, Window};
 use crate::browser_registry::BrowserId;
 use crate::window_closing::Closing;
+use crate::window_options::WindowState;
 use tracing::debug;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -19,7 +20,7 @@ pub struct WindowMetadata {
     pub created_at: std::time::Instant,
 }
 
-pub(crate) struct WindowState {
+pub(crate) struct WindowEntry {
     pub window: Window,
     pub browser_id: Option<BrowserId>,
     pub metadata: WindowMetadata,
@@ -31,7 +32,7 @@ pub(crate) struct WindowState {
     pub restored: Option<Rect>,
     /// The state it showed in when last not minimized: what it comes back
     /// as once restored (crate::window_closing)
-    pub shown: crate::window_options::WindowState,
+    pub shown: WindowState,
 }
 
 /// What opened a window.
@@ -46,7 +47,7 @@ pub(crate) enum WindowKind {
 }
 
 pub(crate) struct WindowRegistry {
-    windows: HashMap<WindowId, WindowState>,
+    windows: HashMap<WindowId, WindowEntry>,
     lookup: HashMap<BrowserId, WindowId>,
     /// The names the application gave its windows (WindowOptions::name),
     /// each held by its window from its ID on until its close is reported
@@ -103,9 +104,9 @@ impl WindowRegistry {
         browser_id: Option<BrowserId>,
         follows_title: bool,
         kind: WindowKind,
-        shown: crate::window_options::WindowState,
+        shown: WindowState,
     ) {
-        let state = WindowState {
+        let entry = WindowEntry {
             window,
             browser_id,
             metadata: WindowMetadata {
@@ -128,14 +129,14 @@ impl WindowRegistry {
             self.lookup.insert(bid, id);
         }
 
-        self.windows.insert(id, state);
+        self.windows.insert(id, entry);
     }
 
     pub fn unregister(&mut self, id: WindowId) -> bool {
         // Let go already when its browser closed, unless it never had one
         self.release_name(id);
-        if let Some(state) = self.windows.remove(&id) {
-            if let Some(bid) = state.browser_id {
+        if let Some(entry) = self.windows.remove(&id) {
+            if let Some(bid) = entry.browser_id {
                 self.lookup.remove(&bid);
             }
             debug!("[WindowRegistry] unregistered window {}", id.0);
@@ -154,34 +155,29 @@ impl WindowRegistry {
         self.windows.is_empty()
     }
 
-    pub fn get(&self, id: WindowId) -> Option<&WindowState> {
+    pub fn get(&self, id: WindowId) -> Option<&WindowEntry> {
         self.windows.get(&id)
     }
 
     #[allow(dead_code)]
-    pub fn get_mut(&mut self, id: WindowId) -> Option<&mut WindowState> {
+    pub fn get_mut(&mut self, id: WindowId) -> Option<&mut WindowEntry> {
         self.windows.get_mut(&id)
     }
 
     /// Records that window `id` restores to `bounds` (crate::window).
     pub fn set_restored(&mut self, id: WindowId, bounds: Rect) {
-        if let Some(state) = self.windows.get_mut(&id) {
-            state.restored = Some(bounds);
+        if let Some(entry) = self.windows.get_mut(&id) {
+            entry.restored = Some(bounds);
         }
     }
 
     /// Records that window `id`, not minimized, shows in `state` at
     /// `bounds` (crate::window): where it restores to when it shows normally;
     /// a maximized or fullscreen window's bounds are its display's.
-    pub fn shown(
-        &mut self,
-        id: WindowId,
-        state: crate::window_options::WindowState,
-        bounds: &Rect,
-    ) {
+    pub fn shown(&mut self, id: WindowId, state: WindowState, bounds: &Rect) {
         if let Some(entry) = self.windows.get_mut(&id) {
             entry.shown = state;
-            if state == crate::window_options::WindowState::Normal {
+            if state == WindowState::Normal {
                 entry.restored = Some(bounds.clone());
             }
         }
@@ -227,10 +223,10 @@ impl WindowRegistry {
     ///
     /// Returns false when no such window is registered.
     pub fn link(&mut self, id: WindowId, browser_id: BrowserId) -> bool {
-        let Some(state) = self.windows.get_mut(&id) else {
+        let Some(entry) = self.windows.get_mut(&id) else {
             return false;
         };
-        state.browser_id = Some(browser_id);
+        entry.browser_id = Some(browser_id);
         self.lookup.insert(browser_id, id);
         true
     }
@@ -239,10 +235,10 @@ impl WindowRegistry {
     /// window stays registered until CEF destroys it.
     pub fn unlink_browser(&mut self, browser_id: BrowserId) {
         if let Some(id) = self.lookup.remove(&browser_id)
-            && let Some(state) = self.windows.get_mut(&id)
-            && state.browser_id == Some(browser_id)
+            && let Some(entry) = self.windows.get_mut(&id)
+            && entry.browser_id == Some(browser_id)
         {
-            state.browser_id = None;
+            entry.browser_id = None;
             debug!(
                 "[WindowRegistry] unlinked browser {} from window {}",
                 browser_id.as_u32(),
@@ -260,7 +256,7 @@ impl WindowRegistry {
         self.windows.get(&id).map(|s| s.metadata.clone())
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&WindowId, &WindowState)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&WindowId, &WindowEntry)> {
         self.windows.iter()
     }
 }

@@ -1,49 +1,45 @@
+use kurogane::{WindowOptions, WindowPlacement, WindowState};
+
 fn main() {
     kurogane_suite::logging();
     let runtime = kurogane::App::url("https://xkcd.com")
         .start()
         .expect("Kurogane failed to initialize");
 
+    let at = |x, y| WindowPlacement {
+        x,
+        y,
+        width: 800,
+        height: 600,
+        state: WindowState::Normal,
+    };
+
     // Visible immediately
     runtime
-        .create_window(kurogane::WindowOptions {
-            url: "https://en.wikipedia.org/wiki/Rust_(programming_language)".into(),
-            bounds: kurogane::BrowserBounds {
-                x: 120,
-                y: 90,
-                width: 800,
-                height: 600,
-            },
-            show_state: kurogane::WindowState::Normal,
-        })
+        .create_window(
+            "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+            WindowOptions::new().placement(at(120, 90)),
+        )
         .expect("failed to create browser window");
 
-    // Starts maximized
+    // Starts maximized; restored, it goes back to its place
     runtime
-        .create_window(kurogane::WindowOptions {
-            url: "https://github.com/0x48piraj/kurogane".into(),
-            bounds: kurogane::BrowserBounds {
-                x: 240,
-                y: 180,
-                width: 800,
-                height: 600,
-            },
-            show_state: kurogane::WindowState::Maximized,
-        })
+        .create_window(
+            "https://github.com/0x48piraj/kurogane",
+            WindowOptions::new()
+                .placement(at(240, 180))
+                .state(WindowState::Maximized),
+        )
         .expect("failed to create browser window");
 
     // Starts minimized
     runtime
-        .create_window(kurogane::WindowOptions {
-            url: "https://www.rust-lang.org".into(),
-            bounds: kurogane::BrowserBounds {
-                x: 360,
-                y: 270,
-                width: 800,
-                height: 600,
-            },
-            show_state: kurogane::WindowState::Minimized,
-        })
+        .create_window(
+            "https://www.rust-lang.org",
+            WindowOptions::new()
+                .placement(at(360, 270))
+                .state(WindowState::Minimized),
+        )
         .expect("failed to create browser window");
 
     // Starts hidden, and the application never shows it (a second launch
@@ -51,16 +47,12 @@ fn main() {
     // close, its browser keeps the application running, as any open browser
     // does; Ctrl+C ends it
     runtime
-        .create_window(kurogane::WindowOptions {
-            url: "https://docs.rs".into(),
-            bounds: kurogane::BrowserBounds {
-                x: 480,
-                y: 360,
-                width: 800,
-                height: 600,
-            },
-            show_state: kurogane::WindowState::Hidden,
-        })
+        .create_window(
+            "https://docs.rs",
+            WindowOptions::new()
+                .placement(at(480, 360))
+                .state(WindowState::Hidden),
+        )
         .expect("failed to create browser window");
 
     runtime.run().expect("Kurogane failed to run");

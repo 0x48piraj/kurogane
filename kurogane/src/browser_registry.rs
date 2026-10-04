@@ -45,7 +45,7 @@ pub struct BrowserMetadata {
     pub created_at: std::time::Instant,
 }
 
-pub(crate) struct BrowserState {
+pub(crate) struct BrowserEntry {
     pub browser: Browser,
     pub metadata: BrowserMetadata,
     #[allow(dead_code)]
@@ -75,7 +75,7 @@ pub(crate) struct BrowserState {
     pub opaque_documents: Vec<FrameId>,
 }
 
-impl BrowserState {
+impl BrowserEntry {
     /// Whether `origin` was let into this browser. An opaque origin never is.
     pub(crate) fn admits(&self, origin: &Origin) -> bool {
         !origin.is_opaque() && self.admitted.contains(origin)
@@ -116,7 +116,7 @@ impl BrowserState {
 }
 
 pub(crate) struct BrowserRegistry {
-    browsers: HashMap<BrowserId, BrowserState>,
+    browsers: HashMap<BrowserId, BrowserEntry>,
     lookup: HashMap<i32, BrowserId>,
     next_id: u32,
 }
@@ -171,7 +171,7 @@ impl BrowserRegistry {
         let id = BrowserId(self.next_id);
         self.next_id += 1;
         let cef_id = browser.identifier();
-        let state = BrowserState {
+        let state = BrowserEntry {
             browser,
             metadata: BrowserMetadata {
                 id,
@@ -231,11 +231,11 @@ impl BrowserRegistry {
         self.browsers.is_empty()
     }
 
-    pub fn get(&self, id: BrowserId) -> Option<&BrowserState> {
+    pub fn get(&self, id: BrowserId) -> Option<&BrowserEntry> {
         self.browsers.get(&id)
     }
 
-    pub fn get_mut(&mut self, id: BrowserId) -> Option<&mut BrowserState> {
+    pub fn get_mut(&mut self, id: BrowserId) -> Option<&mut BrowserEntry> {
         self.browsers.get_mut(&id)
     }
 
@@ -272,7 +272,7 @@ impl BrowserRegistry {
             .collect()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&BrowserId, &BrowserState)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&BrowserId, &BrowserEntry)> {
         self.browsers.iter()
     }
 }

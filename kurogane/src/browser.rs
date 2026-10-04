@@ -7,7 +7,7 @@ use crate::runtime::AppHandle;
 use crate::spec::{RuntimeSpec, RuntimeMode};
 use crate::browser_registry::BrowserType;
 use crate::client::KuroganeClient;
-use crate::window::{Placement, open_browser_window};
+use crate::window::{Opening, open_browser_window};
 use crate::app::{PumpRequest, SecondInstance};
 use tracing::{debug, error, warn};
 
@@ -45,9 +45,9 @@ wrap_browser_process_handler! {
             }
 
             debug!("Creating main browser with URL: {}", self.spec.start_url);
-            let placement = Placement::Main(self.spec.start_window.clone());
+            let opening = Opening::Application(self.spec.start_window.clone());
             // A CEF callback has nowhere to return the error
-            if let Err(error) = open_browser_window(&self.app, &self.spec.start_url, placement) {
+            if let Err(error) = open_browser_window(&self.app, &self.spec.start_url, opening) {
                 error!("no window will appear: {error}");
             }
         }
