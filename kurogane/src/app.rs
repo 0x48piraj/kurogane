@@ -1267,7 +1267,8 @@ impl App {
     /// The name is a Chromium switch name, with or without its leading `--`
     /// or `-` (or `/` on Windows); on Windows it is case-insensitive, as
     /// Chromium treats it. The flag overrides the runtime's own setting of
-    /// the same switch.
+    /// the same switch; the feature lists, which only add (see
+    /// [`App::chromium_flag_with_value`]), are left as they are.
     pub fn chromium_flag(mut self, name: impl Into<String>) -> Self {
         self.chromium_flags.push(ChromiumFlag::Present(name.into()));
         self
@@ -1276,7 +1277,18 @@ impl App {
     /// Add a Chromium flag with a value.
     ///
     /// The name is read as [`App::chromium_flag`] reads it. The last value
-    /// given for a switch wins, over the runtime's own value too.
+    /// given for a switch wins, over the runtime's own value too, except
+    /// for `disable-features` and `enable-features`: their value adds its
+    /// features to the list, after CEF's own, the ones the application was
+    /// launched with and those given before, each feature once.
+    ///
+    /// ```no_run
+    /// # use kurogane::App;
+    /// // CEF's own disabled features stay disabled
+    /// App::new("dist")
+    ///     .chromium_flag_with_value("disable-features", "Translate,MediaRouter")
+    ///     .run_or_exit();
+    /// ```
     pub fn chromium_flag_with_value(
         mut self,
         name: impl Into<String>,
