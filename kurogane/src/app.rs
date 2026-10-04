@@ -3,6 +3,7 @@
 //! This is the public developer entrypoint built on top of Runtime.
 //! This helps in the abstraction of asset resolution, environment overrides and command registration.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::sync::Arc;
@@ -772,6 +773,32 @@ impl App {
         self
     }
 
+    /// The icon of every window Kurogane opens, a PNG.
+    ///
+    /// On Windows it is the window's icon in its title bar, the taskbar and
+    /// the window switcher; under X11 the icon the window manager shows.
+    /// A square image of 256 by 256 is plenty: the system scales it to each
+    /// place. Under Wayland the desktop takes a window's icon from the
+    /// desktop entry its class names ([`App::window_class`]), and on macOS
+    /// windows have none: the Dock shows the application's own icon.
+    ///
+    /// It is the icon of the start window,
+    /// [`AppInstance::create_window`]'s windows, popups and DevTools alike;
+    /// not of a browser embedded in the application's own window. Without
+    /// it the windows keep the system's default. Bytes that are not a PNG
+    /// are [`ConfigError::InvalidWindowIcon`]. A later call replaces an
+    /// earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::App;
+    /// let icon = std::fs::read("icon.png").expect("the icon");
+    /// App::new("dist").window_icon(icon).run_or_exit();
+    /// ```
+    pub fn window_icon(mut self, png: impl Into<Cow<'static, [u8]>>) -> Self {
+        self.window_identity.icon = Some(png.into());
+        self
+    }
+
     /// Names the application's profile: its cookies, storage and caches.
     ///
     /// Defaults to the executable's name. CEF runs one instance per profile:
@@ -1254,6 +1281,13 @@ impl App {
                 ));
             }
         }
+        // A PNG begins with its signature; CEF decodes the rest with each
+        // window
+        if let Some(png) = &self.window_identity.icon
+            && !png.starts_with(b"\x89PNG\r\n\x1a\n")
+        {
+            self.problems.push(ConfigError::InvalidWindowIcon);
+        }
         self.check_configuration()?;
 
         let Self {
@@ -1632,6 +1666,13 @@ mod tests {
                     [ConfigError::InvalidWindowClass(_)]
                 ),
                 "{class:?}"
+            );
+        }
+        for icon in [&b""[..], b"GIF89a", b"\x89PNG\r\n"] {
+            assert_eq!(
+                problems(App::new("./dist").window_icon(icon), false),
+                vec![ConfigError::InvalidWindowIcon],
+                "{icon:?}"
             );
         }
     }

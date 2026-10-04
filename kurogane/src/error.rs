@@ -330,6 +330,9 @@ pub enum ConfigError {
     /// [`App::window_class`](crate::App::window_class) was given a class no
     /// window manager can take, named here.
     InvalidWindowClass(&'static str),
+    /// [`App::window_icon`](crate::App::window_icon) was given bytes that
+    /// are not a PNG.
+    InvalidWindowIcon,
 }
 
 impl Display for ConfigError {
@@ -366,6 +369,9 @@ impl Display for ConfigError {
             ),
             ConfigError::InvalidWindowClass(problem) => {
                 write!(f, "App::window_class: {problem}")
+            }
+            ConfigError::InvalidWindowIcon => {
+                f.write_str("App::window_icon takes a PNG, and these bytes are not one")
             }
         }
     }

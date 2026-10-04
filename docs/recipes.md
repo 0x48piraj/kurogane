@@ -156,6 +156,20 @@ App::new("dist").window_class("com.example.notes").run_or_exit();
 
 It names the start window, every `create_window` window, popups and DevTools. Without it CEF names the windows. Windows and macOS have no window class and ignore it; a browser embedded in your own window is in your window, which has your class.
 
+### The window icon
+
+`App::window_icon` gives every window Kurogane opens the application's icon, a PNG:
+
+```rust
+use kurogane::App;
+
+App::new("dist")
+    .window_icon(include_bytes!("../icon.png").as_slice())
+    .run_or_exit();
+```
+
+On Windows it is the icon in the window's title bar, the taskbar and the window switcher; under X11 the one the window manager shows. A square of 256 by 256 is plenty: the system scales it. Under Wayland the desktop takes a window's icon from the desktop entry its class names (above), and on macOS windows have no icon: the Dock shows the application's. Bytes that are not a PNG fail to start.
+
 ### More windows
 
 `AppInstance::create_window` opens a page in another window of the application's, with the same options:

@@ -4,9 +4,10 @@
 //! browser view into the platform window.
 
 use cef::*;
+use std::borrow::Cow;
 use std::collections::VecDeque;
 
-use tracing::debug;
+use tracing::{debug, warn};
 use crate::browser_registry::{BrowserId, BrowserType};
 use crate::cef_string::owned_by_cef;
 use crate::client::KuroganeClient;
@@ -92,6 +93,30 @@ impl PendingPopups {
 pub(crate) struct WindowIdentity {
     /// The Linux window class: WM_CLASS under X11, the app_id under Wayland
     pub class: Option<String>,
+    /// The windows' icon, a PNG, decoded for each window as it is created
+    pub icon: Option<Cow<'static, [u8]>>,
+}
+
+/// The size, in DIP, CEF takes a window icon at: it refuses any other
+/// (CefWindowView::SetWindowIcon), and the app icon at any size.
+const WINDOW_ICON_SIDE: f32 = 16.0;
+
+/// A window's two icons from `png`, as CEF images: the window icon (the
+/// title bar), the PNG's pixels at the scale that makes it 16 DIP, and the
+/// app icon (the taskbar, the window switcher) as it is. Made with each
+/// window, on the UI thread: a CEF image may live only between
+/// CefInitialize and CefShutdown, which one kept in the runtime's services
+/// would outlive.
+fn window_icons(png: &[u8]) -> Option<(Image, Image)> {
+    let app = image_create()?;
+    if app.add_png(1.0, Some(png)) == 0 {
+        warn!("the window icon is not a PNG CEF can read; the window keeps its default icon");
+        return None;
+    }
+    let side = app.width().max(app.height()) as f32;
+    let window = image_create()?;
+    window.add_png(side / WINDOW_ICON_SIDE, Some(png));
+    Some((window, app))
 }
 
 /// Where a new top-level window opens and how it first shows.
@@ -325,6 +350,12 @@ wrap_window_delegate! {
                 && let Some(title) = options.fixed_title()
             {
                 window.set_title(Some(&CefString::from(title)));
+            }
+            if let Some(png) = &self.app.window_identity().icon
+                && let Some((mut small, mut large)) = window_icons(png)
+            {
+                window.set_window_icon(Some(&mut small));
+                window.set_window_app_icon(Some(&mut large));
             }
             if self.placement.show_state() != ShowState::HIDDEN {
                 window.show();
