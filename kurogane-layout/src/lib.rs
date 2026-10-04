@@ -20,7 +20,7 @@ pub use cef::{
 };
 pub use discover::{DetectError, DetectedCef, DiscoveryMode, cef_override, detect_cef_root};
 pub use distribution::{
-    AppMetadata, DistributionError, Executable, NameProblem, ResolvedDistribution,
+    AppMetadata, DistributionError, Executable, LinkProblem, NameProblem, ResolvedDistribution,
     ResolvedResource, check_app_name, portable_file_name,
 };
 pub use shell::sh_quote;

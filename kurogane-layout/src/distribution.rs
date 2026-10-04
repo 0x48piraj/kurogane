@@ -131,6 +131,19 @@ pub enum DistributionError {
     #[error("resource destination must be a relative path without '..' components: {0}")]
     InvalidResourceDestination(PathBuf),
 
+    /// A link under a resource that bundling would follow out of it,
+    /// around in a loop, or to nothing. A bundle copies what a link leads
+    /// to, so a link to a key elsewhere would ship the key.
+    #[error("the resource link {link} {problem}")]
+    ResourceLink { link: PathBuf, problem: LinkProblem },
+
+    #[error("could not read the resource {path}")]
+    UnreadableResource {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error(transparent)]
     InvalidCefRuntime(#[from] crate::cef::CefError),
 }
@@ -200,6 +213,7 @@ impl ResolvedDistribution {
             }
 
             validate_resource_destination(&resource.destination)?;
+            check_resource_links(&resource.source)?;
         }
 
         Ok(())
@@ -235,6 +249,20 @@ pub enum NameProblem {
 
     #[error("Windows reserves it for a device")]
     Device,
+}
+
+/// Why a link under a resource cannot be bundled.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum LinkProblem {
+    #[error("leads outside its resource, to {0}")]
+    Outside(PathBuf),
+
+    #[error("leads back to a directory holding it")]
+    Loop,
+
+    #[error("leads nowhere")]
+    Broken,
 }
 
 /// Characters a file name cannot hold on Windows; `/` also separates paths
@@ -293,6 +321,60 @@ fn check_name(what: &'static str, name: &str) -> Result<(), DistributionError> {
         name: name.to_string(),
         problem,
     })
+}
+
+/// Checks that bundling the resource at `source` copies only what lies
+/// inside it. A bundle copies what each link leads to, so every link under
+/// a directory resource must lead to a file or directory inside it, and
+/// none to a directory the copy is already in. The resource itself is what
+/// its entry names, a link or not.
+fn check_resource_links(source: &Path) -> Result<(), DistributionError> {
+    if !source.is_dir() {
+        return Ok(());
+    }
+    let inside = std::fs::canonicalize(source).map_err(unreadable(source))?;
+    let mut holding = vec![inside.clone()];
+    check_links_under(source, &inside, &mut holding)
+}
+
+/// Walks `dir` as copying it would, following links; `holding` is the
+/// real path of each directory the walk is in.
+fn check_links_under(
+    dir: &Path,
+    inside: &Path,
+    holding: &mut Vec<PathBuf>,
+) -> Result<(), DistributionError> {
+    for entry in std::fs::read_dir(dir).map_err(unreadable(dir))? {
+        let path = entry.map_err(unreadable(dir))?.path();
+        let link = |problem| DistributionError::ResourceLink {
+            link: path.clone(),
+            problem,
+        };
+        // Every entry by its real path: a link, or a Windows junction,
+        // anywhere above it is followed as copying follows it
+        let real = match std::fs::canonicalize(&path) {
+            Ok(real) => real,
+            Err(_) if path.is_symlink() => return Err(link(LinkProblem::Broken)),
+            Err(err) => return Err(unreadable(&path)(err)),
+        };
+        if !real.starts_with(inside) {
+            return Err(link(LinkProblem::Outside(real)));
+        }
+        if real.is_dir() {
+            if holding.contains(&real) {
+                return Err(link(LinkProblem::Loop));
+            }
+            holding.push(real);
+            check_links_under(&path, inside, holding)?;
+            holding.pop();
+        }
+    }
+    Ok(())
+}
+
+fn unreadable(path: &Path) -> impl FnOnce(std::io::Error) -> DistributionError {
+    let path = path.to_path_buf();
+    move |source| DistributionError::UnreadableResource { path, source }
 }
 
 /// Validates a resource destination within the bundle.
@@ -706,6 +788,121 @@ mod tests {
         }];
 
         dist.validate().unwrap();
+    }
+
+    /// A distribution whose one resource is the directory `assets` in
+    /// `dir`, holding `inside.txt`, and the file `secret.txt` beside it.
+    #[cfg(unix)]
+    fn with_assets(dir: &Path) -> (ResolvedDistribution, PathBuf) {
+        let mut dist = crate::test_fixtures::sample_distribution(dir);
+        let assets = dir.join("assets");
+        fs::create_dir_all(assets.join("sub")).unwrap();
+        fs::write(assets.join("inside.txt"), "inside").unwrap();
+        fs::write(dir.join("secret.txt"), "secret").unwrap();
+        dist.extra_resources = vec![ResolvedResource {
+            source: assets.clone(),
+            destination: "assets".into(),
+        }];
+        (dist, assets)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_resource_link_out_of_its_resource_is_refused_naming_it() {
+        use std::os::unix::fs::symlink;
+        let dir = crate::test_fixtures::tmp_dir();
+        let (dist, assets) = with_assets(dir.path());
+        let link = assets.join("sub").join("key.txt");
+        symlink(dir.path().join("secret.txt"), &link).unwrap();
+
+        let err = dist.validate().unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                DistributionError::ResourceLink { link: named, problem: LinkProblem::Outside(_) }
+                    if named == &link
+            ),
+            "{err}"
+        );
+        assert!(
+            err.to_string().contains("leads outside its resource"),
+            "{err}"
+        );
+
+        // Out by `..` as much as by an absolute path
+        fs::remove_file(&link).unwrap();
+        symlink("../../secret.txt", &link).unwrap();
+        assert!(matches!(
+            dist.validate(),
+            Err(DistributionError::ResourceLink {
+                problem: LinkProblem::Outside(_),
+                ..
+            })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_resource_link_that_stays_inside_is_bundled() {
+        use std::os::unix::fs::symlink;
+        let dir = crate::test_fixtures::tmp_dir();
+        let (dist, assets) = with_assets(dir.path());
+        symlink("../inside.txt", assets.join("sub").join("again.txt")).unwrap();
+        symlink("sub", assets.join("also-sub")).unwrap();
+
+        dist.validate().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_resource_that_is_a_link_is_what_its_entry_names() {
+        use std::os::unix::fs::symlink;
+        let dir = crate::test_fixtures::tmp_dir();
+        let (mut dist, assets) = with_assets(dir.path());
+        let named = dir.path().join("named");
+        symlink(&assets, &named).unwrap();
+        dist.extra_resources[0].source = named;
+
+        dist.validate().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_resource_link_that_loops_or_leads_nowhere_is_refused() {
+        use std::os::unix::fs::symlink;
+        let dir = crate::test_fixtures::tmp_dir();
+        let (dist, assets) = with_assets(dir.path());
+
+        let up = assets.join("sub").join("up");
+        symlink("..", &up).unwrap();
+        assert!(matches!(
+            dist.validate(),
+            Err(DistributionError::ResourceLink { ref link, problem: LinkProblem::Loop }) if link == &up
+        ));
+        fs::remove_file(&up).unwrap();
+
+        // Two directories leading into each other
+        fs::create_dir(assets.join("other")).unwrap();
+        symlink("../other", assets.join("sub").join("to-other")).unwrap();
+        symlink("../sub", assets.join("other").join("to-sub")).unwrap();
+        assert!(matches!(
+            dist.validate(),
+            Err(DistributionError::ResourceLink {
+                problem: LinkProblem::Loop,
+                ..
+            })
+        ));
+        fs::remove_dir_all(assets.join("other")).unwrap();
+        fs::remove_file(assets.join("sub").join("to-other")).unwrap();
+
+        symlink("gone.txt", assets.join("dangling.txt")).unwrap();
+        assert!(matches!(
+            dist.validate(),
+            Err(DistributionError::ResourceLink {
+                problem: LinkProblem::Broken,
+                ..
+            })
+        ));
     }
 
     #[test]
