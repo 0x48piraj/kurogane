@@ -31,7 +31,7 @@ pub use layout::{
 #[cfg(target_os = "macos")]
 pub use layout::bundled_helper_path_for;
 pub use package::{PackageError, package_directory};
-pub use profile::{cache_root, profile_dir};
+pub use profile::{cache_root, profile_dir, profiles_root};
 #[cfg(target_os = "macos")]
 pub use platform::link_unbundled_angle_libraries;
 /// The name of CEF's framework inside a macOS runtime or bundle.

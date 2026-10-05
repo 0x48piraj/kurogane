@@ -21,21 +21,27 @@ use tracing::{debug, warn};
 
 struct RuntimeLayout {
     cef_root: std::path::PathBuf,
-    cache_dir: std::path::PathBuf,
+    /// The profile CEF keeps (`cache_path`, `root_cache_path`)
+    profile_dir: std::path::PathBuf,
     /// The executable CEF starts helper processes from, when it is named.
     subprocess: Option<std::path::PathBuf>,
 }
 
-fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeError> {
+/// The runtime's layout: the profile is `chosen` (App::profile_dir), or
+/// the one Kurogane names from `profile_id` or the executable.
+fn resolve_layout(
+    profile_id: Option<String>,
+    chosen: Option<std::path::PathBuf>,
+) -> Result<RuntimeLayout, RuntimeError> {
     debug!("Resolving runtime layout");
 
     let exe = std::env::current_exe().map_err(RuntimeError::ExecutableUnavailable)?;
 
-    let cache_dir = profile_dir(&profile_name(profile_id, &exe));
-    debug!("Cache dir: {}", cache_dir.display());
+    let profile_dir = chosen.unwrap_or_else(|| profile_dir(&profile_name(profile_id, &exe)));
+    debug!("Profile dir: {}", profile_dir.display());
 
-    std::fs::create_dir_all(&cache_dir).map_err(|e| RuntimeError::CacheUnavailable {
-        path: cache_dir.clone(),
+    std::fs::create_dir_all(&profile_dir).map_err(|e| RuntimeError::CacheUnavailable {
+        path: profile_dir.clone(),
         source: e,
     })?;
 
@@ -54,7 +60,7 @@ fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeEr
 
     Ok(RuntimeLayout {
         cef_root,
-        cache_dir,
+        profile_dir,
         subprocess: subprocess_path(&exe),
     })
 }
@@ -143,8 +149,8 @@ fn build_settings(
     // This enables cookies, storage APIs and service workers
     let mut settings = Settings {
         external_message_pump: external_message_pump.into(),
-        cache_path: cef_path(&layout.cache_dir),
-        root_cache_path: cef_path(&layout.cache_dir),
+        cache_path: cef_path(&layout.profile_dir),
+        root_cache_path: cef_path(&layout.profile_dir),
         persist_session_cookies: persist_session_cookies.into(),
         no_sandbox: crate::sandbox::cef_no_sandbox(sandbox),
         ..Default::default()
@@ -1347,7 +1353,7 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
     debug!("Executing subprocess dispatch");
     execute_subprocesses(&args, &mut app, sandbox_info);
 
-    let layout = resolve_layout(spec.profile_id)?;
+    let layout = resolve_layout(spec.profile_id, spec.profile_dir)?;
     crate::sandbox::preflight(spec.sandbox_mode, &layout.cef_root)?;
 
     let external_message_pump = spec.scheduler.is_some();

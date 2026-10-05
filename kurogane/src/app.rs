@@ -269,6 +269,7 @@ pub struct App {
     start_window: Option<WindowOptions>,
     window_identity: WindowIdentity,
     profile_id: Option<String>,
+    profile_dir: Option<PathBuf>,
     sandbox_mode: SandboxMode,
     persist_session_cookies: bool,
     gpu_mode: GpuMode,
@@ -311,6 +312,7 @@ impl App {
             start_window: None,
             window_identity: WindowIdentity::default(),
             profile_id: None,
+            profile_dir: None,
             sandbox_mode: SandboxMode::default(),
             persist_session_cookies: true,
             gpu_mode: GpuMode::Auto,
@@ -809,8 +811,36 @@ impl App {
     /// launching the application while it runs brings the running instance to
     /// the front (see [`App::on_second_instance`]). Debug builds use a profile
     /// of their own, named with a `-dev` suffix.
+    ///
+    /// Profiles live in `kurogane/profiles` in the local data directory;
+    /// `~/.local/share` on Linux, `~/Library/Application Support` on macOS,
+    /// `%LOCALAPPDATA%` on Windows. [`App::profile_dir`] puts the profile
+    /// somewhere else.
     pub fn profile_id(mut self, id: impl Into<String>) -> Self {
         self.profile_id = Some(id.into());
+        self
+    }
+
+    /// Keeps the application's profile in `dir`, an absolute path, instead
+    /// of Kurogane's place for it ([`App::profile_id`]).
+    ///
+    /// The directory is created when missing and used as given, in debug
+    /// builds too: a development run then shares it and, as CEF runs one
+    /// instance per profile, hands its launch to the application already
+    /// running there. A relative path is
+    /// [`ConfigError::InvalidProfileDir`](crate::ConfigError::InvalidProfileDir),
+    /// as is a directory given together with [`App::profile_id`], which
+    /// would then name nothing. A later call replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::App;
+    /// // A portable application keeps its profile next to its executable
+    /// let exe = std::env::current_exe().expect("the executable's path");
+    /// let profile = exe.parent().expect("a folder").join("profile");
+    /// App::new("dist").profile_dir(profile).run_or_exit();
+    /// ```
+    pub fn profile_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.profile_dir = Some(dir.into());
         self
     }
 
@@ -1349,6 +1379,19 @@ impl App {
         {
             self.problems.push(ConfigError::InvalidWindowIcon);
         }
+        // CEF takes an absolute profile path, and one relative to the
+        // working directory would move with it
+        if let Some(dir) = &self.profile_dir {
+            if !dir.is_absolute() {
+                self.problems.push(ConfigError::InvalidProfileDir(
+                    "a profile directory is an absolute path",
+                ));
+            } else if self.profile_id.is_some() {
+                self.problems.push(ConfigError::InvalidProfileDir(
+                    "App::profile_id names a profile in Kurogane's place for profiles; give one or the other",
+                ));
+            }
+        }
         self.check_configuration()?;
 
         let Self {
@@ -1360,6 +1403,7 @@ impl App {
             start_window,
             window_identity,
             profile_id,
+            profile_dir,
             sandbox_mode,
             persist_session_cookies,
             gpu_mode,
@@ -1392,6 +1436,7 @@ impl App {
             window_identity,
             asset_root,
             profile_id,
+            profile_dir,
             persist_session_cookies,
             gpu_mode,
             credential_storage,
@@ -1823,6 +1868,28 @@ mod tests {
                 .keys()
                 .any(|name| name.starts_with("fs."))
         );
+    }
+
+    #[test]
+    fn a_profile_dir_is_absolute_and_the_only_name_for_the_profile() {
+        let problems = |app: App| match app.build() {
+            Err(RuntimeError::InvalidConfiguration(problems)) => problems,
+            Err(other) => panic!("expected a configuration error, got: {other}"),
+            Ok(_) => panic!("a misconfigured app must not start"),
+        };
+        assert!(matches!(
+            problems(App::new("./dist").profile_dir("profile"))[..],
+            [ConfigError::InvalidProfileDir(_)]
+        ));
+        let absolute = std::env::temp_dir().join("kurogane-profile");
+        assert!(matches!(
+            problems(
+                App::new("./dist")
+                    .profile_dir(&absolute)
+                    .profile_id("notes")
+            )[..],
+            [ConfigError::InvalidProfileDir(_)]
+        ));
     }
 
     #[test]

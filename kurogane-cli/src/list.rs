@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result, bail};
 use std::fs;
-use kurogane_layout::cache_root;
+use kurogane_layout::profiles_root;
 
 use crate::tui;
 
@@ -25,11 +25,12 @@ fn list_all() -> Result<()> {
     list_profiles()
 }
 
-/// Lists all cached Kurogane profiles, one per application identity.
+/// Lists every Kurogane application's profile, one per application
+/// identity.
 fn list_profiles() -> Result<()> {
     tui::section("Kurogane Profiles");
 
-    let profiles_dir = cache_root().join("profiles");
+    let profiles_dir = profiles_root();
 
     if !profiles_dir.exists() {
         tui::info("No profiles found");

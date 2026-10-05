@@ -1,7 +1,9 @@
 //! Per-application runtime profile and cache paths.
 //!
-//! The profile directory is derived from the application's identity and
-//! remains stable across executable moves and updates.
+//! An application's profile holds what its user would miss (cookies,
+//! storage, permissions), so it lives in the local data directory, not in
+//! the cache that cleaners empty. Its name is derived from the application's
+//! identity and remains stable across executable moves and updates.
 
 use std::path::PathBuf;
 
@@ -11,9 +13,16 @@ pub fn cache_root() -> PathBuf {
     platform::cache_dir().join("kurogane")
 }
 
+/// Where every application's profile lives: `kurogane/profiles` in the
+/// local data directory (`~/.local/share` on Linux, `~/Library/Application
+/// Support` on macOS, `%LOCALAPPDATA%` on Windows).
+pub fn profiles_root() -> PathBuf {
+    platform::data_local_dir().join("kurogane").join("profiles")
+}
+
 /// Returns the profile directory of the application identified by `app_id`.
 pub fn profile_dir(app_id: &str) -> PathBuf {
-    cache_root().join("profiles").join(sanitize_name(app_id))
+    profiles_root().join(sanitize_name(app_id))
 }
 
 /// Sanitizes a user-provided name into a filesystem-safe identifier.
@@ -104,7 +113,21 @@ mod property_tests {
         let dir = profile_dir("my-app");
 
         assert_eq!(dir.file_name().unwrap(), "my-app");
-        assert_eq!(dir.parent().unwrap(), cache_root().join("profiles"));
+        assert_eq!(dir.parent().unwrap(), profiles_root());
+    }
+
+    #[test]
+    fn profiles_live_with_the_data_not_the_cache() {
+        let root = profiles_root();
+        assert!(
+            root.starts_with(platform::data_local_dir()),
+            "{}",
+            root.display()
+        );
+        // Windows keeps both in %LOCALAPPDATA%
+        if cfg!(not(windows)) {
+            assert!(!root.starts_with(cache_root()), "{}", root.display());
+        }
     }
 
     #[test]

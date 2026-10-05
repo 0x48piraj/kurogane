@@ -203,7 +203,7 @@ impl Display for RuntimeError {
             RuntimeError::CacheUnavailable { path, .. } => write!(
                 f,
                 concat!(
-                    "Unable to create cache directory:\n\n",
+                    "Unable to create the profile directory:\n\n",
                     "  {}\n\n",
                     "Check filesystem permissions or free up disk space."
                 ),
@@ -349,6 +349,9 @@ pub enum ConfigError {
     /// [`App::window_icon`](crate::App::window_icon) was given bytes that
     /// are not a PNG.
     InvalidWindowIcon,
+    /// [`App::profile_dir`](crate::App::profile_dir) was given a directory
+    /// no profile can be in, named here.
+    InvalidProfileDir(&'static str),
 }
 
 impl Display for ConfigError {
@@ -388,6 +391,9 @@ impl Display for ConfigError {
             }
             ConfigError::InvalidWindowIcon => {
                 f.write_str("App::window_icon takes a PNG, and these bytes are not one")
+            }
+            ConfigError::InvalidProfileDir(problem) => {
+                write!(f, "App::profile_dir: {problem}")
             }
         }
     }

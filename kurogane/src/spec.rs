@@ -54,6 +54,8 @@ pub(crate) struct RuntimeSpec {
     pub window_identity: WindowIdentity,
     pub asset_root: Option<CanonicalRoot>,
     pub profile_id: Option<String>,
+    /// Where the profile is, when the application chose (App::profile_dir)
+    pub profile_dir: Option<std::path::PathBuf>,
     pub persist_session_cookies: bool,
     pub gpu_mode: GpuMode,
     pub credential_storage: CredentialStorage,

@@ -8,7 +8,7 @@ use anyhow::Result;
 use std::fs;
 use std::io;
 use std::path::Path;
-use kurogane_layout::cache_root;
+use kurogane_layout::{cache_root, profiles_root};
 
 use crate::tui;
 
@@ -93,8 +93,12 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
         remove("tools", "build tools", &tools, &mut failed);
 
         // Every Kurogane application's browser profiles
-        let profiles = cache_root().join("profiles");
-        remove("profiles", "browser profiles", &profiles, &mut failed);
+        remove(
+            "profiles",
+            "browser profiles",
+            &profiles_root(),
+            &mut failed,
+        );
     }
 
     tui::blank();
