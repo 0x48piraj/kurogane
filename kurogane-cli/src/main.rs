@@ -1,7 +1,7 @@
 //! Kurogane command-line entry point.
 //!
-//! This module defines the CLI surface and dispatches subcommands
-//! to the corresponding command implementations.
+//! Defines the CLI surface and dispatches each subcommand to its
+//! corresponding command implementations.
 
 use clap::{Parser, Subcommand};
 use std::ffi::OsString;
@@ -23,6 +23,8 @@ mod clean;
 mod doctor;
 mod list;
 mod info;
+mod receipt;
+mod uninstall;
 
 #[cfg(target_os = "linux")]
 mod appimage;
@@ -88,8 +90,8 @@ enum Commands {
         debug: bool,
         #[arg(long, default_value = crate::bundle::DEFAULT_FORMAT)]
         format: String,
-        /// Sign the bundle: a Windows bundle's binaries ([signing.windows]) or a
-        /// macOS app ([signing.macos]); a Linux bundle has nothing to sign.
+        /// Sign the bundle's Windows binaries ([signing.windows]) or macOS app
+        /// ([signing.macos]). Linux bundles are not signed.
         #[arg(long)]
         sign: bool,
     },
@@ -148,13 +150,31 @@ enum Commands {
         target: Option<String>,
     },
     Info,
+    /// Manage the kurogane CLI itself.
+    #[command(name = "self", subcommand)]
+    Self_(SelfCommand),
 }
 
-/// Whether `--ci` was asked for, by flag or by the `CI` variable's value.
+#[derive(Subcommand)]
+enum SelfCommand {
+    /// Remove an installer-managed Kurogane installation.
+    ///
+    /// Removes the CLI, PATH setup and Kurogane's installed runtimes and
+    /// caches. Application profiles and unmanaged installations are preserved.
+    Uninstall {
+        /// Accept the confirmation without prompting.
+        #[arg(long)]
+        yes: bool,
+
+        /// Keep the installed Chromium runtimes and caches.
+        #[arg(long)]
+        keep_data: bool,
+    },
+}
+
+/// Returns whether non-interactive mode was requested via `--ci` or `CI`.
 ///
-/// The flag takes precedence, `CI` enables non-interactive execution
-/// unless its value is empty, `0`, or `false`. `CI` is parsed manually
-/// because Clap's `env` bool parser rejects values such as `CI=1`.
+/// Parsed here rather than by Clap so values such as `CI=1` are accepted.
 fn ci_requested(flag: bool, ci: Option<&std::ffi::OsStr>) -> bool {
     flag || ci.is_some_and(|value| {
         let value = value.to_string_lossy();
@@ -164,7 +184,7 @@ fn ci_requested(flag: bool, ci: Option<&std::ffi::OsStr>) -> bool {
     })
 }
 
-/// Whether the CLI must run without prompting.
+/// Returns whether the CLI must run without prompting.
 fn is_unattended(ci: bool) -> bool {
     use std::io::IsTerminal;
     ci || !std::io::stdin().is_terminal()
@@ -173,7 +193,7 @@ fn is_unattended(ci: bool) -> bool {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Keep prompting and consent separate.
+    // Keep prompting and consent separate
     // `--ci` means "do not ask"; `--yes` means "approve"
     let unattended = is_unattended(ci_requested(cli.ci, std::env::var_os("CI").as_deref()));
     let consent = |yes: bool| template::Consent {
@@ -211,6 +231,9 @@ fn main() -> anyhow::Result<()> {
         Commands::Doctor { json } => doctor::run(json),
         Commands::List { target } => list::run(target),
         Commands::Info => info::run(),
+        Commands::Self_(SelfCommand::Uninstall { yes, keep_data }) => {
+            uninstall::run(yes, keep_data, unattended)
+        }
     }
 }
 
@@ -218,7 +241,7 @@ fn main() -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    /// `CI`'s value as providers set it, rather than clap's bool grammar.
+    /// Returns a `CI` value as providers set it, not as Clap's bool parser reads it.
     fn ci(value: Option<&str>) -> Option<&std::ffi::OsStr> {
         value.map(std::ffi::OsStr::new)
     }

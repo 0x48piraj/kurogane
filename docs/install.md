@@ -28,7 +28,7 @@ Everything else (Rust, the Chromium runtime, platform build tools) is checked by
 | Windows | x86_64, ARM64 | Windows 10 | `kurogane-cli-<arch>-pc-windows-msvc.zip` |
 | NixOS, Nix | x86_64-linux, aarch64-linux, aarch64-darwin | - | flake, built from source |
 
-The Linux CLI is a static binary and starts on any distribution, but apps run on Chromium, which needs glibc: Alpine and other musl systems can install the CLI but cannot run apps.
+The Linux CLI is a static binary and starts on any distribution, but apps run on Chromium, which needs glibc. Alpine and other musl systems can install the CLI but cannot run apps.
 
 ## Where things go
 
@@ -36,6 +36,7 @@ The Linux CLI is a static binary and starts on any distribution, but apps run on
 |---|---|---|
 | CLI | `~/.kurogane/bin/kurogane` | `%LOCALAPPDATA%\kurogane\bin\kurogane.exe` |
 | PATH setup | `~/.kurogane/env`, sourced from `~/.profile`, `~/.bashrc`, `~/.bash_profile`, `~/.zshenv` (those that exist; `.profile` and `.zshenv` are created), fish `conf.d/kurogane.fish` | user `Path` in `HKCU\Environment` |
+| Install receipt, read by `kurogane self uninstall` | `~/.kurogane/receipt.json` | `%LOCALAPPDATA%\kurogane\receipt.json` |
 | Chromium runtime (`kurogane install`) | `~/.local/share/kurogane/cef/<version>` (Linux), `~/Library/Application Support/kurogane/cef/<version>` (macOS) | `%LOCALAPPDATA%\kurogane\cef\<version>` |
 
 Running the installer again upgrades in place. The existing binary is replaced only after the new one has been downloaded, verified and run successfully. Interrupted or failed installs leave the previous version intact.
@@ -105,13 +106,69 @@ See [Install notes](platforms.md#nix) for `nix develop` and contributor setup.
 ## Uninstalling
 
 ```bash
-kurogane clean all --yes   # removes Chromium runtimes and caches
-rm -r ~/.kurogane          # removes the CLI and its PATH setup script
+kurogane self uninstall
 ```
 
-Then delete the line `. "$HOME/.kurogane/env"` from your shell startup files.
+This removes an installer-managed Kurogane installation, including its CLI, PATH setup and installed Chromium runtimes and caches.
 
-On Windows, run `kurogane clean all --yes`, delete `%LOCALAPPDATA%\kurogane` and remove `%LOCALAPPDATA%\kurogane\bin` from your user PATH (Settings, then "Edit environment variables for your account").
+The command shows what it will remove and asks for confirmation. Use `--yes` to skip the prompt. Use `--keep-data` to keep runtimes and caches.
+
+Kurogane keeps:
+
+- Application profiles in `kurogane/profiles`. These contain application data such as cookies and storage, so they are preserved and their location is reported.
+- Your shell startup files. Only the installer's own entries are removed.
+- An `--install-dir` and anything else installed there.
+- Rust, Node.js, build tools and other system dependencies.
+
+### Installations without a receipt
+
+The receipt defines what Kurogane may remove. When the receipt does not name the running `kurogane` binary, the binary is left untouched and the command points you to the manual uninstall steps.
+
+For example:
+
+```bash
+cargo uninstall kurogane-cli
+```
+
+or:
+
+```bash
+nix profile remove kurogane
+```
+
+Kurogane can still remove its installed runtimes and caches in this case.
+
+### Manual uninstall
+
+When `kurogane self uninstall` cannot run, remove the installation manually.
+
+On Unix:
+
+```bash
+rm -r ~/.kurogane
+rm -r ~/.cache/kurogane ~/.local/share/kurogane/cef
+```
+
+On macOS, the cache and runtime directories are:
+
+```text
+~/Library/Caches/kurogane
+~/Library/Application Support/kurogane/cef
+```
+
+Remove the installer entry from your shell startup files:
+
+```bash
+. "$HOME/.kurogane/env"
+```
+
+If you use fish, remove:
+
+```text
+~/.config/fish/conf.d/kurogane.fish
+```
+
+On Windows, remove everything under `%LOCALAPPDATA%\kurogane` except `profiles`, then remove `%LOCALAPPDATA%\kurogane\bin` from your user `Path` in **Edit environment variables for your account**.
 
 ## What else you need
 

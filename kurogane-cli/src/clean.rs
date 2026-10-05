@@ -1,16 +1,61 @@
-//! Project and runtime cache cleanup.
+//! Removes generated project artifacts and Kurogane's caches.
 //!
-//! Regular cleanup removes generated project artifacts. `clean all` also
-//! removes installed CEF runtimes, build caches and Kurogane application
-//! profiles.
+//! `clean all` also removes installed CEF runtimes, build caches and
+//! application profiles.
 
 use anyhow::Result;
 use std::fs;
 use std::io;
-use std::path::Path;
-use kurogane_layout::{cache_root, profiles_root};
+use std::path::{Path, PathBuf};
+use kurogane_layout::{cache_root, install_root, profiles_root};
 
 use crate::tui;
+
+/// A directory owned by Kurogane.
+pub(crate) struct Data {
+    pub(crate) label: &'static str,
+    pub(crate) what: &'static str,
+    pub(crate) path: PathBuf,
+}
+
+/// Returns the CEF runtimes and their build caches.
+pub(crate) fn runtimes() -> [Data; 3] {
+    [
+        Data {
+            label: "cef",
+            what: "CEF runtimes",
+            path: install_root(),
+        },
+        // Shared CEF wrapper builds, keyed to the runtimes
+        Data {
+            label: "wrapper",
+            what: "CEF wrapper cache",
+            path: cache_root().join("wrapper"),
+        },
+        Data {
+            label: "tools",
+            what: "build tools",
+            path: cache_root().join("tools"),
+        },
+    ]
+}
+
+/// Returns the caches managed by Kurogane's cleanup commands.
+pub(crate) fn caches() -> Vec<Data> {
+    let templates = crate::cache::templates_root().ok().map(|path| Data {
+        label: "templates",
+        what: "template cache",
+        path,
+    });
+
+    let showcase = Data {
+        label: "showcase",
+        what: "showcase",
+        path: cache_root().join("showcase"),
+    };
+
+    templates.into_iter().chain([showcase]).collect()
+}
 
 pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Result<()> {
     tui::section("Kurogane Clean");
@@ -37,22 +82,7 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
             );
         }
 
-        let accepted = loop {
-            print!("\nContinue? [y/N]: ");
-            std::io::Write::flush(&mut std::io::stdout())?;
-
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input)?;
-
-            match input.trim() {
-                "y" | "Y" | "yes" | "Yes" | "YES" => break true,
-                "n" | "N" | "no" | "No" | "NO" | "" => break false,
-                _ => {
-                    tui::warn("Please enter y or n");
-                    continue;
-                }
-            }
-        };
+        let accepted = tui::confirm("Continue?")?;
 
         tui::blank();
 
@@ -66,9 +96,10 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
     if nuclear {
         tui::step("Deprovisioning Kurogane environment");
 
-        // Global CEF installs
-        let cef = kurogane_layout::install_root();
-        remove("cef", "CEF runtimes", &cef, &mut failed);
+        // Global CEF runtimes and the build caches keyed to them
+        for data in runtimes() {
+            remove(data.label, data.what, &data.path, &mut failed);
+        }
 
         // Kurogane's build output and materialized CEF runtimes
         match &project {
@@ -84,15 +115,7 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
             Err(e) => tui::field("target/kurogane", format!("skipped: {e}")),
         }
 
-        // Shared CEF wrapper builds, keyed to the runtimes removed above
-        let wrapper = cache_root().join("wrapper");
-        remove("wrapper", "CEF wrapper cache", &wrapper, &mut failed);
-
-        // Build tools cache
-        let tools = cache_root().join("tools");
-        remove("tools", "build tools", &tools, &mut failed);
-
-        // Every Kurogane application's browser profiles
+        // Every application profile
         remove(
             "profiles",
             "browser profiles",
@@ -133,18 +156,11 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
         return Ok(());
     }
 
-    let showcase = base.join("showcase");
-    let templates = crate::cache::templates_root().ok();
-
     tui::step("Clearing runtime cache");
 
-    // Templates
-    match templates {
-        Some(templates) => remove("templates", "template cache", &templates, &mut failed),
-        None => tui::field("templates", "clean"),
+    for data in caches() {
+        remove(data.label, data.what, &data.path, &mut failed);
     }
-
-    remove("showcase", "showcase", &showcase, &mut failed);
 
     tui::blank();
 
@@ -164,9 +180,9 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
     Ok(())
 }
 
-/// Removes the directory `path` and reports it under `label`, recording a
-/// failure in `failed`. An absent directory is already clean.
-fn remove(label: &'static str, what: &str, path: &Path, failed: &mut Vec<&'static str>) {
+/// Removes the directory `path` and reports the result under `label`.
+/// An absent directory is already clean.
+pub(crate) fn remove(label: &'static str, what: &str, path: &Path, failed: &mut Vec<&'static str>) {
     match fs::remove_dir_all(path) {
         Ok(()) => tui::field(label, "removed"),
         Err(e) if e.kind() == io::ErrorKind::NotFound => tui::field(label, "clean"),
