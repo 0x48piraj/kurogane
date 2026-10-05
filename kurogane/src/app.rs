@@ -1599,7 +1599,7 @@ mod tests {
         };
         let hook = app.on_second_instance.as_ref().expect("registered");
         assert!(ends(|h| hook(&launch, h)));
-        let request = NewWindowRequest::new("about:blank".into(), "app://app/", false);
+        let request = NewWindowRequest::new("about:blank", "app://app/");
         let hook = app.hooks.new_window.as_ref().expect("registered");
         assert!(ends(|h| {
             hook(&request, h);

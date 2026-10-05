@@ -19,25 +19,56 @@ use crate::runtime::AppHandle;
 
 /// A page's request for a new window, passed to
 /// [`App::on_new_window`](crate::App::on_new_window).
+///
+/// An application can make one to test its own hook:
+///
+/// ```
+/// use kurogane::{NewWindowKind, NewWindowRequest};
+///
+/// let request = NewWindowRequest::new("https://docs.rs/", "app://app/index.html")
+///     .with_user_gesture(true)
+///     .with_kind(NewWindowKind::Popup);
+/// assert_eq!(request.origin().to_string(), "https://docs.rs");
+/// assert_eq!(request.opener_origin().to_string(), "app://app");
+/// ```
 #[derive(Debug, Clone)]
 pub struct NewWindowRequest {
     url: String,
     origin: Origin,
     opener_origin: Origin,
     user_gesture: bool,
+    kind: NewWindowKind,
 }
 
 impl NewWindowRequest {
-    /// The request of a page at `opener_url` for a window showing `url`.
-    pub(crate) fn new(url: String, opener_url: &str, user_gesture: bool) -> Self {
+    /// The request of a page at `opener_url` for a window showing `url`: a
+    /// tab, asked for by a script, until [`with_kind`](Self::with_kind) and
+    /// [`with_user_gesture`](Self::with_user_gesture) say otherwise. The
+    /// origins are worked out as Kurogane works them out for a page's
+    /// request.
+    pub fn new(url: impl Into<String>, opener_url: &str) -> Self {
+        let url = url.into();
         let opener_origin = Origin::from_url(opener_url);
         let origin = document_origin(&url, &opener_origin);
         Self {
             url,
             origin,
             opener_origin,
-            user_gesture,
+            user_gesture: false,
+            kind: NewWindowKind::Tab,
         }
+    }
+
+    /// This request, asked for by the user (`true`) or by a script.
+    pub fn with_user_gesture(mut self, user_gesture: bool) -> Self {
+        self.user_gesture = user_gesture;
+        self
+    }
+
+    /// This request, for a window of `kind`.
+    pub fn with_kind(mut self, kind: NewWindowKind) -> Self {
+        self.kind = kind;
+        self
     }
 
     /// The URL the window would load, as Chromium resolved it. Empty or
@@ -63,6 +94,31 @@ impl NewWindowRequest {
     pub fn user_gesture(&self) -> bool {
         self.user_gesture
     }
+
+    /// What the page asked for: a tab, a popup, a window. Kurogane opens
+    /// each as an application window alike; the kind says how the page
+    /// asked.
+    pub fn kind(&self) -> NewWindowKind {
+        self.kind
+    }
+}
+
+/// How a page asked for a window of its own ([`NewWindowRequest::kind`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum NewWindowKind {
+    /// A tab in front: a `target=_blank` link, `window.open` without
+    /// features, a link clicked with Ctrl (Cmd on macOS).
+    Tab,
+    /// A tab behind the current one: a link clicked with the middle button,
+    /// or with Ctrl and Shift.
+    BackgroundTab,
+    /// A popup: `window.open` with features such as a size or position.
+    Popup,
+    /// A window: a link clicked with Shift.
+    Window,
+    /// A picture-in-picture window (`documentPictureInPicture`).
+    PictureInPicture,
 }
 
 /// The answer of [`App::on_new_window`](crate::App::on_new_window).
@@ -166,7 +222,8 @@ mod tests {
 
     /// The outcome of `decision` for a request from the application's page.
     fn outcome(decision: NewWindowDecision, url: &str, user_gesture: bool) -> Outcome {
-        let request = NewWindowRequest::new(url.to_owned(), "app://app/index.html", user_gesture);
+        let request =
+            NewWindowRequest::new(url, "app://app/index.html").with_user_gesture(user_gesture);
         resolve(decision, &request, &app())
     }
 
@@ -206,7 +263,8 @@ mod tests {
 
     #[test]
     fn a_blank_window_has_its_opener_s_origin() {
-        let foreign = NewWindowRequest::new("about:blank".into(), "https://evil.example/", true);
+        let foreign =
+            NewWindowRequest::new("about:blank", "https://evil.example/").with_user_gesture(true);
         assert_eq!(
             foreign.origin(),
             &Origin::parse("https://evil.example").unwrap()
@@ -272,7 +330,7 @@ mod tests {
     fn an_application_of_an_opaque_origin_owns_no_page() {
         // An opaque application origin (an App::url file: page) matches no
         // page, the opaque ones included
-        let request = NewWindowRequest::new("about:blank".into(), "file:///app/index.html", false);
+        let request = NewWindowRequest::new("about:blank", "file:///app/index.html");
         assert_eq!(
             resolve(NewWindowDecision::Default, &request, &Origin::OPAQUE),
             Outcome::Refuse

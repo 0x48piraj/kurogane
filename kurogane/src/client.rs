@@ -13,7 +13,7 @@ use crate::downloads::{self, Answer, DownloadRequest, SavePrompt};
 use crate::ipc::FrameId;
 use crate::keys::{self, KeyDecision, KeyPress};
 use crate::navigation::{self, NavigationRequest};
-use crate::new_window::{self, NewWindowRequest};
+use crate::new_window::{self, NewWindowKind, NewWindowRequest};
 use crate::permissions::{self, Answer as PermissionAnswer, Pending, PermissionRequest};
 use crate::window::{Opening, PopupGeometry, open_browser_window};
 use crate::window_closing;
@@ -47,7 +47,7 @@ wrap_life_span_handler! {
             popup_id: i32,
             target_url: Option<&CefString>,
             _target_frame_name: Option<&CefString>,
-            _target_disposition: WindowOpenDisposition,
+            target_disposition: WindowOpenDisposition,
             user_gesture: i32,
             popup_features: Option<&PopupFeatures>,
             _window_info: Option<&mut WindowInfo>,
@@ -61,7 +61,7 @@ wrap_life_span_handler! {
 
             // Before the geometry is saved: CEF reports no abort for a popup
             // cancelled here
-            let request = new_window_request(frame, target_url, user_gesture);
+            let request = new_window_request(frame, target_url, target_disposition, user_gesture);
             match new_window::decide(&self.app, &request) {
                 Outcome::Open => {}
                 Outcome::External => {
@@ -245,14 +245,35 @@ fn transition(request: &Request) -> u32 {
 fn new_window_request(
     frame: Option<&mut Frame>,
     target_url: Option<&CefString>,
+    disposition: WindowOpenDisposition,
     user_gesture: i32,
 ) -> NewWindowRequest {
     let opener_url = frame.map(|frame| CefString::from(&frame.url()).to_string());
     NewWindowRequest::new(
         target_url.map(CefString::to_string).unwrap_or_default(),
         opener_url.as_deref().unwrap_or_default(),
-        user_gesture != 0,
     )
+    .with_user_gesture(user_gesture != 0)
+    .with_kind(new_window_kind(disposition))
+}
+
+/// The kind of window a page asked for with `disposition`. Chromium's other
+/// ways to a tab (a singleton tab, switching to one) are tabs, and an
+/// off-the-record window a window.
+fn new_window_kind(disposition: WindowOpenDisposition) -> NewWindowKind {
+    if disposition == WindowOpenDisposition::NEW_POPUP {
+        NewWindowKind::Popup
+    } else if disposition == WindowOpenDisposition::NEW_WINDOW
+        || disposition == WindowOpenDisposition::OFF_THE_RECORD
+    {
+        NewWindowKind::Window
+    } else if disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB {
+        NewWindowKind::BackgroundTab
+    } else if disposition == WindowOpenDisposition::NEW_PICTURE_IN_PICTURE {
+        NewWindowKind::PictureInPicture
+    } else {
+        NewWindowKind::Tab
+    }
 }
 
 /// Whether a navigation of `disposition` asks for a window of its own: a
@@ -390,7 +411,7 @@ wrap_request_handler! {
             if !opens_new_window(target_disposition) {
                 return 0;
             }
-            let request = new_window_request(frame, target_url, user_gesture);
+            let request = new_window_request(frame, target_url, target_disposition, user_gesture);
             match new_window::decide(&self.app, &request) {
                 // A window of the application's own, as create_window's
                 // with no options
@@ -1164,6 +1185,31 @@ mod tests {
         let mut none: Option<Client> = None;
         own_client(Some(&mut none), &app, BrowserType::Main);
         assert!(none.is_none());
+    }
+
+    #[test]
+    fn each_disposition_names_the_kind_of_window_asked_for() {
+        for (disposition, kind) in [
+            (
+                WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                NewWindowKind::Tab,
+            ),
+            (WindowOpenDisposition::SINGLETON_TAB, NewWindowKind::Tab),
+            (WindowOpenDisposition::SWITCH_TO_TAB, NewWindowKind::Tab),
+            (
+                WindowOpenDisposition::NEW_BACKGROUND_TAB,
+                NewWindowKind::BackgroundTab,
+            ),
+            (WindowOpenDisposition::NEW_POPUP, NewWindowKind::Popup),
+            (WindowOpenDisposition::NEW_WINDOW, NewWindowKind::Window),
+            (WindowOpenDisposition::OFF_THE_RECORD, NewWindowKind::Window),
+            (
+                WindowOpenDisposition::NEW_PICTURE_IN_PICTURE,
+                NewWindowKind::PictureInPicture,
+            ),
+        ] {
+            assert_eq!(new_window_kind(disposition), kind, "{disposition:?}");
+        }
     }
 
     #[test]

@@ -70,7 +70,7 @@ pub mod __private {
 // What handlers take and return
 pub use crate::ipc::{BinaryResponder, ErrorCode, IpcError, Responder, StreamHandler, StreamResponder};
 pub use app::{PumpRequest, ClientAppBrowserDelegate, ClientAppRendererDelegate, SecondInstance};
-pub use new_window::{NewWindowDecision, NewWindowRequest};
+pub use new_window::{NewWindowDecision, NewWindowKind, NewWindowRequest};
 pub use navigation::{NavigationDecision, NavigationRequest};
 pub use keys::{Key, KeyDecision, KeyPress, Modifiers};
 pub use chrome_commands::{ChromeCommand, ChromeCommandRequest, CommandDecision};
