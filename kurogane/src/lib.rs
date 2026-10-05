@@ -23,6 +23,9 @@ mod navigation;
 mod keys;
 mod downloads;
 mod permissions;
+mod file_dialog;
+mod drag;
+mod page_events;
 mod external;
 mod chrome_commands;
 mod context_menu;
@@ -76,6 +79,9 @@ pub use keys::{Key, KeyDecision, KeyPress, Modifiers};
 pub use chrome_commands::{ChromeCommand, ChromeCommandRequest, CommandDecision};
 pub use downloads::{DownloadDecision, DownloadRequest};
 pub use permissions::{Permission, PermissionDecision, PermissionRequest, PermissionResponder};
+pub use file_dialog::{FileDialogDecision, FileDialogKind, FileDialogRequest, FileDialogResponder};
+pub use drag::{DragDecision, DragEnter};
+pub use page_events::{FullscreenChange, TitleChange};
 pub use context_menu::{
     AppItem, ContextMenu, ContextMenuCommand, ContextMenuTarget, MediaKind, MenuItem, StandardItem,
     Submenu,

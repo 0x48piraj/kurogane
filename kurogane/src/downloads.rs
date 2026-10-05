@@ -209,6 +209,12 @@ impl<P, K> Default for Downloads<P, K> {
 }
 
 impl<P, K> Downloads<P, K> {
+    /// Whether a download's Save As dialog is open: Kurogane's own, which
+    /// the application's file dialog hook is never asked about.
+    pub(crate) fn is_asking(&self) -> bool {
+        self.open.is_some()
+    }
+
     /// The download `id` is to ask the user: returns `prompt` when its
     /// dialog may show now, or keeps it until the dialog before it is
     /// answered.

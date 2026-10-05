@@ -27,11 +27,14 @@ use crate::acl::Origin;
 use crate::chrome_commands::{ChromeCommandRequest, CommandDecision};
 use crate::context_menu::{ContextMenu, ContextMenuCommand};
 use crate::downloads::{DownloadDecision, DownloadRequest};
+use crate::drag::{DragDecision, DragEnter};
+use crate::file_dialog::{FileDialogDecision, FileDialogRequest};
 use crate::permissions::{PermissionDecision, PermissionRequest};
 use crate::hooks::Hooks;
 use crate::keys::{KeyDecision, KeyPress};
 use crate::navigation::{NavigationDecision, NavigationRequest};
 use crate::new_window::{NewWindowDecision, NewWindowRequest};
+use crate::page_events::{FullscreenChange, TitleChange};
 use crate::window::WindowIdentity;
 use crate::window_closing::WindowClosing;
 use crate::window_options::WindowOptions;
@@ -1259,6 +1262,137 @@ impl App {
         self
     }
 
+    /// Answers the file choosers pages open: `<input type=file>` and the
+    /// File System Access pickers (`showOpenFilePicker`,
+    /// `showSaveFilePicker`, `showDirectoryPicker`).
+    ///
+    /// Without a hook, or when it answers
+    /// [`FileDialogDecision::Default`](crate::FileDialogDecision::Default),
+    /// Chromium shows the system's file chooser. The hook can give the page
+    /// files of its choosing instead
+    /// ([`FileDialogDecision::Files`](crate::FileDialogDecision::Files)),
+    /// which the page then reads, or cancel the dialog. To show a picker of
+    /// the application's own, the hook takes a
+    /// [`FileDialogResponder`](crate::FileDialogResponder) with
+    /// [`FileDialogRequest::responder`](crate::FileDialogRequest::responder)
+    /// and answers [`FileDialogDecision::Later`](crate::FileDialogDecision::Later);
+    /// the page waits until the responder selects or cancels, from any
+    /// thread. A responder dropped unanswered cancels.
+    ///
+    /// Kurogane's own Save As dialog for a download is not asked about
+    /// ([`App::on_download`] decides where a download goes), nor are the
+    /// dialogs of DevTools. Runs on the UI thread, so it must not block. A
+    /// hook that panics cancels the dialog. A later call replaces an
+    /// earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, FileDialogDecision, FileDialogKind};
+    /// let inbox = std::env::temp_dir().join("inbox.txt");
+    /// App::new("./dist")
+    ///     .on_file_dialog(move |request, _| match request.kind() {
+    ///         // The page imports the inbox, whatever the user would pick
+    ///         FileDialogKind::Open => FileDialogDecision::Files(vec![inbox.clone()]),
+    ///         _ => FileDialogDecision::Default,
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_file_dialog<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&FileDialogRequest, &AppHandle) -> FileDialogDecision + Send + Sync + 'static,
+    {
+        self.hooks.file_dialog = Some(Box::new(f));
+        self
+    }
+
+    /// Decides the drags that enter a browser embedded in the application's
+    /// own window from another application: files from a file manager, a
+    /// link, selected text.
+    ///
+    /// CEF asks only such a browser (Alloy style): a drag into one of
+    /// Kurogane's own windows ([`App::window`],
+    /// [`AppInstance::create_window`], popups) is not asked about, and its
+    /// page gets the drop as a browser's would. Asked as the drag enters,
+    /// before the page sees it. The hook sees the
+    /// paths of the files dragged ([`DragEnter::files`](crate::DragEnter::files)),
+    /// which the page never does: a page gets a dropped file's name and
+    /// contents only. [`DragDecision::Refuse`](crate::DragDecision::Refuse)
+    /// keeps the drag from the page altogether, and the pointer shows it
+    /// cannot drop there; without a hook, or with
+    /// [`DragDecision::Default`](crate::DragDecision::Default), the drag
+    /// goes on to the page.
+    ///
+    /// Drags of DevTools and of a page's own content within the window are
+    /// not asked about. Runs on the UI thread, so it must not block. A hook
+    /// that panics refuses the drag. A later call replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, DragDecision};
+    /// App::new("./dist")
+    ///     .on_drag_enter(|drag, _| {
+    ///         let images = !drag.files().is_empty()
+    ///             && drag.files().iter().all(|file| {
+    ///                 file.extension().is_some_and(|ext| ext == "png" || ext == "jpg")
+    ///             });
+    ///         if images { DragDecision::Allow } else { DragDecision::Refuse }
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_drag_enter<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&DragEnter, &AppHandle) -> DragDecision + Send + Sync + 'static,
+    {
+        self.hooks.drag_enter = Some(Box::new(f));
+        self
+    }
+
+    /// Hears a page's title change: its `<title>` as it loads, or
+    /// `document.title` set by a script.
+    ///
+    /// Kurogane titles a window after its page itself, unless the window's
+    /// options fixed a title ([`WindowOptions::title`]); the hook hears of
+    /// every change either way, a popup's and an embedded browser's
+    /// included, DevTools' not. Runs on the UI thread, so it must not
+    /// block. A hook that panics is logged. A later call replaces an
+    /// earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::App;
+    /// App::new("./dist")
+    ///     .on_title_change(|change, _| println!("now {:?}", change.title()))
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_title_change<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&TitleChange, &AppHandle) + Send + Sync + 'static,
+    {
+        self.hooks.title_change = Some(Box::new(f));
+        self
+    }
+
+    /// Hears a page enter or leave fullscreen: `requestFullscreen()`, then
+    /// `exitFullscreen()` or the user's Escape.
+    ///
+    /// A window enters and leaves fullscreen with its page by itself; the
+    /// hook hears of it, to hide the application's own controls for
+    /// example. Not for DevTools. A browser embedded in the application's
+    /// own window is not resized by Kurogane: the application sizes it.
+    /// Runs on the UI thread, so it must not block. A hook that panics is
+    /// logged. A later call replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::App;
+    /// App::new("./dist")
+    ///     .on_fullscreen_change(|change, _| println!("fullscreen: {}", change.is_fullscreen()))
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_fullscreen_change<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&FullscreenChange, &AppHandle) + Send + Sync + 'static,
+    {
+        self.hooks.fullscreen_change = Some(Box::new(f));
+        self
+    }
+
     /// Sets the Chromium process sandbox policy.
     ///
     /// Defaults to [`SandboxMode::Disabled`].
@@ -1740,6 +1874,28 @@ mod tests {
     }
 
     #[test]
+    fn a_profile_dir_is_absolute_and_the_only_name_for_the_profile() {
+        let problems = |app: App| match app.build() {
+            Err(RuntimeError::InvalidConfiguration(problems)) => problems,
+            Err(other) => panic!("expected a configuration error, got: {other}"),
+            Ok(_) => panic!("a misconfigured app must not start"),
+        };
+        assert!(matches!(
+            problems(App::new("./dist").profile_dir("profile"))[..],
+            [ConfigError::InvalidProfileDir(_)]
+        ));
+        let absolute = std::env::temp_dir().join("kurogane-profile");
+        assert!(matches!(
+            problems(
+                App::new("./dist")
+                    .profile_dir(&absolute)
+                    .profile_id("notes")
+            )[..],
+            [ConfigError::InvalidProfileDir(_)]
+        ));
+    }
+
+    #[test]
     fn window_settings_no_window_can_have_are_refused_before_anything_starts() {
         let problems = |app: App, embedded: bool| {
             let result = if embedded {
@@ -1868,28 +2024,6 @@ mod tests {
                 .keys()
                 .any(|name| name.starts_with("fs."))
         );
-    }
-
-    #[test]
-    fn a_profile_dir_is_absolute_and_the_only_name_for_the_profile() {
-        let problems = |app: App| match app.build() {
-            Err(RuntimeError::InvalidConfiguration(problems)) => problems,
-            Err(other) => panic!("expected a configuration error, got: {other}"),
-            Ok(_) => panic!("a misconfigured app must not start"),
-        };
-        assert!(matches!(
-            problems(App::new("./dist").profile_dir("profile"))[..],
-            [ConfigError::InvalidProfileDir(_)]
-        ));
-        let absolute = std::env::temp_dir().join("kurogane-profile");
-        assert!(matches!(
-            problems(
-                App::new("./dist")
-                    .profile_dir(&absolute)
-                    .profile_id("notes")
-            )[..],
-            [ConfigError::InvalidProfileDir(_)]
-        ));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! The browsers and windows the runtime tracks.
 
-use cef::Browser;
+use cef::{Browser, FileDialogCallback};
 
 use crate::browser_registry::{BrowserId, BrowserRegistry, BrowserType};
 use crate::permissions::Pending;
@@ -29,6 +29,9 @@ pub(crate) struct Closed {
     /// deny: CEF answers a page's request for a device as its callback
     /// goes, which must not happen under the lock
     pub(crate) waiting_permissions: Vec<Pending>,
+    /// The browser's file dialogs still waiting for an answer, to cancel
+    /// outside the lock
+    pub(crate) waiting_file_dialogs: Vec<FileDialogCallback>,
     /// The application window the browser showed, whose close the
     /// application hears of (crate::window_closing)
     pub(crate) closing: Option<Closing>,
@@ -58,6 +61,11 @@ impl Registry {
             .get_mut(id)
             .map(|state| state.permissions.take_all())
             .unwrap_or_default();
+        let waiting_file_dialogs = self
+            .browsers
+            .get_mut(id)
+            .map(|state| state.file_dialogs.take_all())
+            .unwrap_or_default();
 
         self.browsers.unregister(id);
         self.windows.unlink_browser(id);
@@ -76,6 +84,7 @@ impl Registry {
             stragglers,
             last: self.browsers.is_empty(),
             waiting_permissions,
+            waiting_file_dialogs,
             closing,
         })
     }

@@ -10,9 +10,12 @@
 use crate::chrome_commands::{ChromeCommandRequest, CommandDecision};
 use crate::context_menu::{ContextMenu, ContextMenuCommand};
 use crate::downloads::{DownloadDecision, DownloadRequest};
+use crate::drag::{DragDecision, DragEnter};
+use crate::file_dialog::{FileDialogDecision, FileDialogRequest};
 use crate::keys::{KeyDecision, KeyPress};
 use crate::navigation::{NavigationDecision, NavigationRequest};
 use crate::new_window::{NewWindowDecision, NewWindowRequest};
+use crate::page_events::{FullscreenChange, TitleChange};
 use crate::permissions::{PermissionDecision, PermissionRequest};
 use crate::runtime::AppHandle;
 use crate::window_closing::WindowClosing;
@@ -50,6 +53,20 @@ pub(crate) type ContextMenuCommandHook = Box<dyn Fn(&ContextMenuCommand, &AppHan
 /// What [`App::on_window_closing`](crate::App::on_window_closing) stores.
 pub(crate) type WindowClosingHook = Box<dyn Fn(&WindowClosing, &AppHandle) + Send + Sync>;
 
+/// What [`App::on_file_dialog`](crate::App::on_file_dialog) stores.
+pub(crate) type FileDialogHook =
+    Box<dyn Fn(&FileDialogRequest, &AppHandle) -> FileDialogDecision + Send + Sync>;
+
+/// What [`App::on_drag_enter`](crate::App::on_drag_enter) stores.
+pub(crate) type DragEnterHook = Box<dyn Fn(&DragEnter, &AppHandle) -> DragDecision + Send + Sync>;
+
+/// What [`App::on_title_change`](crate::App::on_title_change) stores.
+pub(crate) type TitleChangeHook = Box<dyn Fn(&TitleChange, &AppHandle) + Send + Sync>;
+
+/// What [`App::on_fullscreen_change`](crate::App::on_fullscreen_change)
+/// stores.
+pub(crate) type FullscreenChangeHook = Box<dyn Fn(&FullscreenChange, &AppHandle) + Send + Sync>;
+
 /// The hooks the application registered.
 #[derive(Default)]
 pub(crate) struct Hooks {
@@ -62,4 +79,8 @@ pub(crate) struct Hooks {
     pub context_menu: Option<ContextMenuHook>,
     pub context_menu_command: Option<ContextMenuCommandHook>,
     pub window_closing: Option<WindowClosingHook>,
+    pub file_dialog: Option<FileDialogHook>,
+    pub drag_enter: Option<DragEnterHook>,
+    pub title_change: Option<TitleChangeHook>,
+    pub fullscreen_change: Option<FullscreenChangeHook>,
 }

@@ -13,7 +13,10 @@ use crate::downloads::{self, Answer, DownloadRequest, SavePrompt};
 use crate::ipc::FrameId;
 use crate::keys::{self, KeyDecision, KeyPress};
 use crate::navigation::{self, NavigationRequest};
+use crate::drag::{self, DragEnter};
+use crate::file_dialog::{self, FileDialogKind, FileDialogRequest};
 use crate::new_window::{self, NewWindowKind, NewWindowRequest};
+use crate::page_events::{self, FullscreenChange, TitleChange};
 use crate::permissions::{self, Answer as PermissionAnswer, Pending, PermissionRequest};
 use crate::window::{Opening, PopupGeometry, open_browser_window};
 use crate::window_closing;
@@ -190,6 +193,9 @@ wrap_life_span_handler! {
 
             for waiting in closed.waiting_permissions {
                 waiting.answer(false);
+            }
+            for waiting in closed.waiting_file_dialogs {
+                waiting.cancel();
             }
 
             #[cfg(target_os = "macos")]
@@ -1019,21 +1025,187 @@ wrap_display_handler! {
             let (Some(browser), Some(title)) = (browser, title) else {
                 return;
             };
-            // The guard ends with the statement, before the window is titled
-            let window = {
+            // The guard ends with the block, before the window is titled
+            // and the application told. Every window follows its page,
+            // DevTools' too; the application hears of its own browsers
+            let (window, change) = {
                 let reg = self.app.registry();
-                reg.browsers
+                let window = reg
+                    .browsers
                     .find_id_by_browser(browser)
                     .and_then(|id| reg.windows.window_id_for_browser(id))
                     .and_then(|id| reg.windows.get(id))
                     .filter(|state| state.follows_title)
-                    .map(|state| state.window.clone())
+                    .map(|state| state.window.clone());
+                let change = application_browser(&reg, browser)
+                    .map(|(id, window)| TitleChange::new(title.to_string(), Some(id), window));
+                (window, change)
             };
             if let Some(window) = window {
                 window.set_title(Some(title));
             }
+            if let Some(change) = change {
+                page_events::report_title(&self.app, &change);
+            }
+        }
+
+        // CEF's window enters and leaves fullscreen with the page (Chrome
+        // style); the application hears of it
+        fn on_fullscreen_mode_change(
+            &self,
+            browser: Option<&mut Browser>,
+            fullscreen: ::std::os::raw::c_int,
+        ) {
+            let Some(browser) = browser else {
+                return;
+            };
+            // The guard ends with the statement
+            let place = application_browser(&self.app.registry(), browser);
+            if let Some((id, window)) = place {
+                let change = FullscreenChange::new(fullscreen != 0, Some(id), window);
+                page_events::report_fullscreen(&self.app, &change);
+            }
         }
     }
+}
+
+//
+// FILE DIALOGS
+//
+// A page's file chooser asks the application's hook (crate::file_dialog).
+// Kurogane's own Save As for a download, DevTools' and Chromium's own
+// browsers' dialogs keep CEF's default.
+wrap_dialog_handler! {
+    pub struct KuroganeDialogHandler {
+        app: AppHandle,
+    }
+
+    impl DialogHandler {
+        fn on_file_dialog(
+            &self,
+            browser: Option<&mut Browser>,
+            mode: FileDialogMode,
+            title: Option<&CefString>,
+            default_file_path: Option<&CefString>,
+            accept_filters: Option<&mut CefStringList>,
+            _accept_extensions: Option<&mut CefStringList>,
+            _accept_descriptions: Option<&mut CefStringList>,
+            callback: Option<&mut FileDialogCallback>,
+        ) -> ::std::os::raw::c_int {
+            let (Some(browser), Some(callback)) = (browser, callback) else {
+                return 0;
+            };
+            let Some(kind) = FileDialogKind::from_cef(mode) else {
+                return 0;
+            };
+            // The guard ends with the block, before the hook runs
+            let id = {
+                let reg = self.app.registry();
+                let Some((id, _)) = application_browser(&reg, browser) else {
+                    return 0;
+                };
+                // One Save As at a time is open per browser: while a
+                // download's is, a Save dialog is that one
+                let saving = reg
+                    .browsers
+                    .get(id)
+                    .is_some_and(|state| state.downloads.is_asking());
+                if kind == FileDialogKind::Save && saving {
+                    return 0;
+                }
+                id
+            };
+            // The frame with the focus is the one whose control the user
+            // activated
+            let frame = browser.focused_frame().or_else(|| browser.main_frame());
+            let origin_url = frame
+                .map(|frame| CefString::from(&frame.url()).to_string())
+                .unwrap_or_default();
+            let request = FileDialogRequest::new(
+                &self.app,
+                kind,
+                title.map(CefString::to_string).unwrap_or_default(),
+                default_file_path.map(CefString::to_string).unwrap_or_default(),
+                file_dialog::lent_strings(accept_filters),
+                &origin_url,
+                Some(id),
+            );
+            match file_dialog::decide(&self.app, &request) {
+                file_dialog::Answer::Default => 0,
+                file_dialog::Answer::Files(files) => {
+                    file_dialog::complete(callback, &files);
+                    1
+                }
+                file_dialog::Answer::Later => {
+                    if let Err(callback) = file_dialog::hold(&self.app, &request, callback.clone()) {
+                        callback.cancel();
+                    }
+                    1
+                }
+            }
+        }
+    }
+}
+
+//
+// DRAGS
+//
+// A drag from another application asks the application's hook as it enters
+// (crate::drag). DevTools' and Chromium's own browsers' drags go on.
+wrap_drag_handler! {
+    pub struct KuroganeDragHandler {
+        app: AppHandle,
+    }
+
+    impl DragHandler {
+        fn on_drag_enter(
+            &self,
+            browser: Option<&mut Browser>,
+            drag_data: Option<&mut DragData>,
+            _mask: DragOperationsMask,
+        ) -> ::std::os::raw::c_int {
+            let (Some(browser), Some(data)) = (browser, drag_data) else {
+                return 0;
+            };
+            // The guard ends with the statement, before the hook runs
+            let Some((id, _)) = application_browser(&self.app.registry(), browser) else {
+                return 0;
+            };
+            let mut paths = CefStringList::new();
+            let files = if data.is_file() != 0 && data.file_paths(Some(&mut paths)) != 0 {
+                paths.into_iter().filter_map(drag::non_empty).collect()
+            } else {
+                Vec::new()
+            };
+            let present = |value: String| (!value.is_empty()).then_some(value);
+            let link = (data.is_link() != 0)
+                .then(|| CefString::from(&data.link_url()).to_string())
+                .and_then(present);
+            let text = (data.is_fragment() != 0)
+                .then(|| CefString::from(&data.fragment_text()).to_string())
+                .and_then(present);
+            let page = browser
+                .main_frame()
+                .map(|frame| CefString::from(&frame.url()).to_string())
+                .unwrap_or_default();
+            let drag = DragEnter::new(files, link, text, &page, Some(id));
+            drag::refused(&self.app, &drag).into()
+        }
+    }
+}
+
+/// `browser` and its window, if it is a browser of the application's:
+/// registered, and neither DevTools nor one of Chromium's own.
+fn application_browser(
+    reg: &crate::registry::Registry,
+    browser: &Browser,
+) -> Option<(BrowserId, Option<crate::window_registry::WindowId>)> {
+    let id = reg.browsers.find_id_by_browser(browser)?;
+    let kind = reg.browsers.get(id)?.metadata.browser_type;
+    if matches!(kind, BrowserType::DevTools | BrowserType::ChromeUi) {
+        return None;
+    }
+    Some((id, reg.windows.window_id_for_browser(id)))
 }
 
 //
@@ -1071,6 +1243,18 @@ wrap_client! {
 
         fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
             Some(KuroganeContextMenuHandler::new(self.app.clone()))
+        }
+
+        // Only for an application that answers file dialogs
+        fn dialog_handler(&self) -> Option<DialogHandler> {
+            let wanted = self.app.hooks().is_some_and(|hooks| hooks.file_dialog.is_some());
+            wanted.then(|| KuroganeDialogHandler::new(self.app.clone()))
+        }
+
+        // Only for an application that decides drags
+        fn drag_handler(&self) -> Option<DragHandler> {
+            let wanted = self.app.hooks().is_some_and(|hooks| hooks.drag_enter.is_some());
+            wanted.then(|| KuroganeDragHandler::new(self.app.clone()))
         }
 
         // Only for an application that asks to see keys
@@ -1141,6 +1325,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn each_disposition_names_the_kind_of_window_asked_for() {
+        for (disposition, kind) in [
+            (
+                WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                NewWindowKind::Tab,
+            ),
+            (WindowOpenDisposition::SINGLETON_TAB, NewWindowKind::Tab),
+            (WindowOpenDisposition::SWITCH_TO_TAB, NewWindowKind::Tab),
+            (
+                WindowOpenDisposition::NEW_BACKGROUND_TAB,
+                NewWindowKind::BackgroundTab,
+            ),
+            (WindowOpenDisposition::NEW_POPUP, NewWindowKind::Popup),
+            (WindowOpenDisposition::NEW_WINDOW, NewWindowKind::Window),
+            (WindowOpenDisposition::OFF_THE_RECORD, NewWindowKind::Window),
+            (
+                WindowOpenDisposition::NEW_PICTURE_IN_PICTURE,
+                NewWindowKind::PictureInPicture,
+            ),
+        ] {
+            assert_eq!(new_window_kind(disposition), kind, "{disposition:?}");
+        }
+    }
+
+    #[test]
     fn new_tabs_and_windows_are_new_windows_and_nothing_else_is() {
         for disposition in [
             WindowOpenDisposition::NEW_FOREGROUND_TAB,
@@ -1185,31 +1394,6 @@ mod tests {
         let mut none: Option<Client> = None;
         own_client(Some(&mut none), &app, BrowserType::Main);
         assert!(none.is_none());
-    }
-
-    #[test]
-    fn each_disposition_names_the_kind_of_window_asked_for() {
-        for (disposition, kind) in [
-            (
-                WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                NewWindowKind::Tab,
-            ),
-            (WindowOpenDisposition::SINGLETON_TAB, NewWindowKind::Tab),
-            (WindowOpenDisposition::SWITCH_TO_TAB, NewWindowKind::Tab),
-            (
-                WindowOpenDisposition::NEW_BACKGROUND_TAB,
-                NewWindowKind::BackgroundTab,
-            ),
-            (WindowOpenDisposition::NEW_POPUP, NewWindowKind::Popup),
-            (WindowOpenDisposition::NEW_WINDOW, NewWindowKind::Window),
-            (WindowOpenDisposition::OFF_THE_RECORD, NewWindowKind::Window),
-            (
-                WindowOpenDisposition::NEW_PICTURE_IN_PICTURE,
-                NewWindowKind::PictureInPicture,
-            ),
-        ] {
-            assert_eq!(new_window_kind(disposition), kind, "{disposition:?}");
-        }
     }
 
     #[test]

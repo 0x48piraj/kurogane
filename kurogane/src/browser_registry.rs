@@ -5,6 +5,7 @@ use crate::acl::Origin;
 use crate::downloads::{Downloads, SavePrompt};
 use crate::context_menu::OpenMenu;
 use crate::ipc::FrameId;
+use crate::file_dialog::PendingFileDialogs;
 use crate::permissions::PendingPermissions;
 use crate::window::PendingPopups;
 
@@ -66,6 +67,9 @@ pub(crate) struct BrowserEntry {
     /// This browser's permission requests waiting for the application's
     /// answer (see [`crate::permissions`]); its close denies them
     pub permissions: PendingPermissions,
+    /// This browser's file dialogs waiting for the application's answer
+    /// (see [`crate::file_dialog`]); its close cancels them
+    pub file_dialogs: PendingFileDialogs,
     /// The last context menu this browser showed: what its items run
     /// (see [`crate::context_menu`])
     pub context_menu: Option<OpenMenu>,
@@ -186,6 +190,7 @@ impl BrowserRegistry {
             popup_origins: Vec::new(),
             downloads: Downloads::default(),
             permissions: PendingPermissions::default(),
+            file_dialogs: PendingFileDialogs::default(),
             context_menu: None,
             opaque_documents: Vec::new(),
         };
