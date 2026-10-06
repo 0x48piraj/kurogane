@@ -1,6 +1,6 @@
 //! The browsers and windows the runtime tracks.
 
-use cef::{Browser, FileDialogCallback};
+use tetsu::{Browser, FileDialogCallback};
 
 use crate::browser_registry::{BrowserId, BrowserRegistry, BrowserType};
 use crate::permissions::Pending;

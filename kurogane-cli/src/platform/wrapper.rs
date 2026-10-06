@@ -68,7 +68,7 @@ fn build(cef: &Path, dest: &Path) -> Result<()> {
     std::fs::create_dir_all(&scratch)
         .with_context(|| format!("failed to create {}", scratch.display()))?;
 
-    // Build one archive for both `cef-dll-sys` sandbox configurations, at
+    // Build one archive for both `tetsu-sys` sandbox configurations, at
     // the API version the bindings declare at run time; CEF's default, its
     // experimental API, loads against this exact libcef only
     run(Command::new("cmake")

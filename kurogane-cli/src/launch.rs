@@ -80,7 +80,7 @@ pub(crate) fn ensure_cef_runtime() -> Result<PathBuf> {
 
 /// Returns Kurogane's directory under Cargo's target directory.
 ///
-/// Kurogane configures `cef-dll-sys` differently from plain cargo,
+/// Kurogane configures `tetsu-sys` differently from plain cargo,
 /// see [`crate::platform::cef_build_script_override`].
 pub(crate) fn target_dir_in(base: &Path) -> PathBuf {
     base.join("kurogane")
@@ -100,7 +100,7 @@ pub(crate) fn cargo_command(cef: &Path, subcommand: &str) -> Result<Command> {
     let mut cmd = Command::new("cargo");
     cmd.arg(subcommand);
 
-    // Skip cef-dll-sys's redundant runtime staging
+    // Skip tetsu-sys's redundant runtime staging
     cmd.args(crate::platform::cef_build_script_override(cef)?);
 
     cmd.env("CEF_PATH", cef);

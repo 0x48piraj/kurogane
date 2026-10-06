@@ -18,7 +18,7 @@
 //!
 //! Everything here runs on CEF's UI thread.
 
-use cef::sys::cef_window_handle_t;
+use tetsu::sys::cef_window_handle_t;
 
 use crate::browser_registry::BrowserId;
 use crate::chromium_flags::ChromiumFlags;
@@ -64,7 +64,7 @@ pub(crate) fn set_child_window_bounds(
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod close {
-    use cef::*;
+    use tetsu::*;
 
     use super::cef_window_handle_t;
     use tracing::debug;
@@ -187,7 +187,7 @@ mod imp {
         bounds: BrowserBounds,
     ) {
         // Null off CEF's UI thread
-        let display = cef::get_xdisplay().cast::<Display>();
+        let display = tetsu::get_xdisplay().cast::<Display>();
         if handle == 0 || display.is_null() {
             return;
         }

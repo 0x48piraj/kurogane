@@ -6,7 +6,7 @@
 //! added to, never replaced: CEF's own entries, the launch's and every
 //! setting's stay.
 
-use cef::*;
+use tetsu::*;
 use std::collections::BTreeMap;
 
 /// User supplied Chromium standalone switches and switches with values.

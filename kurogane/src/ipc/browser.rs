@@ -2,7 +2,7 @@
 //!
 //! Boundary between CEF's message system and the IPC infrastructure.
 
-use cef::*;
+use tetsu::*;
 
 use crate::browser_registry::BrowserId;
 use tracing::debug;

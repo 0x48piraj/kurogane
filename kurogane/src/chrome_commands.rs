@@ -20,7 +20,7 @@ use std::ffi::{CStr, c_char, c_int};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::OnceLock;
 
-use cef::*;
+use tetsu::*;
 
 use tracing::{debug, error};
 

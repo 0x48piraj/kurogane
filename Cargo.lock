@@ -438,29 +438,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cef"
-version = "154.4.0+154.0.33"
-source = "git+https://github.com/tauri-apps/cef-rs?rev=f044f89e561237033435743e5dbcbf486d0d10a9#f044f89e561237033435743e5dbcbf486d0d10a9"
-dependencies = [
- "cef-dll-sys",
- "libloading 0.9.0",
- "objc2 0.6.4",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "cef-dll-sys"
-version = "154.4.0+154.0.33"
-source = "git+https://github.com/tauri-apps/cef-rs?rev=f044f89e561237033435743e5dbcbf486d0d10a9#f044f89e561237033435743e5dbcbf486d0d10a9"
-dependencies = [
- "anyhow",
- "cc",
- "cmake",
- "download-cef 3.0.0",
- "serde_json",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -534,7 +511,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -854,7 +831,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -915,25 +892,6 @@ name = "download-cef"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c169adf067a787e1f1c58ed62906a557de85388bee4b54fb878b722ff606b113"
-dependencies = [
- "bzip2",
- "clap",
- "fs-err",
- "indicatif",
- "regex",
- "semver",
- "serde",
- "serde_json",
- "sha1_smol",
- "tar",
- "thiserror 2.0.18",
- "ureq",
-]
-
-[[package]]
-name = "download-cef"
-version = "3.0.0"
-source = "git+https://github.com/tauri-apps/cef-rs?rev=f044f89e561237033435743e5dbcbf486d0d10a9#f044f89e561237033435743e5dbcbf486d0d10a9"
 dependencies = [
  "bzip2",
  "clap",
@@ -1014,7 +972,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1873,7 +1831,6 @@ dependencies = [
 name = "kurogane"
 version = "0.0.6-alpha.1"
 dependencies = [
- "cef",
  "ctrlc",
  "kurogane-layout",
  "libc",
@@ -1888,6 +1845,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tetsu",
  "tracing",
  "unicode-normalization",
  "url",
@@ -1905,7 +1863,7 @@ dependencies = [
  "clap",
  "colored",
  "dirs",
- "download-cef 2.3.2",
+ "download-cef",
  "git2",
  "kurogane-layout",
  "self-replace",
@@ -3093,7 +3051,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3518,7 +3476,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3538,7 +3496,49 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tetsu"
+version = "154.4.0+154.0.33"
+source = "git+https://github.com/kurogane-rs/tetsu?rev=e784395c6f1ba099ad7610c7cd31edccf13c96aa#e784395c6f1ba099ad7610c7cd31edccf13c96aa"
+dependencies = [
+ "libloading 0.9.0",
+ "objc2 0.6.4",
+ "tetsu-sys",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tetsu-download"
+version = "3.0.0"
+source = "git+https://github.com/kurogane-rs/tetsu?rev=e784395c6f1ba099ad7610c7cd31edccf13c96aa#e784395c6f1ba099ad7610c7cd31edccf13c96aa"
+dependencies = [
+ "bzip2",
+ "clap",
+ "fs-err",
+ "indicatif",
+ "regex",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "tar",
+ "thiserror 2.0.18",
+ "ureq",
+]
+
+[[package]]
+name = "tetsu-sys"
+version = "154.4.0+154.0.33"
+source = "git+https://github.com/kurogane-rs/tetsu?rev=e784395c6f1ba099ad7610c7cd31edccf13c96aa#e784395c6f1ba099ad7610c7cd31edccf13c96aa"
+dependencies = [
+ "anyhow",
+ "cc",
+ "cmake",
+ "serde_json",
+ "tetsu-download",
 ]
 
 [[package]]
@@ -4285,7 +4285,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

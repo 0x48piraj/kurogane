@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use cef::*;
+use tetsu::*;
 use tracing::{debug, warn};
 use crate::runtime::AppHandle;
 use crate::browser_registry::{BrowserId, BrowserType};
@@ -1381,12 +1381,12 @@ mod tests {
         own_client(Some(&mut passed), &app, BrowserType::Main);
         let own = passed.expect("a client is replaced, not cleared");
         assert_ne!(
-            cef::ImplClient::get_raw(&own),
-            cef::ImplClient::get_raw(&opener),
+            tetsu::ImplClient::get_raw(&own),
+            tetsu::ImplClient::get_raw(&opener),
             "the new browser gets a client of its own"
         );
         assert!(
-            cef::rc::Rc::has_one_ref(&opener),
+            tetsu::rc::Rc::has_one_ref(&opener),
             "the reference that came with the opener's client is released"
         );
 

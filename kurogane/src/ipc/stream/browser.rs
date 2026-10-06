@@ -14,7 +14,7 @@
 //! Stream responders share stream state, so responses stop once the stream
 //! has ended or failed.
 
-use cef::*;
+use tetsu::*;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;

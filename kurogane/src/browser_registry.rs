@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use cef::{Browser, DownloadItemCallback, ImplBrowser, RequestContext};
+use tetsu::{Browser, DownloadItemCallback, ImplBrowser, RequestContext};
 use tracing::debug;
 use crate::acl::Origin;
 use crate::downloads::{Downloads, SavePrompt};

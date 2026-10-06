@@ -3,7 +3,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use cef::{ImplView, ImplWindow, Rect, Window};
+use tetsu::{ImplView, ImplWindow, Rect, Window};
 use tracing::{debug, error};
 
 use crate::runtime::AppHandle;

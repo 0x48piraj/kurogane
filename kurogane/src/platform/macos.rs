@@ -38,7 +38,7 @@ pub fn set_app(app: &AppHandle) {
 /// foreground app.
 ///
 /// Uses the runtime-resolved CEF root rather than the app-bundle-only loader
-/// path used by `cef::library_loader`.
+/// path used by `tetsu::library_loader`.
 ///
 /// CEF's subprocesses (`--type=renderer`, `gpu-process`, `utility`) get the
 /// library alone: an `NSApplication` registers its process with LaunchServices
@@ -95,7 +95,7 @@ fn load_framework() -> Result<(), RuntimeError> {
     // (<exe>/../Frameworks/...), which is unavailable in non-bundled dev runs
     let detected = detect_cef_root().map_err(crate::runtime::cef_not_found)?;
 
-    let path = detected.root.join(cef::sys::FRAMEWORK_PATH);
+    let path = detected.root.join(tetsu::sys::FRAMEWORK_PATH);
     let invalid = |source: Box<dyn std::error::Error + Send + Sync>| {
         crate::runtime::unusable_cef(detected.mode, path.clone(), source)
     };
@@ -105,7 +105,7 @@ fn load_framework() -> Result<(), RuntimeError> {
 
     // SAFETY: `framework` is a valid, NUL-terminated C string that outlives the call.
     // Executed prior to any other CEF invocations, satisfying CEF's pre-initialization requirement.
-    let loaded = unsafe { cef::sys::cef_load_library(framework.as_ptr()) };
+    let loaded = unsafe { tetsu::sys::cef_load_library(framework.as_ptr()) };
     if loaded != 1 {
         return Err(invalid(
             "cef_load_library could not load the Chromium Embedded Framework".into(),
@@ -341,7 +341,7 @@ impl SimpleAppDelegate {
 mod application {
     use std::cell::Cell;
 
-    use cef::application_mac::{CefAppProtocol, CrAppControlProtocol, CrAppProtocol};
+    use tetsu::application_mac::{CefAppProtocol, CrAppControlProtocol, CrAppProtocol};
     use objc2::{
         DefinedClass, define_class, extern_methods, msg_send,
         runtime::{AnyObject, Bool},

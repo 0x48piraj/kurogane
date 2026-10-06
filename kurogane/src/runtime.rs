@@ -1,4 +1,4 @@
-use cef::{args::Args, sys::cef_window_handle_t, *};
+use tetsu::{args::Args, sys::cef_window_handle_t, *};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
@@ -829,7 +829,7 @@ fn parent_window(parent: &impl HasWindowHandle) -> Result<cef_window_handle_t, R
         .map_err(|_| RuntimeError::UnsupportedParentWindow)?;
     match handle.as_raw() {
         #[cfg(target_os = "windows")]
-        RawWindowHandle::Win32(window) => Ok(cef::sys::HWND(window.hwnd.get() as *mut _)),
+        RawWindowHandle::Win32(window) => Ok(tetsu::sys::HWND(window.hwnd.get() as *mut _)),
         #[cfg(target_os = "macos")]
         RawWindowHandle::AppKit(window) => Ok(window.ns_view.as_ptr() as cef_window_handle_t),
         #[cfg(target_os = "linux")]
@@ -1137,12 +1137,12 @@ impl AppInstance {
     ///
     /// The loop runs until the application's last browser has closed:
     /// after [`AppHandle::shutdown`] (from any thread), its last window
-    /// closing, or Ctrl+C. After the loop exits, cef::shutdown() is called on
+    /// closing, or Ctrl+C. After the loop exits, tetsu::shutdown() is called on
     /// the current (UI) thread.
     ///
     /// Not for an application given an [`App::scheduler`](crate::App::scheduler):
     /// the scheduler turns on CEF's external message pump, under which this
-    /// loop returns at once and cef::shutdown() would run under a window
+    /// loop returns at once and tetsu::shutdown() would run under a window
     /// still opening. Such an application calls [`AppInstance::pump`] from its
     /// own loop until [`AppInstance::should_shutdown`], then
     /// [`AppInstance::shutdown`].
@@ -1165,7 +1165,7 @@ impl AppInstance {
 
     /// Perform orderly CEF shutdown.
     ///
-    /// Calls cef::shutdown() on the UI thread; [`AppHandle::should_shutdown`]
+    /// Calls tetsu::shutdown() on the UI thread; [`AppHandle::should_shutdown`]
     /// is true from here on. Safe to call multiple times. Subsequent calls are
     /// no-ops.
     ///
@@ -1235,7 +1235,7 @@ impl AppInstance {
         parent: &impl HasWindowHandle,
         bounds: BrowserBounds,
         url: &str,
-        rc_settings: &cef::RequestContextSettings,
+        rc_settings: &tetsu::RequestContextSettings,
     ) -> Result<BrowserHandle, RuntimeError> {
         // Nothing reaches CEF once application shutdown begins.
         if self.handle.is_ending() {
@@ -1243,7 +1243,7 @@ impl AppInstance {
         }
         // Without its own context the browser would share the global cookie
         // and cache partition the caller asked to avoid
-        let rc = cef::request_context_create_context(Some(rc_settings), None)
+        let rc = tetsu::request_context_create_context(Some(rc_settings), None)
             .ok_or(RuntimeError::BrowserCreationFailed)?;
         self.create_child_browser_impl(parent, bounds, url, Some(rc))
     }
@@ -1253,7 +1253,7 @@ impl AppInstance {
         parent: &impl HasWindowHandle,
         bounds: BrowserBounds,
         url: &str,
-        request_context: Option<cef::RequestContext>,
+        request_context: Option<tetsu::RequestContext>,
     ) -> Result<BrowserHandle, RuntimeError> {
         if self.handle.is_ending() {
             return Err(RuntimeError::ShuttingDown);
@@ -1561,8 +1561,8 @@ mod tests {
     use std::ffi::c_int;
     use std::sync::atomic::AtomicUsize;
 
-    use cef::rc::ConvertReturnValue;
-    use cef::sys::{
+    use tetsu::rc::ConvertReturnValue;
+    use tetsu::sys::{
         _cef_base_ref_counted_t, _cef_browser_host_t, _cef_browser_t, _cef_frame_t, _cef_window_t,
     };
 

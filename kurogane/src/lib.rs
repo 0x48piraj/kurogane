@@ -61,7 +61,7 @@ pub use resources::resource_dir;
 /// the version Kurogane uses: a host passes its window as it is.
 pub use raw_window_handle;
 /// cef-rs, at the revision Kurogane is built with.
-pub use cef;
+pub use tetsu;
 
 /// What Kurogane's macros expand to. Not a public API.
 #[doc(hidden)]

@@ -324,7 +324,7 @@ Kurogane is a platform foundation, not an application framework.
 flowchart TB
     %% Kurogane Layer
     subgraph Kurogane["Kurogane runtime"]
-        A[cef::App Lifecycle]
+        A[tetsu::App Lifecycle]
         B[BrowserProcessHandler]
         C[Native Window]
         D[Browser View]

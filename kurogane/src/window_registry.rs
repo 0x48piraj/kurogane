@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use cef::{Rect, Window};
+use tetsu::{Rect, Window};
 use crate::browser_registry::BrowserId;
 use crate::window_closing::Closing;
 use crate::window_options::WindowState;

@@ -3,7 +3,7 @@
 //! [`AppInstance::create_window`](crate::AppInstance::create_window); and
 //! where one is, to open it there again ([`WindowPlacement`]).
 
-use cef::Rect;
+use tetsu::Rect;
 use serde::{Deserialize, Serialize};
 
 /// How an application window opens: the name the application knows it by,
@@ -236,14 +236,14 @@ impl WindowState {
     }
 }
 
-impl From<WindowState> for cef::ShowState {
+impl From<WindowState> for tetsu::ShowState {
     fn from(state: WindowState) -> Self {
         match state {
-            WindowState::Normal => cef::ShowState::NORMAL,
-            WindowState::Minimized => cef::ShowState::MINIMIZED,
-            WindowState::Maximized => cef::ShowState::MAXIMIZED,
-            WindowState::Fullscreen => cef::ShowState::FULLSCREEN,
-            WindowState::Hidden => cef::ShowState::HIDDEN,
+            WindowState::Normal => tetsu::ShowState::NORMAL,
+            WindowState::Minimized => tetsu::ShowState::MINIMIZED,
+            WindowState::Maximized => tetsu::ShowState::MAXIMIZED,
+            WindowState::Fullscreen => tetsu::ShowState::FULLSCREEN,
+            WindowState::Hidden => tetsu::ShowState::HIDDEN,
         }
     }
 }
@@ -357,13 +357,13 @@ mod tests {
     #[test]
     fn every_state_has_its_show_state() {
         for (state, shown) in [
-            (WindowState::Normal, cef::ShowState::NORMAL),
-            (WindowState::Minimized, cef::ShowState::MINIMIZED),
-            (WindowState::Maximized, cef::ShowState::MAXIMIZED),
-            (WindowState::Fullscreen, cef::ShowState::FULLSCREEN),
-            (WindowState::Hidden, cef::ShowState::HIDDEN),
+            (WindowState::Normal, tetsu::ShowState::NORMAL),
+            (WindowState::Minimized, tetsu::ShowState::MINIMIZED),
+            (WindowState::Maximized, tetsu::ShowState::MAXIMIZED),
+            (WindowState::Fullscreen, tetsu::ShowState::FULLSCREEN),
+            (WindowState::Hidden, tetsu::ShowState::HIDDEN),
         ] {
-            assert_eq!(cef::ShowState::from(state), shown, "{state:?}");
+            assert_eq!(tetsu::ShowState::from(state), shown, "{state:?}");
         }
     }
 }

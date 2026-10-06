@@ -6,11 +6,11 @@ fn main() {
         .exec()
         .expect("failed to read cargo metadata");
 
-    // Find cef-dll-sys package
+    // Find tetsu-sys package
     let pkg = metadata
         .packages
         .iter()
-        .filter(|p| p.name == "cef-dll-sys")
+        .filter(|p| p.name == "tetsu-sys")
         .max_by_key(|p| Version::parse(&p.version.to_string()).unwrap())
         .expect("cef crate not found in dependency graph");
 

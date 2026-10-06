@@ -1,6 +1,6 @@
 //! Root CEF application object.
 
-use cef::*;
+use tetsu::*;
 
 use crate::browser::KuroganeBrowserProcessHandler;
 use crate::ipc::IpcRenderProcessHandler;

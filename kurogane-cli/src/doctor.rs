@@ -22,7 +22,7 @@ struct ToolCheck {
 
 /// The tools a CEF build needs on the running host.
 ///
-/// `cef-dll-sys` compiles `libcef_dll_wrapper` through CMake's Ninja generator
+/// `tetsu-sys` compiles `libcef_dll_wrapper` through CMake's Ninja generator
 /// on Windows and macOS. Its Linux branch only stages the runtime and emits
 /// link directives, so neither tool is involved there.
 ///

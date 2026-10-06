@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn the_flags_are_cef_s() {
-        use cef::sys::cef_event_flags_t as Flags;
+        use tetsu::sys::cef_event_flags_t as Flags;
         for (ours, cef) in [
             (flag::SHIFT_DOWN, Flags::EVENTFLAG_SHIFT_DOWN),
             (flag::CONTROL_DOWN, Flags::EVENTFLAG_CONTROL_DOWN),

@@ -43,7 +43,7 @@ pub(crate) fn configure_runtime_env(cmd: &mut Command, cef: &Path) -> Result<()>
     Ok(())
 }
 
-/// Overrides `cef-dll-sys` runtime staging while preserving its linker configuration.
+/// Overrides `tetsu-sys` runtime staging while preserving its linker configuration.
 ///
 /// Linux and Windows skip the build script outright; macOS cannot and shares a
 /// prebuilt wrapper instead.
@@ -124,7 +124,7 @@ fn override_config(triple: &str, root: &str) -> Vec<String> {
     let link = toml::Value::Array(vec![lib.into()]);
     let dir = toml::Value::from(root);
 
-    let key = format!("target.{triple}.cef_dll_wrapper");
+    let key = format!("target.{triple}.tetsu");
     vec![
         format!("{key}.rustc-link-search={search}"),
         format!("{key}.rustc-link-lib={link}"),
@@ -146,7 +146,7 @@ fn macos_override_config(triple: &str, root: &str, wrapper: &str) -> Vec<String>
     ]);
     let dir = toml::Value::from(root);
 
-    let key = format!("target.{triple}.cef_dll_wrapper");
+    let key = format!("target.{triple}.tetsu");
     vec![
         format!("{key}.rustc-link-search={search}"),
         format!("{key}.rustc-link-lib={link}"),
@@ -216,7 +216,7 @@ mod tests {
     /// Extracts a field from a Cargo target override
     fn override_field(entry: &str, triple: &str, field: &str) -> toml::Value {
         let config: toml::Table = entry.parse().expect("each entry is one TOML key/value");
-        config["target"][triple]["cef_dll_wrapper"][field].clone()
+        config["target"][triple]["tetsu"][field].clone()
     }
 
     #[test]

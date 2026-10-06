@@ -27,9 +27,9 @@ use std::fmt::Write as _;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::OnceLock;
 
-use cef::sys::cef_context_menu_edit_state_flags_t as EditFlags;
-use cef::sys::cef_menu_id_t as MenuId;
-use cef::*;
+use tetsu::sys::cef_context_menu_edit_state_flags_t as EditFlags;
+use tetsu::sys::cef_menu_id_t as MenuId;
+use tetsu::*;
 use tracing::{debug, error, warn};
 
 use crate::acl::Origin;

@@ -22,8 +22,8 @@
 //! - Links inside the root that stay inside it keep working
 //! - Focused on safe, predictable asset access within the runtime
 
-use cef::*;
-use cef::sys::cef_scheme_options_t::{
+use tetsu::*;
+use tetsu::sys::cef_scheme_options_t::{
     CEF_SCHEME_OPTION_STANDARD, CEF_SCHEME_OPTION_SECURE, CEF_SCHEME_OPTION_CORS_ENABLED,
     CEF_SCHEME_OPTION_FETCH_ENABLED,
 };
@@ -98,7 +98,7 @@ pub struct ResolvedAsset {
 /// Implement this trait and pass the instance to
 /// [`App::register_scheme`](crate::App::register_scheme) to expose a custom
 /// scheme to the frontend. The trait method mirrors
-/// [`SchemeHandlerFactory::create`](cef::SchemeHandlerFactory) minus the
+/// [`SchemeHandlerFactory::create`](tetsu::SchemeHandlerFactory) minus the
 /// scheme name which is fixed per registration.
 ///
 /// CEF calls `create` on the browser-process IO thread, which also carries

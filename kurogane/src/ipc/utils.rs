@@ -1,4 +1,4 @@
-use cef::*;
+use tetsu::*;
 
 /// Formats a promise rejection as `"{code}: {message}"`, the form the
 /// bridge's `toError` parses into an `Error` with a numeric `.code`.

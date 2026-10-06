@@ -19,7 +19,7 @@ use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
-use cef::BeforeDownloadCallback;
+use tetsu::BeforeDownloadCallback;
 use tracing::{debug, error, warn};
 
 use crate::acl::Origin;
@@ -283,7 +283,7 @@ impl<P, K> Downloads<P, K> {
 /// Chromium's permission to download several files from one page without a
 /// click for each, which it asks the user for in a prompt of its own.
 const MULTIPLE_DOWNLOADS: u32 =
-    cef::sys::cef_permission_request_types_t::CEF_PERMISSION_TYPE_MULTIPLE_DOWNLOADS as u32;
+    tetsu::sys::cef_permission_request_types_t::CEF_PERMISSION_TYPE_MULTIPLE_DOWNLOADS as u32;
 
 /// Whether Kurogane grants a permission prompt itself, without showing it:
 /// one asking for multiple downloads alone. Every download still passes
@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn only_the_multiple_downloads_prompt_is_granted() {
-        use cef::sys::cef_permission_request_types_t as Permission;
+        use tetsu::sys::cef_permission_request_types_t as Permission;
         let camera = Permission::CEF_PERMISSION_TYPE_CAMERA_STREAM as u32;
         assert!(grants_prompt(MULTIPLE_DOWNLOADS));
         assert!(!grants_prompt(camera));
