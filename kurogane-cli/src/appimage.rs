@@ -393,6 +393,8 @@ pub fn build(
     cmd.env("OUTPUT", &appimage_path);
     cmd.env("ARCH", &arch);
     cmd.env("APPIMAGE_EXTRACT_AND_RUN", "1");
+    // Distribution libraries arrive stripped; linuxdeploy's own strip rejects RELR sections
+    cmd.env("NO_STRIP", "1");
     cmd.arg("--appimage-extract-and-run");
     cmd.arg("--appdir").arg(&app_dir);
     cmd.arg("--deploy-deps-only").arg(&bundle_dir);
