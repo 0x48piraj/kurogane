@@ -238,9 +238,95 @@ const MIN_VISIBLE: i32 = 30;
 /// size CEF gives a window it is asked to size itself.
 const DEFAULT_SIZE: (i32, i32) = (800, 600);
 
-/// Where a window opens: an application window where its placement says,
-/// brought onto a display, or centred at its size; a popup where its page
-/// asked, empty for CEF to choose. UI thread.
+/// Whether the frame around a window's content is known as CEF creates the
+/// window, before it shows. Under X11 the window manager adds the frame once
+/// the window maps.
+const FRAME_KNOWN_AT_CREATION: bool = !cfg!(target_os = "linux");
+
+/// The frame the system draws around a window's content, in DIP on each
+/// side. Zero for a window the window manager has not framed yet.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Frame {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+impl Frame {
+    /// Returns the frame around `window`'s content.
+    fn of(window: &Window) -> Self {
+        Self::between(
+            &window.bounds_in_screen(),
+            &window.client_area_bounds_in_screen(),
+        )
+    }
+
+    /// Returns the frame between a whole window `outer` and its `content`.
+    fn between(outer: &Rect, content: &Rect) -> Self {
+        Self {
+            left: content.x - outer.x,
+            top: content.y - outer.y,
+            right: outer.x + outer.width - content.x - content.width,
+            bottom: outer.y + outer.height - content.y - content.height,
+        }
+    }
+
+    /// Returns the whole window around `content`.
+    fn around(&self, content: &Rect) -> Rect {
+        Rect {
+            x: content.x - self.left,
+            y: content.y - self.top,
+            width: content.width + self.left + self.right,
+            height: content.height + self.top + self.bottom,
+        }
+    }
+
+    /// Returns the content inside the whole window `outer`.
+    fn within(&self, outer: &Rect) -> Rect {
+        Rect {
+            x: outer.x + self.left,
+            y: outer.y + self.top,
+            width: outer.width - self.left - self.right,
+            height: outer.height - self.top - self.bottom,
+        }
+    }
+}
+
+/// Where an application window opens as a whole, its frame known: around
+/// its placement and brought onto a display, or centred at its size with
+/// the frame. UI thread.
+fn framed_opening_bounds(options: &WindowOptions, frame: &Frame) -> Rect {
+    match options.requested_bounds() {
+        Some(content) => on_a_display(frame.around(&content)),
+        None => {
+            let (width, height) = options.requested_size().unwrap_or(DEFAULT_SIZE);
+            centred(
+                width + frame.left + frame.right,
+                height + frame.top + frame.bottom,
+            )
+        }
+    }
+}
+
+/// Shows a window CEF opened normal in `state`. Maximized or minimized it
+/// shows as it takes the state, and hidden it stays unshown. UI thread.
+fn show_in(window: &Window, state: WindowState) {
+    match state {
+        WindowState::Normal => window.show(),
+        WindowState::Maximized => window.maximize(),
+        WindowState::Minimized => window.minimize(),
+        WindowState::Fullscreen => {
+            window.set_fullscreen(1);
+            window.show();
+        }
+        WindowState::Hidden => {}
+    }
+}
+
+/// Where a window opens: an application window's content where its
+/// placement says, brought onto a display, or centred at its size; a popup
+/// where its page asked, empty for CEF to choose. UI thread.
 fn opening_bounds(opening: &Opening) -> Rect {
     match opening {
         Opening::Application(options) => match options.requested_bounds() {
@@ -286,7 +372,7 @@ fn centre(width: i32, height: i32, area: &Rect) -> Rect {
 }
 
 /// `bounds` on the display that shows most of them, or the nearest one when
-/// none does: made to fit its work area (and then inside it), the title bar
+/// none does: made to fit its work area (and then inside it), the top edge
 /// not above it, and moved inside it when less than [`MIN_VISIBLE`] of the
 /// window shows there. UI thread.
 fn on_a_display(bounds: Rect) -> Rect {
@@ -349,8 +435,14 @@ wrap_window_delegate! {
             opening_bounds(&self.opening)
         }
 
+        // A window CEF opens in another state reports that state's bounds as
+        // it is created, so where the frame is known an application window
+        // opens normal and on_window_created applies its state
         fn initial_show_state(&self, _window: Option<&mut Window>) -> ShowState {
-            self.opening.show_state()
+            match self.opening {
+                Opening::Application(_) if FRAME_KNOWN_AT_CREATION => ShowState::NORMAL,
+                _ => self.opening.show_state(),
+            }
         }
 
         // Linux only. Sets the class the window manager knows the window by,
@@ -386,14 +478,20 @@ wrap_window_delegate! {
                 self.opening.kind(),
                 self.opening.restored_state(),
             );
-            // A window that opens maximized, minimized, fullscreen or hidden
-            // restores to the bounds it was given, which are not what it
-            // answers yet: one CEF opens minimized or hidden is iconic from
-            // the start (Windows). A popup to where CEF put it. The guard
-            // ends with the statement, after CEF answered
-            let initial = match self.opening {
+            // An application window's options place its content. Where the
+            // frame is known the whole window goes around that content
+            // before it shows; under X11 the content is the window's bounds.
+            // A popup restores to where CEF put it. The guard ends with the
+            // statement, after CEF answered
+            let initial = match &self.opening {
+                Opening::Application(options) if FRAME_KNOWN_AT_CREATION => {
+                    let frame = Frame::of(window);
+                    let outer = framed_opening_bounds(options, &frame);
+                    window.set_bounds(Some(&outer));
+                    frame.within(&outer)
+                }
                 Opening::Application(_) => opening_bounds(&self.opening),
-                Opening::Popup(_) => window.bounds_in_screen(),
+                Opening::Popup(_) => window.client_area_bounds_in_screen(),
             };
             self.app.registry().windows.set_restored(self.window_id, initial);
 
@@ -409,14 +507,19 @@ wrap_window_delegate! {
                 window.set_window_icon(Some(&mut small));
                 window.set_window_app_icon(Some(&mut large));
             }
-            if self.opening.show_state() != ShowState::HIDDEN {
-                window.show();
+            match &self.opening {
+                Opening::Application(options) if FRAME_KNOWN_AT_CREATION => {
+                    show_in(window, options.initial_state());
+                }
+                _ if self.opening.show_state() != ShowState::HIDDEN => window.show(),
+                _ => {}
             }
             match &self.opening {
                 Opening::Application(options) => debug!(
-                    "[Window] {} opened at {:?}{}",
+                    "[Window] {} opened at {:?}, its content at {:?}{}",
                     self.window_id.as_u32(),
                     window.bounds_in_screen(),
+                    window.client_area_bounds_in_screen(),
                     options
                         .window_name()
                         .map(|name| format!(", named {name}"))
@@ -435,13 +538,18 @@ wrap_window_delegate! {
             // are not where it restores to
             let (maximized, minimized, fullscreen) =
                 (window.is_maximized(), window.is_minimized(), window.is_fullscreen());
+            let content = window.client_area_bounds_in_screen();
             debug!(
-                "[Window] {} bounds {},{} {}x{} maximized={maximized} minimized={minimized} fullscreen={fullscreen}",
+                "[Window] {} bounds {},{} {}x{} content {},{} {}x{} maximized={maximized} minimized={minimized} fullscreen={fullscreen}",
                 self.window_id.as_u32(),
                 bounds.x,
                 bounds.y,
                 bounds.width,
                 bounds.height,
+                content.x,
+                content.y,
+                content.width,
+                content.height,
             );
             // A minimized window comes back as it last showed, so only a
             // window not minimized says how that is
@@ -454,7 +562,7 @@ wrap_window_delegate! {
                     WindowState::Normal
                 };
                 // The guard ends with the statement
-                self.app.registry().windows.shown(self.window_id, state, bounds);
+                self.app.registry().windows.shown(self.window_id, state, &content);
             }
         }
 
@@ -851,6 +959,38 @@ mod tests {
         );
         // Larger than the work area: made to fit it
         assert_eq!(parts(centre(3000, 2000, &area)), (0, 0, 1920, 1032));
+    }
+
+    #[test]
+    fn a_frame_goes_around_the_content_and_comes_off_again() {
+        // A Windows 11 frame at 100%, its invisible borders included
+        let frame = Frame::between(&rect(502, 176, 916, 679), &rect(510, 207, 900, 640));
+        assert_eq!(
+            frame,
+            Frame {
+                left: 8,
+                top: 31,
+                right: 8,
+                bottom: 8
+            }
+        );
+        let content = rect(200, 150, 900, 600);
+        assert_eq!(parts(frame.around(&content)), (192, 119, 916, 639));
+        assert_eq!(
+            parts(frame.within(&frame.around(&content))),
+            (200, 150, 900, 600)
+        );
+        // No frame yet (X11 before the window maps)
+        assert_eq!(Frame::between(&content, &content), Frame::default());
+    }
+
+    #[test]
+    fn a_framed_window_is_centred_and_fitted_whole() {
+        let area = rect(0, 0, 1920, 1032);
+        // 900x640 of content in a 916x679 window
+        assert_eq!(parts(centre(916, 679, &area)), (502, 176, 916, 679));
+        // Too large for the work area: the whole window fits it
+        assert_eq!(parts(centre(1916, 1071, &area)), (2, 0, 1916, 1032));
     }
 
     #[test]

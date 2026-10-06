@@ -15,6 +15,12 @@ use serde::{Deserialize, Serialize};
 /// display at 150%. A place is on the screen, from the top-left corner of
 /// the primary display.
 ///
+/// A size and a place are the window's content, the area its page shows
+/// in, without the frame the system draws around it. Centring a window and
+/// keeping it on a display take the whole window, frame included, on
+/// Windows and macOS. Under X11 the window manager adds the frame once the
+/// window shows, so there the content is centred and kept on the display.
+///
 /// ```no_run
 /// # use kurogane::{App, WindowOptions};
 /// App::new("dist")
@@ -62,8 +68,8 @@ impl WindowOptions {
         self
     }
 
-    /// The window's size, its frame included, centred on the primary
-    /// display; made to fit the display's work area.
+    /// The size of the window's content, the window centred on the primary
+    /// display and made to fit its work area.
     /// [`placement`](Self::placement), when given, decides the size instead.
     pub fn size(mut self, width: u32, height: u32) -> Self {
         self.size = Some((width, height));
@@ -84,8 +90,8 @@ impl WindowOptions {
         self
     }
 
-    /// The size of content the user cannot make the window smaller than,
-    /// its frame aside. A side of 0 leaves that side free.
+    /// The size of content the user cannot make the window smaller than.
+    /// A side of 0 leaves that side free.
     pub fn min_size(mut self, width: u32, height: u32) -> Self {
         self.min_size = Some((width, height));
         self
@@ -174,10 +180,9 @@ impl WindowOptions {
     }
 }
 
-/// Where a window is and how it shows: its place and size on the screen,
-/// its frame included, in density-independent pixels, and its state. A
-/// window maximized, minimized or fullscreen is placed where it restores
-/// to.
+/// Where a window's content is on the screen, in density-independent
+/// pixels, and how the window shows. A window maximized, minimized or
+/// fullscreen is placed where it restores to.
 ///
 /// [`WindowClosing::placement`](crate::WindowClosing::placement) gives one
 /// as a window closes, and [`WindowOptions::placement`] opens a window as
@@ -186,13 +191,13 @@ impl WindowOptions {
 /// to keep with the application's settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowPlacement {
-    /// The window's left edge, from the primary display's top-left corner.
+    /// The content's left edge, from the primary display's top-left corner.
     pub x: i32,
-    /// Its top edge.
+    /// The content's top edge.
     pub y: i32,
-    /// Its width, its frame included.
+    /// The content's width.
     pub width: u32,
-    /// Its height, its frame included.
+    /// The content's height.
     pub height: u32,
     /// How it shows.
     pub state: WindowState,
