@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use kurogane_layout::{ResolvedDistribution, package_directory, sh_quote};
 use crate::config::PackagingConfig;
@@ -96,16 +96,19 @@ fn download(url: &str) -> Result<Vec<u8>> {
         .read_to_vec()?)
 }
 
-/// Downloads and caches the pinned linuxdeploy release.
+/// Downloads, caches and extracts the pinned linuxdeploy release, returning
+/// its extracted entry point.
 ///
 /// Downloads are verified against [`LINUXDEPLOY_DIGESTS`] before being written
 /// to the cache. Cached copies are not re-hashed because [`patch_linuxdeploy`]
-/// three bytes of the file in place.
+/// changes three bytes of the file in place. linuxdeploy runs extracted in the
+/// cache because an extract-and-run leaves its copy in `$TMPDIR`.
 fn prepare_linuxdeploy(arch: &str) -> Result<PathBuf> {
     let tools = tools_dir()?;
 
     // linuxdeploy
     let path = tools.join(format!("linuxdeploy-{arch}.AppImage"));
+    let tree = tools.join(format!("linuxdeploy-{arch}"));
     if !path.exists() {
         let expected = expected_digest(arch)?;
 
@@ -128,9 +131,59 @@ fn prepare_linuxdeploy(arch: &str) -> Result<PathBuf> {
         write_and_make_executable(&path, &data)?;
         // Mask linuxdeploy's magic bytes
         patch_linuxdeploy(&path)?;
+
+        // Drop the tree extracted from an older download
+        if tree.exists() {
+            fs::remove_dir_all(&tree)
+                .with_context(|| format!("failed to remove directory {}", tree.display()))?;
+        }
     }
 
-    Ok(path)
+    let apprun = tree.join("AppRun");
+    if !apprun.exists() {
+        extract_linuxdeploy(&path, &tree)?;
+    }
+
+    Ok(apprun)
+}
+
+/// Extracts the linuxdeploy AppImage into `tree`.
+///
+/// An interrupted extraction leaves no partial tree behind.
+fn extract_linuxdeploy(appimage: &Path, tree: &Path) -> Result<()> {
+    tui::step("Extracting linuxdeploy...");
+
+    let staging = tree.with_extension("extracting");
+    if staging.exists() {
+        fs::remove_dir_all(&staging)
+            .with_context(|| format!("failed to remove directory {}", staging.display()))?;
+    }
+    fs::create_dir_all(&staging)
+        .with_context(|| format!("failed to create directory {}", staging.display()))?;
+
+    let status = Command::new(appimage)
+        .arg("--appimage-extract")
+        .current_dir(&staging)
+        .stdout(Stdio::null())
+        .status()?;
+    if !status.success() {
+        let code = status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".into());
+        bail!("failed to extract linuxdeploy (exit code: {code})");
+    }
+
+    if tree.exists() {
+        fs::remove_dir_all(tree)
+            .with_context(|| format!("failed to remove directory {}", tree.display()))?;
+    }
+    fs::rename(staging.join("squashfs-root"), tree)
+        .with_context(|| format!("failed to move linuxdeploy into {}", tree.display()))?;
+    fs::remove_dir_all(&staging)
+        .with_context(|| format!("failed to remove directory {}", staging.display()))?;
+
+    Ok(())
 }
 
 /// Disables AppImage execution metadata in the linuxdeploy binary.
@@ -392,10 +445,8 @@ pub fn build(
     let mut cmd = Command::new(&linuxdeploy);
     cmd.env("OUTPUT", &appimage_path);
     cmd.env("ARCH", &arch);
-    cmd.env("APPIMAGE_EXTRACT_AND_RUN", "1");
     // Distribution libraries arrive stripped; linuxdeploy's own strip rejects RELR sections
     cmd.env("NO_STRIP", "1");
-    cmd.arg("--appimage-extract-and-run");
     cmd.arg("--appdir").arg(&app_dir);
     cmd.arg("--deploy-deps-only").arg(&bundle_dir);
     cmd.arg("--exclude-library").arg("libcef*");
