@@ -763,13 +763,14 @@ impl App {
     /// X11; under Wayland the entry's file name is the app_id), and the
     /// compositor's rules for the application match it. `kurogane bundle`
     /// writes `[app].identifier` from `kurogane.toml` as the AppImage's
-    /// `StartupWMClass`: give this the same identifier.
+    /// `StartupWMClass`, or the executable's name without one. Give this the
+    /// same identifier.
     ///
     /// It names the start window, [`AppInstance::create_window`]'s windows,
     /// popups and DevTools alike; not a browser embedded in the
     /// application's own window, whose window is the application's. Without
-    /// it CEF names the windows. Other platforms have no window class and
-    /// ignore it. An empty class, or one with a control character, is
+    /// it the class is the executable's file name. Other platforms have no
+    /// window class and ignore it. An empty class, or one with a control character, is
     /// [`ConfigError::InvalidWindowClass`]. A later call replaces an earlier
     /// one.
     ///
@@ -1567,7 +1568,7 @@ impl App {
             sandbox_mode,
             start_url,
             start_window: start_window.unwrap_or_default(),
-            window_identity,
+            window_identity: window_identity.or_executable_class(),
             asset_root,
             profile_id,
             profile_dir,

@@ -97,6 +97,24 @@ pub(crate) struct WindowIdentity {
     pub icon: Option<Cow<'static, [u8]>>,
 }
 
+impl WindowIdentity {
+    /// Returns the identity with the executable's file name as its class
+    /// when the application named none.
+    pub fn or_executable_class(mut self) -> Self {
+        if self.class.is_none() {
+            self.class = executable_class();
+        }
+        self
+    }
+}
+
+/// Returns the running executable's file name when it can be a window class.
+fn executable_class() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let name = exe.file_name()?.to_str()?;
+    (!name.chars().any(char::is_control)).then(|| name.to_owned())
+}
+
 /// The size, in DIP, CEF takes a window icon at: it refuses any other
 /// (CefWindowView::SetWindowIcon), and the app icon at any size.
 const WINDOW_ICON_SIDE: f32 = 16.0;
@@ -335,10 +353,10 @@ wrap_window_delegate! {
             self.opening.show_state()
         }
 
-        // Asked on Linux only: the names the window manager knows the
-        // window by. Only the class, when the application named one; CEF's
-        // default otherwise. The strings are CEF's own, which cef-rs's write
-        // of this struct back to CEF keeps (crate::cef_string)
+        // Linux only. Sets the class the window manager knows the window by,
+        // the application's or the executable's name. The strings are CEF's
+        // own, which cef-rs's write of this struct back to CEF keeps
+        // (crate::cef_string)
         fn linux_window_properties(
             &self,
             _window: Option<&mut Window>,
