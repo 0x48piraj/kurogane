@@ -68,13 +68,19 @@ fn build(cef: &Path, dest: &Path) -> Result<()> {
     std::fs::create_dir_all(&scratch)
         .with_context(|| format!("failed to create {}", scratch.display()))?;
 
-    // Build one archive for both `cef-dll-sys` sandbox configurations
+    // Build one archive for both `cef-dll-sys` sandbox configurations, at
+    // the API version the bindings declare at run time; CEF's default, its
+    // experimental API, loads against this exact libcef only
     run(Command::new("cmake")
         .arg("-G")
         .arg("Ninja")
         .arg("-DCMAKE_BUILD_TYPE=RelWithDebInfo")
         .arg(format!("-DPROJECT_ARCH={}", project_arch()))
         .arg("-DUSE_SANDBOX=OFF")
+        .arg(format!(
+            "-DCEF_COMPILER_DEFINES=CEF_API_VERSION={}",
+            api_version(cef)?
+        ))
         .arg(cef)
         .current_dir(&scratch))?;
 
@@ -97,6 +103,22 @@ fn build(cef: &Path, dest: &Path) -> Result<()> {
     tui::success("CEF wrapper ready");
 
     Ok(())
+}
+
+/// Returns the newest API version a CEF distribution's headers name.
+fn api_version(cef: &Path) -> Result<u32> {
+    let header = cef.join("include").join("cef_api_versions.h");
+    let text = std::fs::read_to_string(&header)
+        .with_context(|| format!("failed to read {}", header.display()))?;
+    text.lines()
+        .find_map(|line| {
+            line.strip_prefix("#define CEF_API_VERSION_LAST ")?
+                .trim()
+                .strip_prefix("CEF_API_VERSION_")?
+                .parse()
+                .ok()
+        })
+        .with_context(|| format!("no CEF_API_VERSION_LAST in {}", header.display()))
 }
 
 /// Runs a build command, surfacing its output only when it fails.
