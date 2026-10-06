@@ -43,6 +43,10 @@ impl WindowClosing {
     /// `Fullscreen`: a window minimized, or never shown, gives the state it
     /// shows in once restored, so the placement given back opens a window
     /// the user sees.
+    ///
+    /// Under xfwm4 a window the user maximized can give its maximized place
+    /// and size as `Normal` because xfwm4 sends a maximize's geometry before
+    /// its state.
     pub fn placement(&self) -> WindowPlacement {
         self.placement
     }

@@ -210,6 +210,9 @@ pub enum WindowState {
     /// Maximized.
     Maximized,
     /// Filling its display, without a frame.
+    ///
+    /// Under X11 a window opened in this state shows at its size, because
+    /// Chromium drops a state set before the window maps.
     Fullscreen,
     /// Not shown. A hidden window's browser keeps the application running
     /// as any open browser does.
