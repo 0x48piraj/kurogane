@@ -3502,7 +3502,7 @@ dependencies = [
 [[package]]
 name = "tetsu"
 version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tetsu?rev=e784395c6f1ba099ad7610c7cd31edccf13c96aa#e784395c6f1ba099ad7610c7cd31edccf13c96aa"
+source = "git+https://github.com/kurogane-rs/tetsu?rev=0a469a1e9987b00b75c4150db51efa7545d5018f#0a469a1e9987b00b75c4150db51efa7545d5018f"
 dependencies = [
  "libloading 0.9.0",
  "objc2 0.6.4",
@@ -3513,7 +3513,7 @@ dependencies = [
 [[package]]
 name = "tetsu-download"
 version = "3.0.0"
-source = "git+https://github.com/kurogane-rs/tetsu?rev=e784395c6f1ba099ad7610c7cd31edccf13c96aa#e784395c6f1ba099ad7610c7cd31edccf13c96aa"
+source = "git+https://github.com/kurogane-rs/tetsu?rev=0a469a1e9987b00b75c4150db51efa7545d5018f#0a469a1e9987b00b75c4150db51efa7545d5018f"
 dependencies = [
  "bzip2",
  "clap",
@@ -3532,11 +3532,11 @@ dependencies = [
 [[package]]
 name = "tetsu-sys"
 version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tetsu?rev=e784395c6f1ba099ad7610c7cd31edccf13c96aa#e784395c6f1ba099ad7610c7cd31edccf13c96aa"
+source = "git+https://github.com/kurogane-rs/tetsu?rev=0a469a1e9987b00b75c4150db51efa7545d5018f#0a469a1e9987b00b75c4150db51efa7545d5018f"
 dependencies = [
  "anyhow",
- "cc",
  "cmake",
+ "fs-err",
  "serde_json",
  "tetsu-download",
 ]

@@ -35,10 +35,7 @@ sudo apt install build-essential mesa-utils
 
 ### On Windows
 
-You must compile within a Visual Studio developer environment so `CMake` can locate `MSVC` and `Ninja`.
-
-1. Open the **`x64 Native Tools Command Prompt for VS`**.
-2. Run your cargo/kurogane commands directly inside that shell.
+Install the Visual Studio C++ Build Tools (workload *Desktop development with C++*, which includes the Windows SDK). Cargo finds the linker on its own, so any shell works.
 
 ## Ground rules
 

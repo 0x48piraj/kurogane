@@ -18,7 +18,7 @@ authors = [
 repository = "https://github.com/0x48piraj/kurogane"
 
 [workspace.dependencies]
-tetsu = { git = "https://github.com/kurogane-rs/tetsu", rev = "e784395c6f1ba099ad7610c7cd31edccf13c96aa", default-features = false }
+tetsu = { git = "https://github.com/kurogane-rs/tetsu", rev = "0a469a1e9987b00b75c4150db51efa7545d5018f", default-features = false }
 download-cef = "2.3"
 kurogane = { path = "kurogane" }
 kurogane-cli = { path = "kurogane-cli" }

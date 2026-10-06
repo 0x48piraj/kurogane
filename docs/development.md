@@ -89,6 +89,8 @@ Chromium is supplied as a managed runtime, separate from your crate and gives yo
 
 `kurogane dev`, `run` and `build` prefer a `CEF_PATH` override when set, falling back to the managed installation, and start your application with `CEF_PATH` pointing at it. A bundled application uses only the runtime inside its bundle, never `CEF_PATH`. See [Bundling](bundling.md#chromium-resolution) for the bundler's resolution and provenance rules.
 
+Start an unbundled application with `kurogane run` or `kurogane dev`. A plain `cargo run` copies no Chromium runtime beside the executable, so the application finds one only through `CEF_PATH`, with that directory also on `PATH` (Windows) or `LD_LIBRARY_PATH` (Linux). Building with `TETSU_STAGE_RUNTIME=1` copies the runtime beside the executable instead, up to 1.5 GB per profile.
+
 ## Advanced workflows
 
 - **`kurogane run`** passes arguments straight to Cargo (unlike `dev`), useful when you need `cargo run` passthrough.
@@ -99,4 +101,4 @@ Chromium is supplied as a managed runtime, separate from your crate and gives yo
 
 ## Platform notes
 
-Platform-specific setup (Visual Studio environment on Windows, sandbox fallback, Nix) lives in [Install notes](platforms.md).
+Platform-specific setup (Visual Studio build tools on Windows, sandbox fallback, Nix) lives in [Install notes](platforms.md).

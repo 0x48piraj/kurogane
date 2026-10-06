@@ -182,5 +182,3 @@ The CLI is all the installers put on your machine. Building and running apps als
 | CMake and Ninja | macOS | `brew install cmake ninja`, or the official installers |
 | C compiler and Chromium's libraries | Linux | Debian/Ubuntu: `sudo apt install build-essential libnss3 libgtk-3-0 libgbm1 libxkbcommon0 libasound2` (Ubuntu 24.04: `libgtk-3-0t64 libasound2t64`); Fedora: `sudo dnf install gcc nss gtk3 mesa-libgbm libxkbcommon alsa-lib` |
 | Node.js | starters with a JavaScript frontend | [nodejs.org](https://nodejs.org) |
-
-Working on Kurogane itself or building an app with plain `cargo build` requires CMake 3.21+ and Ninja on Windows because Cargo compiles CEF's C++ wrapper library. See [CONTRIBUTING](../CONTRIBUTING.md).

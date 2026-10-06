@@ -48,8 +48,6 @@ npm --prefix frontend run dev
 kurogane dev
 ```
 
-Building Kurogane itself, or building an app with cargo build, also compiles CEF's C++ wrapper library. These builds require CMake and Ninja on `PATH`, such as when using the **Native Tools Command Prompt for VS**.
-
 ## macOS
 
 Requires CMake and Ninja. `hdiutil` ships with macOS; `--sign` additionally needs `codesign` from the Xcode Command Line Tools.

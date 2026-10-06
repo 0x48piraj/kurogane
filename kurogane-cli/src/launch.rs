@@ -80,8 +80,10 @@ pub(crate) fn ensure_cef_runtime() -> Result<PathBuf> {
 
 /// Returns Kurogane's directory under Cargo's target directory.
 ///
-/// Kurogane configures `tetsu-sys` differently from plain cargo,
-/// see [`crate::platform::cef_build_script_override`].
+/// Kurogane builds `tetsu-sys` against the `CEF_PATH` it resolves, on macOS
+/// with a shared wrapper (see [`crate::platform::cef_build_script_override`]);
+/// a directory of its own keeps plain cargo builds from rerunning that build
+/// script.
 pub(crate) fn target_dir_in(base: &Path) -> PathBuf {
     base.join("kurogane")
 }
@@ -100,7 +102,7 @@ pub(crate) fn cargo_command(cef: &Path, subcommand: &str) -> Result<Command> {
     let mut cmd = Command::new("cargo");
     cmd.arg(subcommand);
 
-    // Skip tetsu-sys's redundant runtime staging
+    // The shared wrapper on macOS
     cmd.args(crate::platform::cef_build_script_override(cef)?);
 
     cmd.env("CEF_PATH", cef);

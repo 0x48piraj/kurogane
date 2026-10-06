@@ -7,7 +7,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::Command;
 
-#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 use anyhow::Context;
 
 #[cfg(target_os = "linux")]
@@ -43,26 +43,6 @@ pub(crate) fn configure_runtime_env(cmd: &mut Command, cef: &Path) -> Result<()>
     Ok(())
 }
 
-/// Overrides `tetsu-sys` runtime staging while preserving its linker configuration.
-///
-/// Linux and Windows skip the build script outright; macOS cannot and shares a
-/// prebuilt wrapper instead.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
-pub(crate) fn cef_build_script_override(cef: &Path) -> Result<Vec<OsString>> {
-    // Overrides require an exact target triple
-    let triple = host_triple()?;
-
-    // The override requires UTF-8 paths; assumes MSVC's `libcef.lib` on Windows
-    let Some(root) = cef.to_str() else {
-        return Ok(Vec::new());
-    };
-    if cfg!(windows) && !triple.ends_with("-msvc") {
-        return Ok(Vec::new());
-    }
-
-    Ok(config_args(override_config(&triple, root)))
-}
-
 /// Returns Cargo configuration overrides for the shared macOS CEF wrapper.
 ///
 /// Falls back to the default build script when the wrapper is unavailable.
@@ -94,42 +74,21 @@ pub(crate) fn cef_build_script_override(cef: &Path) -> Result<Vec<OsString>> {
     Ok(config_args(macos_override_config(&triple, root, shared)))
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+/// Linux and Windows run `tetsu-sys`'s own build script, which links libcef
+/// alone and copies no runtime.
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn cef_build_script_override(cef: &Path) -> Result<Vec<OsString>> {
     let _ = cef;
     Ok(Vec::new())
 }
 
 /// Flattens configuration entries into Cargo `--config` arguments.
-#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos", test))]
+#[cfg(any(target_os = "macos", test))]
 fn config_args(entries: Vec<String>) -> Vec<OsString> {
     entries
         .into_iter()
         .flat_map(|entry| [OsString::from("--config"), OsString::from(entry)])
         .collect()
-}
-
-/// Builds Cargo configuration overrides for the CEF wrapper.
-#[cfg(any(target_os = "linux", target_os = "windows", test))]
-fn override_config(triple: &str, root: &str) -> Vec<String> {
-    // Windows uses the `libcef` import library; other platforms use `cef`
-    let lib = if triple.contains("-windows-") {
-        "libcef"
-    } else {
-        "cef"
-    };
-
-    // Serialize the values as TOML to preserve platform-specific path syntax
-    let search = toml::Value::Array(vec![format!("native={root}").into()]);
-    let link = toml::Value::Array(vec![lib.into()]);
-    let dir = toml::Value::from(root);
-
-    let key = format!("target.{triple}.tetsu");
-    vec![
-        format!("{key}.rustc-link-search={search}"),
-        format!("{key}.rustc-link-lib={link}"),
-        format!("{key}.CEF_DIR={dir}"),
-    ]
 }
 
 /// Builds Cargo configuration for the shared macOS wrapper.
@@ -155,7 +114,7 @@ fn macos_override_config(triple: &str, root: &str, wrapper: &str) -> Vec<String>
 }
 
 /// The triple Cargo builds for by default, as reported by the active toolchain.
-#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 fn host_triple() -> Result<String> {
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
 
@@ -220,53 +179,16 @@ mod tests {
     }
 
     #[test]
-    fn linux_override_links_libcef_so_from_the_root() {
-        let triple = "x86_64-unknown-linux-gnu";
-        let entries = override_config(triple, "/opt/cef");
-
-        assert_eq!(
-            override_field(&entries[0], triple, "rustc-link-search"),
-            toml::Value::Array(vec!["native=/opt/cef".into()])
-        );
-        assert_eq!(
-            override_field(&entries[1], triple, "rustc-link-lib"),
-            toml::Value::Array(vec!["cef".into()])
-        );
-        assert_eq!(
-            override_field(&entries[2], triple, "CEF_DIR"),
-            toml::Value::from("/opt/cef")
-        );
-    }
-
-    #[test]
-    fn windows_override_links_the_import_library() {
-        let triple = "x86_64-pc-windows-msvc";
-        let root = r"C:\Users\me\AppData\Local\kurogane\cef\1.2.3";
-        let entries = override_config(triple, root);
-
-        assert_eq!(
-            override_field(&entries[1], triple, "rustc-link-lib"),
-            toml::Value::Array(vec!["libcef".into()]),
-            "MSVC links libcef.lib, the import library of libcef.dll"
-        );
-        assert_eq!(
-            override_field(&entries[0], triple, "rustc-link-search"),
-            toml::Value::Array(vec![format!("native={root}").into()]),
-            "backslashes are TOML escapes and must survive as path separators"
-        );
-        assert_eq!(
-            override_field(&entries[2], triple, "CEF_DIR"),
-            toml::Value::from(root)
-        );
-    }
-
-    #[test]
     fn override_paths_survive_quotes() {
-        let triple = "aarch64-unknown-linux-gnu";
-        let root = r#"/home/o"neil/cef's"#;
+        let triple = "aarch64-apple-darwin";
+        let root = r#"/Users/o"neil/cef's"#;
 
         assert_eq!(
-            override_field(&override_config(triple, root)[2], triple, "CEF_DIR"),
+            override_field(
+                &macos_override_config(triple, root, "/cache")[2],
+                triple,
+                "CEF_DIR"
+            ),
             toml::Value::from(root)
         );
     }

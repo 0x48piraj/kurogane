@@ -84,7 +84,7 @@ jobs:
       - name: Test
         run: cargo test -p kurogane-layout -p kurogane-cli --locked
 
-  # Expensive runtime checks with CEF download, CMake/Ninja C++ build
+  # Expensive runtime checks with CEF download; macOS also builds CEF's C++ wrapper
   runtime:
     name: runtime (${{ matrix.os }})
     if: github.event_name != 'push' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
@@ -95,10 +95,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
 
-    env:
-      # CEF_PATH is both the install root and CI cache root
-      CEF_PATH: ${{ github.workspace }}/.cef
-
+    # No CEF_PATH: tetsu-sys downloads CEF into its OUT_DIR, which rust-cache
+    # keeps and cargo test puts on the library search path
     steps:
       - uses: actions/checkout@v4
 
@@ -122,26 +120,12 @@ jobs:
             brew list --formula "$pkg" >/dev/null 2>&1 || brew install "$pkg"
           done
 
-      - name: Install Windows dependencies
-        if: runner.os == 'Windows'
-        run: choco install ninja -y --no-progress
-
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
 
       - uses: Swatinem/rust-cache@v2
         with:
           key: runtime-${{ matrix.os }}
-
-      - name: Cache CEF distribution
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/.cef
-          key: cef-${{ matrix.os }}-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Create CEF cache directory
-        shell: bash
-        run: mkdir -p "${{ github.workspace }}/.cef"
 
       - name: Fetch dependencies
         run: cargo fetch --locked

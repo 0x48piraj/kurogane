@@ -22,31 +22,16 @@ struct ToolCheck {
 
 /// The tools a CEF build needs on the running host.
 ///
-/// `tetsu-sys` compiles `libcef_dll_wrapper` through CMake's Ninja generator
-/// on Windows and macOS. Its Linux branch only stages the runtime and emits
-/// link directives, so neither tool is involved there.
-///
-/// macOS needs both for Kurogane's own shared wrapper build as well,
-/// see [`crate::platform`].
+/// Only macOS compiles CEF's C++ `libcef_dll_wrapper`, through CMake's Ninja
+/// generator, in `tetsu-sys` or in Kurogane's shared wrapper build (see
+/// [`crate::platform`]). Linux and Windows link libcef alone.
 fn required_tools() -> Vec<ToolCheck> {
     if cfg!(windows) {
-        vec![
-            ToolCheck {
-                name: "MSVC",
-                cmd: "cl",
-                hint: "Install Visual Studio C++ build tools",
-            },
-            ToolCheck {
-                name: "CMake",
-                cmd: "cmake",
-                hint: "Install CMake",
-            },
-            ToolCheck {
-                name: "Ninja",
-                cmd: "ninja",
-                hint: "Install Ninja build system",
-            },
-        ]
+        vec![ToolCheck {
+            name: "MSVC",
+            cmd: "cl",
+            hint: "Install Visual Studio C++ build tools",
+        }]
     } else if cfg!(target_os = "macos") {
         vec![
             ToolCheck {
