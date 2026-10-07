@@ -1,7 +1,7 @@
-//! Listing of installed runtimes and cached profiles.
+//! Listing of application profiles and versions.
 //!
-//! This module provides human-readable summaries of Kurogane-managed
-//! CEF versions and application runtime profiles.
+//! Prints every application's profile, the CLI's version and the CEF
+//! version it was built with.
 
 use anyhow::{Context, Result, bail};
 use std::fs;
@@ -63,7 +63,7 @@ fn list_profiles() -> Result<()> {
     Ok(())
 }
 
-/// Prints Kurogane and bundled CEF versions.
+/// Prints the CLI's version and the CEF version it was built with.
 fn list_version() -> Result<()> {
     tui::section("Kurogane Version");
 

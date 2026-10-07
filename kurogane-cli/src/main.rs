@@ -56,6 +56,7 @@ mod tui;
     version
 )]
 struct Cli {
+    /// Never prompt; a true `CI` environment variable does the same.
     #[arg(long, global = true)]
     ci: bool,
 
@@ -65,10 +66,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Install the Chromium runtime the project uses.
+    ///
+    /// Outside a project, installs the version this CLI was built with.
     Install,
-    /// Run the Kurogane development workflow.
+    /// Run the application, installing its Chromium runtime when missing.
     Dev,
-    /// Run the application with Cargo.
+    /// Run the application with Cargo, installing its Chromium runtime when
+    /// missing.
     ///
     /// Unlike `dev`, this command passes arguments directly to Cargo.
     #[command(disable_help_flag = true)]
@@ -81,9 +86,13 @@ enum Commands {
         )]
         cargo_args: Vec<OsString>,
     },
+    /// Build the application and package it for distribution.
     Bundle {
+        /// Build with Cargo's dev profile instead of release.
         #[arg(long)]
         debug: bool,
+        /// Package format: dir or appimage on Linux, dir or nsis on Windows,
+        /// app on macOS.
         #[arg(long, default_value = crate::bundle::DEFAULT_FORMAT)]
         format: String,
         /// Sign the bundle's Windows binaries ([signing.windows]) or macOS app
@@ -91,8 +100,9 @@ enum Commands {
         #[arg(long)]
         sign: bool,
     },
+    /// Create a project from a starter or template.
     New {
-        /// Official starter name.
+        /// Official starter: minimal, react, svelte or vue.
         starter: Option<String>,
 
         /// Project name.
@@ -111,6 +121,7 @@ enum Commands {
         #[arg(long)]
         yes: bool,
     },
+    /// Add Kurogane to an existing frontend project.
     Init {
         /// Frontend assets directory.
         #[arg(long)]
@@ -124,7 +135,10 @@ enum Commands {
         #[arg(long)]
         yes: bool,
     },
+    /// Remove the project's dist/ and Kurogane's caches.
     Clean {
+        /// `all` also removes tetsu's shared Chromium installation, build tools
+        /// and every application profile.
         #[arg(value_parser = ["all"])]
         target: Option<String>,
 
@@ -132,19 +146,25 @@ enum Commands {
         #[arg(long)]
         yes: bool,
     },
+    /// Run Kurogane's showcase application.
     Showcase {
         /// Accept template hooks without prompting.
         #[arg(long)]
         yes: bool,
     },
+    /// Check the Chromium runtime, toolchain and project.
     Doctor {
+        /// Print the full report as JSON.
         #[arg(long)]
         json: bool,
     },
+    /// List application profiles and versions.
     List {
+        /// Only profiles or only versions; both by default.
         #[arg(value_parser = ["profiles", "version"])]
         target: Option<String>,
     },
+    /// Show the CLI, environment and project configuration.
     Info,
     /// Manage the kurogane CLI itself.
     #[command(name = "self", subcommand)]
@@ -155,8 +175,9 @@ enum Commands {
 enum SelfCommand {
     /// Remove an installer-managed Kurogane installation.
     ///
-    /// Removes the CLI, PATH setup and Kurogane's installed runtimes and
-    /// caches. Application profiles and unmanaged installations are preserved.
+    /// Removes the CLI, PATH setup, Kurogane's caches and tetsu's shared
+    /// Chromium runtimes, which other tetsu projects use too. Application
+    /// profiles and unmanaged installations are preserved.
     Uninstall {
         /// Accept the confirmation without prompting.
         #[arg(long)]
@@ -180,6 +201,27 @@ fn ci_requested(flag: bool, ci: Option<&std::ffi::OsStr>) -> bool {
     })
 }
 
+/// Returns `run`'s arguments for Cargo as they were `given`.
+///
+/// Clap takes a `--` that comes first as its own separator, while Cargo
+/// needs it to tell the application's arguments from its own.
+fn cargo_args(parsed: Vec<OsString>, given: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
+    let separator_first = given
+        .into_iter()
+        .skip(1)
+        .skip_while(|arg| arg != "run")
+        .nth(1)
+        .is_some_and(|arg| arg == "--");
+
+    if separator_first {
+        std::iter::once(OsString::from("--"))
+            .chain(parsed)
+            .collect()
+    } else {
+        parsed
+    }
+}
+
 /// Returns whether the CLI must run without prompting.
 fn is_unattended(ci: bool) -> bool {
     use std::io::IsTerminal;
@@ -200,7 +242,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Install => install::run(),
         Commands::Dev => dev::run(),
-        Commands::Run { cargo_args } => run::run(cargo_args),
+        Commands::Run { cargo_args: parsed } => run::run(cargo_args(parsed, std::env::args_os())),
         Commands::Bundle {
             debug,
             format,
@@ -239,6 +281,35 @@ mod tests {
     /// Returns a `CI` value as providers set it, not as Clap's bool parser reads it.
     fn ci(value: Option<&str>) -> Option<&std::ffi::OsStr> {
         value.map(std::ffi::OsStr::new)
+    }
+
+    /// Returns the arguments `kurogane <given>` hands to `cargo run`.
+    fn run_args(given: &[&str]) -> Vec<String> {
+        let given: Vec<OsString> = std::iter::once("kurogane")
+            .chain(given.iter().copied())
+            .map(OsString::from)
+            .collect();
+        let Commands::Run { cargo_args: parsed } = Cli::try_parse_from(&given).unwrap().command
+        else {
+            panic!("not a run");
+        };
+
+        cargo_args(parsed, given)
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn run_hands_cargo_its_arguments_as_given() {
+        assert_eq!(run_args(&["run", "--", "--bench=x"]), ["--", "--bench=x"]);
+        assert_eq!(
+            run_args(&["run", "--release", "--", "--bench=x"]),
+            ["--release", "--", "--bench=x"]
+        );
+        assert_eq!(run_args(&["run", "--", "--", "x"]), ["--", "--", "x"]);
+        assert_eq!(run_args(&["--ci", "run", "--", "x"]), ["--", "x"]);
+        assert!(run_args(&["run"]).is_empty());
     }
 
     #[test]
