@@ -3,10 +3,6 @@ all-features = true
 
 [advisories]
 unmaintained = "workspace"
-ignore = [
-    { id = "RUSTSEC-2026-0194", reason = "Pinned CEF-rs revision requires plist 1.9.0 and quick-xml 0.39.x." },
-    { id = "RUSTSEC-2026-0195", reason = "Pinned CEF-rs revision requires plist 1.9.0 and quick-xml 0.39.x." },
-]
 
 [licenses]
 version = 2
@@ -36,8 +32,8 @@ wildcards = "warn"
 unknown-registry = "deny"
 unknown-git = "deny"
 
-# CEF releases lag the versions Kurogane targets, so this dependency is pinned
-# to a Git revision. Changes to the pinned revision can affect Kurogane's API.
+# tetsu, Kurogane's CEF bindings, is pinned to the Git revision Kurogane was
+# tested with. Changes to the pinned revision can affect Kurogane's API.
 allow-git = [
     "https://github.com/kurogane-rs/tetsu",
 ]

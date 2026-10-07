@@ -1,7 +1,7 @@
 //! Linux: `xdg-open`, which picks the desktop's browser. It gets the URL as
 //! one argument, no input and no output of the application's, and no
-//! `LD_LIBRARY_PATH`: `kurogane run` and the launcher's
-//! `KUROGANE_LD_LIBRARY_PATH` point it at CEF's directory, whose libraries
+//! `LD_LIBRARY_PATH`: a bundle launcher's `KUROGANE_LD_LIBRARY_PATH` may
+//! point it at CEF's directory, whose libraries
 //! (`libEGL`, `libvulkan`) the browser must not load. A worker thread waits
 //! for it, so no finished `xdg-open` is left unreaped.
 
