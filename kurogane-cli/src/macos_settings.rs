@@ -17,7 +17,7 @@ pub const CEF_MINIMUM_MACOS: MacosVersion = MacosVersion([12, 0, 0]);
 /// The CEF whose `CEF_TARGET_SDK` [`CEF_MINIMUM_MACOS`] was read from; a
 /// test fails once the CEF Kurogane builds with is another.
 #[cfg(test)]
-const CEF_MINIMUM_MACOS_CHECKED_FOR: &str = "150.0.10";
+const CEF_MINIMUM_MACOS_CHECKED_FOR: &str = "154.0.33";
 
 /// The category of an application whose `[macos]` names none.
 const DEFAULT_CATEGORY: &str = "public.app-category.utilities";
