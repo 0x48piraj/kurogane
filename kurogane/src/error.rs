@@ -23,6 +23,9 @@ pub enum RuntimeError {
 
     CefInitializeFailed,
     CefNotInstalled,
+    /// `CEF_PATH` names a directory that does not exist; no other runtime
+    /// runs in its place.
+    CefPathMissing(PathBuf),
     /// The Chromium runtime at `path` cannot be used; `source` says why.
     InvalidCefInstallation {
         path: PathBuf,
@@ -163,11 +166,24 @@ impl Display for RuntimeError {
                 f,
                 concat!(
                     "No Chromium runtime was found: none is bundled beside the ",
-                    "executable, and CEF_PATH names none.\n\n",
-                    "Start the application with:\n\n",
-                    "  kurogane run\n\n",
-                    "which installs Chromium when it is missing and points CEF_PATH at it."
+                    "executable, CEF_PATH names none, and none is installed for the ",
+                    "CEF version the application was built against.\n\n",
+                    "Install it with:\n\n",
+                    "  kurogane install\n\n",
+                    "or start the application with `kurogane run`, which installs it ",
+                    "when it is missing."
                 )
+            ),
+
+            RuntimeError::CefPathMissing(path) => write!(
+                f,
+                concat!(
+                    "CEF_PATH names a Chromium runtime that does not exist:\n\n",
+                    "  {}\n\n",
+                    "Point CEF_PATH at a CEF distribution, or unset it to run the ",
+                    "installed one (`kurogane install`)."
+                ),
+                path.display()
             ),
 
             RuntimeError::InvalidCefInstallation { path, .. } => write!(
@@ -303,6 +319,7 @@ impl std::error::Error for RuntimeError {
             | RuntimeError::EntrypointMissing(_)
             | RuntimeError::CefInitializeFailed
             | RuntimeError::CefNotInstalled
+            | RuntimeError::CefPathMissing(_)
             | RuntimeError::BrowserCreationFailed
             | RuntimeError::WindowCreationFailed
             | RuntimeError::InvalidWindowOptions(_)

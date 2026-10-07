@@ -89,7 +89,7 @@ Chromium is supplied as a managed runtime, separate from your crate and gives yo
 
 `kurogane dev`, `run` and `build` prefer a `CEF_PATH` override when set, falling back to the managed installation, and start your application with `CEF_PATH` pointing at it. A bundled application uses only the runtime inside its bundle, never `CEF_PATH`. See [Bundling](bundling.md#chromium-resolution) for the bundler's resolution and provenance rules.
 
-Start an unbundled application with `kurogane run` or `kurogane dev`. A plain `cargo run` copies no Chromium runtime beside the executable, so the application finds one only through `CEF_PATH`, with that directory also on `PATH` (Windows) or `LD_LIBRARY_PATH` (Linux). Building with `TETSU_STAGE_RUNTIME=1` copies the runtime beside the executable instead, up to 1.5 GB per profile.
+A plain `cargo run` works as well. Outside a bundle the application looks for a runtime beside its executable, then the one `CEF_PATH` names, then the installed runtime of the CEF version it was built against (`kurogane install`; `kurogane dev` and `run` install it when it is missing). A `CEF_PATH` that names no directory stops the application rather than letting it run another runtime.
 
 ## Advanced workflows
 

@@ -7,8 +7,8 @@
 use anyhow::Result;
 use cargo_metadata::MetadataCommand;
 use kurogane_layout::{
-    CefSource, install_root, installed_cef_root, read_provenance, resolve_cef_for_bundle,
-    validate_cef_runtime,
+    CefSource, cef_install_dir, install_root, installed_cef_root, read_provenance,
+    resolve_cef_for_bundle, validate_cef_runtime,
 };
 
 use crate::collector;
@@ -20,11 +20,8 @@ struct ToolCheck {
     hint: &'static str,
 }
 
-/// The tools a CEF build needs on the running host.
-///
-/// Only macOS compiles CEF's C++ `libcef_dll_wrapper`, through CMake's Ninja
-/// generator, in `tetsu-sys` or in Kurogane's shared wrapper build (see
-/// [`crate::platform`]). Linux and Windows link libcef alone.
+/// The tools a CEF build needs on the running host, a C toolchain to link
+/// with; nothing is compiled from C++.
 fn required_tools() -> Vec<ToolCheck> {
     if cfg!(windows) {
         vec![ToolCheck {
@@ -33,23 +30,11 @@ fn required_tools() -> Vec<ToolCheck> {
             hint: "Install Visual Studio C++ build tools",
         }]
     } else if cfg!(target_os = "macos") {
-        vec![
-            ToolCheck {
-                name: "Xcode Command Line Tools (clang)",
-                cmd: "clang",
-                hint: "Install Command Line Tools: xcode-select --install",
-            },
-            ToolCheck {
-                name: "CMake",
-                cmd: "cmake",
-                hint: "Install CMake",
-            },
-            ToolCheck {
-                name: "Ninja",
-                cmd: "ninja",
-                hint: "Install Ninja build system",
-            },
-        ]
+        vec![ToolCheck {
+            name: "Xcode Command Line Tools (clang)",
+            cmd: "clang",
+            hint: "Install Command Line Tools: xcode-select --install",
+        }]
     } else {
         vec![ToolCheck {
             name: "C compiler (cc)",
@@ -108,7 +93,7 @@ pub fn run(json: bool) -> Result<()> {
 
             tui::field("required", version);
 
-            tui::field("expected", tui::format_path(&install_root().join(version)));
+            tui::field("expected", tui::format_path(&cef_install_dir(version)));
 
             tui::info("Run: kurogane install");
 

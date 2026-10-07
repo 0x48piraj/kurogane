@@ -1,10 +1,7 @@
 //! macOS-specific CEF initialization.
 
-use std::ffi::CString;
-use std::os::unix::ffi::OsStrExt;
 use std::sync::{OnceLock, Weak};
 
-use kurogane_layout::detect_cef_root;
 use objc2::{
     ClassType, MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
@@ -56,7 +53,7 @@ pub fn init_ns_app(sandbox: crate::SandboxMode) -> Result<(), RuntimeError> {
         crate::sandbox::macos::initialize_helper()?;
     }
 
-    load_framework()?;
+    crate::runtime::load_libcef()?;
 
     if !browser {
         return Ok(());
@@ -87,32 +84,6 @@ fn promote_unbundled(app: &NSApplication) {
     if app.activationPolicy() == NSApplicationActivationPolicy::Prohibited {
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
     }
-}
-
-/// Loads the Chromium Embedded Framework from the resolved CEF root.
-fn load_framework() -> Result<(), RuntimeError> {
-    // The library loader assumes an app-bundle layout
-    // (<exe>/../Frameworks/...), which is unavailable in non-bundled dev runs
-    let detected = detect_cef_root().map_err(crate::runtime::cef_not_found)?;
-
-    let path = detected.root.join(tetsu::sys::FRAMEWORK_PATH);
-    let invalid = |source: Box<dyn std::error::Error + Send + Sync>| {
-        crate::runtime::unusable_cef(detected.mode, path.clone(), source)
-    };
-    let canonical = path.canonicalize().map_err(|e| invalid(Box::new(e)))?;
-    let framework =
-        CString::new(canonical.as_os_str().as_bytes()).map_err(|e| invalid(Box::new(e)))?;
-
-    // SAFETY: `framework` is a valid, NUL-terminated C string that outlives the call.
-    // Executed prior to any other CEF invocations, satisfying CEF's pre-initialization requirement.
-    let loaded = unsafe { tetsu::sys::cef_load_library(framework.as_ptr()) };
-    if loaded != 1 {
-        return Err(invalid(
-            "cef_load_library could not load the Chromium Embedded Framework".into(),
-        ));
-    }
-
-    Ok(())
 }
 
 /// Installs the application delegate for the process lifetime.

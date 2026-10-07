@@ -19,18 +19,12 @@ pub(crate) struct Data {
 }
 
 /// Returns the CEF runtimes and their build caches.
-pub(crate) fn runtimes() -> [Data; 3] {
+pub(crate) fn runtimes() -> [Data; 2] {
     [
         Data {
             label: "cef",
             what: "CEF runtimes",
             path: install_root(),
-        },
-        // Shared CEF wrapper builds, keyed to the runtimes
-        Data {
-            label: "wrapper",
-            what: "CEF wrapper cache",
-            path: cache_root().join("wrapper"),
         },
         Data {
             label: "tools",
@@ -101,14 +95,15 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
             remove(data.label, data.what, &data.path, &mut failed);
         }
 
-        // Kurogane's build output and materialized CEF runtimes
+        // Kurogane's own files under the target directory, the CEF runtimes
+        // materialized for bundles
         match &project {
             Ok(metadata) => {
-                let target = crate::launch::target_dir_in(metadata.target_directory.as_std_path());
+                let own = crate::launch::kurogane_dir_in(metadata.target_directory.as_std_path());
                 remove(
                     "target/kurogane",
-                    "Kurogane build output",
-                    &target,
+                    "materialized CEF runtimes",
+                    &own,
                     &mut failed,
                 );
             }

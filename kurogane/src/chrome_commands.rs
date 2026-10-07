@@ -16,7 +16,7 @@
 //! [`ChromeCommand`], and may refuse it; it never sees, and so never allows,
 //! a command Kurogane refuses.
 
-use std::ffi::{CStr, c_char, c_int};
+use std::ffi::{CStr, c_int};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::OnceLock;
 
@@ -145,17 +145,11 @@ const ALLOWED: &[(&CStr, ChromeCommand)] = &[
     ),
 ];
 
-unsafe extern "C" {
-    /// Resolves a string command name to its dynamic CEF command ID.
-    /// Returns `-1` if the command is absent in the current CEF build.
-    fn cef_id_for_command_id_name(name: *const c_char) -> c_int;
-}
-
 /// Resolves a stable command name to its dynamic runtime ID.
 pub(crate) fn command_id(name: &CStr) -> Option<c_int> {
     // SAFETY: `name` is a valid, null-terminated C-string. The FFI boundary
     // guarantees read-only access and the backing memory outlives the call.
-    let id = unsafe { cef_id_for_command_id_name(name.as_ptr()) };
+    let id = unsafe { tetsu::sys::cef_id_for_command_id_name(name.as_ptr()) };
     (id >= 0).then_some(id)
 }
 

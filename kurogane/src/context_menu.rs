@@ -22,7 +22,7 @@
 //! whose command [`App::on_chrome_command`](crate::App::on_chrome_command)
 //! refuses is left out of the menu, and asked about again when chosen.
 
-use std::ffi::{CStr, c_char, c_int};
+use std::ffi::{CStr, c_int};
 use std::fmt::Write as _;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::OnceLock;
@@ -528,12 +528,6 @@ enum Style {
     Alloy,
 }
 
-unsafe extern "C" {
-    /// The id of a string in Chromium's resources by its name, -1 when the
-    /// build has none of that name (cef_id_mappers.h).
-    fn cef_id_for_pack_string_name(name: *const c_char) -> c_int;
-}
-
 /// The command id of `item` in a menu of `style`. None for an item that
 /// style has no command for (Alloy's Inspect, which Kurogane runs itself;
 /// the spelling items, taken from Chromium's own menu) or a name the build
@@ -669,7 +663,7 @@ fn label(item: StandardItem) -> String {
     };
     // SAFETY: `name` is a valid, null-terminated C string, only read for
     // the call.
-    let id = unsafe { cef_id_for_pack_string_name(name.as_ptr()) };
+    let id = unsafe { tetsu::sys::cef_id_for_pack_string_name(name.as_ptr()) };
     let localized = (id >= 0)
         .then(resource_bundle_get_global)
         .flatten()

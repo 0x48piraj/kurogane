@@ -20,8 +20,8 @@ Apps run unsandboxed by default. An app that opts in with `SandboxMode::Chromium
 - The setuid helper shipped with CEF:
 
 ```bash
-sudo chown root:root ~/.local/share/kurogane/cef/{INSTALLED_CEF_VERSION}/chrome-sandbox
-sudo chmod 4755 ~/.local/share/kurogane/cef/{INSTALLED_CEF_VERSION}/chrome-sandbox
+sudo chown root:root ~/.local/share/tetsu/cef/{INSTALLED_CEF_VERSION}/cef_linux_x86_64/chrome-sandbox
+sudo chmod 4755 ~/.local/share/tetsu/cef/{INSTALLED_CEF_VERSION}/cef_linux_x86_64/chrome-sandbox
 ```
 
 The app checks both at startup and refuses to start, printing these instructions, when neither is usable. AppImages and Nix-store installs cannot use the setuid helper and need user namespaces.
@@ -50,7 +50,7 @@ kurogane dev
 
 ## macOS
 
-Requires CMake and Ninja. `hdiutil` ships with macOS; `--sign` additionally needs `codesign` from the Xcode Command Line Tools.
+`hdiutil` ships with macOS; `--sign` additionally needs `codesign` from the Xcode Command Line Tools.
 
 `kurogane dev` runs. The runtime resolves the managed Chromium framework, starts the browser, renderer and GPU processes and opens a window.
 

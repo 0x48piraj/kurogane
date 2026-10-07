@@ -37,7 +37,7 @@ The Linux CLI is a static binary and starts on any distribution, but apps run on
 | CLI | `~/.kurogane/bin/kurogane` | `%LOCALAPPDATA%\kurogane\bin\kurogane.exe` |
 | PATH setup | `~/.kurogane/env`, sourced from `~/.profile`, `~/.bashrc`, `~/.bash_profile`, `~/.zshenv` (those that exist; `.profile` and `.zshenv` are created), fish `conf.d/kurogane.fish` | user `Path` in `HKCU\Environment` |
 | Install receipt, read by `kurogane self uninstall` | `~/.kurogane/receipt.json` | `%LOCALAPPDATA%\kurogane\receipt.json` |
-| Chromium runtime (`kurogane install`) | `~/.local/share/kurogane/cef/<version>` (Linux), `~/Library/Application Support/kurogane/cef/<version>` (macOS) | `%LOCALAPPDATA%\kurogane\cef\<version>` |
+| Chromium runtime (`kurogane install`), shared with every project built with tetsu | `~/.local/share/tetsu/cef/<version>/cef_linux_<arch>` (Linux), `~/Library/Application Support/tetsu/cef/<version>/cef_macos_<arch>` (macOS) | `%LOCALAPPDATA%\tetsu\cef\<version>\cef_windows_<arch>` |
 
 Running the installer again upgrades in place. The existing binary is replaced only after the new one has been downloaded, verified and run successfully. Interrupted or failed installs leave the previous version intact.
 
@@ -146,14 +146,14 @@ On Unix:
 
 ```bash
 rm -r ~/.kurogane
-rm -r ~/.cache/kurogane ~/.local/share/kurogane/cef
+rm -r ~/.cache/kurogane ~/.local/share/tetsu/cef
 ```
 
 On macOS, the cache and runtime directories are:
 
 ```text
 ~/Library/Caches/kurogane
-~/Library/Application Support/kurogane/cef
+~/Library/Application Support/tetsu/cef
 ```
 
 Remove the installer entry from your shell startup files:
@@ -168,7 +168,7 @@ If you use fish, remove:
 ~/.config/fish/conf.d/kurogane.fish
 ```
 
-On Windows, remove everything under `%LOCALAPPDATA%\kurogane` except `profiles`, then remove `%LOCALAPPDATA%\kurogane\bin` from your user `Path` in **Edit environment variables for your account**.
+On Windows, remove everything under `%LOCALAPPDATA%\kurogane` except `profiles` and the Chromium runtimes in `%LOCALAPPDATA%\tetsu\cef`, then remove `%LOCALAPPDATA%\kurogane\bin` from your user `Path` in **Edit environment variables for your account**.
 
 ## What else you need
 
@@ -179,6 +179,5 @@ The CLI is all the installers put on your machine. Building and running apps als
 | Rust (stable) | all platforms | [rustup.rs](https://rustup.rs) |
 | Visual Studio C++ Build Tools | Windows | Visual Studio Installer, workload *Desktop development with C++* (includes the Windows SDK) |
 | Xcode Command Line Tools | macOS | `xcode-select --install` |
-| CMake and Ninja | macOS | `brew install cmake ninja`, or the official installers |
 | C compiler and Chromium's libraries | Linux | Debian/Ubuntu: `sudo apt install build-essential libnss3 libgtk-3-0 libgbm1 libxkbcommon0 libasound2` (Ubuntu 24.04: `libgtk-3-0t64 libasound2t64`); Fedora: `sudo dnf install gcc nss gtk3 mesa-libgbm libxkbcommon alsa-lib` |
 | Node.js | starters with a JavaScript frontend | [nodejs.org](https://nodejs.org) |

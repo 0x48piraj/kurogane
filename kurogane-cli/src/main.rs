@@ -50,8 +50,6 @@ mod template;
 mod starters;
 mod tui;
 
-mod platform;
-
 #[derive(Parser)]
 #[command(name = "kurogane")]
 #[command(

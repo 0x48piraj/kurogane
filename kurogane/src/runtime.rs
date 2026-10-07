@@ -45,7 +45,7 @@ fn resolve_layout(
         source: e,
     })?;
 
-    let detected = detect_cef_root().map_err(cef_not_found)?;
+    let detected = detect_cef_root(&cef_version()).map_err(cef_not_found)?;
 
     let invalid = |source: Box<dyn std::error::Error + Send + Sync>| {
         unusable_cef(detected.mode, detected.root.clone(), source)
@@ -88,10 +88,41 @@ fn profile_name(profile_id: Option<String>, exe: &std::path::Path) -> String {
     }
 }
 
+/// The CEF version the application was built against, as `kurogane install`
+/// names its directory.
+pub(crate) fn cef_version() -> String {
+    format!(
+        "{}.{}.{}",
+        sys::CEF_VERSION_MAJOR,
+        sys::CEF_VERSION_MINOR,
+        sys::CEF_VERSION_PATCH
+    )
+}
+
+/// Loads libcef from the runtime the application resolves, before any other
+/// call into CEF; the binary links none. macOS loads it in `init_ns_app`,
+/// after a sandboxed helper enters its sandbox.
+pub(crate) fn load_libcef() -> Result<(), RuntimeError> {
+    let detected = detect_cef_root(&cef_version()).map_err(cef_not_found)?;
+    let invalid = |source: Box<dyn std::error::Error + Send + Sync>| {
+        unusable_cef(detected.mode, detected.root.clone(), source)
+    };
+    // Its own DLLs load from its directory, which takes an absolute path
+    let libcef = std::path::absolute(detected.root.join(sys::LIBCEF_FILE))
+        .map_err(|e| invalid(Box::new(e)))?;
+
+    // SAFETY: no call into CEF precedes this one
+    unsafe { sys::load_libcef(&libcef) }.map_err(|e| invalid(Box::new(e)))?;
+    debug!("Loaded {} ({})", libcef.display(), detected.mode);
+
+    Ok(())
+}
+
 /// Maps a failure to find the Chromium runtime onto what the user can act on.
 pub(crate) fn cef_not_found(error: DetectError) -> RuntimeError {
     match error {
         DetectError::CurrentExe(source) => RuntimeError::ExecutableUnavailable(source),
+        DetectError::OverrideMissing(path) => RuntimeError::CefPathMissing(path),
         // Not found and whatever a newer layout crate adds, leaves no runtime
         _ => RuntimeError::CefNotInstalled,
     }
@@ -107,9 +138,9 @@ pub(crate) fn unusable_cef(
 ) -> RuntimeError {
     match mode {
         DiscoveryMode::Bundled => RuntimeError::IncompleteBundle { path, source },
-        DiscoveryMode::BesideExecutable | DiscoveryMode::EnvironmentOverride => {
-            RuntimeError::InvalidCefInstallation { path, source }
-        }
+        DiscoveryMode::BesideExecutable
+        | DiscoveryMode::EnvironmentOverride
+        | DiscoveryMode::Installed => RuntimeError::InvalidCefInstallation { path, source },
     }
 }
 
@@ -1326,6 +1357,9 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
     #[cfg(target_os = "macos")]
     crate::platform::macos::init_ns_app(spec.sandbox_mode)?;
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    load_libcef()?;
+
     // The first call fixes the CEF API version for the whole process; the
     // Windows sandbox check compares hashes under this version later
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
@@ -2068,5 +2102,14 @@ mod tests {
             "--typewriter",
             "--type-check"
         ]));
+    }
+
+    #[test]
+    fn the_installed_runtime_is_where_tetsu_installs_it() {
+        assert_eq!(
+            Some(kurogane_layout::cef_install_dir(&cef_version())),
+            tetsu::sys::cef_install_dir(),
+            "a plain cargo run looks where kurogane install and tetsu's builds put CEF"
+        );
     }
 }

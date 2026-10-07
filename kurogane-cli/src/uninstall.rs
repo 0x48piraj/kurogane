@@ -312,10 +312,14 @@ fn prune(home: &Path, bin: &Path) {
     remove_if_empty(home);
 }
 
-/// Removes Kurogane's data and cache folders if nothing is left in them.
+/// Removes Kurogane's data folder, its cache folder and tetsu's data folder
+/// when nothing is left in them.
 fn prune_data_roots() {
-    if let Some(data) = install_root().parent() {
+    if let Some(data) = profiles_root().parent() {
         remove_if_empty(data);
+    }
+    if let Some(tetsu) = install_root().parent() {
+        remove_if_empty(tetsu);
     }
     remove_if_empty(&cache_root());
 }

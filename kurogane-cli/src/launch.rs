@@ -78,36 +78,28 @@ pub(crate) fn ensure_cef_runtime() -> Result<PathBuf> {
     }
 }
 
-/// Returns Kurogane's directory under Cargo's target directory.
-///
-/// Kurogane builds `tetsu-sys` against the `CEF_PATH` it resolves, on macOS
-/// with a shared wrapper (see [`crate::platform::cef_build_script_override`]);
-/// a directory of its own keeps plain cargo builds from rerunning that build
-/// script.
-pub(crate) fn target_dir_in(base: &Path) -> PathBuf {
+/// Returns Kurogane's own directory under Cargo's target directory, which
+/// holds the runtimes it materializes for bundles.
+pub(crate) fn kurogane_dir_in(base: &Path) -> PathBuf {
     base.join("kurogane")
 }
 
-/// Kurogane's target directory for the current project.
+/// The current project's target directory, which Kurogane builds in as plain
+/// cargo does.
 pub(crate) fn target_dir() -> Result<PathBuf> {
     let metadata = cargo_metadata::MetadataCommand::new().no_deps().exec()?;
 
-    Ok(target_dir_in(metadata.target_directory.as_std_path()))
+    Ok(metadata.target_directory.into_std_path_buf())
 }
 
-/// Constructs a Cargo command with Kurogane's CEF build configuration.
+/// Constructs a Cargo command whose application runs on `cef`.
 ///
-/// Uses a shared target directory and `CEF_PATH` across build, run and bundle.
+/// The build reads no CEF, so it is plain cargo's; `CEF_PATH` reaches only the
+/// application it starts.
 pub(crate) fn cargo_command(cef: &Path, subcommand: &str) -> Result<Command> {
     let mut cmd = Command::new("cargo");
     cmd.arg(subcommand);
-
-    // The shared wrapper on macOS
-    cmd.args(crate::platform::cef_build_script_override(cef)?);
-
     cmd.env("CEF_PATH", cef);
-
-    cmd.env("CARGO_TARGET_DIR", target_dir()?);
 
     Ok(cmd)
 }
@@ -143,13 +135,8 @@ pub(crate) fn run_app(cef: &Path, cargo_args: &[OsString]) -> Result<ExitStatus>
 
 /// Run Cargo with the Kurogane runtime environment.
 fn cargo_run(cef: &Path, cargo_args: &[OsString]) -> Result<ExitStatus> {
-    crate::platform::prepare_gpu_libraries(cef, cargo_args)?;
-
     let mut cmd = cargo_command(cef, "run")?;
     cmd.args(cargo_args);
-
-    // Configure platform-specific runtime loading for the launched process
-    crate::platform::configure_runtime_env(&mut cmd, cef)?;
 
     tui::blank();
     tui::step("Launching application");

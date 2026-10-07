@@ -9,12 +9,21 @@ use std::path::{Path, PathBuf};
 
 use crate::platform;
 
+/// Where CEF is installed for every project of the user, tetsu's shared
+/// installation `tetsu/cef` under the local data directory, which
+/// `tetsu_download::install` fills and `tetsu_sys::cef_install_dir` names at
+/// run time.
 pub fn install_root() -> PathBuf {
-    platform::data_local_dir().join("kurogane").join("cef")
+    platform::data_local_dir().join("tetsu").join("cef")
 }
 
+/// The installation of CEF `version` for this host.
 pub fn cef_install_dir(version: &str) -> PathBuf {
-    install_root().join(version)
+    install_root().join(version).join(format!(
+        "cef_{}_{}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    ))
 }
 
 /// Resolves a versioned managed CEF installation if it exists locally.

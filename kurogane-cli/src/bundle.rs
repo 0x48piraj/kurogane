@@ -326,8 +326,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     }
 
     let profile = if debug { "debug" } else { "release" };
-    let kurogane_target = crate::launch::target_dir_in(metadata.target_directory.as_std_path());
-    let target_dir = kurogane_target.join(profile);
+    let target_dir = metadata.target_directory.as_std_path().join(profile);
 
     tui::step(&format!("Building {profile}..."));
 
@@ -344,7 +343,9 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
         .map(|p| p.cef_version.clone())
         .unwrap_or_else(|| env!("KUROGANE_CEF_VERSION").to_string());
 
-    let runtime_dir = kurogane_target.join("cef-runtime").join(&runtime_version);
+    let runtime_dir = crate::launch::kurogane_dir_in(metadata.target_directory.as_std_path())
+        .join("cef-runtime")
+        .join(&runtime_version);
 
     let cef_runtime = materialize_cef_runtime(&cef.root, &runtime_dir)?;
 

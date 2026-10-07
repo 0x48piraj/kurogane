@@ -89,7 +89,7 @@ flowchart TD
 The bundler resolves the CEF distribution with an override-first policy:
 
 1. **`CEF_PATH` override**: Accepted **only** when the directory contains an `archive.json` provenance file whose recorded version and platform match the build. An unverifiable or mismatched override is rejected rather than silently packaged. A set-but-broken `CEF_PATH` is a hard error, never a silent fallback.
-2. **Managed installation**: `~/.local/share/kurogane/cef/<version>/`, populated by `kurogane install`. Subjected to the same version/platform/provenance verification as overrides.
+2. **Managed installation**: `~/.local/share/tetsu/cef/<version>/cef_<os>_<arch>/`, tetsu's shared installation, populated by `kurogane install`. Subjected to the same version/platform/provenance verification as overrides.
 
 Chromium resolution prefers `CEF_PATH` when it is set, but an invalid override is an error rather than a fallback. Otherwise Kurogane uses the managed installation.
 
