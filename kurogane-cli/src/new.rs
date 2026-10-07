@@ -39,8 +39,6 @@ pub fn run(
     let project =
         template::generate_project(&template_dir, &name, &destination, &defines, consent)?;
 
-    template::write_cargo_config(&project)?;
-
     let generated_config = crate::config::PackagingConfig::load(&project)?;
 
     tui::success("Project created");

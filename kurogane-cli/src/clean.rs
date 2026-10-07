@@ -1,13 +1,13 @@
 //! Removes generated project artifacts and Kurogane's caches.
 //!
-//! `clean all` also removes installed CEF runtimes, build caches and
-//! application profiles.
+//! `clean all` also removes tetsu's shared CEF installation, build caches
+//! and application profiles.
 
 use anyhow::Result;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use kurogane_layout::{cache_root, install_root, profiles_root};
+use kurogane_layout::{cache_root, profiles_root};
 
 use crate::tui;
 
@@ -18,20 +18,21 @@ pub(crate) struct Data {
     pub(crate) path: PathBuf,
 }
 
-/// Returns the CEF runtimes and their build caches.
-pub(crate) fn runtimes() -> [Data; 2] {
-    [
-        Data {
-            label: "cef",
-            what: "CEF runtimes",
-            path: install_root(),
-        },
-        Data {
-            label: "tools",
-            what: "build tools",
-            path: cache_root().join("tools"),
-        },
-    ]
+/// Returns tetsu's shared CEF installation and Kurogane's build tools.
+pub(crate) fn runtimes() -> Vec<Data> {
+    let cef = tetsu_download::cef_install_root().map(|path| Data {
+        label: "cef",
+        what: "tetsu's shared CEF installation",
+        path,
+    });
+
+    let tools = Data {
+        label: "tools",
+        what: "build tools",
+        path: cache_root().join("tools"),
+    };
+
+    cef.into_iter().chain([tools]).collect()
 }
 
 /// Returns the caches managed by Kurogane's cleanup commands.
@@ -65,7 +66,7 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
     // Confirm destructive system-wide cleanup
     if nuclear && !confirmed {
         tui::warn("This will remove ALL Kurogane data.");
-        tui::warn("Including installed Chromium runtimes.");
+        tui::warn("Including tetsu's shared CEF installation, which other tetsu projects use too.");
         tui::warn("Including every Kurogane application's browser profile (cookies, storage).");
 
         // Never prompt when running unattended
@@ -90,24 +91,9 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
     if nuclear {
         tui::step("Deprovisioning Kurogane environment");
 
-        // Global CEF runtimes and the build caches keyed to them
+        // tetsu's shared CEF installation and Kurogane's build tools
         for data in runtimes() {
             remove(data.label, data.what, &data.path, &mut failed);
-        }
-
-        // Kurogane's own files under the target directory, the CEF runtimes
-        // materialized for bundles
-        match &project {
-            Ok(metadata) => {
-                let own = crate::launch::kurogane_dir_in(metadata.target_directory.as_std_path());
-                remove(
-                    "target/kurogane",
-                    "materialized CEF runtimes",
-                    &own,
-                    &mut failed,
-                );
-            }
-            Err(e) => tui::field("target/kurogane", format!("skipped: {e}")),
         }
 
         // Every application profile

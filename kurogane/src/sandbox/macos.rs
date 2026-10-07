@@ -8,7 +8,7 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::sync::OnceLock;
 
-use kurogane_layout::{bundled_cef_root, bundled_helper_path};
+use kurogane_layout::{bundle_cef_root, bundled_helper_path};
 
 use crate::chromium_flags::ChromiumFlags;
 use crate::error::RuntimeError;
@@ -75,7 +75,7 @@ pub(crate) fn initialize_helper() -> Result<(), RuntimeError> {
 
 /// Loads `libcef_sandbox.dylib` and calls its `cef_sandbox_initialize`.
 fn enter_sandbox() -> Result<HelperSandbox, String> {
-    let root = match bundled_cef_root() {
+    let root = match bundle_cef_root() {
         Ok(Some(root)) => root,
         Ok(None) => return Err("CEF framework not found in the app bundle".into()),
         Err(e) => return Err(format!("cannot locate the running executable: {e}")),

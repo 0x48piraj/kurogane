@@ -111,7 +111,6 @@ pub(crate) fn initialize(
     template::confirm_hooks(&template_dir, consent)?;
 
     template::generate_into_existing_dir(&template_dir, &name, dir, &defines, consent)?;
-    template::write_cargo_config(dir)?;
 
     tui::success("Kurogane added");
     tui::blank();

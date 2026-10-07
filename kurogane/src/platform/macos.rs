@@ -34,8 +34,7 @@ pub fn set_app(app: &AppHandle) {
 /// `NSApplication` subclass and makes an unbundled process a regular
 /// foreground app.
 ///
-/// Uses the runtime-resolved CEF root rather than the app-bundle-only loader
-/// path used by `tetsu::library_loader`.
+/// Loads the CEF the runtime resolves, its bundle's or the one tetsu finds.
 ///
 /// CEF's subprocesses (`--type=renderer`, `gpu-process`, `utility`) get the
 /// library alone: an `NSApplication` registers its process with LaunchServices
@@ -45,18 +44,19 @@ pub fn set_app(app: &AppHandle) {
 /// Under [`SandboxMode::Chromium`](crate::SandboxMode::Chromium) subprocesses
 /// enter the seatbelt sandbox before the framework is loaded.
 ///
-/// Must run on the main thread before CEF initialization.
-pub fn init_ns_app(sandbox: crate::SandboxMode) -> Result<(), RuntimeError> {
+/// Must run on the main thread before CEF initialization. Returns the
+/// directory of the CEF it loaded.
+pub fn init_ns_app(sandbox: crate::SandboxMode) -> Result<std::path::PathBuf, RuntimeError> {
     let browser = crate::runtime::is_browser_process();
 
     if !browser && matches!(sandbox, crate::SandboxMode::Chromium) {
         crate::sandbox::macos::initialize_helper()?;
     }
 
-    crate::runtime::load_libcef()?;
+    let cef_root = crate::runtime::load_libcef()?;
 
     if !browser {
-        return Ok(());
+        return Ok(cef_root);
     }
 
     let mtm = MainThreadMarker::new().expect("init_ns_app must run on the main thread");
@@ -74,7 +74,7 @@ pub fn init_ns_app(sandbox: crate::SandboxMode) -> Result<(), RuntimeError> {
 
     promote_unbundled(&app);
 
-    Ok(())
+    Ok(cef_root)
 }
 
 /// Ensures unbundled browser processes use a foreground activation policy.

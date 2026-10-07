@@ -39,7 +39,7 @@ Three crates with distinct responsibilities:
 | Crate | Responsibility |
 |-------|----------------|
 | `kurogane` | The runtime. Process model, browser and window lifecycle, IPC, asset resolution. |
-| `kurogane-layout` | Filesystem knowledge. Chromium discovery, provenance, validation, runtime materialization and bundle layouts. |
+| `kurogane-layout` | Filesystem knowledge. A bundle's Chromium runtime, provenance, validation and bundle layouts. |
 | `kurogane-cli` | Developer tooling. `init`, `dev`, `run`, `bundle`, `doctor`, `info`, `install`. |
 
 The runtime and CLI are separate layers: the runtime does not depend on the CLI and the CLI interacts with the runtime through its public interfaces.
@@ -85,14 +85,15 @@ It does not provide a UI framework; the frontend remains the application's respo
 
 ## Runtime layout
 
-Each command has its own rule for which Chromium it uses, and all of them read `CEF_PATH` in one place (`kurogane_layout::cef_override`):
+An application finds its Chromium the same way however it is started, and the CLI follows the same rule:
 
-* An application in a bundle runs the runtime inside its bundle and no other: neither `CEF_PATH` nor the managed installation, so it loads its resources and locales from the tree its libcef came from. `kurogane bundle` marks a bundle with a `kurogane-bundle` file beside the executable (a macOS `.app` needs none), and an application whose bundle has lost its runtime reports the bundle incomplete.
-* Any other application, frontendless or not, uses a runtime beside its executable, else the one `CEF_PATH` names.
-* `kurogane dev`, `run` and `build` use `CEF_PATH`, else the managed installation (installing it when missing), and start the application with `CEF_PATH` pointing at that choice. So in development the application uses the Chromium the CLI chose.
-* `kurogane bundle` copies into the bundle the runtime `CEF_PATH` names, else the managed installation, and requires verified provenance for either ([Chromium resolution](docs/bundling.md#chromium-resolution)). That is the only use of either: once bundled, the application never looks outside its bundle.
+* An application in a bundle runs the runtime inside its bundle and no other: neither `CEF_PATH` nor the installation, so it loads its resources and locales from the tree its libcef came from. `kurogane bundle` marks a bundle with a `kurogane-bundle` file beside the executable (a macOS `.app` needs none), and an application whose bundle has lost its runtime reports the bundle incomplete.
+* Any other application loads the runtime tetsu finds (`tetsu::sys::find_cef_dir`): one beside its executable, else the one `CEF_PATH` names (a `CEF_PATH` naming no directory is an error, never skipped), else tetsu's shared installation of the CEF version the application was built against. A plain `cargo run` and `kurogane run` start it the same way.
+* Loading refuses a libcef that is not the CEF build the application was built against.
+* `kurogane install`, `dev` and `run` install the CEF version the project's application loads, read from its tetsu-sys, when it is missing; they pass the application nothing.
+* `kurogane bundle` copies into the bundle the runtime `CEF_PATH` names, else the installation, and requires verified provenance for either ([Chromium resolution](docs/bundling.md#chromium-resolution)). That is the only use of either: once bundled, the application never looks outside its bundle.
 
-`kurogane doctor` reports the first choice of `dev` and the one `bundle` would package.
+`kurogane doctor` reports the runtime the application loads and the one `bundle` would package.
 
 The runtime follows each platform's native distribution layout rather than trying to normalize them into a single structure.
 

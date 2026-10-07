@@ -1,37 +1,11 @@
 //! Filesystem layout and low-level bundle utilities.
 //!
-//! This module owns managed CEF paths, bundled runtime discovery and
-//! recursive directory copying and linking.
+//! This module owns bundled runtime discovery and recursive directory
+//! copying and linking.
 //!
 //! It does not define package formats or application metadata.
 
 use std::path::{Path, PathBuf};
-
-use crate::platform;
-
-/// Where CEF is installed for every project of the user, tetsu's shared
-/// installation `tetsu/cef` under the local data directory, which
-/// `tetsu_download::install` fills and `tetsu_sys::cef_install_dir` names at
-/// run time.
-pub fn install_root() -> PathBuf {
-    platform::data_local_dir().join("tetsu").join("cef")
-}
-
-/// The installation of CEF `version` for this host.
-pub fn cef_install_dir(version: &str) -> PathBuf {
-    install_root().join(version).join(format!(
-        "cef_{}_{}",
-        std::env::consts::OS,
-        std::env::consts::ARCH
-    ))
-}
-
-/// Resolves a versioned managed CEF installation if it exists locally.
-pub fn installed_cef_root(version: &str) -> Option<PathBuf> {
-    let root = cef_install_dir(version);
-
-    root.exists().then_some(root)
-}
 
 /// Mirrors `src` into `dst`, reusing files where possible.
 ///
@@ -276,51 +250,10 @@ pub(crate) fn bundle_cef_root_for(exe: &Path) -> Option<PathBuf> {
     }
 }
 
-pub fn bundled_cef_root() -> Result<Option<PathBuf>, std::io::Error> {
-    let exe = std::env::current_exe()?;
-
-    let dir = exe
-        .parent()
-        .ok_or_else(|| std::io::Error::other("the executable path has no parent directory"))?;
-
-    #[cfg(target_os = "windows")]
-    {
-        // CEF is next to the executable
-        let libcef = dir.join("libcef.dll");
-
-        if libcef.exists() {
-            return Ok(Some(dir.to_path_buf()));
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        // CEF is under `cef/`
-        let cef = dir.join("cef");
-
-        if cef.exists() {
-            return Ok(Some(cef));
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let framework = dir.join("Chromium Embedded Framework.framework");
-
-        if framework.exists() {
-            return Ok(Some(dir.to_path_buf()));
-        }
-
-        if let Some(contents) = app_bundle_contents(&exe) {
-            let frameworks = contents.join("Frameworks");
-
-            if frameworks.join(crate::platform::MACOS_FRAMEWORK).exists() {
-                return Ok(Some(frameworks));
-            }
-        }
-    }
-
-    Ok(None)
+/// The Chromium runtime of the bundle the running executable belongs to,
+/// whether or not it is still in place; a bundle runs it and no other.
+pub fn bundle_cef_root() -> std::io::Result<Option<PathBuf>> {
+    Ok(bundle_cef_root_for(&std::env::current_exe()?))
 }
 
 #[cfg(test)]

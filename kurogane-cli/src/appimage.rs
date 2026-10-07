@@ -438,8 +438,8 @@ pub fn build(
 
     let linuxdeploy = prepare_linuxdeploy(&arch)?;
 
-    // Deploy external dependencies without relocating the canonical bundle
-    // CEF remains in runtime/cef/, resolved through its $ORIGIN/cef RPATH
+    // Deploy external dependencies without relocating the canonical bundle;
+    // CEF stays in runtime/cef/, which the application loads by its path
     let mut cmd = Command::new(&linuxdeploy);
     cmd.env("OUTPUT", &appimage_path);
     cmd.env("ARCH", &arch);
@@ -558,11 +558,11 @@ mod tests {
     }
 
     #[test]
-    fn apprun_leaves_library_loading_to_rpath() {
+    fn apprun_sets_no_library_path() {
         let content = generate_apprun("myapp", "myapp");
         assert!(
             !content.contains("LD_LIBRARY_PATH"),
-            "AppRun must not set LD_LIBRARY_PATH; loading is RPATH-owned"
+            "AppRun must not set LD_LIBRARY_PATH; the application loads libcef by its path"
         );
     }
 

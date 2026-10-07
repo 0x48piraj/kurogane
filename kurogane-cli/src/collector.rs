@@ -202,7 +202,7 @@ mod env {
             .collect::<BTreeMap<_, _>>();
 
         EnvInfo {
-            cef_path: kurogane_layout::cef_override().map(|path| path.display().to_string()),
+            cef_path: kurogane_layout::cef_path().map(|path| path.display().to_string()),
             display: std::env::var("DISPLAY").ok(),
             wayland_display: std::env::var("WAYLAND_DISPLAY").ok(),
             xdg_session_type: std::env::var("XDG_SESSION_TYPE").ok(),
@@ -212,18 +212,31 @@ mod env {
 }
 
 mod cef {
-    //! Managed CEF installation information.
+    //! The CEF the project's application loads.
     use super::*;
     use kurogane_layout::validate_cef_runtime;
 
-    /// The runtime `kurogane dev` and `run` start applications with.
+    /// The runtime the project's application loads, the one `CEF_PATH`
+    /// names or else the installation of its CEF version.
     pub fn collect() -> CefInfo {
-        let (root, source) = crate::launch::dev_cef_root();
+        let version = crate::install::project_cef_version();
+        let (root, source) = match kurogane_layout::cef_path() {
+            Some(root) => (Some(root), "CEF_PATH"),
+            None => (
+                crate::install::installed_cef_dir(&version).ok(),
+                "installed",
+            ),
+        };
 
         CefInfo {
-            version: env!("KUROGANE_CEF_VERSION").to_string(),
-            path: root.display().to_string(),
-            valid: validate_cef_runtime(&root).is_ok(),
+            version,
+            path: root
+                .as_ref()
+                .map(|root| root.display().to_string())
+                .unwrap_or_default(),
+            valid: root
+                .as_ref()
+                .is_some_and(|root| validate_cef_runtime(root).is_ok()),
             source: source.into(),
         }
     }

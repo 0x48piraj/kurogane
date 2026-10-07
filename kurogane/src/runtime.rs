@@ -13,7 +13,7 @@ use crate::browser_registry::{BrowserId, BrowserMetadata, BrowserType};
 use crate::registry::Registry;
 use crate::window_registry::{WindowId, WindowMetadata};
 use crate::window::{Opening, WindowIdentity, open_browser_window};
-use kurogane_layout::{DetectError, DiscoveryMode, detect_cef_root, validate_cef_runtime, profile_dir};
+use kurogane_layout::{bundle_cef_root, validate_cef_runtime, profile_dir};
 use crate::ipc::IpcRouter;
 use crate::ipc::transport::message::RendererSandbox;
 use crate::spec::{RuntimeMode, RuntimeSpec, SandboxMode};
@@ -27,9 +27,11 @@ struct RuntimeLayout {
     subprocess: Option<std::path::PathBuf>,
 }
 
-/// The runtime's layout: the profile is `chosen` (App::profile_dir), or
-/// the one Kurogane names from `profile_id` or the executable.
+/// The runtime's layout around the CEF it loaded: the profile is `chosen`
+/// (App::profile_dir), or the one Kurogane names from `profile_id` or the
+/// executable.
 fn resolve_layout(
+    cef_root: std::path::PathBuf,
     profile_id: Option<String>,
     chosen: Option<std::path::PathBuf>,
 ) -> Result<RuntimeLayout, RuntimeError> {
@@ -44,17 +46,6 @@ fn resolve_layout(
         path: profile_dir.clone(),
         source: e,
     })?;
-
-    let detected = detect_cef_root(&cef_version()).map_err(cef_not_found)?;
-
-    let invalid = |source: Box<dyn std::error::Error + Send + Sync>| {
-        unusable_cef(detected.mode, detected.root.clone(), source)
-    };
-    validate_cef_runtime(&detected.root).map_err(|e| invalid(Box::new(e)))?;
-    let cef_root = detected
-        .root
-        .canonicalize()
-        .map_err(|e| invalid(Box::new(e)))?;
 
     debug!("CEF root: {}", cef_root.display());
 
@@ -88,59 +79,98 @@ fn profile_name(profile_id: Option<String>, exe: &std::path::Path) -> String {
     }
 }
 
-/// The CEF version the application was built against, as `kurogane install`
-/// names its directory.
-pub(crate) fn cef_version() -> String {
-    format!(
-        "{}.{}.{}",
-        sys::CEF_VERSION_MAJOR,
-        sys::CEF_VERSION_MINOR,
-        sys::CEF_VERSION_PATCH
-    )
+/// Where the application's CEF came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CefOrigin {
+    /// The bundle the executable belongs to, which runs its own runtime and
+    /// no other.
+    Bundle,
+    /// Where tetsu found it outside a bundle.
+    Found(sys::FoundIn),
+}
+
+impl std::fmt::Display for CefOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bundle => f.write_str("the bundle"),
+            Self::Found(found_in) => found_in.fmt(f),
+        }
+    }
+}
+
+/// Finds the application's CEF, its bundle's (which it runs and no other),
+/// else the one tetsu finds beside the executable, in `CEF_PATH` or in the
+/// shared installation of the CEF version it was built against.
+fn locate_cef() -> Result<(std::path::PathBuf, CefOrigin), RuntimeError> {
+    if let Some(root) = bundle_cef_root().map_err(RuntimeError::ExecutableUnavailable)? {
+        return Ok((root, CefOrigin::Bundle));
+    }
+
+    let found = sys::find_cef_dir().map_err(cef_not_found)?;
+
+    Ok((found.path, CefOrigin::Found(found.found_in)))
 }
 
 /// Loads libcef from the runtime the application resolves, before any other
 /// call into CEF; the binary links none. macOS loads it in `init_ns_app`,
-/// after a sandboxed helper enters its sandbox.
-pub(crate) fn load_libcef() -> Result<(), RuntimeError> {
-    let detected = detect_cef_root(&cef_version()).map_err(cef_not_found)?;
+/// after a sandboxed helper enters its sandbox. Returns the runtime's
+/// directory, canonical.
+pub(crate) fn load_libcef() -> Result<std::path::PathBuf, RuntimeError> {
+    let (root, origin) = locate_cef()?;
     let invalid = |source: Box<dyn std::error::Error + Send + Sync>| {
-        unusable_cef(detected.mode, detected.root.clone(), source)
+        unusable_cef(origin, root.clone(), source)
     };
+    validate_cef_runtime(&root).map_err(|e| invalid(Box::new(e)))?;
     // Its own DLLs load from its directory, which takes an absolute path
-    let libcef = std::path::absolute(detected.root.join(sys::LIBCEF_FILE))
-        .map_err(|e| invalid(Box::new(e)))?;
+    let libcef =
+        std::path::absolute(root.join(sys::LIBCEF_FILE)).map_err(|e| invalid(Box::new(e)))?;
 
     // SAFETY: no call into CEF precedes this one
-    unsafe { sys::load_libcef(&libcef) }.map_err(|e| invalid(Box::new(e)))?;
-    debug!("Loaded {} ({})", libcef.display(), detected.mode);
+    unsafe { sys::load_libcef(&libcef) }.map_err(|e| match e {
+        sys::LoadError::VersionMismatch { path, found } => RuntimeError::CefVersionMismatch {
+            path,
+            found,
+            expected: bindings_cef_version(),
+        },
+        other => invalid(Box::new(other)),
+    })?;
+    debug!("Loaded {} from {origin}", libcef.display());
 
-    Ok(())
+    root.canonicalize().map_err(|e| invalid(Box::new(e)))
+}
+
+/// The CEF build the bindings were generated for, such as
+/// `154.0.33+ga03e714+chromium-154.0.8037.94`.
+fn bindings_cef_version() -> String {
+    std::ffi::CStr::from_bytes_with_nul(sys::CEF_VERSION)
+        .ok()
+        .and_then(|version| version.to_str().ok())
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// Maps a failure to find the Chromium runtime onto what the user can act on.
-pub(crate) fn cef_not_found(error: DetectError) -> RuntimeError {
+fn cef_not_found(error: sys::FindError) -> RuntimeError {
     match error {
-        DetectError::CurrentExe(source) => RuntimeError::ExecutableUnavailable(source),
-        DetectError::OverrideMissing(path) => RuntimeError::CefPathMissing(path),
-        // Not found and whatever a newer layout crate adds, leaves no runtime
-        _ => RuntimeError::CefNotInstalled,
+        sys::FindError::CurrentExe(source) => RuntimeError::ExecutableUnavailable(source),
+        sys::FindError::CefPathMissing(path) => RuntimeError::CefPathMissing(path),
+        sys::FindError::NotInstalled { installed } => RuntimeError::CefNotInstalled {
+            expected: installed,
+        },
     }
 }
 
 /// Names a Chromium runtime that cannot be used: a bundle's own leaves the
 /// bundle incomplete, since a bundle runs no other; any other is an invalid
 /// installation.
-pub(crate) fn unusable_cef(
-    mode: DiscoveryMode,
+fn unusable_cef(
+    origin: CefOrigin,
     path: std::path::PathBuf,
     source: Box<dyn std::error::Error + Send + Sync>,
 ) -> RuntimeError {
-    match mode {
-        DiscoveryMode::Bundled => RuntimeError::IncompleteBundle { path, source },
-        DiscoveryMode::BesideExecutable
-        | DiscoveryMode::EnvironmentOverride
-        | DiscoveryMode::Installed => RuntimeError::InvalidCefInstallation { path, source },
+    match origin {
+        CefOrigin::Bundle => RuntimeError::IncompleteBundle { path, source },
+        CefOrigin::Found(_) => RuntimeError::InvalidCefInstallation { path, source },
     }
 }
 
@@ -1354,15 +1384,13 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
     // never sets `multi_threaded_message_loop`
     let ui_thread = std::thread::current().id();
 
+    // Loading fixes the CEF API version for the whole process; the Windows
+    // sandbox check compares hashes under this version later
     #[cfg(target_os = "macos")]
-    crate::platform::macos::init_ns_app(spec.sandbox_mode)?;
+    let cef_root = crate::platform::macos::init_ns_app(spec.sandbox_mode)?;
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
-    load_libcef()?;
-
-    // The first call fixes the CEF API version for the whole process; the
-    // Windows sandbox check compares hashes under this version later
-    let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
+    let cef_root = load_libcef()?;
 
     debug!("Runtime initializing");
 
@@ -1387,7 +1415,7 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
     debug!("Executing subprocess dispatch");
     execute_subprocesses(&args, &mut app, sandbox_info);
 
-    let layout = resolve_layout(spec.profile_id, spec.profile_dir)?;
+    let layout = resolve_layout(cef_root, spec.profile_id, spec.profile_dir)?;
     crate::sandbox::preflight(spec.sandbox_mode, &layout.cef_root)?;
 
     let external_message_pump = spec.scheduler.is_some();
@@ -2102,14 +2130,5 @@ mod tests {
             "--typewriter",
             "--type-check"
         ]));
-    }
-
-    #[test]
-    fn the_installed_runtime_is_where_tetsu_installs_it() {
-        assert_eq!(
-            Some(kurogane_layout::cef_install_dir(&cef_version())),
-            tetsu::sys::cef_install_dir(),
-            "a plain cargo run looks where kurogane install and tetsu's builds put CEF"
-        );
     }
 }

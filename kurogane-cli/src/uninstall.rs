@@ -9,7 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use kurogane_layout::{cache_root, install_root, profiles_root};
+use kurogane_layout::{cache_root, profiles_root};
 
 use crate::clean;
 use crate::receipt::{self, Installed};
@@ -318,7 +318,10 @@ fn prune_data_roots() {
     if let Some(data) = profiles_root().parent() {
         remove_if_empty(data);
     }
-    if let Some(tetsu) = install_root().parent() {
+    if let Some(tetsu) = tetsu_download::cef_install_root()
+        .as_deref()
+        .and_then(Path::parent)
+    {
         remove_if_empty(tetsu);
     }
     remove_if_empty(&cache_root());

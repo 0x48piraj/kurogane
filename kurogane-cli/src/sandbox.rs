@@ -59,17 +59,13 @@ pub(crate) fn app_name(package: &Package) -> Result<&str> {
 ///
 /// The bootstrap loads the application rather than being it, so only the
 /// `cdylib` is built, and Cargo reports where it landed.
-pub(crate) fn build_library(
-    cef: &Path,
-    package: &Package,
-    build_args: &[OsString],
-) -> Result<PathBuf> {
+pub(crate) fn build_library(package: &Package, build_args: &[OsString]) -> Result<PathBuf> {
     let target =
         launch::find_target(package, TargetKind::CDyLib).ok_or_else(|| anyhow!(NEEDS_A_LIBRARY))?;
 
     tui::step("Building application library");
 
-    let output = launch::cargo_command(cef, "build")?
+    let output = launch::cargo_command("build")
         .args(launch::strip_message_format(build_args))
         .arg("--lib")
         .arg("--message-format=json-render-diagnostics")
@@ -159,7 +155,7 @@ pub(crate) fn run(
 ) -> Result<ExitStatus> {
     let (build_args, app_args) = launch::split_cargo_args(cargo_args);
 
-    let library = build_library(cef, package, build_args)?;
+    let library = build_library(package, build_args)?;
 
     let artifact_dir = library
         .parent()
@@ -201,10 +197,10 @@ pub(crate) fn run(
     tui::step("Launching application");
     tui::blank();
 
+    // The application finds the staged runtime beside its executable, the one
+    // the bootstrap already loaded
     let status = Command::new(&exe)
         .args(app_args)
-        // The staged runtime is the one the bootstrap already loaded from
-        .env("CEF_PATH", &staging)
         .status()
         .with_context(|| format!("failed to run {}", exe.display()))?;
 
@@ -385,8 +381,8 @@ mod tests {
     #[test]
     fn a_run_is_staged_beside_its_build_output() {
         assert_eq!(
-            staging_dir(Path::new("/w/target/kurogane/debug")),
-            PathBuf::from("/w/target/kurogane/debug/sandbox"),
+            staging_dir(Path::new("/w/target/debug")),
+            PathBuf::from("/w/target/debug/sandbox"),
             "staging under the artifact directory follows --target and --release"
         );
     }

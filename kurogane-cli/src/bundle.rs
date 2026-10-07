@@ -9,9 +9,7 @@ use std::env::consts::EXE_SUFFIX;
 use std::ffi::OsString;
 use std::process::Command;
 use cargo_metadata::{MetadataCommand, Package, TargetKind};
-use kurogane_layout::{
-    AppMetadata, Executable, ResolvedDistribution, materialize_cef_runtime, resolve_cef_for_bundle,
-};
+use kurogane_layout::{AppMetadata, Executable, ResolvedDistribution, resolve_cef_for_bundle};
 use crate::config::{AppConfig, PackagingConfig, anchor_path};
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use crate::signing::SignConfig;
@@ -255,13 +253,13 @@ fn build_executable(
     if crate::sandbox::uses_bootstrap(app) {
         // The bootstrap is CEF's; only the application's library is built
         let profile: Vec<OsString> = profile.iter().map(OsString::from).collect();
-        let library = crate::sandbox::build_library(cef, pkg, &profile)?;
+        let library = crate::sandbox::build_library(pkg, &profile)?;
         let exe_name = format!("{}{EXE_SUFFIX}", crate::sandbox::app_name(pkg)?);
 
         return Ok((crate::sandbox::bundled(cef, library)?, exe_name));
     }
 
-    let status = crate::launch::cargo_command(cef, "build")?
+    let status = crate::launch::cargo_command("build")
         .args(profile)
         .status()?;
 
@@ -310,19 +308,18 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
     tui::step("Resolving CEF runtime...");
 
-    let cef = resolve_cef_for_bundle(env!("KUROGANE_CEF_VERSION"))?;
+    // The CEF the project's application loads
+    let cef_version = crate::install::cef_version_of(&metadata)
+        .unwrap_or_else(|| env!("KUROGANE_CEF_VERSION").to_string());
+    let installed = crate::install::installed_cef_dir(&cef_version)?;
+    let cef = resolve_cef_for_bundle(&cef_version, &installed)?;
 
-    match cef.source {
-        kurogane_layout::CefSource::ManagedCache => {
-            if let Some(p) = &cef.provenance {
-                tui::field("cef", format!("{} (managed)", p.cef_version));
-            }
-        }
-        kurogane_layout::CefSource::EnvironmentOverride => {
-            if let Some(p) = &cef.provenance {
-                tui::field("cef", format!("{} (CEF_PATH)", p.cef_version));
-            }
-        }
+    if let Some(p) = &cef.provenance {
+        let source = match cef.source {
+            kurogane_layout::CefSource::Installed => "installed",
+            kurogane_layout::CefSource::CefPath => "CEF_PATH",
+        };
+        tui::field("cef", format!("{} ({source})", p.cef_version));
     }
 
     let profile = if debug { "debug" } else { "release" };
@@ -336,18 +333,8 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     // Resolve distribution contents
     tui::step("Resolving distribution...");
 
-    // Materialize the runnable runtime
-    let runtime_version = cef
-        .provenance
-        .as_ref()
-        .map(|p| p.cef_version.clone())
-        .unwrap_or_else(|| env!("KUROGANE_CEF_VERSION").to_string());
-
-    let runtime_dir = crate::launch::kurogane_dir_in(metadata.target_directory.as_std_path())
-        .join("cef-runtime")
-        .join(&runtime_version);
-
-    let cef_runtime = materialize_cef_runtime(&cef.root, &runtime_dir)?;
+    // The bundle copies the runtime's files straight from the distribution
+    let cef_runtime = cef.root.clone();
 
     // Configured paths are relative to the project root
     let project_root = metadata.workspace_root.as_std_path();

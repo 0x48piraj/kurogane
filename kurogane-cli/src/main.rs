@@ -12,7 +12,6 @@ mod dev;
 mod launch;
 mod run;
 mod sandbox;
-mod build;
 mod bundle;
 mod config;
 mod signing;
@@ -82,7 +81,6 @@ enum Commands {
         )]
         cargo_args: Vec<OsString>,
     },
-    Build,
     Bundle {
         #[arg(long)]
         debug: bool,
@@ -203,7 +201,6 @@ fn main() -> anyhow::Result<()> {
         Commands::Install => install::run(),
         Commands::Dev => dev::run(),
         Commands::Run { cargo_args } => run::run(cargo_args),
-        Commands::Build => build::run(),
         Commands::Bundle {
             debug,
             format,

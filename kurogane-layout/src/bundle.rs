@@ -5,8 +5,7 @@
 //!
 //! On Windows, CEF is placed beside the executable so the Windows loader can
 //! resolve its DLL dependencies normally. On Linux, CEF is placed under
-//! `runtime/cef`, matching the executable's `$ORIGIN/cef` RPATH and runtime
-//! discovery path.
+//! `runtime/cef`, where the runtime looks for a bundle's runtime.
 //!
 //! Linux bundles include `chrome-sandbox` with the CEF runtime.
 //! Used by `SandboxMode::Chromium` when unprivileged user namespaces are unavailable.

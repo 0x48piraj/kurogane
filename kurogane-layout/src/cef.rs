@@ -1,8 +1,8 @@
-//! CEF distribution resolution, provenance, validation and runtime materialization.
+//! CEF distribution resolution, provenance and validation.
 //!
-//! This module knows how to recognize CEF distributions, validate their
-//! platform and version metadata and produce the runnable CEF runtime used
-//! by packaged applications.
+//! This module knows how to recognize the CEF distribution a bundle packages,
+//! validate its platform and version metadata and tell its runtime files from
+//! the rest.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,16 +11,35 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::bootstrap::Bootstrap;
-use crate::layout::copy_dir_filtered;
 
 /// The source of a resolved CEF distribution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CefSource {
-    // A managed CEF installation
-    ManagedCache,
+    /// The distribution `CEF_PATH` names.
+    CefPath,
 
-    // A CEF distribution supplied through `CEF_PATH`
-    EnvironmentOverride,
+    /// tetsu's shared installation of the CEF version.
+    Installed,
+}
+
+impl CefSource {
+    /// What to do about a distribution from here without provenance.
+    fn unverifiable_advice(self) -> &'static str {
+        match self {
+            Self::CefPath => {
+                "Point CEF_PATH at a distribution `export-cef-dir` wrote, or unset it to \
+                 package the installed one."
+            }
+            Self::Installed => "Re-run `kurogane install`.",
+        }
+    }
+}
+
+/// The CEF distribution `CEF_PATH` names, when it is set and not empty.
+pub fn cef_path() -> Option<PathBuf> {
+    std::env::var_os("CEF_PATH")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
 }
 
 /// Provenance information for a CEF distribution.
@@ -172,23 +191,18 @@ pub struct ResolvedCef {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum CefError {
-    #[error("No usable CEF distribution; Run `kurogane install` (expected {expected} at {path})")]
-    NotFound { expected: String, path: PathBuf },
+    #[error("CEF {version} is not installed at {}; run `kurogane install`", .path.display())]
+    NotInstalled { version: String, path: PathBuf },
 
-    #[error("CEF_PATH does not exist: {0}")]
-    OverrideMissing(PathBuf),
-
-    #[error(
-        "CEF_PATH has no archive.json provenance; refusing to package an unverifiable CEF tree ({0}). \
-         Run `kurogane install` or point CEF_PATH at a managed installation."
-    )]
-    UnverifiableOverride(PathBuf),
+    #[error("CEF_PATH names {}, which is not a directory", .0.display())]
+    CefPathMissing(PathBuf),
 
     #[error(
-        "managed CEF installation at {0} has no archive.json provenance; refusing to package an \
-         unverifiable CEF tree. Re-run `kurogane install`."
+        "{} has no archive.json provenance; refusing to package an unverifiable CEF tree. {}",
+        .path.display(),
+        .from.unverifiable_advice()
     )]
-    UnverifiableManaged(PathBuf),
+    Unverifiable { path: PathBuf, from: CefSource },
 
     #[error("CEF version mismatch at {path}: expected {expected}, found {found}")]
     VersionMismatch {
@@ -240,9 +254,12 @@ impl CefError {
 fn resolve_provenanced_root(
     root: PathBuf,
     version: &str,
-    unverifiable: fn(PathBuf) -> CefError,
+    from: CefSource,
 ) -> Result<CefProvenance, CefError> {
-    let provenance = read_provenance(&root)?.ok_or_else(|| unverifiable(root.clone()))?;
+    let provenance = read_provenance(&root)?.ok_or_else(|| CefError::Unverifiable {
+        path: root.clone(),
+        from,
+    })?;
 
     verify_provenanced_version_and_platform(&provenance, &root, version)?;
 
@@ -251,57 +268,51 @@ fn resolve_provenanced_root(
     Ok(provenance)
 }
 
-/// Resolves the CEF distribution for release packaging.
-pub fn resolve_cef_for_bundle(version: &str) -> Result<ResolvedCef, CefError> {
-    resolve_cef(
-        version,
-        crate::cef_override(),
-        crate::layout::installed_cef_root,
-    )
+/// Resolves the CEF distribution a bundle packages, the one `CEF_PATH`
+/// names, else the installation at `installed` of CEF `version`.
+pub fn resolve_cef_for_bundle(version: &str, installed: &Path) -> Result<ResolvedCef, CefError> {
+    resolve_cef(version, cef_path(), installed)
 }
 
 /// Resolves the CEF distribution for release packaging.
 ///
-/// An explicit `CEF_PATH` is preferred over the managed installation. Both
-/// sources are validated for provenance, version, platform and distribution
-/// layout. An invalid `CEF_PATH` causes resolution to fail rather than falling
-/// back to the managed installation.
+/// `CEF_PATH` comes before the installation. Both are validated for
+/// provenance, version, platform and distribution layout. A set `CEF_PATH`
+/// naming no directory is an error rather than a fallback to the
+/// installation.
 fn resolve_cef(
     version: &str,
-    override_path: Option<PathBuf>,
-    installed_root: impl Fn(&str) -> Option<PathBuf>,
+    cef_path: Option<PathBuf>,
+    installed: &Path,
 ) -> Result<ResolvedCef, CefError> {
-    // Environment override takes precedence; a set-but-broken override is an
-    // error rather than a silent fallback to the managed installation
-    if let Some(root) = override_path {
-        if !root.exists() {
-            return Err(CefError::OverrideMissing(root));
+    if let Some(root) = cef_path {
+        if !root.is_dir() {
+            return Err(CefError::CefPathMissing(root));
         }
 
-        let provenance =
-            resolve_provenanced_root(root.clone(), version, CefError::UnverifiableOverride)?;
+        let provenance = resolve_provenanced_root(root.clone(), version, CefSource::CefPath)?;
 
         return Ok(ResolvedCef {
             root,
-            source: CefSource::EnvironmentOverride,
+            source: CefSource::CefPath,
             provenance: Some(provenance),
         });
     }
 
-    if let Some(root) = installed_root(version) {
-        let provenance =
-            resolve_provenanced_root(root.clone(), version, CefError::UnverifiableManaged)?;
+    if installed.is_dir() {
+        let root = installed.to_path_buf();
+        let provenance = resolve_provenanced_root(root.clone(), version, CefSource::Installed)?;
 
         return Ok(ResolvedCef {
             root,
-            source: CefSource::ManagedCache,
+            source: CefSource::Installed,
             provenance: Some(provenance),
         });
     }
 
-    Err(CefError::NotFound {
-        expected: version.to_string(),
-        path: crate::layout::cef_install_dir(version),
+    Err(CefError::NotInstalled {
+        version: version.to_string(),
+        path: installed.to_path_buf(),
     })
 }
 
@@ -374,7 +385,8 @@ pub(crate) fn cef_binary_name() -> &'static str {
     }
 }
 
-/// Validates that a directory has a recognized CEF distribution shape.
+/// Validates that a directory is a CEF distribution as tetsu writes it, with
+/// libcef at its root.
 pub fn validate_distribution(root: &Path) -> Result<(), CefError> {
     if !root.is_dir() {
         return Err(CefError::InvalidDistribution {
@@ -383,59 +395,17 @@ pub fn validate_distribution(root: &Path) -> Result<(), CefError> {
         });
     }
 
-    let raw_shape = root.join("Release").is_dir() && root.join("Resources").is_dir();
-    let flat_shape = root.join(cef_binary_name()).exists();
-
-    if raw_shape || flat_shape {
+    if root.join(cef_binary_name()).exists() {
         Ok(())
     } else {
         Err(CefError::InvalidDistribution {
             root: root.to_path_buf(),
             reason: format!(
-                "neither Release/+Resources/ nor {} found",
+                "no {} at its root, as `export-cef-dir` and `kurogane install` lay it out",
                 cef_binary_name()
             ),
         })
     }
-}
-
-/// Prepares the runtime files required by a packaged application.
-pub fn materialize_cef_runtime(
-    distribution_root: &Path,
-    destination: &Path,
-) -> Result<PathBuf, CefError> {
-    if destination.exists() && validate_cef_runtime(destination).is_ok() {
-        return Ok(destination.to_path_buf());
-    }
-
-    if destination.exists() {
-        fs::remove_dir_all(destination).map_err(CefError::io("clear", destination))?;
-    }
-
-    let copy = CefError::io("copy the CEF runtime to", destination);
-    let release = distribution_root.join("Release");
-    let resources = distribution_root.join("Resources");
-
-    if release.is_dir() && resources.is_dir() {
-        // Raw official distribution
-        copy_dir_filtered(&release, destination, &is_runtime_artifact)
-            .and_then(|()| copy_dir_filtered(&resources, destination, &is_runtime_artifact))
-            .map_err(copy)?;
-    } else if distribution_root.join(cef_binary_name()).exists() {
-        // Already-flattened distribution
-        copy_dir_filtered(distribution_root, destination, &is_runtime_artifact).map_err(copy)?;
-    } else {
-        return Err(CefError::InvalidDistribution {
-            root: distribution_root.to_path_buf(),
-            reason: format!(
-                "neither Release/+Resources/ nor {} found",
-                cef_binary_name()
-            ),
-        });
-    }
-
-    validate_cef_runtime(destination)?;
-    Ok(destination.to_path_buf())
 }
 
 /// V8 snapshot file names across CEF versions.
@@ -587,21 +557,6 @@ mod tests {
     // Distribution validation
 
     #[test]
-    fn raw_distribution_shape_is_valid() {
-        let dir = tmp();
-        fs::create_dir_all(dir.path().join("Release")).unwrap();
-        fs::create_dir_all(dir.path().join("Resources")).unwrap();
-
-        let binary = dir.path().join("Release").join(cef_binary_name());
-        if let Some(parent) = binary.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(&binary, "").unwrap();
-
-        assert!(validate_distribution(dir.path()).is_ok());
-    }
-
-    #[test]
     fn flat_distribution_shape_is_valid() {
         let dir = tmp();
 
@@ -622,34 +577,11 @@ mod tests {
         assert!(matches!(err, CefError::InvalidDistribution { .. }));
     }
 
-    // Materialization
+    // Runtime files, as a bundle copies them
 
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn raw_distribution_becomes_flat_runtime() {
-        let dir = tmp();
-        let dist = dir.path().join("dist");
-        fs::create_dir_all(dist.join("Release")).unwrap();
-        fs::create_dir_all(dist.join("Resources").join("locales")).unwrap();
-        fs::write(dist.join("Release").join("libcef.so"), "lib").unwrap();
-        fs::write(dist.join("Release").join("chrome-sandbox"), "sb").unwrap();
-        fs::write(dist.join("Resources").join("icudtl.dat"), "icu").unwrap();
-        fs::write(dist.join("Resources").join("v8_context_snapshot.bin"), "v8").unwrap();
-        fs::write(
-            dist.join("Resources").join("locales").join("en-US.pak"),
-            "pak",
-        )
-        .unwrap();
-
-        let dest = dir.path().join("runtime");
-        let out = materialize_cef_runtime(&dist, &dest).unwrap();
-
-        assert_eq!(out, dest);
-        assert!(dest.join("libcef.so").exists());
-        assert!(dest.join("chrome-sandbox").exists());
-        assert!(dest.join("icudtl.dat").exists());
-        assert!(dest.join("locales/en-US.pak").exists());
-        assert!(validate_cef_runtime(&dest).is_ok());
+    /// Copies `dist` to `dest` as a bundle does, runtime files only.
+    fn copy_runtime(dist: &Path, dest: &Path) {
+        crate::layout::copy_dir_filtered(dist, dest, &is_runtime_artifact).unwrap();
     }
 
     #[test]
@@ -664,7 +596,7 @@ mod tests {
         fs::write(dist.join("CREDITS.html"), "credits").unwrap();
 
         let dest = dir.path().join("runtime");
-        materialize_cef_runtime(&dist, &dest).unwrap();
+        copy_runtime(&dist, &dest);
 
         assert!(dest.join(cef_binary_name()).exists());
         assert!(!dest.join("include").exists());
@@ -683,7 +615,7 @@ mod tests {
         }
 
         let dest = dir.path().join("runtime");
-        materialize_cef_runtime(&dist, &dest).unwrap();
+        copy_runtime(&dist, &dest);
 
         for name in ["bootstrap.exe", "bootstrapc.exe", "libcef.lib"] {
             assert!(!dest.join(name).exists(), "{name} is not loaded at runtime");
@@ -734,7 +666,7 @@ mod tests {
         .unwrap();
 
         let dest = dir.path().join("runtime");
-        materialize_cef_runtime(&dist, &dest).unwrap();
+        copy_runtime(&dist, &dest);
 
         assert!(!dest.join("archive.json").exists());
         assert!(
@@ -746,35 +678,6 @@ mod tests {
             dest.join(cef_binary_name()).exists(),
             "runtime files unaffected"
         );
-    }
-
-    #[test]
-    fn materialization_is_cached_when_valid() {
-        let dir = tmp();
-        let dist = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
-        let dest = dir.path().join("runtime");
-        materialize_cef_runtime(&dist, &dest).unwrap();
-
-        // Corrupt the source; cache must still be returned untouched
-        fs::remove_file(dist.join(cef_binary_name())).unwrap();
-        let marker = dest.join("cache-marker");
-        fs::write(&marker, "hit").unwrap();
-
-        materialize_cef_runtime(&dist, &dest).unwrap();
-        assert!(marker.exists(), "valid destination must be reused");
-    }
-
-    #[test]
-    fn invalid_cached_destination_is_rebuilt() {
-        let dir = tmp();
-        let dist = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
-        let dest = dir.path().join("runtime");
-        fs::create_dir_all(&dest).unwrap();
-        fs::write(dest.join("garbage"), "").unwrap();
-
-        materialize_cef_runtime(&dist, &dest).unwrap();
-        assert!(dest.join(cef_binary_name()).exists());
-        assert!(!dest.join("garbage").exists());
     }
 
     // Runtime validation
@@ -892,31 +795,35 @@ mod tests {
 
     // Resolution policy
     //
-    // Tests inject both the override lookup and the managed-root lookup, so
-    // no test mutates process-global environment state.
+    // Tests pass CEF_PATH and the installation in as values, so no test
+    // mutates process-global environment state.
 
     #[test]
-    fn resolution_fails_without_managed_install_or_override() {
-        let err = resolve_cef("0.0.0-nonexistent", None, |_| None).unwrap_err();
-        assert!(matches!(err, CefError::NotFound { .. }));
+    fn resolution_fails_without_an_installation_or_cef_path() {
+        let dir = tmp();
+        let err = resolve_cef("0.0.0-nonexistent", None, &dir.path().join("absent")).unwrap_err();
+        assert!(matches!(err, CefError::NotInstalled { .. }));
     }
 
     #[test]
-    fn unverifiable_override_is_rejected() {
+    fn an_unverifiable_cef_path_is_rejected() {
         let dir = tmp();
         let fake = dir.path().join("dev-cef");
         crate::test_fixtures::cef_runtime(&fake); // looks like CEF but has no archive.json
 
-        let err = resolve_cef("1.2.3", Some(fake.clone()), |_| {
-            panic!("managed lookup must not run when override is set")
-        })
-        .unwrap_err();
+        let err = resolve_cef("1.2.3", Some(fake.clone()), &dir.path().join("absent")).unwrap_err();
 
-        assert!(matches!(err, CefError::UnverifiableOverride(_)));
+        assert!(matches!(
+            err,
+            CefError::Unverifiable {
+                from: CefSource::CefPath,
+                ..
+            }
+        ));
     }
 
     #[test]
-    fn version_mismatched_override_is_rejected() {
+    fn a_version_mismatched_cef_path_is_rejected() {
         let dir = tmp();
         let fake = crate::test_fixtures::cef_runtime(&dir.path().join("dev-cef"));
         fs::write(
@@ -925,83 +832,73 @@ mod tests {
         )
         .unwrap();
 
-        let err = resolve_cef("1.2.3", Some(fake.clone()), |_| {
-            panic!("managed lookup must not run when override is set")
-        })
-        .unwrap_err();
+        let err = resolve_cef("1.2.3", Some(fake.clone()), &dir.path().join("absent")).unwrap_err();
 
         assert!(matches!(err, CefError::VersionMismatch { .. }));
     }
 
     #[test]
-    fn verified_override_with_matching_provenance_is_accepted() {
+    fn a_verified_cef_path_with_matching_provenance_is_accepted() {
         let dir = tmp();
-        let fake = crate::test_fixtures::cef_runtime(&dir.path().join("dev-cef"));
-        let platform = current_platform_name().unwrap_or("linux64");
-        let archive_name =
-            format!("cef_binary_1.2.3+g6a8d2b7+chromium-131.0.6778.204_{platform}_minimal.tar.bz2");
-        fs::write(
-            fake.join("archive.json"),
-            serde_json::json!({ "type": "minimal", "name": archive_name, "sha1": "x" }).to_string(),
-        )
-        .unwrap();
+        let fake = provenance_fixture(&dir.path().join("dev"));
 
-        let resolved = resolve_cef("1.2.3", Some(fake.clone()), |_| {
-            panic!("managed lookup must not run when override is set")
-        })
-        .unwrap();
+        let resolved =
+            resolve_cef("1.2.3", Some(fake.clone()), &dir.path().join("absent")).unwrap();
 
-        assert_eq!(resolved.source, CefSource::EnvironmentOverride);
+        assert_eq!(resolved.source, CefSource::CefPath);
         let prov = resolved.provenance.expect("provenance present");
         assert_eq!(prov.chromium_version.as_deref(), Some("131.0.6778.204"));
     }
 
-    // Managed-install resolution (injected root; no environment mutation)
+    // The installation
 
-    fn managed_provenance_fixture(dir: &Path) -> PathBuf {
-        let managed = crate::test_fixtures::cef_runtime(&dir.join("managed"));
+    fn provenance_fixture(dir: &Path) -> PathBuf {
+        let installed = crate::test_fixtures::cef_runtime(&dir.join("installed"));
         let platform = current_platform_name().unwrap_or("linux64");
         let archive_name =
             format!("cef_binary_1.2.3+g6a8d2b7+chromium-131.0.6778.204_{platform}_minimal.tar.bz2");
         fs::write(
-            managed.join("archive.json"),
+            installed.join("archive.json"),
             serde_json::json!({ "type": "minimal", "name": archive_name, "sha1": "x" }).to_string(),
         )
         .unwrap();
-        managed
+        installed
     }
 
     #[test]
-    fn valid_managed_install_is_accepted_with_provenance() {
+    fn a_valid_installation_is_accepted_with_provenance() {
         let dir = tmp();
-        let managed = managed_provenance_fixture(dir.path());
+        let installed = provenance_fixture(dir.path());
 
-        let resolved = resolve_cef("1.2.3", None, |_| Some(managed.clone())).unwrap();
+        let resolved = resolve_cef("1.2.3", None, &installed).unwrap();
 
-        assert_eq!(resolved.source, CefSource::ManagedCache);
-        assert_eq!(resolved.root, managed);
+        assert_eq!(resolved.source, CefSource::Installed);
+        assert_eq!(resolved.root, installed);
         assert!(resolved.provenance.is_some());
     }
 
     #[test]
-    fn managed_install_without_provenance_is_rejected() {
+    fn an_installation_without_provenance_is_rejected() {
         let dir = tmp();
-        let managed = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
+        let installed = crate::test_fixtures::cef_runtime(&dir.path().join("installed"));
 
-        let err = resolve_cef("1.2.3", None, |_| Some(managed.clone())).unwrap_err();
+        let err = resolve_cef("1.2.3", None, &installed).unwrap_err();
 
         assert!(
-            matches!(err, CefError::UnverifiableManaged(ref p) if p == &managed),
-            "expected UnverifiableManaged, got: {err}"
+            matches!(
+                err,
+                CefError::Unverifiable { ref path, from: CefSource::Installed } if path == &installed
+            ),
+            "expected Unverifiable, got: {err}"
         );
     }
 
     #[test]
-    fn version_mismatched_managed_install_is_rejected() {
+    fn a_version_mismatched_installation_is_rejected() {
         let dir = tmp();
-        let managed = managed_provenance_fixture(dir.path());
+        let installed = provenance_fixture(dir.path());
 
-        let err = resolve_cef("127.1.1", None, |_| Some(managed.clone())).unwrap_err();
+        let err = resolve_cef("127.1.1", None, &installed).unwrap_err();
 
         assert!(
             matches!(err, CefError::VersionMismatch { .. }),
@@ -1010,9 +907,9 @@ mod tests {
     }
 
     #[test]
-    fn platform_mismatched_managed_install_is_rejected() {
+    fn a_platform_mismatched_installation_is_rejected() {
         let dir = tmp();
-        let managed = crate::test_fixtures::cef_runtime(&dir.path().join("managed"));
+        let installed = crate::test_fixtures::cef_runtime(&dir.path().join("installed"));
         let wrong_platform = if current_platform_name() == Some("linux64") {
             "windowsarm64"
         } else {
@@ -1022,12 +919,12 @@ mod tests {
             "cef_binary_1.2.3+g6a8d2b7+chromium-131.0.6778.204_{wrong_platform}_minimal.tar.bz2"
         );
         fs::write(
-            managed.join("archive.json"),
+            installed.join("archive.json"),
             serde_json::json!({ "type": "minimal", "name": archive_name, "sha1": "x" }).to_string(),
         )
         .unwrap();
 
-        let err = resolve_cef("1.2.3", None, |_| Some(managed.clone())).unwrap_err();
+        let err = resolve_cef("1.2.3", None, &installed).unwrap_err();
 
         assert!(
             matches!(err, CefError::PlatformMismatch { .. }),
@@ -1036,34 +933,28 @@ mod tests {
     }
 
     #[test]
-    fn override_takes_precedence_over_managed_install() {
+    fn cef_path_comes_before_the_installation() {
         let dir = tmp();
-        let override_root = managed_provenance_fixture(&dir.path().join("ovr"));
-        let managed_root = managed_provenance_fixture(&dir.path().join("mgr"));
+        let cef_path = provenance_fixture(&dir.path().join("cef-path"));
+        let installed = provenance_fixture(&dir.path().join("installed"));
 
-        let resolved = resolve_cef("1.2.3", Some(override_root.clone()), |_| {
-            Some(managed_root.clone())
-        })
-        .unwrap();
+        let resolved = resolve_cef("1.2.3", Some(cef_path.clone()), &installed).unwrap();
 
-        assert_eq!(resolved.source, CefSource::EnvironmentOverride);
-        assert_eq!(resolved.root, override_root);
+        assert_eq!(resolved.source, CefSource::CefPath);
+        assert_eq!(resolved.root, cef_path);
     }
 
     #[test]
-    fn missing_override_path_errors_even_with_managed_install() {
+    fn a_missing_cef_path_is_an_error_even_with_an_installation() {
         let dir = tmp();
-        let managed_root = managed_provenance_fixture(&dir.path().join("mgr"));
+        let installed = provenance_fixture(&dir.path().join("installed"));
         let missing = dir.path().join("does-not-exist");
 
-        let err = resolve_cef("1.2.3", Some(missing.clone()), |_| {
-            Some(managed_root.clone())
-        })
-        .unwrap_err();
+        let err = resolve_cef("1.2.3", Some(missing.clone()), &installed).unwrap_err();
 
         assert!(
-            matches!(err, CefError::OverrideMissing(ref p) if p == &missing),
-            "expected OverrideMissing, got: {err}"
+            matches!(err, CefError::CefPathMissing(ref p) if p == &missing),
+            "expected CefPathMissing, got: {err}"
         );
     }
 }

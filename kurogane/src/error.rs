@@ -22,10 +22,22 @@ pub enum RuntimeError {
     },
 
     CefInitializeFailed,
-    CefNotInstalled,
+    /// No Chromium runtime beside the executable, no `CEF_PATH` and nothing
+    /// installed at `expected`, which is `None` for a user without a local
+    /// data directory.
+    CefNotInstalled {
+        expected: Option<PathBuf>,
+    },
     /// `CEF_PATH` names a directory that does not exist; no other runtime
     /// runs in its place.
     CefPathMissing(PathBuf),
+    /// The Chromium runtime at `path` is another CEF build, commit `found`,
+    /// than the one the application was built against, `expected`.
+    CefVersionMismatch {
+        path: PathBuf,
+        found: String,
+        expected: String,
+    },
     /// The Chromium runtime at `path` cannot be used; `source` says why.
     InvalidCefInstallation {
         path: PathBuf,
@@ -162,18 +174,23 @@ impl Display for RuntimeError {
                 )
             ),
 
-            RuntimeError::CefNotInstalled => write!(
-                f,
-                concat!(
-                    "No Chromium runtime was found: none is bundled beside the ",
-                    "executable, CEF_PATH names none, and none is installed for the ",
-                    "CEF version the application was built against.\n\n",
+            RuntimeError::CefNotInstalled { expected } => {
+                f.write_str(concat!(
+                    "No Chromium runtime was found: none is beside the executable, ",
+                    "CEF_PATH names none and the CEF version the application was ",
+                    "built against is not installed"
+                ))?;
+                match expected {
+                    Some(path) => write!(f, " at\n\n  {}\n\n", path.display())?,
+                    None => f.write_str(", as this user has no local data directory.\n\n")?,
+                }
+                f.write_str(concat!(
                     "Install it with:\n\n",
                     "  kurogane install\n\n",
                     "or start the application with `kurogane run`, which installs it ",
                     "when it is missing."
-                )
-            ),
+                ))
+            }
 
             RuntimeError::CefPathMissing(path) => write!(
                 f,
@@ -186,14 +203,32 @@ impl Display for RuntimeError {
                 path.display()
             ),
 
+            RuntimeError::CefVersionMismatch {
+                path,
+                found,
+                expected,
+            } => write!(
+                f,
+                concat!(
+                    "The Chromium runtime at\n\n",
+                    "  {}\n\n",
+                    "is CEF commit {}, not the CEF {} this application was built ",
+                    "against.\n\n",
+                    "Install the matching one with `kurogane install`, or point CEF_PATH ",
+                    "at it."
+                ),
+                path.display(),
+                found,
+                expected
+            ),
+
             RuntimeError::InvalidCefInstallation { path, .. } => write!(
                 f,
                 concat!(
                     "Chromium installation is invalid:\n\n",
                     "  {}\n\n",
-                    "In development, start the application with:\n\n",
-                    "  kurogane run\n\n",
-                    "which installs Chromium when it is missing and points CEF_PATH at it."
+                    "Reinstall it with `kurogane install`, or point CEF_PATH at a complete ",
+                    "CEF distribution."
                 ),
                 path.display()
             ),
@@ -318,8 +353,9 @@ impl std::error::Error for RuntimeError {
             | RuntimeError::AssetRootMissing(_)
             | RuntimeError::EntrypointMissing(_)
             | RuntimeError::CefInitializeFailed
-            | RuntimeError::CefNotInstalled
+            | RuntimeError::CefNotInstalled { .. }
             | RuntimeError::CefPathMissing(_)
+            | RuntimeError::CefVersionMismatch { .. }
             | RuntimeError::BrowserCreationFailed
             | RuntimeError::WindowCreationFailed
             | RuntimeError::InvalidWindowOptions(_)

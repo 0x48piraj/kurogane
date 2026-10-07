@@ -1,6 +1,5 @@
 mod bootstrap;
 mod cef;
-mod discover;
 mod layout;
 mod platform;
 mod profile;
@@ -15,19 +14,15 @@ pub mod test_fixtures;
 pub use bootstrap::{Bootstrap, client_library_path, stage_runtime};
 pub use bundle::{BundleError, BundleLayout};
 pub use cef::{
-    materialize_cef_runtime, read_provenance, resolve_cef_for_bundle, validate_cef_runtime,
-    CefError, CefProvenance, CefSource, ResolvedCef,
+    cef_path, read_provenance, resolve_cef_for_bundle, validate_cef_runtime, CefError,
+    CefProvenance, CefSource, ResolvedCef,
 };
-pub use discover::{DetectError, DetectedCef, DiscoveryMode, cef_override, detect_cef_root};
 pub use distribution::{
     AppMetadata, DistributionError, Executable, LinkProblem, NameProblem, ResolvedDistribution,
     ResolvedResource, check_app_name, portable_file_name,
 };
 pub use shell::sh_quote;
-pub use layout::{
-    bundled_cef_root, bundled_helper_path, bundled_resource_root, cef_install_dir, copy_dir,
-    install_root, installed_cef_root, link_dir,
-};
+pub use layout::{bundle_cef_root, bundled_helper_path, bundled_resource_root, copy_dir, link_dir};
 #[cfg(target_os = "macos")]
 pub use layout::bundled_helper_path_for;
 pub use package::{PackageError, package_directory};

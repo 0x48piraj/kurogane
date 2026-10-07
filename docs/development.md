@@ -82,19 +82,19 @@ For applications with no HTML frontend, use `App::url` and your own serving stra
 
 Chromium is supplied as a managed runtime, separate from your crate and gives you complete control over the browser process.
 
-- `kurogane install` fetches and verifies the managed Chromium distribution for the version your build links against.
+- `kurogane install` fetches and verifies the Chromium distribution of the version your application loads, into tetsu's shared installation.
 - `kurogane dev` and `kurogane bundle` resolve this runtime automatically (`kurogane dev` runs the install step if needed).
 - `kurogane doctor` inspects your setup: expected Chromium version, installed versions, frontend source/distribution, and container/CI detection.
 - `kurogane list` shows available profiles and versions; `kurogane info` prints your project's configured manifest.
 
-`kurogane dev`, `run` and `build` prefer a `CEF_PATH` override when set, falling back to the managed installation, and start your application with `CEF_PATH` pointing at it. A bundled application uses only the runtime inside its bundle, never `CEF_PATH`. See [Bundling](bundling.md#chromium-resolution) for the bundler's resolution and provenance rules.
+`kurogane dev` and `run` install the CEF version your application loads when it is missing, then start it with plain `cargo run` and pass it nothing; with `CEF_PATH` set they check that runtime instead. A bundled application uses only the runtime inside its bundle, never `CEF_PATH`. See [Bundling](bundling.md#chromium-resolution) for the bundler's resolution and provenance rules.
 
-A plain `cargo run` works as well. Outside a bundle the application looks for a runtime beside its executable, then the one `CEF_PATH` names, then the installed runtime of the CEF version it was built against (`kurogane install`; `kurogane dev` and `run` install it when it is missing). A `CEF_PATH` that names no directory stops the application rather than letting it run another runtime.
+A plain `cargo run` works as well. Outside a bundle the application looks for a runtime beside its executable, then the one `CEF_PATH` names, then the installed runtime of the CEF version it was built against (`kurogane install`; `kurogane dev` and `run` install it when it is missing). A `CEF_PATH` that names no directory stops the application rather than letting it run another runtime, and loading refuses a libcef that is not the CEF build the application was built against.
 
 ## Advanced workflows
 
 - **`kurogane run`** passes arguments straight to Cargo (unlike `dev`), useful when you need `cargo run` passthrough.
-- **`kurogane build`** compiles a release binary without bundling.
+- **`cargo build --release`** compiles a release binary without bundling; no build reads CEF.
 - **`kurogane bundle`** packages your app into a distributable artifact. See [Bundling](bundling.md).
 - **Custom protocols, IPC and windowing** are covered in [Recipes](recipes.md).
 - **Embedding into an existing event loop / window host** (e.g. winit) is covered in [winit integration](winit.md).

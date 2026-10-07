@@ -253,25 +253,6 @@ pub fn generate_into_existing_dir(
     cargo_generate::generate(args).context("Project generation failed")
 }
 
-/// Keep the bundled CEF runtime discoverable without environment shims.
-pub(crate) fn write_cargo_config(project_dir: &Path) -> Result<()> {
-    let cargo_dir = project_dir.join(".cargo");
-    fs::create_dir_all(&cargo_dir)
-        .with_context(|| format!("failed to create directory {}", cargo_dir.display()))?;
-
-    fs::write(
-        project_dir.join(".cargo/config.toml"),
-        r#"[target.'cfg(all(unix, not(target_os = "macos")))']
-rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN/cef"]
-
-[target.'cfg(target_os = "macos")']
-rustflags = ["-C", "link-arg=-Wl,-rpath,@executable_path"]
-"#,
-    )?;
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,15 +390,5 @@ mod tests {
 
         let hooks = detect_hooks(dir.path());
         assert_eq!(hooks, vec!["pre.rhai", "post-a.rhai", "post-b.rhai"]);
-    }
-
-    #[test]
-    fn cargo_config_pins_rpath_to_the_bundled_cef_runtime() {
-        let dir = tempfile::tempdir().unwrap();
-        write_cargo_config(dir.path()).unwrap();
-
-        let contents = fs::read_to_string(dir.path().join(".cargo/config.toml")).unwrap();
-        assert!(contents.starts_with("[target."));
-        assert!(contents.contains("$ORIGIN/cef"));
     }
 }

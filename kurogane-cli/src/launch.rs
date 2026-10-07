@@ -10,46 +10,44 @@
 //! Once control passes to the user's program, the program owns the exit code.
 
 use anyhow::Result;
-use cargo_metadata::{Package, Target, TargetKind};
+use cargo_metadata::{Metadata, Package, Target, TargetKind};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
-use kurogane_layout::{cef_install_dir, cef_override, validate_cef_runtime};
+use kurogane_layout::{cef_path, validate_cef_runtime};
 use crate::config::PackagingConfig;
 
 use crate::tui;
 
-/// Where `kurogane dev`, `run` and `build` look for CEF, and where that
-/// comes from: the distribution `CEF_PATH` names, else the managed
-/// installation.
-pub(crate) fn dev_cef_root() -> (PathBuf, &'static str) {
-    match cef_override() {
-        Some(root) => (root, "CEF_PATH"),
-        None => (
-            cef_install_dir(env!("KUROGANE_CEF_VERSION")),
-            "managed install",
-        ),
-    }
-}
-
-/// Resolve the CEF runtime, installing it if necessary.
+/// The CEF the application will load, installing CEF `version` when it is
+/// missing: the distribution `CEF_PATH` names, else the installation.
 ///
-/// `CEF_PATH` overrides the managed install when valid for development convenience.
-/// Provenance is deliberately not checked.
-pub(crate) fn ensure_cef_runtime() -> Result<PathBuf> {
-    let version = env!("KUROGANE_CEF_VERSION");
-
-    let (cef, _) = dev_cef_root();
-
+/// The application finds the same one itself, so nothing is passed to it.
+/// A `CEF_PATH` naming no usable runtime is an error, never replaced by the
+/// installation.
+pub(crate) fn ensure_cef_runtime(version: &str) -> Result<PathBuf> {
     tui::step("Checking Chromium engine");
 
-    match validate_cef_runtime(&cef) {
-        Ok(_) => {
-            tui::success("Chromium engine ready");
-            tui::field("path", tui::format_path(&cef));
+    if let Some(cef) = cef_path() {
+        validate_cef_runtime(&cef)
+            .map_err(|err| anyhow::anyhow!("CEF_PATH names no usable Chromium runtime: {err}"))?;
 
-            Ok(cef)
+        tui::success("Chromium engine ready");
+        tui::field("path", tui::format_path(&cef));
+        tui::field("source", "CEF_PATH");
+
+        return Ok(cef);
+    }
+
+    let installed = crate::install::installed_cef_dir(version)?;
+
+    match validate_cef_runtime(&installed) {
+        Ok(()) => {
+            tui::success("Chromium engine ready");
+            tui::field("path", tui::format_path(&installed));
+
+            Ok(installed)
         }
 
         Err(err) => {
@@ -57,51 +55,18 @@ pub(crate) fn ensure_cef_runtime() -> Result<PathBuf> {
             tui::info("Initiating install process...");
             tui::field("reason", err);
 
-            crate::install::run()?;
-
-            // The installer populates the managed cache, not `cef`
-            // Use the managed path after a failed validation
-            let installed = cef_install_dir(version);
-
-            validate_cef_runtime(&installed).map_err(|err| {
-                anyhow::anyhow!(
-                    "CEF runtime at {} is still invalid after install: {err}",
-                    installed.display()
-                )
-            })?;
-
-            tui::success("Chromium engine ready");
-            tui::field("path", tui::format_path(&installed));
-
-            Ok(installed)
+            crate::install::install(version)
         }
     }
 }
 
-/// Returns Kurogane's own directory under Cargo's target directory, which
-/// holds the runtimes it materializes for bundles.
-pub(crate) fn kurogane_dir_in(base: &Path) -> PathBuf {
-    base.join("kurogane")
-}
-
-/// The current project's target directory, which Kurogane builds in as plain
-/// cargo does.
-pub(crate) fn target_dir() -> Result<PathBuf> {
-    let metadata = cargo_metadata::MetadataCommand::new().no_deps().exec()?;
-
-    Ok(metadata.target_directory.into_std_path_buf())
-}
-
-/// Constructs a Cargo command whose application runs on `cef`.
-///
-/// The build reads no CEF, so it is plain cargo's; `CEF_PATH` reaches only the
-/// application it starts.
-pub(crate) fn cargo_command(cef: &Path, subcommand: &str) -> Result<Command> {
+/// Constructs a plain Cargo command; builds read no CEF and the application
+/// finds its own.
+pub(crate) fn cargo_command(subcommand: &str) -> Command {
     let mut cmd = Command::new("cargo");
     cmd.arg(subcommand);
-    cmd.env("CEF_PATH", cef);
 
-    Ok(cmd)
+    cmd
 }
 
 /// Returns the package's first target of `kind`.
@@ -112,18 +77,20 @@ pub(crate) fn find_target(package: &Package, kind: TargetKind) -> Option<&Target
         .find(|target| target.kind.contains(&kind))
 }
 
-/// Runs the application with the Kurogane runtime environment, in the shape
-/// its sandbox needs.
+/// Runs the application in the shape its sandbox needs, on `cef`.
 ///
 /// Reads `kurogane.toml` from the project root; only `sandbox = true` on
 /// Windows changes the shape, see [`crate::sandbox`].
-pub(crate) fn run_app(cef: &Path, cargo_args: &[OsString]) -> Result<ExitStatus> {
-    let metadata = cargo_metadata::MetadataCommand::new().no_deps().exec()?;
+pub(crate) fn run_app(
+    metadata: &Metadata,
+    cef: &Path,
+    cargo_args: &[OsString],
+) -> Result<ExitStatus> {
     let project_root = metadata.workspace_root.as_std_path();
     let config = PackagingConfig::load(project_root)?;
 
     if !crate::sandbox::uses_bootstrap(&config.app) {
-        return cargo_run(cef, cargo_args);
+        return cargo_run(cargo_args);
     }
 
     let package = metadata
@@ -133,9 +100,9 @@ pub(crate) fn run_app(cef: &Path, cargo_args: &[OsString]) -> Result<ExitStatus>
     crate::sandbox::run(cef, cargo_args, package, project_root, &config.app)
 }
 
-/// Run Cargo with the Kurogane runtime environment.
-fn cargo_run(cef: &Path, cargo_args: &[OsString]) -> Result<ExitStatus> {
-    let mut cmd = cargo_command(cef, "run")?;
+/// Runs the application through plain `cargo run`.
+fn cargo_run(cargo_args: &[OsString]) -> Result<ExitStatus> {
+    let mut cmd = cargo_command("run");
     cmd.args(cargo_args);
 
     tui::blank();
