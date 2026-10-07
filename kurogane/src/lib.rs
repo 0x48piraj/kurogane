@@ -53,14 +53,14 @@ pub use gpu::GpuMode;
 pub use credentials::CredentialStorage;
 pub use spec::SandboxMode;
 pub use scheme::{SchemeHandler, resource_handler_from_bytes};
-pub use error::{ConfigError, RuntimeError};
+pub use error::{CefLocation, ConfigError, RuntimeError};
 pub use acl::{Origin, OriginError};
 pub use app::App;
 pub use resources::resource_dir;
 /// The window-handle traits [`AppInstance::create_child_browser`] takes, at
 /// the version Kurogane uses: a host passes its window as it is.
 pub use raw_window_handle;
-/// cef-rs, at the revision Kurogane is built with.
+/// tetsu, Kurogane's CEF bindings, at the revision Kurogane is built with.
 pub use tetsu;
 
 /// What Kurogane's macros expand to. Not a public API.

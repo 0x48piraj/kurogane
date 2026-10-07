@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::acl::Origin;
 use crate::cef_app::KuroganeApp;
 use crate::client::KuroganeClient;
-use crate::error::RuntimeError;
+use crate::error::{CefLocation, RuntimeError};
 use crate::hooks::Hooks;
 use crate::browser_registry::{BrowserId, BrowserMetadata, BrowserType};
 use crate::registry::Registry;
@@ -79,36 +79,23 @@ fn profile_name(profile_id: Option<String>, exe: &std::path::Path) -> String {
     }
 }
 
-/// Where the application's CEF came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CefOrigin {
-    /// The bundle the executable belongs to, which runs its own runtime and
-    /// no other.
-    Bundle,
-    /// Where tetsu found it outside a bundle.
-    Found(sys::FoundIn),
-}
-
-impl std::fmt::Display for CefOrigin {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Bundle => f.write_str("the bundle"),
-            Self::Found(found_in) => found_in.fmt(f),
-        }
-    }
-}
-
 /// Finds the application's CEF, its bundle's (which it runs and no other),
 /// else the one tetsu finds beside the executable, in `CEF_PATH` or in the
 /// shared installation of the CEF version it was built against.
-fn locate_cef() -> Result<(std::path::PathBuf, CefOrigin), RuntimeError> {
+fn locate_cef() -> Result<(std::path::PathBuf, CefLocation), RuntimeError> {
     if let Some(root) = bundle_cef_root().map_err(RuntimeError::ExecutableUnavailable)? {
-        return Ok((root, CefOrigin::Bundle));
+        return Ok((root, CefLocation::Bundle));
     }
 
     let found = sys::find_cef_dir().map_err(cef_not_found)?;
+    let location = match found.found_in {
+        sys::FoundIn::AppBundle => CefLocation::Bundle,
+        sys::FoundIn::BesideExecutable => CefLocation::BesideExecutable,
+        sys::FoundIn::CefPath => CefLocation::CefPath,
+        sys::FoundIn::Installed => CefLocation::Installed,
+    };
 
-    Ok((found.path, CefOrigin::Found(found.found_in)))
+    Ok((found.path, location))
 }
 
 /// Loads libcef from the runtime the application resolves, before any other
@@ -116,10 +103,13 @@ fn locate_cef() -> Result<(std::path::PathBuf, CefOrigin), RuntimeError> {
 /// after a sandboxed helper enters its sandbox. Returns the runtime's
 /// directory, canonical.
 pub(crate) fn load_libcef() -> Result<std::path::PathBuf, RuntimeError> {
-    let (root, origin) = locate_cef()?;
-    let invalid = |source: Box<dyn std::error::Error + Send + Sync>| {
-        unusable_cef(origin, root.clone(), source)
-    };
+    let (root, location) = locate_cef()?;
+    let invalid =
+        |source: Box<dyn std::error::Error + Send + Sync>| RuntimeError::InvalidCefRuntime {
+            path: root.clone(),
+            location,
+            source,
+        };
     validate_cef_runtime(&root).map_err(|e| invalid(Box::new(e)))?;
     // Its own DLLs load from its directory, which takes an absolute path
     let libcef =
@@ -129,12 +119,13 @@ pub(crate) fn load_libcef() -> Result<std::path::PathBuf, RuntimeError> {
     unsafe { sys::load_libcef(&libcef) }.map_err(|e| match e {
         sys::LoadError::VersionMismatch { path, found } => RuntimeError::CefVersionMismatch {
             path,
+            location,
             found,
             expected: bindings_cef_version(),
         },
         other => invalid(Box::new(other)),
     })?;
-    debug!("Loaded {} from {origin}", libcef.display());
+    debug!("Loaded {} from {location}", libcef.display());
 
     root.canonicalize().map_err(|e| invalid(Box::new(e)))
 }
@@ -157,20 +148,6 @@ fn cef_not_found(error: sys::FindError) -> RuntimeError {
         sys::FindError::NotInstalled { installed } => RuntimeError::CefNotInstalled {
             expected: installed,
         },
-    }
-}
-
-/// Names a Chromium runtime that cannot be used: a bundle's own leaves the
-/// bundle incomplete, since a bundle runs no other; any other is an invalid
-/// installation.
-fn unusable_cef(
-    origin: CefOrigin,
-    path: std::path::PathBuf,
-    source: Box<dyn std::error::Error + Send + Sync>,
-) -> RuntimeError {
-    match origin {
-        CefOrigin::Bundle => RuntimeError::IncompleteBundle { path, source },
-        CefOrigin::Found(_) => RuntimeError::InvalidCefInstallation { path, source },
     }
 }
 

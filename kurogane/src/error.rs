@@ -31,22 +31,20 @@ pub enum RuntimeError {
     /// `CEF_PATH` names a directory that does not exist; no other runtime
     /// runs in its place.
     CefPathMissing(PathBuf),
-    /// The Chromium runtime at `path` is another CEF build, commit `found`,
-    /// than the one the application was built against, `expected`.
+    /// The Chromium runtime at `path`, from `location`, is another CEF
+    /// build, commit `found`, than the one the application was built
+    /// against, `expected`.
     CefVersionMismatch {
         path: PathBuf,
+        location: CefLocation,
         found: String,
         expected: String,
     },
-    /// The Chromium runtime at `path` cannot be used; `source` says why.
-    InvalidCefInstallation {
+    /// The Chromium runtime at `path`, from `location`, cannot be used;
+    /// `source` says why.
+    InvalidCefRuntime {
         path: PathBuf,
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-    /// The application runs from a bundle whose Chromium runtime at `path`
-    /// is missing or incomplete; `source` says why. A bundle runs no other.
-    IncompleteBundle {
-        path: PathBuf,
+        location: CefLocation,
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
@@ -104,6 +102,51 @@ pub enum RuntimeError {
     /// [`App::filesystem`](crate::App::filesystem) was rejected; nothing was
     /// started.
     InvalidFilesystem(FsConfigError),
+}
+
+/// Where the application found its Chromium runtime, in the order it looks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CefLocation {
+    /// The application's bundle, which runs its own runtime and no other.
+    Bundle,
+    /// The executable's directory, looked at before `CEF_PATH` and the
+    /// installation.
+    BesideExecutable,
+    /// The directory `CEF_PATH` names, looked at before the installation.
+    CefPath,
+    /// The shared installation of the CEF version the application was built
+    /// against.
+    Installed,
+}
+
+impl CefLocation {
+    /// Returns what makes a runtime found here usable.
+    fn remedy(self) -> &'static str {
+        match self {
+            Self::Bundle => "Reinstall the application.",
+            Self::BesideExecutable => concat!(
+                "A runtime beside the executable comes before CEF_PATH and the installation. ",
+                "Remove it, or replace it with the CEF this application was built against."
+            ),
+            Self::CefPath => concat!(
+                "Point CEF_PATH at the CEF this application was built against, or unset it ",
+                "to run the installed one (`kurogane install`)."
+            ),
+            Self::Installed => "Remove it, then reinstall it with `kurogane install`.",
+        }
+    }
+}
+
+impl Display for CefLocation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Bundle => "the bundle",
+            Self::BesideExecutable => "beside the executable",
+            Self::CefPath => "CEF_PATH",
+            Self::Installed => "the shared installation",
+        })
+    }
 }
 
 impl Display for RuntimeError {
@@ -205,42 +248,36 @@ impl Display for RuntimeError {
 
             RuntimeError::CefVersionMismatch {
                 path,
+                location,
                 found,
                 expected,
             } => write!(
                 f,
                 concat!(
-                    "The Chromium runtime at\n\n",
+                    "The Chromium runtime from {}, at\n\n",
                     "  {}\n\n",
                     "is CEF commit {}, not the CEF {} this application was built ",
                     "against.\n\n",
-                    "Install the matching one with `kurogane install`, or point CEF_PATH ",
-                    "at it."
+                    "{}"
                 ),
+                location,
                 path.display(),
                 found,
-                expected
+                expected,
+                location.remedy()
             ),
 
-            RuntimeError::InvalidCefInstallation { path, .. } => write!(
+            RuntimeError::InvalidCefRuntime { path, location, .. } => write!(
                 f,
                 concat!(
-                    "Chromium installation is invalid:\n\n",
+                    "The Chromium runtime from {}, at\n\n",
                     "  {}\n\n",
-                    "Reinstall it with `kurogane install`, or point CEF_PATH at a complete ",
-                    "CEF distribution."
+                    "cannot be used.\n\n",
+                    "{}"
                 ),
-                path.display()
-            ),
-
-            RuntimeError::IncompleteBundle { path, .. } => write!(
-                f,
-                concat!(
-                    "This application's Chromium runtime is missing or incomplete:\n\n",
-                    "  {}\n\n",
-                    "Reinstall the application."
-                ),
-                path.display()
+                location,
+                path.display(),
+                location.remedy()
             ),
 
             RuntimeError::ExecutableUnavailable(_) => write!(
@@ -344,8 +381,7 @@ impl std::error::Error for RuntimeError {
             RuntimeError::ExecutableUnavailable(source) => Some(source),
 
             RuntimeError::InvalidFrontendUrl { source, .. }
-            | RuntimeError::InvalidCefInstallation { source, .. }
-            | RuntimeError::IncompleteBundle { source, .. } => Some(&**source),
+            | RuntimeError::InvalidCefRuntime { source, .. } => Some(&**source),
 
             RuntimeError::InvalidFilesystem(error) => Some(error),
 
@@ -472,12 +508,9 @@ mod tests {
                 path: "cache".into(),
                 source: denied(),
             },
-            RuntimeError::InvalidCefInstallation {
+            RuntimeError::InvalidCefRuntime {
                 path: "cef".into(),
-                source: Box::new(denied()),
-            },
-            RuntimeError::IncompleteBundle {
-                path: "cef".into(),
+                location: CefLocation::Bundle,
                 source: Box::new(denied()),
             },
             RuntimeError::InvalidFrontendUrl {
@@ -493,5 +526,24 @@ mod tests {
                 "{error}"
             );
         }
+    }
+
+    #[test]
+    fn a_runtime_s_fix_follows_where_it_was_found() {
+        let mismatch = |location| {
+            RuntimeError::CefVersionMismatch {
+                path: "cef".into(),
+                location,
+                found: "a03e714".into(),
+                expected: "154.0.33".into(),
+            }
+            .to_string()
+        };
+
+        assert!(mismatch(CefLocation::Bundle).contains("Reinstall the application"));
+        let beside = mismatch(CefLocation::BesideExecutable);
+        assert!(beside.contains("Remove it") && !beside.contains("kurogane install"));
+        assert!(mismatch(CefLocation::CefPath).contains("Point CEF_PATH at"));
+        assert!(mismatch(CefLocation::Installed).contains("kurogane install"));
     }
 }
