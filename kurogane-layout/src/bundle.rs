@@ -3,9 +3,9 @@
 //! The bundle keeps the executable and CEF runtime together so the packaged
 //! application can locate its runtime without environment-specific shims.
 //!
-//! On Windows, CEF is placed beside the executable so the Windows loader can
-//! resolve its DLL dependencies normally. On Linux, CEF is placed under
-//! `runtime/cef`, where the runtime looks for a bundle's runtime.
+//! On Windows, CEF is placed beside the executable, where CEF's sandbox
+//! bootstrap requires it. On Linux, CEF is placed under `runtime/cef`, where
+//! the runtime looks for a bundle's runtime.
 //!
 //! Linux bundles include `chrome-sandbox` with the CEF runtime.
 //! Used by `SandboxMode::Chromium` when unprivileged user namespaces are unavailable.
@@ -202,7 +202,7 @@ set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
-# Opt-in library path for systems the executable's RUNPATH does not cover
+# Opt-in library path for libraries the system's loader does not find
 if [ -n "${{KUROGANE_LD_LIBRARY_PATH:-}}" ]; then
     export LD_LIBRARY_PATH="$KUROGANE_LD_LIBRARY_PATH${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"
 fi

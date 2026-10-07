@@ -197,8 +197,8 @@ pub(crate) fn run(
     tui::step("Launching application");
     tui::blank();
 
-    // The application finds the staged runtime beside its executable, the one
-    // the bootstrap already loaded
+    // The staging is marked as a bundle's, so the application runs the runtime
+    // the bootstrap already loaded and the content staged with it
     let status = Command::new(&exe)
         .args(app_args)
         .status()

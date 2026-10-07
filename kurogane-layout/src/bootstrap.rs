@@ -55,14 +55,16 @@ pub fn client_library_path(bootstrap: &Path) -> PathBuf {
     bootstrap.with_extension("dll")
 }
 
-/// Stages a CEF runtime beside a bootstrap.
+/// Stages a CEF runtime beside a bootstrap and marks the directory as a
+/// bundle's, which runs that runtime and the resources staged with it.
 ///
 /// The bootstrap resolves `chrome_elf.dll` in its own directory and refuses
 /// to start when it finds it anywhere else, so a development run needs the
 /// whole runtime there rather than on `PATH`. The files are shared with the
-/// managed installation where the filesystem allows it.
+/// installation where the filesystem allows it.
 pub fn stage_runtime(cef_root: &Path, dst: &Path) -> std::io::Result<()> {
-    crate::layout::link_dir(cef_root, dst, &crate::cef::is_runtime_artifact)
+    crate::layout::link_dir(cef_root, dst, &crate::cef::is_runtime_artifact)?;
+    std::fs::write(dst.join(crate::layout::BUNDLE_MARKER), b"")
 }
 
 #[cfg(test)]
@@ -118,5 +120,21 @@ mod tests {
             );
         }
         assert!(staged.join(crate::cef::cef_binary_name()).exists());
+    }
+
+    #[test]
+    fn a_staged_run_is_a_bundle() {
+        let dir = crate::test_fixtures::tmp_dir();
+        let cef = crate::test_fixtures::cef_runtime(&dir.path().join("cef"));
+
+        let staged = dir.path().join("staged");
+        stage_runtime(&cef, &staged).unwrap();
+
+        assert!(staged.join(crate::layout::BUNDLE_MARKER).is_file());
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            crate::layout::bundle_cef_root_for(&staged.join("myapp.exe")),
+            Some(staged)
+        );
     }
 }
