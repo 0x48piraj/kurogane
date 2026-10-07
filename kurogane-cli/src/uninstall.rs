@@ -92,7 +92,9 @@ fn uninstall(exe: &Path, installed: &Installed, keep_data: bool, confirm: Confir
 
     tui::warn("This removes the kurogane binary and the PATH setup the installer added.");
     if !keep_data {
-        tui::warn("Including installed Chromium runtimes and Kurogane's caches.");
+        tui::warn(
+            "Including Kurogane's caches and tetsu's shared Chromium runtimes, which other tetsu projects use too.",
+        );
     }
     note_profiles();
     if !confirm.ask()? {
@@ -160,7 +162,9 @@ fn remove_data_only(exe: &Path, owner: Owner, keep_data: bool, confirm: Confirm)
         return Ok(());
     }
 
-    tui::warn("This removes installed Chromium runtimes and Kurogane's caches.");
+    tui::warn(
+        "This removes Kurogane's caches and tetsu's shared Chromium runtimes, which other tetsu projects use too.",
+    );
     tui::warn("The kurogane binary stays.");
     note_profiles();
     if !confirm.ask()? {

@@ -58,7 +58,7 @@ impl Installed {
 
 /// Finds the installer-managed installation for `exe`.
 pub(crate) fn find(exe: &Path) -> Result<Option<Installed>> {
-    find_in(&homes(), exe)
+    find_in(&homes(exe), exe)
 }
 
 fn find_in(homes: &[PathBuf], exe: &Path) -> Result<Option<Installed>> {
@@ -106,18 +106,30 @@ fn parse(text: &str) -> Result<Receipt> {
     Ok(serde_json::from_str(text)?)
 }
 
-/// Returns the installer's possible home directories in precedence order.
-fn homes() -> Vec<PathBuf> {
+/// Returns the installer's possible home directories for `exe` in
+/// precedence order.
+///
+/// The installer keeps the binary in its home's `bin` folder unless told
+/// otherwise, so a home chosen at install time is found from the binary.
+fn homes(exe: &Path) -> Vec<PathBuf> {
     let mut homes = Vec::new();
 
     #[cfg(unix)]
+    if let Some(home) = std::env::var_os("KUROGANE_HOME").filter(|v| !v.is_empty()) {
+        homes.push(PathBuf::from(home));
+    }
+
+    if let Some(home) = exe
+        .parent()
+        .filter(|bin| bin.ends_with("bin"))
+        .and_then(Path::parent)
     {
-        if let Some(home) = std::env::var_os("KUROGANE_HOME").filter(|v| !v.is_empty()) {
-            homes.push(PathBuf::from(home));
-        }
-        if let Some(home) = dirs::home_dir() {
-            homes.push(home.join(".kurogane"));
-        }
+        homes.push(home.to_path_buf());
+    }
+
+    #[cfg(unix)]
+    if let Some(home) = dirs::home_dir() {
+        homes.push(home.join(".kurogane"));
     }
 
     #[cfg(windows)]
@@ -130,8 +142,13 @@ fn homes() -> Vec<PathBuf> {
         }
     }
 
-    homes.dedup();
-    homes
+    let mut unique: Vec<PathBuf> = Vec::new();
+    for home in homes {
+        if !unique.contains(&home) {
+            unique.push(home);
+        }
+    }
+    unique
 }
 
 /// Returns whether `a` and `b` name the same existing file.
@@ -244,6 +261,22 @@ mod tests {
 
         assert_eq!(installed.home, fs::canonicalize(home.path()).unwrap());
         assert_eq!(installed.receipt_path(), installed.home.join(FILE_NAME));
+    }
+
+    #[test]
+    fn the_home_a_binary_was_installed_into_is_looked_at() {
+        let home = tempfile::tempdir().unwrap();
+        let binary = installed_binary(home.path());
+
+        assert!(homes(&binary).contains(&home.path().to_path_buf()));
+    }
+
+    #[test]
+    fn a_binary_outside_a_bin_folder_names_no_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("kurogane");
+
+        assert!(!homes(&binary).contains(&dir.path().parent().unwrap().to_path_buf()));
     }
 
     #[test]
