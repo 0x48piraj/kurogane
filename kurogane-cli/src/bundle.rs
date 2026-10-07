@@ -247,7 +247,7 @@ fn build_executable(
     debug: bool,
     target_dir: &std::path::Path,
 ) -> Result<(Executable, String)> {
-    // Build Kurogane in debug or release mode
+    // Build the application in debug or release mode
     let profile: &[&str] = if debug { &[] } else { &["--release"] };
 
     if crate::sandbox::uses_bootstrap(app) {
@@ -303,24 +303,21 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     #[cfg(target_os = "macos")]
     let macos = crate::macos_settings::MacosSettings::resolve(&packaging_config.macos)?;
 
-    // Build frontend before cargo build
-    build_frontend(metadata.workspace_root.as_std_path(), &packaging_config.app)?;
-
-    tui::step("Resolving CEF runtime...");
-
-    // The CEF the project's application loads
-    let cef_version = crate::install::cef_version_of(&metadata)
-        .unwrap_or_else(|| env!("KUROGANE_CEF_VERSION").to_string());
+    // The CEF the project's application loads, installed when missing before
+    // anything is built
+    let cef_version = crate::install::cef_version_of(&metadata);
+    crate::install::ensure_cef_runtime(&cef_version)?;
     let installed = crate::install::installed_cef_dir(&cef_version)?;
     let cef = resolve_cef_for_bundle(&cef_version, &installed)?;
 
-    if let Some(p) = &cef.provenance {
-        let source = match cef.source {
-            kurogane_layout::CefSource::Installed => "installed",
-            kurogane_layout::CefSource::CefPath => "CEF_PATH",
-        };
-        tui::field("cef", format!("{} ({source})", p.cef_version));
-    }
+    let source = match cef.source {
+        kurogane_layout::CefSource::Installed => "installed",
+        kurogane_layout::CefSource::CefPath => "CEF_PATH",
+    };
+    tui::field("cef", format!("{} ({source})", cef.provenance.cef_version));
+
+    // Build frontend before cargo build
+    build_frontend(metadata.workspace_root.as_std_path(), &packaging_config.app)?;
 
     let profile = if debug { "debug" } else { "release" };
     let target_dir = metadata.target_directory.as_std_path().join(profile);

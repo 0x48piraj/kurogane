@@ -12,53 +12,12 @@
 use anyhow::Result;
 use cargo_metadata::{Metadata, Package, Target, TargetKind};
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, ExitStatus};
 
-use kurogane_layout::{cef_path, validate_cef_runtime};
 use crate::config::PackagingConfig;
 
 use crate::tui;
-
-/// The CEF the application will load, installing CEF `version` when it is
-/// missing: the distribution `CEF_PATH` names, else the installation.
-///
-/// The application finds the same one itself, so nothing is passed to it.
-/// A `CEF_PATH` naming no usable runtime is an error, never replaced by the
-/// installation.
-pub(crate) fn ensure_cef_runtime(version: &str) -> Result<PathBuf> {
-    tui::step("Checking Chromium engine");
-
-    if let Some(cef) = cef_path() {
-        validate_cef_runtime(&cef)
-            .map_err(|err| anyhow::anyhow!("CEF_PATH names no usable Chromium runtime: {err}"))?;
-
-        tui::success("Chromium engine ready");
-        tui::field("path", tui::format_path(&cef));
-        tui::field("source", "CEF_PATH");
-
-        return Ok(cef);
-    }
-
-    let installed = crate::install::installed_cef_dir(version)?;
-
-    match validate_cef_runtime(&installed) {
-        Ok(()) => {
-            tui::success("Chromium engine ready");
-            tui::field("path", tui::format_path(&installed));
-
-            Ok(installed)
-        }
-
-        Err(err) => {
-            tui::warn("Chromium runtime missing or invalid");
-            tui::info("Initiating install process...");
-            tui::field("reason", err);
-
-            crate::install::install(version)
-        }
-    }
-}
 
 /// Constructs a plain Cargo command; builds read no CEF and the application
 /// finds its own.

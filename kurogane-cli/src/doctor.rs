@@ -172,10 +172,7 @@ pub fn run(json: bool) -> Result<()> {
                     CefSource::Installed => "installed",
                 },
             );
-
-            if let Some(p) = &resolved.provenance {
-                tui::field("provenance", p.artifact.clone());
-            }
+            tui::field("provenance", resolved.provenance.artifact);
         }
 
         Err(e) => {

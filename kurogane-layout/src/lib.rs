@@ -14,8 +14,8 @@ pub mod test_fixtures;
 pub use bootstrap::{Bootstrap, client_library_path, stage_runtime};
 pub use bundle::{BundleError, BundleLayout};
 pub use cef::{
-    cef_path, read_provenance, resolve_cef_for_bundle, validate_cef_runtime, CefError,
-    CefProvenance, CefSource, ResolvedCef,
+    cef_path, read_provenance, resolve_cef_for_bundle, validate_cef_runtime, verify_installation,
+    CefError, CefProvenance, CefSource, ResolvedCef,
 };
 pub use distribution::{
     AppMetadata, DistributionError, Executable, LinkProblem, NameProblem, ResolvedDistribution,

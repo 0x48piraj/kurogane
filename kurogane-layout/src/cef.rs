@@ -30,7 +30,7 @@ impl CefSource {
                 "Point CEF_PATH at a distribution `export-cef-dir` wrote, or unset it to \
                  package the installed one."
             }
-            Self::Installed => "Re-run `kurogane install`.",
+            Self::Installed => "Run `kurogane install` to reinstall it.",
         }
     }
 }
@@ -184,8 +184,8 @@ pub struct ResolvedCef {
     /// The source of the distribution.
     pub source: CefSource,
 
-    /// Provenance information, when available.
-    pub provenance: Option<CefProvenance>,
+    /// Provenance information.
+    pub provenance: CefProvenance,
 }
 
 #[derive(Debug, Error)]
@@ -198,7 +198,7 @@ pub enum CefError {
     CefPathMissing(PathBuf),
 
     #[error(
-        "{} has no archive.json provenance; refusing to package an unverifiable CEF tree. {}",
+        "{} has no archive.json naming its CEF build, so it cannot be verified. {}",
         .path.display(),
         .from.unverifiable_advice()
     )]
@@ -274,6 +274,15 @@ pub fn resolve_cef_for_bundle(version: &str, installed: &Path) -> Result<Resolve
     resolve_cef(version, cef_path(), installed)
 }
 
+/// Checks that `root` is a complete installation of CEF `version` whose
+/// `archive.json` names that version and this platform.
+pub fn verify_installation(root: &Path, version: &str) -> Result<CefProvenance, CefError> {
+    let provenance = resolve_provenanced_root(root.to_path_buf(), version, CefSource::Installed)?;
+    validate_cef_runtime(root)?;
+
+    Ok(provenance)
+}
+
 /// Resolves the CEF distribution for release packaging.
 ///
 /// `CEF_PATH` comes before the installation. Both are validated for
@@ -295,7 +304,7 @@ fn resolve_cef(
         return Ok(ResolvedCef {
             root,
             source: CefSource::CefPath,
-            provenance: Some(provenance),
+            provenance,
         });
     }
 
@@ -306,7 +315,7 @@ fn resolve_cef(
         return Ok(ResolvedCef {
             root,
             source: CefSource::Installed,
-            provenance: Some(provenance),
+            provenance,
         });
     }
 
@@ -846,8 +855,10 @@ mod tests {
             resolve_cef("1.2.3", Some(fake.clone()), &dir.path().join("absent")).unwrap();
 
         assert_eq!(resolved.source, CefSource::CefPath);
-        let prov = resolved.provenance.expect("provenance present");
-        assert_eq!(prov.chromium_version.as_deref(), Some("131.0.6778.204"));
+        assert_eq!(
+            resolved.provenance.chromium_version.as_deref(),
+            Some("131.0.6778.204")
+        );
     }
 
     // The installation
@@ -874,7 +885,59 @@ mod tests {
 
         assert_eq!(resolved.source, CefSource::Installed);
         assert_eq!(resolved.root, installed);
-        assert!(resolved.provenance.is_some());
+        assert_eq!(resolved.provenance.cef_version, "1.2.3+g6a8d2b7");
+    }
+
+    #[test]
+    fn a_verified_installation_names_its_version() {
+        let dir = tmp();
+        let installed = provenance_fixture(dir.path());
+
+        let provenance = verify_installation(&installed, "1.2.3").unwrap();
+
+        assert_eq!(provenance.cef_version, "1.2.3+g6a8d2b7");
+    }
+
+    #[test]
+    fn an_installation_is_not_verified_without_archive_json() {
+        let dir = tmp();
+        let installed = crate::test_fixtures::cef_runtime(&dir.path().join("installed"));
+
+        assert!(matches!(
+            verify_installation(&installed, "1.2.3"),
+            Err(CefError::Unverifiable {
+                from: CefSource::Installed,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn an_installation_of_another_version_is_not_verified() {
+        let dir = tmp();
+        let installed = provenance_fixture(dir.path());
+
+        assert!(matches!(
+            verify_installation(&installed, "1.2.4"),
+            Err(CefError::VersionMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn an_incomplete_installation_is_not_verified_despite_its_archive_json() {
+        let dir = tmp();
+        let installed = provenance_fixture(dir.path());
+        let icu = if cfg!(target_os = "macos") {
+            installed.join("Chromium Embedded Framework.framework/Resources/icudtl.dat")
+        } else {
+            installed.join("icudtl.dat")
+        };
+        fs::remove_file(icu).unwrap();
+
+        assert!(matches!(
+            verify_installation(&installed, "1.2.3"),
+            Err(CefError::InvalidRuntime { .. })
+        ));
     }
 
     #[test]
