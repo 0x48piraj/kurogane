@@ -6,9 +6,7 @@
 
 use anyhow::Result;
 use cargo_metadata::MetadataCommand;
-use kurogane_layout::{
-    CefSource, cef_path, read_provenance, resolve_cef_for_bundle, validate_cef_runtime,
-};
+use crate::install::{CefError, ProjectCef, cef_version_of, find_cef, packaged_archive};
 
 use crate::collector;
 use crate::tui;
@@ -77,63 +75,58 @@ pub fn run(json: bool) -> Result<()> {
     let mut warn = 0;
     let mut fail = 0;
 
-    // The CEF the project's application loads, which the commands use too
-    let version = crate::install::project_cef_version();
+    // One read of the project, for its CEF version and its workspace
+    let metadata = MetadataCommand::new().exec();
+
+    // The CEF the project's application loads, as run and bundle find it
+    let version = match &metadata {
+        Ok(metadata) => cef_version_of(metadata),
+        Err(_) => env!("KUROGANE_CEF_VERSION").to_owned(),
+    };
 
     tui::field("cef", &version);
 
-    match cef_path() {
-        Some(cef) => match validate_cef_runtime(&cef) {
-            Ok(()) => {
-                tui::success("The application loads the runtime CEF_PATH names");
-                tui::field("path", tui::format_path(&cef));
-            }
+    let found = find_cef(&version);
+    match &found {
+        Ok(ProjectCef::CefPath(root)) => {
+            tui::success("The application loads the runtime CEF_PATH names");
+            tui::field("path", tui::format_path(root));
+        }
 
-            Err(e) => {
-                tui::error("CEF_PATH names no usable Chromium runtime");
-                tui::field("path", tui::format_path(&cef));
-                tui::field("reason", e);
+        Ok(ProjectCef::Installed { root, archive }) => {
+            tui::success("The application loads the installed runtime");
+            tui::field("path", tui::format_path(root));
+            tui::field("artifact", &archive.name);
+        }
 
-                fail += 1;
-            }
-        },
+        Err(CefError::NotInstalled { path, .. }) => {
+            tui::error("Chromium runtime not installed");
+            tui::field("expected", tui::format_path(path));
+            tui::info("Run: kurogane install");
 
-        None => match crate::install::installed_cef_dir(&version) {
-            Ok(installed) => match validate_cef_runtime(&installed) {
-                Ok(()) => {
-                    tui::success("The application loads the installed runtime");
-                    tui::field("path", tui::format_path(&installed));
+            fail += 1;
+        }
 
-                    if let Ok(Some(p)) = read_provenance(&installed) {
-                        tui::field("artifact", p.artifact);
-                    }
-                }
+        Err(e @ (CefError::NoInstallDir | CefError::UnsupportedHost(_))) => {
+            tui::error("No place to install Chromium");
+            tui::error_fields(e);
 
-                Err(e) if installed.exists() => {
-                    tui::error("Installed Chromium runtime invalid");
-                    tui::field("path", tui::format_path(&installed));
-                    tui::field("reason", e);
-                    tui::info("Run: kurogane install");
+            fail += 1;
+        }
 
-                    fail += 1;
-                }
+        Err(e) if e.concerns_cef_path() => {
+            tui::error("CEF_PATH names no usable Chromium runtime");
+            tui::error_fields(e);
 
-                Err(_) => {
-                    tui::error("Chromium runtime not installed");
-                    tui::field("expected", tui::format_path(&installed));
-                    tui::info("Run: kurogane install");
+            fail += 1;
+        }
 
-                    fail += 1;
-                }
-            },
+        Err(e) => {
+            tui::error("Installed Chromium runtime invalid");
+            tui::error_fields(e);
 
-            Err(e) => {
-                tui::error("No place to install Chromium");
-                tui::field("reason", e);
-
-                fail += 1;
-            }
-        },
+            fail += 1;
+        }
     }
 
     if let Some(root) = tetsu_download::cef_install_root()
@@ -159,20 +152,16 @@ pub fn run(json: bool) -> Result<()> {
     tui::blank();
 
     // What `kurogane bundle` packages, with verified provenance
-    let packaged = crate::install::installed_cef_dir(&version)
-        .and_then(|installed| Ok(resolve_cef_for_bundle(&version, &installed)?));
+    let packaged = found.and_then(|cef| {
+        let archive = packaged_archive(&cef, &version)?;
+        Ok((cef, archive))
+    });
     match packaged {
-        Ok(resolved) => {
+        Ok((cef, archive)) => {
             tui::success("bundle packages");
-            tui::field("path", tui::format_path(&resolved.root));
-            tui::field(
-                "source",
-                match resolved.source {
-                    CefSource::CefPath => "CEF_PATH",
-                    CefSource::Installed => "installed",
-                },
-            );
-            tui::field("provenance", resolved.provenance.artifact);
+            tui::field("path", tui::format_path(cef.root()));
+            tui::field("source", cef.source());
+            tui::field("provenance", archive.name);
         }
 
         Err(e) => {
@@ -218,7 +207,7 @@ pub fn run(json: bool) -> Result<()> {
     tui::section("Project");
 
     // Resolve workspace root
-    let workspace_root = match MetadataCommand::new().no_deps().exec() {
+    let workspace_root = match metadata {
         Ok(metadata) => {
             let root = metadata.workspace_root.into_std_path_buf();
             tui::success("Cargo workspace detected");

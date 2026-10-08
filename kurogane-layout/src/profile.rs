@@ -1,4 +1,4 @@
-//! Per-application runtime profile and cache paths.
+//! Per-application runtime profile paths.
 //!
 //! An application's profile holds what its user would miss (cookies,
 //! storage, permissions), so it lives in the local data directory, not in
@@ -8,10 +8,6 @@
 use std::path::PathBuf;
 
 use crate::platform;
-
-pub fn cache_root() -> PathBuf {
-    platform::cache_dir().join("kurogane")
-}
 
 /// Where every application's profile lives: `kurogane/profiles` in the
 /// local data directory (`~/.local/share` on Linux, `~/Library/Application
@@ -126,7 +122,8 @@ mod property_tests {
         );
         // Windows keeps both in %LOCALAPPDATA%
         if cfg!(not(windows)) {
-            assert!(!root.starts_with(cache_root()), "{}", root.display());
+            let cache = dirs::cache_dir().unwrap();
+            assert!(!root.starts_with(cache), "{}", root.display());
         }
     }
 

@@ -9,14 +9,14 @@ use std::env::consts::EXE_SUFFIX;
 use std::ffi::OsString;
 use std::process::Command;
 use cargo_metadata::{MetadataCommand, Package, TargetKind};
-use kurogane_layout::{AppMetadata, Executable, ResolvedDistribution, resolve_cef_for_bundle};
+use crate::distribution::{AppMetadata, Executable, ResolvedDistribution};
 use crate::config::{AppConfig, PackagingConfig, anchor_path};
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use crate::signing::SignConfig;
 
 use crate::launch::find_target;
 #[cfg(not(target_os = "macos"))]
-use kurogane_layout::package_directory;
+use crate::distribution::package_directory;
 #[cfg(target_os = "windows")]
 use crate::signing::{sign_tree, verify_tree};
 
@@ -137,7 +137,7 @@ impl PackageFormat {
 fn resolve_resources(
     project_root: &std::path::Path,
     configured: &[crate::config::ResourceConfig],
-) -> Result<Vec<kurogane_layout::ResolvedResource>> {
+) -> Result<Vec<crate::distribution::ResolvedResource>> {
     configured
         .iter()
         .map(|resource| {
@@ -259,9 +259,7 @@ fn build_executable(
         return Ok((crate::sandbox::bundled(cef, library)?, exe_name));
     }
 
-    let status = crate::launch::cargo_command("build")
-        .args(profile)
-        .status()?;
+    let status = Command::new("cargo").arg("build").args(profile).status()?;
 
     if !status.success() {
         bail!("Build failed");
@@ -298,7 +296,7 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
         .name
         .clone()
         .unwrap_or_else(|| pkg.name.to_string());
-    kurogane_layout::check_app_name(&app_name)
+    crate::distribution::check_app_name(&app_name)
         .with_context(|| format!("[app].name in {}", crate::config::CONFIG_FILE_NAME))?;
     #[cfg(target_os = "macos")]
     let macos = crate::macos_settings::MacosSettings::resolve(&packaging_config.macos)?;
@@ -306,15 +304,9 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     // The CEF the project's application loads, installed when missing before
     // anything is built
     let cef_version = crate::install::cef_version_of(&metadata);
-    crate::install::ensure_cef_runtime(&cef_version)?;
-    let installed = crate::install::installed_cef_dir(&cef_version)?;
-    let cef = resolve_cef_for_bundle(&cef_version, &installed)?;
-
-    let source = match cef.source {
-        kurogane_layout::CefSource::Installed => "installed",
-        kurogane_layout::CefSource::CefPath => "CEF_PATH",
-    };
-    tui::field("cef", format!("{} ({source})", cef.provenance.cef_version));
+    let cef = crate::install::ensure_cef_runtime(&cef_version)?;
+    let archive = crate::install::packaged_archive(&cef, &cef_version)?;
+    tui::field("cef", format!("{} ({})", archive.cef_version, cef.source()));
 
     // Build frontend before cargo build
     build_frontend(metadata.workspace_root.as_std_path(), &packaging_config.app)?;
@@ -325,13 +317,13 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
     tui::step(&format!("Building {profile}..."));
 
     let (executable, exe_name) =
-        build_executable(&cef.root, pkg, &packaging_config.app, debug, &target_dir)?;
+        build_executable(cef.root(), pkg, &packaging_config.app, debug, &target_dir)?;
 
     // Resolve distribution contents
     tui::step("Resolving distribution...");
 
     // The bundle copies the runtime's files straight from the distribution
-    let cef_runtime = cef.root.clone();
+    let cef_runtime = cef.root().to_path_buf();
 
     // Configured paths are relative to the project root
     let project_root = metadata.workspace_root.as_std_path();

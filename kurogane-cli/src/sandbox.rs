@@ -14,7 +14,7 @@ use std::process::{Command, ExitStatus, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
 use cargo_metadata::{Message, Package, TargetKind};
-use kurogane_layout::{Bootstrap, Executable, client_library_path, link_dir, stage_runtime};
+use crate::distribution::{Bootstrap, Executable, client_library_path, link_dir, stage_runtime};
 use crate::config::{AppConfig, anchor_path};
 
 use crate::launch;
@@ -65,7 +65,8 @@ pub(crate) fn build_library(package: &Package, build_args: &[OsString]) -> Resul
 
     tui::step("Building application library");
 
-    let output = launch::cargo_command("build")
+    let output = Command::new("cargo")
+        .arg("build")
         .args(launch::strip_message_format(build_args))
         .arg("--lib")
         .arg("--message-format=json-render-diagnostics")

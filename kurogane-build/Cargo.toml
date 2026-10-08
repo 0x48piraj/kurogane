@@ -1,5 +1,6 @@
 [package]
-name = "kurogane-layout"
+name = "kurogane-build"
+description = "Build-time setup for Kurogane applications"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,17 +8,8 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-[features]
-test-fixtures = ["dep:tempfile"]
-
 [dependencies]
-dirs = "6"
-tempfile = { version = "3", optional = true }
-thiserror = "2.0.18"
-
-[dev-dependencies]
-proptest = "1"
-tempfile = "3"
+tetsu-build.workspace = true
 
 [lints]
 workspace = true

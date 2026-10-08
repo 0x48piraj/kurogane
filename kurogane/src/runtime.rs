@@ -117,27 +117,21 @@ pub(crate) fn load_libcef() -> Result<std::path::PathBuf, RuntimeError> {
 
     // SAFETY: no call into CEF precedes this one
     unsafe { sys::load_libcef(&libcef) }.map_err(|e| match e {
-        sys::LoadError::VersionMismatch { path, found } => RuntimeError::CefVersionMismatch {
+        sys::LoadError::VersionMismatch {
+            path,
+            found,
+            expected,
+        } => RuntimeError::CefVersionMismatch {
             path,
             location,
             found,
-            expected: bindings_cef_version(),
+            expected,
         },
         other => invalid(Box::new(other)),
     })?;
     debug!("Loaded {} from {location}", libcef.display());
 
     root.canonicalize().map_err(|e| invalid(Box::new(e)))
-}
-
-/// The CEF build the bindings were generated for, such as
-/// `154.0.33+ga03e714+chromium-154.0.8037.94`.
-fn bindings_cef_version() -> String {
-    std::ffi::CStr::from_bytes_with_nul(sys::CEF_VERSION)
-        .ok()
-        .and_then(|version| version.to_str().ok())
-        .unwrap_or_default()
-        .to_owned()
 }
 
 /// Maps a failure to find the Chromium runtime onto what the user can act on.
@@ -1595,7 +1589,7 @@ mod tests {
     //
     // A CEF object is a C structure of function pointers. A fake fills in
     // only the functions a test needs and counts every call made through
-    // them; cef-rs answers a default for a function left out, without
+    // them; tetsu answers a default for a function left out, without
     // calling anything. No test here loads CEF
     use std::ffi::c_int;
     use std::sync::atomic::AtomicUsize;
@@ -1643,7 +1637,7 @@ mod tests {
     }
 
     unsafe extern "C" fn called<T>(object: *mut T) {
-        // SAFETY: cef-rs passes the structure it wraps, a Fake<T>'s
+        // SAFETY: tetsu passes the structure it wraps, a Fake<T>'s
         unsafe { count(object) }
     }
 
@@ -1664,7 +1658,7 @@ mod tests {
         1
     }
 
-    /// Leaks a fake around `raw` and wraps it as cef-rs wraps what CEF returns.
+    /// Leaks a fake around `raw` and wraps it as tetsu wraps what CEF returns.
     fn leak<T: 'static, W>(raw: T) -> (W, &'static AtomicUsize)
     where
         *mut T: ConvertReturnValue<W>,
@@ -1673,7 +1667,7 @@ mod tests {
             raw,
             calls: AtomicUsize::new(0),
         }));
-        // cef-rs only reads the structure, and the count is atomic
+        // tetsu only reads the structure, and the count is atomic
         let object = std::ptr::from_ref(&fake.raw).cast_mut();
         (
             <*mut T as ConvertReturnValue<W>>::wrap_result(object),

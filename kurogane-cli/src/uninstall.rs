@@ -9,7 +9,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use kurogane_layout::{cache_root, profiles_root};
+use kurogane_layout::profiles_root;
+
+use crate::cache::cache_root;
 
 use crate::clean;
 use crate::receipt::{self, Installed};

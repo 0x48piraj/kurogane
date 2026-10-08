@@ -21,7 +21,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn sh_reads_the_word_back_as_written() {
-        let dir = crate::test_fixtures::tmp_dir();
+        let dir = crate::distribution::test_fixtures::tmp_dir();
         let mark = dir.path().join("mark");
         let mark = mark.to_string_lossy();
         for value in [

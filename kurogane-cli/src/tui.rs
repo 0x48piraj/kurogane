@@ -41,6 +41,18 @@ pub fn field(key: &str, value: impl Display) {
     println!("    {}: {}", key.dimmed(), value);
 }
 
+/// Prints an error as a `reason` field and each of its causes as a `cause`
+/// field.
+pub fn error_fields(error: &dyn std::error::Error) {
+    field("reason", error);
+
+    let mut cause = error.source();
+    while let Some(current) = cause {
+        field("cause", current);
+        cause = current.source();
+    }
+}
+
 /// Prints a section header between blank lines.
 pub fn section(title: &str) {
     println!("\n{}\n", title.bold());

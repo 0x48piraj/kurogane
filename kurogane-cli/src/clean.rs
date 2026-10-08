@@ -1,13 +1,15 @@
 //! Removes generated project artifacts and Kurogane's caches.
 //!
-//! `clean all` also removes tetsu's shared CEF installation, build caches
+//! `clean all` also removes tetsu's shared CEF installation, build tools
 //! and application profiles.
 
 use anyhow::Result;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use kurogane_layout::{cache_root, profiles_root};
+use kurogane_layout::profiles_root;
+
+use crate::cache::{cache_root, showcase_dir, templates_dir, tools_dir};
 
 use crate::tui;
 
@@ -29,7 +31,7 @@ pub(crate) fn runtimes() -> Vec<Data> {
     let tools = Data {
         label: "tools",
         what: "build tools",
-        path: cache_root().join("tools"),
+        path: tools_dir(),
     };
 
     cef.into_iter().chain([tools]).collect()
@@ -37,19 +39,18 @@ pub(crate) fn runtimes() -> Vec<Data> {
 
 /// Returns the caches managed by Kurogane's cleanup commands.
 pub(crate) fn caches() -> Vec<Data> {
-    let templates = crate::cache::templates_root().ok().map(|path| Data {
-        label: "templates",
-        what: "template cache",
-        path,
-    });
-
-    let showcase = Data {
-        label: "showcase",
-        what: "showcase",
-        path: cache_root().join("showcase"),
-    };
-
-    templates.into_iter().chain([showcase]).collect()
+    vec![
+        Data {
+            label: "templates",
+            what: "template snapshots",
+            path: templates_dir(),
+        },
+        Data {
+            label: "showcase",
+            what: "showcase",
+            path: showcase_dir(),
+        },
+    ]
 }
 
 pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Result<()> {
@@ -137,7 +138,7 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
         return Ok(());
     }
 
-    tui::step("Clearing runtime cache");
+    tui::step("Clearing caches");
 
     for data in caches() {
         remove(data.label, data.what, &data.path, &mut failed);

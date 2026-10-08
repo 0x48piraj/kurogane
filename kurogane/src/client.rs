@@ -300,10 +300,10 @@ fn opens_new_window(disposition: WindowOpenDisposition) -> bool {
 /// popup (its opener's). DevTools gets one of its own the same way
 /// (`on_before_dev_tools_popup`).
 ///
-/// cef-rs keeps the reference CEF passes with that client when a handler
+/// tetsu keeps the reference CEF passes with that client when a handler
 /// leaves it unchanged, so the opener's client, and the application's state
 /// it holds, would never be released. Replacing the client releases that
-/// reference. Remove this once cef-rs releases it itself.
+/// reference. Remove this once tetsu releases it itself.
 fn own_client(client: Option<&mut Option<Client>>, app: &AppHandle, browser_type: BrowserType) {
     // No client stays no client
     if let Some(client) = client
@@ -438,9 +438,9 @@ wrap_request_handler! {
 //
 // KEYBOARD HANDLER
 //
-// cef-rs types the platform's own event differently on each platform, and
-// its macro takes no attribute on a parameter, so the handler is written
-// once per platform around one body
+// tetsu types the platform's own event differently on each platform. Its
+// macro takes no attribute on a parameter, so the handler is written once
+// per platform around one body
 #[cfg(target_os = "windows")]
 wrap_keyboard_handler! {
     pub struct KuroganeKeyboardHandler {
@@ -1011,7 +1011,7 @@ wrap_load_handler! {
 //
 // DISPLAY HANDLER
 //
-// Every other method keeps CEF's default, which cef-rs's defaults return
+// Every other method keeps CEF's default, which tetsu's defaults return
 wrap_display_handler! {
     pub struct KuroganeDisplayHandler {
         app: AppHandle,
@@ -1264,7 +1264,7 @@ wrap_client! {
         }
 
         // Only OnOpenURLFromTab is answered; every other method keeps CEF's
-        // default, which cef-rs's defaults return
+        // default, which tetsu's defaults return
         fn request_handler(&self) -> Option<RequestHandler> {
             Some(KuroganeRequestHandler::new(self.app.clone()))
         }

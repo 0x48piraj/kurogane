@@ -1,4 +1,4 @@
-//! Cargo passthrough.
+//! Runs the application through Cargo for `dev` and `run`.
 //!
 //! Forwards arguments to `cargo run` after installing the CEF the project's
 //! application loads when it is missing. Cargo owns the argument surface;
@@ -14,8 +14,9 @@ use std::ffi::OsString;
 use crate::launch;
 use crate::tui;
 
-pub fn run(cargo_args: Vec<OsString>) -> Result<()> {
-    tui::section("Kurogane Run");
+/// Runs the application under `title`; `kurogane dev` passes no arguments.
+pub fn run(title: &str, cargo_args: Vec<OsString>) -> Result<()> {
+    tui::section(title);
 
     if !cargo_args.is_empty() {
         tui::field("cargo", launch::describe_args(&cargo_args));
@@ -25,7 +26,7 @@ pub fn run(cargo_args: Vec<OsString>) -> Result<()> {
     let version = crate::install::cef_version_of(&metadata);
 
     let cef = crate::install::ensure_cef_runtime(&version)?;
-    let status = launch::run_app(&metadata, &cef, &cargo_args)?;
+    let status = launch::run_app(&metadata, cef.root(), &cargo_args)?;
 
     launch::exit_with(status)
 }

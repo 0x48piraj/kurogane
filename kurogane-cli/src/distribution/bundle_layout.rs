@@ -1,4 +1,4 @@
-//! Canonical application bundle materialization.
+//! Windows and Linux bundle directories.
 //!
 //! The bundle keeps the executable and CEF runtime together so the packaged
 //! application can locate its runtime without environment-specific shims.
@@ -11,10 +11,10 @@
 //! Used by `SandboxMode::Chromium` when unprivileged user namespaces are unavailable.
 //!
 //! The executable is installed under the application's name
-//! ([`AppMetadata::exe_name`](crate::AppMetadata::exe_name)), whatever the
+//! ([`AppMetadata::exe_name`](crate::distribution::AppMetadata::exe_name)), whatever the
 //! built file is called. A sandboxed Windows application is CEF's bootstrap
 //! under that name, with the application's library beside it; see
-//! [`Executable`](crate::Executable).
+//! [`Executable`](crate::distribution::Executable).
 
 use std::ffi::OsStr;
 use std::fs;
@@ -25,9 +25,9 @@ use thiserror::Error;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt;
 
-use crate::cef::is_runtime_artifact;
-use crate::layout::{copy_dir, copy_dir_filtered};
-use crate::ResolvedDistribution;
+use crate::distribution::cef::is_runtime_artifact;
+use crate::distribution::files::{copy_dir, copy_dir_filtered};
+use crate::distribution::ResolvedDistribution;
 
 /// Errors raised while materializing or verifying a canonical bundle.
 #[derive(Debug, Error)]
@@ -54,7 +54,7 @@ pub enum BundleError {
     MissingMarker(PathBuf),
 
     #[error(transparent)]
-    Cef(#[from] crate::cef::CefError),
+    InvalidCefRuntime(#[from] kurogane_layout::IncompleteRuntime),
 
     /// A file operation failed: what was being done, and to which path.
     #[error("failed to {action} {}", .path.display())]
@@ -108,6 +108,8 @@ impl BundleLayout {
         Ok(())
     }
 
+    /// Linux directory holding the executable and its runtime.
+    #[cfg(target_os = "linux")]
     pub fn runtime_dir(&self) -> PathBuf {
         self.root.join("runtime")
     }
@@ -122,32 +124,38 @@ impl BundleLayout {
         self.runtime_dir().join("cef")
     }
 
-    #[cfg(target_os = "macos")]
-    pub fn cef_dir(&self) -> PathBuf {
-        self.root.clone()
-    }
-
     /// Path of the library a bootstrap installed as `exe_name` loads.
     ///
     /// CEF looks it up beside the bootstrap, under the bootstrap's own name,
     /// so it is never on a search path and never shared between applications.
     pub fn client_library_path(&self, exe_name: &OsStr) -> PathBuf {
-        crate::client_library_path(&self.executable_path(exe_name))
+        crate::distribution::client_library_path(&self.executable_path(exe_name))
     }
 
     pub fn content_dir(&self) -> PathBuf {
         self.root.join("content")
     }
 
+    /// Linux launcher script at the bundle's root.
+    #[cfg(target_os = "linux")]
     pub fn launcher_path(&self, exe_name: &OsStr) -> PathBuf {
         self.root.join(exe_name)
+    }
+
+    /// Windows application manifest beside the executable, for an
+    /// executable built without `kurogane_build::build`.
+    #[cfg(target_os = "windows")]
+    pub fn manifest_path(&self, exe_name: &OsStr) -> PathBuf {
+        let mut name = exe_name.to_os_string();
+        name.push(".manifest");
+        self.executable_path(exe_name).with_file_name(name)
     }
 
     /// Path of the marker that tells the application it runs from this
     /// bundle, beside the executable.
     pub fn marker_path(&self, exe_name: &OsStr) -> PathBuf {
         self.executable_path(exe_name)
-            .with_file_name(crate::layout::BUNDLE_MARKER)
+            .with_file_name(kurogane_layout::BUNDLE_MARKER)
     }
 
     #[cfg(target_os = "windows")]
@@ -160,11 +168,6 @@ impl BundleLayout {
         self.runtime_dir().join(exe_name)
     }
 
-    #[cfg(target_os = "macos")]
-    pub fn executable_path(&self, exe_name: &OsStr) -> PathBuf {
-        self.root.join(exe_name)
-    }
-
     pub fn install_frontend(&self, src: &Path) -> Result<(), BundleError> {
         if !src.exists() {
             return Err(BundleError::MissingFrontend(src.to_path_buf()));
@@ -175,7 +178,7 @@ impl BundleLayout {
         Ok(())
     }
 
-    /// Installs a materialized CEF runtime into the bundle.
+    /// Copies a CEF runtime into the bundle.
     ///
     /// Only runtime artifacts are included.
     pub fn install_cef(&self, src: &Path) -> Result<(), BundleError> {
@@ -191,7 +194,8 @@ impl BundleLayout {
         let launcher = self.launcher_path(exe_name);
 
         // One quoted word: the name expands nothing in the script
-        let runtime_target = crate::sh_quote(&format!("runtime/{}", exe_name.to_string_lossy()));
+        let runtime_target =
+            crate::distribution::sh_quote(&format!("runtime/{}", exe_name.to_string_lossy()));
 
         // The library path override is the running machine's, so the script
         // reads it when it starts; an unset LD_LIBRARY_PATH gains no empty
@@ -247,6 +251,14 @@ exec "$ROOT"/{runtime_target} "$@"
 
         #[cfg(target_os = "linux")]
         self.write_launcher(exe_name)?;
+
+        // Windows reads it when the executable embeds no manifest of its own
+        #[cfg(target_os = "windows")]
+        {
+            let manifest = self.manifest_path(exe_name);
+            fs::write(&manifest, tetsu_build::WINDOWS_MANIFEST)
+                .map_err(BundleError::io("write", &manifest))?;
+        }
 
         // The application runs the runtime installed below and no other
         let marker = self.marker_path(exe_name);
@@ -306,7 +318,7 @@ exec "$ROOT"/{runtime_target} "$@"
             }
         }
 
-        crate::cef::validate_cef_runtime(&self.cef_dir())?;
+        kurogane_layout::validate_cef_runtime(&self.cef_dir())?;
 
         Ok(())
     }
@@ -336,8 +348,8 @@ mod tests {
 
     #[test]
     fn materialize_copies_executable() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("out");
         let layout = BundleLayout::new(&out);
 
@@ -347,10 +359,29 @@ mod tests {
         assert!(exe.exists(), "executable should exist after materialize");
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_windows_bundle_carries_the_application_manifest() {
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
+        let layout = BundleLayout::new(dir.path().join("out"));
+
+        layout.materialize(&dist).unwrap();
+
+        let manifest = fs::read_to_string(layout.manifest_path(test_exe_name())).unwrap();
+        assert_eq!(manifest, tetsu_build::WINDOWS_MANIFEST);
+        assert!(
+            layout
+                .manifest_path(test_exe_name())
+                .ends_with(format!("{}.manifest", test_exe_name().to_string_lossy())),
+            "Windows reads <app>.exe.manifest beside the executable"
+        );
+    }
+
     #[test]
     fn a_failed_copy_names_what_it_was_copying_and_where() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         std::fs::remove_file(dist.executable.binary()).unwrap();
         let layout = BundleLayout::new(dir.path().join("out"));
 
@@ -369,8 +400,8 @@ mod tests {
 
     #[test]
     fn materialize_copies_cef() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("out");
         let layout = BundleLayout::new(&out);
 
@@ -393,23 +424,23 @@ mod tests {
 
     #[test]
     fn a_bundle_is_marked_to_run_the_runtime_it_installed() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let layout = BundleLayout::new(dir.path().join("out"));
 
         layout.materialize(&dist).unwrap();
 
         let exe = layout.executable_path(test_exe_name());
         assert_eq!(
-            crate::layout::bundle_cef_root_for(&exe),
+            kurogane_layout::bundle_cef_root_for(&exe),
             Some(layout.cef_dir())
         );
     }
 
     #[test]
     fn a_bundle_without_its_marker_fails_verification() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let layout = BundleLayout::new(dir.path().join("out"));
         layout.materialize(&dist).unwrap();
 
@@ -424,8 +455,8 @@ mod tests {
 
     #[test]
     fn materialize_copies_frontend() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("out");
         let layout = BundleLayout::new(&out);
 
@@ -437,23 +468,25 @@ mod tests {
 
     #[test]
     fn materialize_copies_extra_resources() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
 
         let res_file = dir.path().join("data.txt");
         fs::write(&res_file, "resource content").unwrap();
-        dist.extra_resources.push(crate::ResolvedResource {
-            source: res_file.clone(),
-            destination: "data.txt".into(),
-        });
+        dist.extra_resources
+            .push(crate::distribution::ResolvedResource {
+                source: res_file.clone(),
+                destination: "data.txt".into(),
+            });
 
         let res_dir = dir.path().join("assets");
         fs::create_dir_all(res_dir.join("sub")).unwrap();
         fs::write(res_dir.join("sub").join("file.txt"), "nested").unwrap();
-        dist.extra_resources.push(crate::ResolvedResource {
-            source: res_dir.clone(),
-            destination: "assets".into(),
-        });
+        dist.extra_resources
+            .push(crate::distribution::ResolvedResource {
+                source: res_dir.clone(),
+                destination: "assets".into(),
+            });
 
         let out = dir.path().join("out");
         let layout = BundleLayout::new(&out);
@@ -480,8 +513,8 @@ mod tests {
 
     #[test]
     fn materialize_no_frontend_does_not_fabricate_content_dir() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         dist.frontend = None;
 
         let out = dir.path().join("out");
@@ -496,8 +529,8 @@ mod tests {
 
     #[test]
     fn materialize_over_existing_output() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("out");
 
         // First materialization
@@ -514,8 +547,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn materialize_creates_launcher_script() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("out");
         let layout = BundleLayout::new(&out);
 
@@ -550,8 +583,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn the_launcher_reads_the_library_path_override_when_it_runs() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let layout = BundleLayout::new(dir.path().join("out"));
         layout.materialize(&dist).unwrap();
 
@@ -592,8 +625,8 @@ mod tests {
 
     #[test]
     fn the_executable_is_installed_under_the_application_s_name() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         dist.metadata.exe_name = "renamed".to_string();
 
         let layout = BundleLayout::new(dir.path().join("out"));
@@ -608,8 +641,8 @@ mod tests {
 
     #[test]
     fn an_executable_without_a_name_is_refused() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         dist.metadata.exe_name.clear();
 
         let layout = BundleLayout::new(dir.path().join("out"));
@@ -622,8 +655,8 @@ mod tests {
 
     #[test]
     fn a_sandboxed_bundle_installs_the_bootstrap_and_its_library() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sandboxed_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sandboxed_distribution(dir.path());
         let layout = BundleLayout::new(dir.path().join("out"));
 
         layout.materialize(&dist).unwrap();
@@ -646,8 +679,8 @@ mod tests {
 
     #[test]
     fn a_sandboxed_bundle_without_its_library_fails_verification() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sandboxed_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sandboxed_distribution(dir.path());
         let layout = BundleLayout::new(dir.path().join("out"));
 
         layout.materialize(&dist).unwrap();
@@ -661,8 +694,8 @@ mod tests {
 
     #[test]
     fn cef_s_bootstraps_do_not_reach_the_bundle() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
 
         // As a runtime materialized by an older Kurogane still carries them
         for name in ["bootstrap.exe", "bootstrapc.exe", "libcef.lib"] {
@@ -683,15 +716,15 @@ mod tests {
         assert!(
             layout
                 .cef_dir()
-                .join(crate::cef::cef_binary_name())
+                .join(crate::distribution::cef::cef_binary_name())
                 .is_file()
         );
     }
 
     #[test]
     fn verify_passes_with_valid_bundle() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("out");
         let layout = BundleLayout::new(&out);
 
@@ -701,8 +734,8 @@ mod tests {
 
     #[test]
     fn verify_requires_content_index_when_content_dir_exists() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         dist.frontend = None;
 
         let out = dir.path().join("out");
@@ -724,14 +757,14 @@ mod tests {
 
     #[test]
     fn verify_fails_without_executable() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("out");
         let layout = BundleLayout::new(&out);
         fs::create_dir_all(layout.content_dir()).unwrap();
         fs::write(layout.content_dir().join("index.html"), "").unwrap();
 
-        crate::test_fixtures::cef_runtime(&layout.cef_dir());
+        crate::distribution::test_fixtures::cef_runtime(&layout.cef_dir());
 
         let result = layout.verify(&dist);
         assert!(
@@ -742,14 +775,19 @@ mod tests {
 
     #[test]
     fn verify_fails_with_incomplete_cef_runtime() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("out");
         let layout = BundleLayout::new(&out);
         layout.materialize(&dist).unwrap();
 
         // Mess shit up
-        fs::remove_file(layout.cef_dir().join(crate::cef::cef_binary_name())).unwrap();
+        fs::remove_file(
+            layout
+                .cef_dir()
+                .join(crate::distribution::cef::cef_binary_name()),
+        )
+        .unwrap();
 
         assert!(
             layout.verify(&dist).is_err(),
@@ -759,8 +797,8 @@ mod tests {
 
     #[test]
     fn exe_name_matches_executable_filename() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
 
         let actual_filename = dist
             .executable

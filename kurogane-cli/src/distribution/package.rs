@@ -1,15 +1,15 @@
-//! Represents an application bundle as a materialized directory.
+//! Packaging of a bundle directory.
 
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-use crate::{BundleLayout, ResolvedDistribution};
+use crate::distribution::{BundleLayout, ResolvedDistribution};
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum PackageError {
     #[error(transparent)]
-    Layout(#[from] crate::BundleError),
+    Layout(#[from] crate::distribution::BundleError),
 }
 
 /// Packages a resolved distribution as a plain directory bundle.
@@ -33,8 +33,8 @@ mod tests {
 
     #[test]
     fn package_directory_returns_materialized_bundle() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("dist");
 
         let result = package_directory(&dist, &out).unwrap();
@@ -44,8 +44,8 @@ mod tests {
 
     #[test]
     fn package_directory_contains_executable() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("dist");
 
         let bundle = package_directory(&dist, &out).unwrap();
@@ -62,8 +62,8 @@ mod tests {
 
     #[test]
     fn package_directory_contains_cef() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("dist");
 
         let bundle = package_directory(&dist, &out).unwrap();
@@ -82,8 +82,8 @@ mod tests {
 
     #[test]
     fn package_directory_contains_frontend() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let out = dir.path().join("dist");
 
         let bundle = package_directory(&dist, &out).unwrap();
@@ -93,8 +93,8 @@ mod tests {
 
     #[test]
     fn package_directory_without_frontend() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         dist.frontend = None;
 
         let out = dir.path().join("dist");
@@ -112,8 +112,8 @@ mod tests {
 
     #[test]
     fn package_directory_contains_extra_resources() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
 
         let out = dir.path().join("dist");
         let bundle = package_directory(&dist, &out).unwrap();
@@ -126,9 +126,10 @@ mod tests {
 
     #[test]
     fn package_directory_rejects_invalid_distribution() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
-        dist.executable = crate::Executable::Application(dir.path().join("nonexistent"));
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
+        dist.executable =
+            crate::distribution::Executable::Application(dir.path().join("nonexistent"));
 
         let out = dir.path().join("dist");
         let result = package_directory(&dist, &out);

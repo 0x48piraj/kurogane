@@ -1,43 +1,42 @@
 //! Project creation from starters and templates.
 //!
-//! Resolves project sources and generates new applications through
-//! cargo-generate with Kurogane-specific project post-generation.
+//! Generates new applications through cargo-generate from an official
+//! starter or any template.
 
 use anyhow::{Result, bail};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::starters;
-use crate::template;
+use crate::template::{self, Answers};
 use crate::tui;
 
 pub fn run(
     starter: Option<String>,
     name: Option<String>,
     language: Option<String>,
-    template_src: Option<String>,
+    custom: Option<String>,
+    values: Option<PathBuf>,
     consent: template::Consent,
 ) -> Result<()> {
     tui::section("Kurogane project setup");
 
-    let (source, language) =
-        resolve_source(starter, language, template_src, consent.non_interactive)?;
+    let (template, language) = resolve_source(starter, language, custom, consent.non_interactive)?;
 
     let name = resolve_project_name(name, consent.non_interactive)?;
 
     tui::step("Creating project");
     tui::field("name", &name);
+    tui::field("template", &template);
 
-    let resolved = template::resolve(&source);
-    let template_dir = template::acquire(&resolved)?;
-    template::confirm_hooks(&template_dir, consent)?;
-
-    let defines = language
-        .map(|l| vec![format!("language={l}")])
-        .unwrap_or_default();
+    let answers = Answers {
+        defines: language
+            .map(|l| vec![format!("language={l}")])
+            .unwrap_or_default(),
+        values,
+    };
     let destination = std::env::current_dir()?;
-    let project =
-        template::generate_project(&template_dir, &name, &destination, &defines, consent)?;
+    let project = template::generate_project(&template, &name, &destination, &answers, consent)?;
 
     let generated_config = crate::config::PackagingConfig::load(&project)?;
 
@@ -65,16 +64,16 @@ pub fn run(
 fn resolve_source(
     starter: Option<String>,
     language: Option<String>,
-    template_src: Option<String>,
+    custom: Option<String>,
     non_interactive: bool,
 ) -> Result<(String, Option<String>)> {
-    match (starter, template_src) {
+    match (starter, custom) {
         (None, None) => {
             let s = starters::choose(non_interactive)?;
             let lang = starters::resolve_language(s, language, non_interactive)?;
             Ok((s.source.to_owned(), lang.map(str::to_owned)))
         }
-        (None, Some(tpl)) => Ok((tpl, None)),
+        (None, Some(template)) => Ok((template, language)),
         (Some(name), None) => {
             if name == "showcase" {
                 bail!("Use 'kurogane showcase' to run the showcase demo");
@@ -90,9 +89,7 @@ fn resolve_source(
             let lang = starters::resolve_language(s, language, non_interactive)?;
             Ok((s.source.to_owned(), lang.map(str::to_owned)))
         }
-        (Some(_), Some(_)) => {
-            bail!("--template and a starter name are mutually exclusive");
-        }
+        (Some(_), Some(_)) => unreachable!("clap refuses --template beside a starter"),
     }
 }
 

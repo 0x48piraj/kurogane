@@ -63,8 +63,12 @@ pub fn client_library_path(bootstrap: &Path) -> PathBuf {
 /// whole runtime there rather than on `PATH`. The files are shared with the
 /// installation where the filesystem allows it.
 pub fn stage_runtime(cef_root: &Path, dst: &Path) -> std::io::Result<()> {
-    crate::layout::link_dir(cef_root, dst, &crate::cef::is_runtime_artifact)?;
-    std::fs::write(dst.join(crate::layout::BUNDLE_MARKER), b"")
+    crate::distribution::files::link_dir(
+        cef_root,
+        dst,
+        &crate::distribution::cef::is_runtime_artifact,
+    )?;
+    std::fs::write(dst.join(kurogane_layout::BUNDLE_MARKER), b"")
 }
 
 #[cfg(test)]
@@ -104,8 +108,8 @@ mod tests {
 
     #[test]
     fn staging_leaves_cef_s_own_bootstraps_behind() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let cef = crate::test_fixtures::cef_runtime(&dir.path().join("cef"));
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let cef = crate::distribution::test_fixtures::cef_runtime(&dir.path().join("cef"));
         for bootstrap in Bootstrap::ALL {
             std::fs::write(bootstrap.path_in(&cef), "bootstrap").unwrap();
         }
@@ -119,21 +123,25 @@ mod tests {
                 "the application installs its bootstrap under its own name"
             );
         }
-        assert!(staged.join(crate::cef::cef_binary_name()).exists());
+        assert!(
+            staged
+                .join(crate::distribution::cef::cef_binary_name())
+                .exists()
+        );
     }
 
     #[test]
     fn a_staged_run_is_a_bundle() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let cef = crate::test_fixtures::cef_runtime(&dir.path().join("cef"));
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let cef = crate::distribution::test_fixtures::cef_runtime(&dir.path().join("cef"));
 
         let staged = dir.path().join("staged");
         stage_runtime(&cef, &staged).unwrap();
 
-        assert!(staged.join(crate::layout::BUNDLE_MARKER).is_file());
+        assert!(staged.join(kurogane_layout::BUNDLE_MARKER).is_file());
         #[cfg(target_os = "windows")]
         assert_eq!(
-            crate::layout::bundle_cef_root_for(&staged.join("myapp.exe")),
+            kurogane_layout::bundle_cef_root_for(&staged.join("myapp.exe")),
             Some(staged)
         );
     }

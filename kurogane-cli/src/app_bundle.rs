@@ -10,7 +10,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use kurogane_layout::{AppMetadata, Executable, copy_dir, validate_cef_runtime};
+use kurogane_layout::{MACOS_FRAMEWORK, validate_cef_runtime};
+use crate::distribution::{AppMetadata, Executable, copy_dir};
+use crate::install::NOTICES;
 use crate::macos_settings::MacosSettings;
 use crate::plist::Dict;
 use crate::signing::{SignConfig, sign_app_bundle};
@@ -29,6 +31,9 @@ fn macos_dir(app_dir: &Path) -> std::path::PathBuf {
 fn frameworks_dir(app_dir: &Path) -> std::path::PathBuf {
     app_dir.join("Contents").join("Frameworks")
 }
+
+/// Folder of `Contents/Resources` holding CEF's licence and credits.
+const CEF_NOTICES_DIR: &str = "Chromium Embedded Framework";
 
 /// Returns `Contents/Resources`.
 fn resources_dir(app_dir: &Path) -> std::path::PathBuf {
@@ -244,7 +249,7 @@ fn install_icon(resources: &Path, icon: &Path) -> Result<bool> {
 /// Builds and optionally signs a macOS `.app` bundle declaring what `macos`
 /// says.
 pub fn build(
-    dist: &kurogane_layout::ResolvedDistribution,
+    dist: &crate::distribution::ResolvedDistribution,
     output_dir: &Path,
     macos: &MacosSettings,
     sign_config: Option<&SignConfig>,
@@ -285,16 +290,14 @@ pub fn build(
         .with_context(|| format!("failed to set permissions on {}", exe_dest.display()))?;
 
     // CEF framework
-    let framework_src = dist
-        .cef_runtime
-        .join("Chromium Embedded Framework.framework");
+    let framework_src = dist.cef_runtime.join(MACOS_FRAMEWORK);
     if !framework_src.exists() {
         bail!(
-            "CEF runtime at {} does not contain the Chromium Embedded Framework.framework",
+            "CEF runtime at {} does not contain the {MACOS_FRAMEWORK}",
             dist.cef_runtime.display()
         );
     }
-    let framework_dest = frameworks_dir(&app_dir).join("Chromium Embedded Framework.framework");
+    let framework_dest = frameworks_dir(&app_dir).join(MACOS_FRAMEWORK);
     copy_dir(&framework_src, &framework_dest).with_context(|| {
         format!(
             "failed to copy the CEF framework to {}",
@@ -304,6 +307,16 @@ pub fn build(
 
     // Validate the placed framework
     validate_cef_runtime(&frameworks_dir(&app_dir))?;
+
+    // CEF's licence and credits, outside the framework its signature covers
+    let notices = resources_dir(&app_dir).join(CEF_NOTICES_DIR);
+    fs::create_dir_all(&notices)
+        .with_context(|| format!("failed to create directory {}", notices.display()))?;
+    for notice in NOTICES {
+        let (src, dest) = (dist.cef_runtime.join(notice), notices.join(notice));
+        fs::copy(&src, &dest)
+            .with_context(|| format!("failed to copy {} to {}", src.display(), dest.display()))?;
+    }
 
     // Subprocess helpers, beside the framework. Without these macOS launches no
     // renderer and the packaged app shows a blank window.
@@ -383,7 +396,7 @@ pub fn build(
 mod tests {
     use super::*;
     use crate::config::MacosPackagingConfig;
-    use kurogane_layout::{AppMetadata, Executable, ResolvedDistribution, ResolvedResource};
+    use crate::distribution::{AppMetadata, Executable, ResolvedDistribution, ResolvedResource};
 
     /// What an empty `[macos]` declares.
     fn settings() -> MacosSettings {
@@ -408,8 +421,13 @@ mod tests {
         fs::write(path, b"mach-o").unwrap();
     }
 
-    // Minimal CEF framework shape required by `validate_cef_runtime`
+    // Minimal CEF framework shape required by `validate_cef_runtime`, with
+    // the notices an installation carries
     fn framework_fixture(root: &Path) {
+        fs::create_dir_all(root).unwrap();
+        for notice in NOTICES {
+            fs::write(root.join(notice), b"notice").unwrap();
+        }
         let fw = root.join("Chromium Embedded Framework.framework");
         let resources = fw.join("Resources");
         fs::create_dir_all(&resources).unwrap();
@@ -456,6 +474,15 @@ mod tests {
                 .exists()
         );
         assert!(app_dir.join("Contents").join("Info.plist").exists());
+        for notice in NOTICES {
+            assert!(
+                resources_dir(&app_dir)
+                    .join(CEF_NOTICES_DIR)
+                    .join(notice)
+                    .is_file(),
+                "the bundle passes on CEF's {notice}"
+            );
+        }
     }
 
     #[test]

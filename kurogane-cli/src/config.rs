@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use thiserror::Error;
 
-use kurogane_layout::{AppMetadata, ResolvedResource};
+use crate::distribution::{AppMetadata, ResolvedResource};
 
 /// Name of the project packaging configuration file.
 pub const CONFIG_FILE_NAME: &str = "kurogane.toml";
@@ -654,7 +654,7 @@ future-option = 42
 
     #[test]
     fn apply_to_overrides_only_set_fields() {
-        let mut metadata = kurogane_layout::AppMetadata {
+        let mut metadata = crate::distribution::AppMetadata {
             name: "cargo-name".into(),
             ..Default::default()
         };

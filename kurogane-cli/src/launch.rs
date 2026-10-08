@@ -19,15 +19,6 @@ use crate::config::PackagingConfig;
 
 use crate::tui;
 
-/// Constructs a plain Cargo command; builds read no CEF and the application
-/// finds its own.
-pub(crate) fn cargo_command(subcommand: &str) -> Command {
-    let mut cmd = Command::new("cargo");
-    cmd.arg(subcommand);
-
-    cmd
-}
-
 /// Returns the package's first target of `kind`.
 pub(crate) fn find_target(package: &Package, kind: TargetKind) -> Option<&Target> {
     package
@@ -61,7 +52,8 @@ pub(crate) fn run_app(
 
 /// Runs the application through plain `cargo run`.
 fn cargo_run(cargo_args: &[OsString]) -> Result<ExitStatus> {
-    let mut cmd = cargo_command("run");
+    let mut cmd = Command::new("cargo");
+    cmd.arg("run");
     cmd.args(cargo_args);
 
     tui::blank();

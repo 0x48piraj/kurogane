@@ -8,11 +8,11 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 mod install;
-mod dev;
 mod launch;
 mod run;
 mod sandbox;
 mod bundle;
+mod distribution;
 mod config;
 mod signing;
 mod new;
@@ -46,6 +46,7 @@ mod plist;
 mod collector;
 mod cache;
 mod template;
+mod template_store;
 mod starters;
 mod tui;
 
@@ -113,11 +114,16 @@ enum Commands {
         #[arg(long)]
         language: Option<String>,
 
-        /// Use an arbitrary template source.
-        #[arg(long)]
+        /// Use a template: a local path, git URL or cargo-generate shorthand
+        /// such as gh:owner/repository.
+        #[arg(long, conflicts_with = "starter")]
         template: Option<String>,
 
-        /// Accept template hooks without prompting.
+        /// Read placeholder values from this TOML file.
+        #[arg(long, value_name = "FILE")]
+        values: Option<PathBuf>,
+
+        /// Allow the template's hooks to run commands without asking.
         #[arg(long)]
         yes: bool,
     },
@@ -131,7 +137,7 @@ enum Commands {
         #[arg(long)]
         dev_url: Option<String>,
 
-        /// Accept template hooks without prompting.
+        /// Allow the template's hooks to run commands without asking.
         #[arg(long)]
         yes: bool,
     },
@@ -148,7 +154,7 @@ enum Commands {
     },
     /// Run Kurogane's showcase application.
     Showcase {
-        /// Accept template hooks without prompting.
+        /// Allow the template's hooks to run commands without asking.
         #[arg(long)]
         yes: bool,
     },
@@ -161,8 +167,8 @@ enum Commands {
     /// List application profiles and versions.
     List {
         /// Only profiles or only versions; both by default.
-        #[arg(value_parser = ["profiles", "version"])]
-        target: Option<String>,
+        #[arg(value_enum)]
+        target: Option<list::Target>,
     },
     /// Show the CLI, environment and project configuration.
     Info,
@@ -241,8 +247,10 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Install => install::run(),
-        Commands::Dev => dev::run(),
-        Commands::Run { cargo_args: parsed } => run::run(cargo_args(parsed, std::env::args_os())),
+        Commands::Dev => run::run("Kurogane Dev", Vec::new()),
+        Commands::Run { cargo_args: parsed } => {
+            run::run("Kurogane Run", cargo_args(parsed, std::env::args_os()))
+        }
         Commands::Bundle {
             debug,
             format,
@@ -256,8 +264,9 @@ fn main() -> anyhow::Result<()> {
             name,
             language,
             template,
+            values,
             yes,
-        } => new::run(starter, name, language, template, consent(yes)),
+        } => new::run(starter, name, language, template, values, consent(yes)),
         Commands::Init {
             assets,
             dev_url,

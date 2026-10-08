@@ -9,7 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use kurogane_layout::{ResolvedDistribution, package_directory, sh_quote};
+use crate::distribution::{ResolvedDistribution, package_directory, sh_quote};
 use crate::config::PackagingConfig;
 
 use crate::tui;
@@ -70,10 +70,7 @@ fn tools_arch() -> Result<String> {
 }
 
 fn tools_dir() -> Result<PathBuf> {
-    let dir = dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("kurogane")
-        .join("tools");
+    let dir = crate::cache::tools_dir();
     fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create directory {}", dir.display()))?;
     Ok(dir)
@@ -477,7 +474,7 @@ mod tests {
     }
 
     fn test_distribution(dir: &Path) -> ResolvedDistribution {
-        kurogane_layout::test_fixtures::sample_distribution(dir)
+        crate::distribution::test_fixtures::sample_distribution(dir)
     }
 
     #[test]
@@ -859,7 +856,7 @@ mod tests {
         let res = dir.path().join("extra.txt");
         fs::write(&res, "resource data").unwrap();
         dist.extra_resources
-            .push(kurogane_layout::ResolvedResource {
+            .push(crate::distribution::ResolvedResource {
                 source: res.clone(),
                 destination: "extra.txt".into(),
             });

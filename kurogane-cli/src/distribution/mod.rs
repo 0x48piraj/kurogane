@@ -1,11 +1,34 @@
-//! Resolved application distribution model.
+//! Application distributions and the bundles made from them.
 //!
-//! This module defines the platform-independent description of the files
-//! required to distribute an application and validates that all declared
-//! inputs are usable.
+//! Defines the platform-independent description of the files an application
+//! ships, validates it and lays it out as a bundle the runtime recognizes.
+
+mod bootstrap;
+#[cfg(not(target_os = "macos"))]
+mod bundle_layout;
+mod cef;
+mod files;
+#[cfg(not(target_os = "macos"))]
+mod package;
+#[cfg(target_os = "linux")]
+mod shell;
+
+#[cfg(test)]
+pub mod test_fixtures;
 
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+
+pub use bootstrap::{Bootstrap, client_library_path, stage_runtime};
+#[cfg(not(target_os = "macos"))]
+pub use bundle_layout::{BundleError, BundleLayout};
+#[cfg(target_os = "macos")]
+pub use files::copy_dir;
+pub use files::link_dir;
+#[cfg(not(target_os = "macos"))]
+pub use package::package_directory;
+#[cfg(target_os = "linux")]
+pub use shell::sh_quote;
 
 /// Application identity and distribution metadata.
 #[derive(Debug, Clone, Default)]
@@ -56,7 +79,7 @@ pub enum Executable {
     /// Chromium's Windows sandbox is brokered by whichever process starts the
     /// browser, and CEF keeps that broker in its bootstrap. The bootstrap is
     /// installed under the application's name and finds the library beside
-    /// it under the same name, see [`crate::client_library_path`].
+    /// it under the same name, see [`crate::distribution::client_library_path`].
     Bootstrap {
         bootstrap: PathBuf,
         library: PathBuf,
@@ -145,7 +168,7 @@ pub enum DistributionError {
     },
 
     #[error(transparent)]
-    InvalidCefRuntime(#[from] crate::cef::CefError),
+    InvalidCefRuntime(#[from] kurogane_layout::IncompleteRuntime),
 }
 
 impl ResolvedDistribution {
@@ -220,7 +243,7 @@ impl ResolvedDistribution {
     }
 
     fn validate_cef(&self) -> Result<(), DistributionError> {
-        crate::cef::validate_cef_runtime(&self.cef_runtime)?;
+        kurogane_layout::validate_cef_runtime(&self.cef_runtime)?;
         Ok(())
     }
 }
@@ -402,15 +425,15 @@ mod tests {
 
     #[test]
     fn valid_distribution_passes_validation() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         assert!(dist.validate().is_ok());
     }
 
     #[test]
     fn missing_executable_is_rejected() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let binary = dist.executable.binary();
         fs::remove_file(binary).unwrap();
 
@@ -423,8 +446,8 @@ mod tests {
 
     #[test]
     fn executable_is_directory_rejected() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         fs::remove_file(dist.executable.binary()).unwrap();
         fs::create_dir(dist.executable.binary()).unwrap();
 
@@ -437,8 +460,8 @@ mod tests {
 
     #[test]
     fn an_executable_without_a_name_is_rejected() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         dist.metadata.exe_name.clear();
 
         assert!(matches!(
@@ -495,8 +518,8 @@ mod tests {
 
     #[test]
     fn a_distribution_whose_names_cannot_name_files_is_rejected() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         dist.metadata.name = "/etc".to_string();
         assert!(matches!(
             dist.validate(),
@@ -507,7 +530,7 @@ mod tests {
             })
         ));
 
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         dist.metadata.exe_name = "a\nb".to_string();
         let err = dist.validate().unwrap_err();
         assert!(
@@ -529,16 +552,16 @@ mod tests {
 
     #[test]
     fn a_bootstrap_distribution_passes_validation() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sandboxed_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sandboxed_distribution(dir.path());
 
         assert!(dist.validate().is_ok());
     }
 
     #[test]
     fn a_bootstrap_without_its_library_is_rejected() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sandboxed_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sandboxed_distribution(dir.path());
         let library = dist.executable.library().unwrap();
         fs::remove_file(library).unwrap();
 
@@ -550,8 +573,8 @@ mod tests {
 
     #[test]
     fn missing_frontend_directory_is_rejected() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         dist.frontend = Some(dir.path().join("nonexistent"));
 
         let err = dist.validate().unwrap_err();
@@ -563,8 +586,8 @@ mod tests {
 
     #[test]
     fn frontend_not_a_directory_is_rejected() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let file_path = dir.path().join("not_a_dir");
         fs::write(&file_path, "content").unwrap();
         dist.frontend = Some(file_path);
@@ -578,8 +601,8 @@ mod tests {
 
     #[test]
     fn missing_index_html_is_rejected() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let empty_frontend = dir.path().join("empty_frontend");
         fs::create_dir(&empty_frontend).unwrap();
         dist.frontend = Some(empty_frontend);
@@ -593,8 +616,8 @@ mod tests {
 
     #[test]
     fn frontend_none_does_not_require_index() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         dist.frontend = None;
 
         assert!(
@@ -605,8 +628,8 @@ mod tests {
 
     #[test]
     fn missing_cef_root_is_rejected() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         dist.cef_runtime = dir.path().join("nonexistent_cef");
 
         let err = dist.validate().unwrap_err();
@@ -618,8 +641,8 @@ mod tests {
 
     #[test]
     fn cef_root_not_a_directory_is_rejected() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let file_path = dir.path().join("not_a_cef_dir");
         fs::write(&file_path, "").unwrap();
         dist.cef_runtime = file_path;
@@ -633,8 +656,8 @@ mod tests {
 
     #[test]
     fn incomplete_cef_runtime_is_rejected() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let empty_cef = dir.path().join("empty_cef");
         fs::create_dir(&empty_cef).unwrap();
         dist.cef_runtime = empty_cef;
@@ -648,8 +671,8 @@ mod tests {
 
     #[test]
     fn missing_extra_resource_is_rejected() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let missing = dir.path().join("nonexistent_resource");
         dist.extra_resources = vec![ResolvedResource {
             source: missing.clone(),
@@ -665,8 +688,8 @@ mod tests {
 
     #[test]
     fn missing_resource_not_confused_with_cef_or_frontend_error() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         dist.extra_resources = vec![ResolvedResource {
             source: dir.path().join("missing_res"),
             destination: "missing_res".into(),
@@ -684,7 +707,7 @@ mod tests {
 
     #[test]
     fn raw_distribution_root_is_not_a_valid_runtime() {
-        let dir = crate::test_fixtures::tmp_dir();
+        let dir = crate::distribution::test_fixtures::tmp_dir();
         let raw = dir.path().join("raw_dist");
         fs::create_dir_all(raw.join("Release")).unwrap();
         fs::create_dir_all(raw.join("Resources")).unwrap();
@@ -714,8 +737,8 @@ mod tests {
 
     #[test]
     fn extra_resources_dirs_are_checked() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         let missing_dir = dir.path().join("missing_dir");
         dist.extra_resources = vec![ResolvedResource {
             source: missing_dir,
@@ -731,8 +754,8 @@ mod tests {
 
     #[test]
     fn absolute_resource_destination_is_rejected() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         dist.extra_resources = vec![ResolvedResource {
             source: dir.path().join("extra.txt"),
             destination: "/etc/passwd".into(),
@@ -748,8 +771,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn drive_letter_destination_is_rejected_on_windows() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         dist.extra_resources = vec![ResolvedResource {
             source: dir.path().join("extra.txt"),
             destination: r"C:\Windows\evil.dll".into(),
@@ -764,8 +787,8 @@ mod tests {
 
     #[test]
     fn parent_dir_resource_destination_is_rejected() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         dist.extra_resources = vec![ResolvedResource {
             source: dir.path().join("extra.txt"),
             destination: "../escape.txt".into(),
@@ -780,8 +803,8 @@ mod tests {
 
     #[test]
     fn nested_relative_resource_destination_is_accepted() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let mut dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
         dist.extra_resources = vec![ResolvedResource {
             source: dir.path().join("extra.txt"),
             destination: "share/data/extra.txt".into(),
@@ -794,7 +817,7 @@ mod tests {
     /// `dir`, holding `inside.txt`, and the file `secret.txt` beside it.
     #[cfg(unix)]
     fn with_assets(dir: &Path) -> (ResolvedDistribution, PathBuf) {
-        let mut dist = crate::test_fixtures::sample_distribution(dir);
+        let mut dist = crate::distribution::test_fixtures::sample_distribution(dir);
         let assets = dir.join("assets");
         fs::create_dir_all(assets.join("sub")).unwrap();
         fs::write(assets.join("inside.txt"), "inside").unwrap();
@@ -810,7 +833,7 @@ mod tests {
     #[test]
     fn a_resource_link_out_of_its_resource_is_refused_naming_it() {
         use std::os::unix::fs::symlink;
-        let dir = crate::test_fixtures::tmp_dir();
+        let dir = crate::distribution::test_fixtures::tmp_dir();
         let (dist, assets) = with_assets(dir.path());
         let link = assets.join("sub").join("key.txt");
         symlink(dir.path().join("secret.txt"), &link).unwrap();
@@ -845,7 +868,7 @@ mod tests {
     #[test]
     fn a_resource_link_that_stays_inside_is_bundled() {
         use std::os::unix::fs::symlink;
-        let dir = crate::test_fixtures::tmp_dir();
+        let dir = crate::distribution::test_fixtures::tmp_dir();
         let (dist, assets) = with_assets(dir.path());
         symlink("../inside.txt", assets.join("sub").join("again.txt")).unwrap();
         symlink("sub", assets.join("also-sub")).unwrap();
@@ -857,7 +880,7 @@ mod tests {
     #[test]
     fn a_resource_that_is_a_link_is_what_its_entry_names() {
         use std::os::unix::fs::symlink;
-        let dir = crate::test_fixtures::tmp_dir();
+        let dir = crate::distribution::test_fixtures::tmp_dir();
         let (mut dist, assets) = with_assets(dir.path());
         let named = dir.path().join("named");
         symlink(&assets, &named).unwrap();
@@ -870,7 +893,7 @@ mod tests {
     #[test]
     fn a_resource_link_that_loops_or_leads_nowhere_is_refused() {
         use std::os::unix::fs::symlink;
-        let dir = crate::test_fixtures::tmp_dir();
+        let dir = crate::distribution::test_fixtures::tmp_dir();
         let (dist, assets) = with_assets(dir.path());
 
         let up = assets.join("sub").join("up");
@@ -907,8 +930,8 @@ mod tests {
 
     #[test]
     fn exe_name_matches_executable_filename() {
-        let dir = crate::test_fixtures::tmp_dir();
-        let dist = crate::test_fixtures::sample_distribution(dir.path());
+        let dir = crate::distribution::test_fixtures::tmp_dir();
+        let dist = crate::distribution::test_fixtures::sample_distribution(dir.path());
 
         let actual_filename = dist
             .executable

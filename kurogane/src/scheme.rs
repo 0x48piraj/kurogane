@@ -941,7 +941,7 @@ mod tests {
 
     #[test]
     fn a_panicking_scheme_handler_fails_its_request() {
-        // Called through cef-rs's extern "C" trampoline, as CEF calls it: a
+        // Called through tetsu's extern "C" trampoline, as CEF calls it: a
         // panic escaping the factory would abort the test process
         let factory = CustomSchemeHandlerFactory::new(Arc::new(Panics));
         assert!(factory.create(None, None, None, None).is_none());

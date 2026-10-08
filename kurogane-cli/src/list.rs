@@ -3,18 +3,24 @@
 //! Prints every application's profile, the CLI's version and the CEF
 //! version it was built with.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use std::fs;
 use kurogane_layout::profiles_root;
 
 use crate::tui;
 
-pub fn run(target: Option<String>) -> Result<()> {
-    match target.as_deref() {
-        Some("profiles") => list_profiles(),
-        Some("version") => list_version(),
+/// What `kurogane list` shows.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum Target {
+    Profiles,
+    Version,
+}
+
+pub fn run(target: Option<Target>) -> Result<()> {
+    match target {
+        Some(Target::Profiles) => list_profiles(),
+        Some(Target::Version) => list_version(),
         None => list_all(),
-        _ => bail!("Unknown list target. Valid targets: profiles, version"),
     }
 }
 

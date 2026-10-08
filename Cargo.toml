@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "kurogane",
+    "kurogane-build",
     "kurogane-cli",
     "kurogane-layout",
     "kurogane-suite"
@@ -18,9 +19,11 @@ authors = [
 repository = "https://github.com/0x48piraj/kurogane"
 
 [workspace.dependencies]
-tetsu = { git = "https://github.com/kurogane-rs/tetsu", rev = "043b5b864bdaff5a5b937ae53a8db3aab181e934", default-features = false }
-tetsu-download = { git = "https://github.com/kurogane-rs/tetsu", rev = "043b5b864bdaff5a5b937ae53a8db3aab181e934" }
+tetsu = { git = "https://github.com/kurogane-rs/tetsu", rev = "881d8cbd1209aa0379c90f121a9f00aaefd026d2", default-features = false }
+tetsu-download = { git = "https://github.com/kurogane-rs/tetsu", rev = "881d8cbd1209aa0379c90f121a9f00aaefd026d2" }
+tetsu-build = { git = "https://github.com/kurogane-rs/tetsu", rev = "881d8cbd1209aa0379c90f121a9f00aaefd026d2" }
 kurogane = { path = "kurogane" }
+kurogane-build = { path = "kurogane-build" }
 kurogane-cli = { path = "kurogane-cli" }
 kurogane-layout = { path = "kurogane-layout" }
 semver = "1"
