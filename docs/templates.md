@@ -2,103 +2,237 @@
 
 New Kurogane applications are generated from templates (`kurogane new`). Existing projects get a Rust shell added instead (`kurogane init`).
 
-Kurogane uses [cargo-generate](https://github.com/cargo-generate/cargo-generate) under the hood, while adding its own template selection, safety checks and post-generation setup.
+Every Kurogane template is a [cargo-generate](https://github.com/cargo-generate/cargo-generate) template. The official starters are too. Kurogane adds its own starter selection on top. A template you write works with `kurogane new` and with plain `cargo generate`.
 
 ## Official starters
 
-Kurogane includes built-in starters for common frontend setups, available in both TypeScript and JavaScript.
+Kurogane has official starters for common frontend setups. Each one comes in TypeScript and JavaScript.
 
-The starters and their source code are available in the [`kurogane-rs`](https://github.com/orgs/kurogane-rs/) repositories:
+The starters and their source code live in the [`kurogane-rs`](https://github.com/orgs/kurogane-rs/) repositories:
 
 | Starter | Repository | Description |
 |---------|------------|-------------|
-| `minimal` | [`kurogane-rs/starter-minimal`](https://github.com/kurogane-rs/kurogane-starter-minimal) | Bare-bones project with a Vite frontend |
-| `react` | [`kurogane-rs/starter-react`](https://github.com/kurogane-rs/kurogane-starter-react) | React + Vite |
-| `svelte` | [`kurogane-rs/starter-svelte`](https://github.com/kurogane-rs/kurogane-starter-svelte) | Svelte 5 + Vite |
-| `vue` | [`kurogane-rs/starter-vue`](https://github.com/kurogane-rs/kurogane-starter-vue) | Vue 3 + Vite |
+| `minimal` | [`kurogane-rs/kurogane-starter-minimal`](https://github.com/kurogane-rs/kurogane-starter-minimal) | Bare-bones project with a Vite frontend |
+| `react` | [`kurogane-rs/kurogane-starter-react`](https://github.com/kurogane-rs/kurogane-starter-react) | React + Vite |
+| `svelte` | [`kurogane-rs/kurogane-starter-svelte`](https://github.com/kurogane-rs/kurogane-starter-svelte) | Svelte 5 + Vite |
+| `vue` | [`kurogane-rs/kurogane-starter-vue`](https://github.com/kurogane-rs/kurogane-starter-vue) | Vue 3 + Vite |
 
-When no arguments are given, `kurogane new` prompts you to choose a starter and language interactively. You can also pass the starter name directly:
+Without arguments `kurogane new` asks for a starter and a language. You can also name the starter:
 
 ```bash
-kurogane new react         # prompts for TypeScript or JavaScript
-kurogane new minimal --yes # skip hook confirmation
+kurogane new react
 ```
+
+```bash
+kurogane new react --language javascript --name my-app
+```
+
+The CLI fetches each starter from its repository's default branch.
 
 ## Custom templates
 
-Use `--template` to generate from a custom template instead of an official starter. A starter name and `--template` cannot be used together.
-
-## Template caching
-
-Templates are cached after the first generation, so updates to a remote template won't be picked up automatically.
-
-To pick up changes to a remote template, clear the cache with `kurogane clean` and generate again.
-
-> Using a local template skips the cache, as you'd expect.
-
-### Usage
+Use `--template` to generate from any other template. A starter name and `--template` cannot be used together.
 
 ```bash
-kurogane new --template user/repo     # any git-hosted template
-kurogane new --template gh:user/repo  # alternative
-kurogane new --template ./my-template # local path
+kurogane new --template gh:user/repo
 ```
 
-The project directory is named after the project, converted to kebab-case.
+```bash
+kurogane new --template https://gitlab.com/user/repo
+```
+
+```bash
+kurogane new --template ./my-template
+```
+
+`--template` takes a local path, a git URL or a cargo-generate shorthand (`gh:`, `gl:`, `bb:`, `sr:` or `user/repo` for GitHub). Private repositories use your git credentials and SSH agent.
+
+A git template comes from its default branch. Every run fetches it again into a snapshot in Kurogane's cache. A run that cannot fetch it generates from the last snapshot and says how old it is. `kurogane clean` removes the snapshots.
+
+### Placeholder values
+
+A template's placeholders are asked for interactively. `--values` takes them from a TOML file instead:
+
+```toml
+[values]
+language = "javascript"
+```
+
+```bash
+kurogane new --template gh:user/repo --name my-app --values answers.toml --ci
+```
+
+A values file gives the same answers on every run and every machine. `--language` sets the `language` placeholder for any template.
+
+The project directory takes the project's name in kebab-case.
 
 Generated projects are not initialized as git repositories and are never added to a parent Cargo workspace.
 
 ## Adding Kurogane to an existing app
 
-`kurogane init` adds Kurogane to an existing frontend project.
+`kurogane init` adds Kurogane to an existing frontend project. It generates the Rust shell in the current directory. The shell is `Cargo.toml`, `build.rs`, `kurogane.toml` and `src/main.rs`.
 
-It generates the Rust shell in the current directory and takes a deliberately conservative approach: _it never overwrites existing files or an existing Kurogane setup_.
+_It never overwrites existing files or an existing Kurogane setup._ Its guardrails:
 
-That means a few guardrails are built in:
+* Refuses to run when `kurogane.toml` already exists.
+* Refuses to run when the directory already has a `Cargo.toml` or `src/main.rs`.
+* Asks for the build output directory and the dev server URL unless `--assets` and `--dev-url` give them. A non-interactive run needs both flags.
 
-- Refuses to run if `kurogane.toml` already exists.
-- Points empty directories at `kurogane new` instead.
-- Aborts if any existing Rust project is already present.
-- Asks for the assets directory and dev server URL (or takes them from `--assets` / `--dev-url`).
+`--assets` becomes `frontend-dist` in `kurogane.toml`. `kurogane bundle` packages that directory.
+
+Debug builds load the dev server URL. The prompt always asks for one. Pass `--dev-url ""` to make debug builds load the build output instead. Release builds load the bundle's `content/`.
 
 ## Hooks and safety
 
-Templates can run Rhai hooks (`[hooks]` in its `cargo-generate.toml`) during generation. Because those hooks execute code, Kurogane asks you to confirm them before generation.
+A template can run Rhai hooks (`[hooks]` in its `cargo-generate.toml`) during generation. cargo-generate asks before a hook runs any command and shows the command.
+
+`--yes` lets hooks run commands without asking. A non-interactive run without `--yes` refuses any command a hook asks for.
 
 > [!CAUTION]
-> Non-interactive runs must pass `--yes`. Hook scripts themselves are never inspected or analyzed.
+> Only pass `--yes` for templates you trust. Hook scripts are never inspected or analyzed.
+
+The official starters have no hooks.
 
 ## Post-generation setup
 
-Generated projects include a `.cargo/config.toml` that makes the bundled Chromium runtime available at runtime without requiring environment variables. See [bundling](bundling.md) for more details.
+Generated projects need no setup of their own. `kurogane dev` installs the Chromium runtime the project uses when it is missing. The application loads it when it starts. A template needs no `.cargo/config.toml` or linker flags for it. See [bundling](bundling.md) for how a bundle carries its runtime.
 
 ## Authoring templates
 
-Kurogane templates are ordinary cargo-generate templates with a Kurogane application manifest (`kurogane.toml`) and a Rust entry point.
+A Kurogane template is a cargo-generate template that produces a Kurogane application. Start from an official starter. Fork it, change it and publish it.
 
-Liquid placeholders follow the [cargo-generate template guide](https://shopify.github.io/liquid/).
+### Layout
+
+```
+Cargo.toml           # the application crate, depending on kurogane and kurogane-build
+build.rs             # calls kurogane_build::build()
+kurogane.toml        # the Kurogane application manifest
+src/main.rs          # the entry point
+frontend/            # a self-contained frontend project
+cargo-generate.toml  # placeholders and conditional files
+```
+
+`cargo-generate.toml` is read during generation and never copied into the project.
+
+### The build script
+
+Every Kurogane application's `build.rs` calls `kurogane_build::build()`:
+
+```rust
+fn main() {
+    kurogane_build::build();
+}
+```
+
+`kurogane-build` is one of its build dependencies:
+
+```toml
+[build-dependencies]
+kurogane-build = { git = "https://github.com/0x48piraj/kurogane" }
+```
+
+On Windows it embeds the application manifest CEF's own executables carry. Without it Windows tells the application and the Chromium inside it that they run on Windows 8. `kurogane bundle` also writes the manifest beside a Windows bundle's executable for an application built without it.
+
+### Placeholders
+
+Every file is rendered with [Liquid](https://shopify.github.io/liquid/). cargo-generate always provides `{{project-name}}` (as typed) and `{{crate_name}}` (snake case):
+
+```toml
+[package]
+name = "{{crate_name}}"
+```
+
+Declare your own placeholders in `cargo-generate.toml`. A placeholder with a default and choices takes its value from `--language`, `--values`, the prompt or its default under `--ci`:
+
+```toml
+[placeholders.language]
+type = "string"
+prompt = "Language"
+default = "typescript"
+choices = ["typescript", "javascript"]
+```
+
+Keep placeholders for real choices. Values every project shares belong in the files as they are.
+
+### Language variants
+
+The official starters keep both languages in one `frontend/` folder. Files only one language needs are left out by condition:
+
+```toml
+[conditional.'language == "typescript"']
+ignore = ["frontend/src/main.js"]
+
+[conditional.'language == "javascript"']
+ignore = ["frontend/src/main.ts", "frontend/tsconfig.json"]
+```
+
+Files both languages share differ inline:
+
+```html
+<script type="module" src="/src/main.{% if language == "typescript" %}ts{% else %}js{% endif %}"></script>
+```
+
+This needs no hook. Generating the starter asks for no consent.
+
+### Frontend syntax that looks like Liquid
+
+Wrap template syntax of your frontend framework in `{% raw %}` so Liquid leaves it alone:
+
+```vue
+<h1>{% raw %}{{ message }}{% endraw %}</h1>
+```
+
+### Testing
+
+Generate from your working copy once per variant:
+
+```bash
+kurogane new --template ./my-template --name check-ts --language typescript --ci
+```
+
+```bash
+kurogane new --template ./my-template --name check-js --language javascript --ci
+```
+
+Then install, build and run each project as a user would.
+
+### Publishing
+
+Push the template to a git host. Users generate from it by its shorthand:
+
+```bash
+kurogane new --template gh:you/kurogane-template
+```
+
+Pin Kurogane by tag so generated projects build the same way every time. Pin `kurogane-build` to the same tag:
+
+```toml
+[dependencies]
+kurogane = { git = "https://github.com/0x48piraj/kurogane", tag = "v0.0.6-alpha.2" }
+
+[build-dependencies]
+kurogane-build = { git = "https://github.com/0x48piraj/kurogane", tag = "v0.0.6-alpha.2" }
+```
 
 ### Kurogane application manifest
 
 ```toml
 [app]
 name = "{{project-name}}"
-frontend = "{{frontend}}"                           # source npm project root
-frontend-dist = "{{frontend_dist}}"                 # build output; what gets packaged
-frontend-install = "{{frontend_install}}"           # command run to install frontend deps
-frontend-run = "{{frontend_run}}"                   # command run to start the dev server
-frontend-build = "npm --prefix frontend run build"  # command run by kurogane bundle before cargo build
+frontend = "frontend"                                # source npm project root
+frontend-dist = "frontend/dist"                      # build output; what gets packaged
+frontend-install = "npm --prefix frontend install"   # installs the frontend's dependencies
+frontend-run = "npm --prefix frontend run dev"       # starts the dev server
+frontend-build = "npm --prefix frontend run build"   # run by kurogane bundle before cargo build
 ```
 
-`frontend` names the source npm project (`frontend/`) and `frontend-dist` names the compiled output that `kurogane bundle` packages (`frontend/dist`). These are build-time paths, resolved relative to the project root.
+`frontend` names the source npm project (`frontend/`). `frontend-dist` names the compiled output `kurogane bundle` packages (`frontend/dist`). Both are build-time paths relative to the project root.
 
-`frontend-install` and `frontend-run` are the commands `kurogane new` echoes in its "Next steps" for the dev workflow: installing dependencies and starting the live dev server before `kurogane dev`.
+`kurogane new` prints `frontend-install` and `frontend-run` in its **Next steps**. They install the frontend's dependencies and start its dev server before `kurogane dev`.
 
-The `frontend-build` field tells `kurogane bundle` how to produce frontend assets before packaging. When present, the bundler runs this command verbatim from the workspace root.
+`frontend-build` is the command `kurogane bundle` runs to build the frontend before packaging. It runs from the workspace root through the platform shell. That is `sh` on Linux and macOS and `cmd` on Windows. Shell syntax such as `&&` works.
 
-The command is executed directly rather than through a shell, so shell syntax such as pipes and `&&` is not supported. `npm` runs the script and handles any `&&` chains inside `package.json` itself.
-
-The scaffolded `src/main.rs` points the release build at the bundle's fixed `content/` directory, not at `frontend-dist`:
+In release builds a generated `src/main.rs` loads the bundle's `content/` directory instead of `frontend-dist`:
 
 ```rust
 #[cfg(not(debug_assertions))]
@@ -109,7 +243,7 @@ App::new("content").run_or_exit();
 
 ### Directory convention
 
-Official starters keep the frontend as a self-contained Vite project inside a `frontend/` directory, using a three-layer layout:
+Official starters keep the frontend as a self-contained Vite project in `frontend/`. The layout has three layers:
 
 ```
 frontend/      # self-contained frontend source
@@ -117,6 +251,6 @@ frontend/dist/ # build output (Vite default outDir)
 content/       # bundle-internal (copied by bundler at package time)
 ```
 
-`frontend/` is a normal frontend project, so `cd frontend && npm install && npm run dev` works exactly like any Vite app. During development the Vite dev server serves `frontend/` directly; the desktop app loads it via the configured dev URL.
+`frontend/` is a normal Vite project. `cd frontend && npm install && npm run dev` works as in any Vite app. During development the Vite dev server serves `frontend/` and the desktop app loads it from the dev URL.
 
-For building, `npm --prefix frontend run build` compiles the frontend into `frontend/dist`. `kurogane bundle` then copies that output into `content/` and the packaged application serves its frontend from `content/`.
+`npm --prefix frontend run build` compiles the frontend into `frontend/dist`. `kurogane bundle` copies that output into `content/`. The packaged app serves its frontend from there.

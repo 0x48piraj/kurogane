@@ -1,6 +1,6 @@
 # Contributing to Kurogane
 
-Thank you for looking into contributing! Kurogane aims to make Chromium a predictable, composable component in the Rust ecosystem. Because we bridge the C++/Rust boundary via CEF, we maintain strict architectural constraints to keep the runtime reliable and fast.
+Thank you for looking into contributing! Kurogane aims to make Chromium a predictable and composable part of the Rust ecosystem. It reaches Chromium through CEF's C API. A few strict architectural rules keep the runtime reliable and fast across that boundary.
 
 ## Getting started
 
@@ -15,11 +15,11 @@ cd kurogane
 
 ## Development workflow
 
-Kurogane manages the CEF runtime download and linking automatically via `cargo` and our CLI. You do **not** need to manually download CEF binaries.
+Builds read no CEF. `kurogane run` and `kurogane dev` install the CEF version your project uses when it is missing. Applications load it when they start. You don't need to download CEF yourself.
 
 ### On Nix / NixOS
 
-We provide a flake that drops you into a configured development shell with all required native system libraries, paths and build tools:
+The flake opens a development shell with the native libraries, paths and build tools Kurogane needs:
 
 ```bash
 nix develop github:0x48piraj/kurogane
@@ -27,123 +27,134 @@ nix develop github:0x48piraj/kurogane
 
 ### On Linux
 
-Ensure you have standard build essentials installed. For GPU diagnostics via `kurogane doctor`, install OpenGL utilities:
+Install a C compiler and Chromium's libraries. [Installing Kurogane](docs/install.md#what-else-you-need) lists them for each distribution. `kurogane doctor` reads GPU details through `mesa-utils`:
 
 ```bash
 sudo apt install build-essential mesa-utils
 ```
 
+### On macOS
+
+Install the Xcode Command Line Tools:
+
+```bash
+xcode-select --install
+```
+
 ### On Windows
 
-Install the Visual Studio C++ Build Tools (workload *Desktop development with C++*, which includes the Windows SDK). Cargo finds the linker on its own, so any shell works.
+Install the Visual Studio C++ Build Tools with the *Desktop development with C++* workload. It includes the Windows SDK. Cargo finds the linker itself. Any shell works.
 
 ## Ground rules
 
-Kurogane is a young, evolving project. While our codebase is still maturing and we are actively cleaning up older patterns, we try to guide all new development toward a few core design goals.
+Kurogane is young and still evolving. We clean up older patterns as we go and steer all new work toward a few core design goals.
 
-We don't expect absolute perfection but we highly encourage looking through the existing modules to see how these patterns are being established:
+We don't expect perfection. Look through the existing modules to see these patterns at work:
 
 ### 1. Moving away from global state
 
-* **North star:** We aim to keep state explicitly owned by individual handlers or tracking graphs (often keyed by CEF identifiers) rather than relying on global registries or static singletons.
-* **Why it matters:** Because Kurogane is designed to be embedded safely inside *other* host applications' event loops, isolated and explicit state ownership makes integration significantly cleaner.
+* **North star:** State belongs to the handler or ownership graph that uses it. Avoid global registries and static singletons.
+* **Why it matters:** Kurogane runs inside other applications' event loops. State with one clear owner keeps that integration clean.
 
-### 2. High-throughput & Efficient boundaries
+### 2. High-throughput boundaries
 
-* **North star:** For high-frequency interactions or large data payloads passing between Rust and the Chromium renderer, we lean toward zero-copy paths, shared memory or streaming hooks.
-* **Why it matters:** Serializing massive blocks of binary data over standard IPC blocks threads and kills performance. When writing performance-critical boundaries, look at our existing streaming data pathways.
+* **North star:** High-frequency calls and large payloads between Rust and the renderer take zero-copy paths, shared memory or streams.
+* **Why it matters:** Serializing large binary data over standard IPC blocks threads and costs performance. Start from the existing streaming paths when you write a performance-critical boundary.
 
 ### 3. Process isolation
 
-* **North star:** Keep browser-process responsibilities (windowing, host coordination, overall lifecycle) structurally distinct from renderer-process responsibilities (V8 contexts, DOM interaction).
+* **North star:** Keep browser-process work (windowing, host coordination and lifecycle) apart from renderer-process work (V8 contexts and DOM interaction).
 
 ### Best way to start is to explore
 
 The best documentation is the code itself!
 
-Before diving into a heavy change, spend some time exploring our built-in examples and core runtime setup. If you see a place where our current implementation doesn't perfectly match these goals, that might actually be a great spot for your first cleanup PR. When in doubt, open an issue or draft PR early so we can discuss the approach together.
+Explore the examples and the core runtime setup before a heavy change. A place where the code doesn't match these goals yet makes a good first cleanup PR. Open an issue or a draft PR early when in doubt. We'll discuss the approach together.
 
 ## Areas for contribution
 
-We welcome contributions across the entire stack, but we are actively prioritizing the following areas:
+We welcome contributions across the whole stack. These areas have priority:
 
-### 1. Cross-platform runtime stabilization
+### 1. Cross-platform runtime
 
-* **macOS porting:** Establishing basic runtime execution, windowing loops and addressing app bundling/code-signing quirks specific to macOS `.app` layouts.
-* **Windows & Linux windowing edge cases:** Ironing out multi-window orchestration, popup cascades and window delegate edge cases.
+* **macOS notarization:** `kurogane bundle` signs the `.app` and its `.dmg` but does not notarize them yet.
+* **Wayland embedding:** Embedded browsers on Linux run Chromium on X11. A Wayland session runs them through XWayland.
+* **Windowing edge cases:** Multi-window orchestration, popup cascades and window delegates on every platform.
 
-### 2. Tooling & DX
+### 2. Tooling and developer experience
 
-* **CLI:** Telemetry and heuristics inside `kurogane doctor` and `kurogane info` for debugging tricky host GPU/sandbox mismatches.
-* **Production packaging:** Moving the experimental `kurogane bundle` command closer to a stable, production-ready pipeline for cross-platform binaries.
+* **CLI:** Diagnostics in `kurogane doctor` and `kurogane info` that pin down GPU and sandbox problems on the host.
+* **Production packaging:** Bring the experimental `kurogane bundle` closer to a stable pipeline for every platform.
 
 ## Pull request process
 
-To ensure high code quality without slowing down development, we use a predictable review flow:
+Reviews follow a predictable flow that keeps quality high without slowing development.
 
 ### 1. Pre-flight checks
 
-Before pushing your branch, make sure your code aligns with our tooling standards:
+Run these before you push your branch:
 
 ```bash
-cargo fmt --all           # Enforce consistent styling across all workspace crates
-cargo clippy --all        # Validate memory safety, idiomatic patterns and performance lints
-cargo test                # Verify core unit and integration test suites pass successfully
+cargo fmt --all                                        # format every workspace crate
+cargo clippy --workspace --all-targets -- -D warnings  # lints as CI runs them
+cargo test                                             # unit and doc tests
 ```
 
-To validate visual rendering, complex process lifecycles or GPU behavior, complement these checks by running the interactive targets via the Kurogane CLI as detailed in the testing workflow below.
+Rendering, process lifecycles and GPU behavior also need a run of the suite's examples. See the testing workflow below.
 
 ### 2. Testing workflow
 
-Kurogane includes a dedicated `tests` workspace crate featuring automated and manual test scenarios covering rendering, IPC and lifecycle behaviors.
+[`kurogane-suite`](kurogane-suite/README.md) holds the test scenarios for rendering, IPC, windows and lifecycle. Each scenario is an example of that crate.
 
-#### Running existing test scenarios
+#### Running a scenario
 
-You can execute a specific test case (such as the hardware acceleration / GPU status test) directly through the repository's local CLI package:
+Run one through the repository's own CLI from `kurogane-suite/`. The GPU status scenario for example:
 
 ```bash
-cargo run -p kurogane-cli -- dev --example gpu
+cd kurogane-suite
+cargo run -p kurogane-cli -- run --example gpu
 ```
 
-> **Tip:** Relying on `cargo run -p kurogane-cli` is the ideal workflow if you are actively modifying the CLI codebase itself, as it eliminates the need to repeatedly run a global `cargo install` to test your changes.
+> **Tip:** `cargo run -p kurogane-cli` runs your CLI changes without a `cargo install` after each one.
 
 ### Optimizing your workflow
 
-If your changes are focused entirely on the runtime or application layers rather than the CLI codebase itself, you can install the CLI globally. This simplifies your execution syntax across the workspace:
+Install the CLI once when your changes stay in the runtime:
 
 ```bash
-# Install the Kurogane CLI globally from the repository source
+# from the repository
 cargo install --git https://github.com/0x48piraj/kurogane kurogane-cli
 
-# Or locally
-cargo install --path . --force
+# or from your checkout
+cargo install --path kurogane-cli --force
 
-# Execute the target test binary directly
+# then run a scenario from kurogane-suite/
+cd kurogane-suite
 kurogane run --example gpu
 ```
 
 ### Creating custom test applications
 
-To rapidly prototype or isolate a specific behavior, you can add a custom test binary to the `tests/` directory:
+Add a scenario to `kurogane-suite` to prototype or isolate a behavior:
 
-1. **Create the source file:** Add your test entry point at `tests/test-feature-1.rs`.
-2. **Register the binary:** Update `tests/Cargo.toml` to include the new target configuration:
+1. **Create the source file:** Add its entry point at `kurogane-suite/scenarios/test-feature-1/main.rs`.
+2. **Register the example:** Add it to `kurogane-suite/Cargo.toml`:
 
 ```toml
-[[bin]]
+[[example]]
 name = "test-feature-1"
-path = "test-feature-1.rs"
+path = "scenarios/test-feature-1/main.rs"
 ```
 
-3. **Execute the target:**
+3. **Run it** from `kurogane-suite/`:
 
 ```bash
-kurogane run --bin test-feature-1
+kurogane run --example test-feature-1
 ```
 
-> **Important working directory Note:** If your test application initializes a local frontend via `App::new()` using relative file paths, ensure your working directory is set to the `tests/` directory prior to execution. Running the binary from the workspace root may result in path resolution errors for frontend assets.
+> **Working directory:** A scenario that loads a local frontend with `App::new()` and a relative path finds it only from `kurogane-suite/`.
 
 ### Submitting the PR
 
-* **Keep it focused:** Try to keep PRs constrained to a single feature or bug fix. Large, monolithic PRs that refactor multiple sub-systems simultaneously are difficult to review and slow down integration.
-* **State the impact:** In your PR description, explain how your change affects process ownership, memory overhead or cross-platform compatibility.
+* **Keep it focused:** One feature or bug fix per PR. A PR that refactors several subsystems at once is hard to review and slow to land.
+* **State the impact:** Say in the description how your change affects process ownership, memory use or cross-platform behavior.

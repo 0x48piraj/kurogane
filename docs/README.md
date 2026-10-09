@@ -22,7 +22,7 @@ _New users should start here._
 
 Day-to-day workflow for running and configuring your app.
 
-Covers the dev server, choosing a frontend source and the runtime setup: [see development](development.md)
+Covers the dev server, choosing a frontend source, how your binary runs as several processes and the runtime setup: [see development](development.md)
 
 _Use this while building._
 
@@ -38,7 +38,7 @@ _Use this when building real applications._
 
 End-to-end guide for packaging Kurogane applications into distributable bundles.
 
-Covers output formats, configuration and CI integration: [see bundling](bundling.md)
+Covers output formats, configuration and code signing: [see bundling](bundling.md)
 
 _Use this when preparing releases._
 
