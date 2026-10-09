@@ -1,7 +1,5 @@
 name: CI
 
-# Runtime and Nix builds are gated because CEF builds are expensive
-
 on:
   push:
     branches: ["**"]
@@ -40,10 +38,10 @@ jobs:
         with:
           key: msrv
       - run: cargo fetch --locked
-      - run: cargo check -p kurogane-layout -p kurogane-cli --all-targets --locked
+      - run: cargo check -p kurogane-layout -p kurogane-cli -p kurogane-build --all-targets --locked
 
   # Check advisories, licenses, bans and dependency sources
-  # Note: the cef-rs git dependency is outside advisory coverage; see deny.toml
+  # Note: tetsu's git dependencies are outside advisory coverage; see deny.toml
   audit:
     name: cargo-deny
     runs-on: ubuntu-latest
@@ -79,15 +77,15 @@ jobs:
         run: cargo fetch --locked
 
       - name: Clippy
-        run: cargo clippy -p kurogane-layout -p kurogane-cli --all-targets --locked -- -D warnings
+        run: cargo clippy -p kurogane-layout -p kurogane-cli -p kurogane-build --all-targets --locked -- -D warnings
 
       - name: Test
         run: cargo test -p kurogane-layout -p kurogane-cli --locked
 
-  # The runtime crates on each platform; builds and tests read no CEF
+  # The runtime crates on each platform; builds and tests read no CEF and
+  # link nothing beyond the C library (libcef is loaded when an app starts)
   runtime:
     name: runtime (${{ matrix.os }})
-    if: github.event_name != 'push' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -100,20 +98,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config \
-            libgtk-3-dev libnss3-dev libnspr4-dev \
-            libasound2-dev libcups2-dev libdrm-dev libgbm-dev \
-            libxcomposite-dev libxdamage-dev libxfixes-dev libxrandr-dev \
-            libxkbcommon-dev libxss-dev libxtst-dev libwayland-dev
-
-      - uses: ilammy/msvc-dev-cmd@v1
-        if: runner.os == 'Windows'
-
       - uses: Swatinem/rust-cache@v2
         with:
           key: runtime-${{ matrix.os }}
@@ -121,16 +105,75 @@ jobs:
       - name: Fetch dependencies
         run: cargo fetch --locked
 
-      # Library-only; integration examples require a display
+      # Library tests and doctests; the suite's examples require a display
       - name: Test runtime
-        run: cargo test -p kurogane --lib --locked
+        run: cargo test -p kurogane --locked
 
       # Compile-only coverage for platform-specific examples
       - name: Build examples
         run: cargo build -p kurogane-suite --examples --locked
 
       - name: Clippy
-        run: cargo clippy -p kurogane --all-targets --locked -- -D warnings
+        run: cargo clippy -p kurogane -p kurogane-suite --all-targets --locked -- -D warnings
+
+  # Generate each official starter from its default branch with this CLI and
+  # bundle against checkout's Kurogane
+  starters:
+    name: starter (${{ matrix.starter }}, ${{ matrix.language }})
+    if: github.event_name != 'push' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        starter: [minimal, react, svelte, vue]
+        language: [typescript, javascript]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: starters
+
+      # CEF version follows tetsu-sys in the lock
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/tetsu/cef
+          key: cef-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build the CLI
+        run: cargo build -p kurogane-cli --locked
+
+      - name: Generate the starter
+        working-directory: ${{ runner.temp }}
+        run: |
+          "$GITHUB_WORKSPACE/target/debug/kurogane" new ${{ matrix.starter }} \
+            --name app --language ${{ matrix.language }} --yes --ci
+
+      - name: Build on this checkout's Kurogane
+        working-directory: ${{ runner.temp }}/app
+        run: |
+          cat >> Cargo.toml <<EOF
+
+          [patch."https://github.com/0x48piraj/kurogane"]
+          kurogane = { path = "$GITHUB_WORKSPACE/kurogane" }
+          kurogane-build = { path = "$GITHUB_WORKSPACE/kurogane-build" }
+          EOF
+
+      - name: Install the frontend
+        working-directory: ${{ runner.temp }}/app
+        run: npm --prefix frontend install
+
+      - name: Bundle
+        working-directory: ${{ runner.temp }}/app
+        run: '"$GITHUB_WORKSPACE/target/debug/kurogane" bundle --ci'
 
   # Evaluation-only Nix sanity check
   nixEval:
@@ -150,7 +193,8 @@ jobs:
       - name: Evaluate Nix Flake
         run: nix flake check --no-build
 
-  # Build the runtime and starter templates
+  # Check offline bundling of the package, tests, CEF archive and nix/fixture
+  # using the packaged CLI and Nix store's CEF
   nixChecks:
     name: nix flake checks (${{ matrix.system }})
     if: github.event_name != 'push' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
