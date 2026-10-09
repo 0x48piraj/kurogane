@@ -773,10 +773,18 @@ fn create_browser_window(
         "Creating a browser for {url} in window {}",
         window_id.as_u32()
     );
+    // Chromium's status bubble shows the URL of a hovered link in the
+    // window's corner, a browser's affordance and, for an application served
+    // from localhost, its address with whatever the query carries. Popups
+    // inherit their opener's settings
+    let settings = BrowserSettings {
+        chrome_status_bubble: State::DISABLED,
+        ..Default::default()
+    };
     let browser_view = browser_view_create(
         Some(&mut client),
         Some(&CefString::from(url)),
-        Some(&Default::default()),
+        Some(&settings),
         None,
         None,
         Some(&mut view_delegate),
