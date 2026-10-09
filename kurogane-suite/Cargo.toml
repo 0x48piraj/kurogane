@@ -22,6 +22,9 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["e
 tempfile = "3"
 git2 = "0.21"
 
+[build-dependencies]
+kurogane-build = { workspace = true }
+
 [[example]]
 name = "benchmark"
 path = "scenarios/benchmark/main.rs"

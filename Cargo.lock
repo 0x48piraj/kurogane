@@ -1873,6 +1873,7 @@ version = "0.0.6-alpha.1"
 dependencies = [
  "git2",
  "kurogane",
+ "kurogane-build",
  "raw-window-handle",
  "serde_json",
  "tempfile",
