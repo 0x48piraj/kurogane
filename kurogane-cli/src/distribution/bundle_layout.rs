@@ -597,8 +597,10 @@ mod tests {
         .unwrap();
         fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
         let launcher = layout.launcher_path(test_exe_name());
+        // Run via sh; the shebang is tested separately
         let run = |vars: &[(&str, &str)]| {
-            let output = std::process::Command::new(&launcher)
+            let output = std::process::Command::new("sh")
+                .arg(&launcher)
                 .env_remove("KUROGANE_LD_LIBRARY_PATH")
                 .env_remove("LD_LIBRARY_PATH")
                 .envs(vars.iter().copied())
