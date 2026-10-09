@@ -5,7 +5,7 @@ Build high-performance, GPU-accelerated desktop applications on Chromium or embe
 Kurogane is a Rust-native runtime built on [Chromium Embedded Framework (CEF)](https://en.wikipedia.org/wiki/Chromium_Embedded_Framework), bringing Chromium to desktop applications while giving you control over windowing, event loops and lifecycle when you need it.
 
 <p align="center">
-  <img alt="Kurogane demo" src="docs/media/output.gif" width="400"><br>
+  <img alt="Kurogane demo" src="docs/media/showcase-kurogane.webp" width="800" height="492"><br>
   <b>Chromium, on your terms.</b>
 </p>
 
