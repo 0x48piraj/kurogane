@@ -5,6 +5,7 @@ use super::Source;
 use url::Url;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use crate::acl::Origin;
 use crate::error::RuntimeError;
 use crate::fs::CanonicalRoot;
 use crate::scheme::ResolveError;
@@ -33,6 +34,16 @@ fn resolve_asset_root(dir: &Path) -> PathBuf {
     }
 
     dir.to_path_buf()
+}
+
+/// The origin of the start page `source` names, without touching the
+/// filesystem: `app://app` for a directory, the URL's own origin otherwise
+/// (opaque for a `file:` or hostless URL).
+pub(crate) fn app_origin(source: &Source) -> Origin {
+    match source {
+        Source::Path(_) => Origin::from_url(APP_URL),
+        Source::Url(url) => Origin::from_url(url),
+    }
 }
 
 /// Resolve the frontend for the browser process.
@@ -145,6 +156,27 @@ mod tests {
         let result = resolve(&source).unwrap();
 
         assert_eq!(result.start_url, url);
+    }
+
+    #[test]
+    fn the_app_origin_is_the_start_page_s() {
+        let cases = [
+            (Source::Path("./does-not-exist".into()), "app://app"),
+            (
+                Source::Url("http://localhost:5173/index.html".into()),
+                "http://localhost:5173",
+            ),
+            (
+                Source::Url("https://Example.com/app?x#y".into()),
+                "https://example.com",
+            ),
+        ];
+        for (source, expected) in cases {
+            assert_eq!(app_origin(&source).to_string(), expected);
+        }
+        for url in ["file:///frontend/index.html", "about:blank", "not a url"] {
+            assert!(app_origin(&Source::Url(url.into())).is_opaque(), "{url}");
+        }
     }
 
     // Bundle resolution tests

@@ -16,7 +16,7 @@
         "aarch64-darwin"
       ];
 
-      cefVersion = "150.0.10";
+      cefVersion = "154.0.33";
     in
     inputs.flake-utils.lib.eachSystem supportedSystems (
       system:
@@ -70,20 +70,18 @@
               libgbm
               libvdpau
               systemd
+            ]
+            # macOS Rust binaries link libiconv which apple-sdk omits
+            ++ lib.optionals stdenv.hostPlatform.isDarwin [
+              libiconv
             ];
 
-          nativeBuildInputs =
-            with pkgs;
-            [
-              rustc
-              cargo
-              pkg-config
-              stdenv.cc
-            ]
-            ++ lib.optionals stdenv.hostPlatform.isDarwin [
-              cmake
-              ninja
-            ];
+          nativeBuildInputs = with pkgs; [
+            rustc
+            cargo
+            pkg-config
+            stdenv.cc
+          ];
         };
 
         cef = pkgs.callPackage ./nix/cef.nix { inherit cefVersion; };
@@ -103,8 +101,10 @@
 
             nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
 
+            # Cargo runs outside stdenv; specifically provide its build dependencies
             postInstall = ''
               wrapProgram $out/bin/kurogane \
+                --prefix LIBRARY_PATH : ${pkgs.lib.makeLibraryPath commonArgs.buildInputs} \
                 --set CEF_PATH ${cef} \
                 --prefix PATH : ${pkgs.lib.makeBinPath commonArgs.nativeBuildInputs} \
                 --prefix LD_LIBRARY_PATH : ${
@@ -153,7 +153,10 @@
           }
         );
 
-        testTemplates = import ./nix/testTemplates.nix { inherit pkgs kurogane; };
+        bundleFixture = import ./nix/bundleFixture.nix {
+          inherit pkgs craneLib kurogane;
+          src = ./.;
+        };
 
       in
       {
@@ -177,13 +180,15 @@
             rustfmt
           ];
 
-          # Reuse the Nix store CEF instead of letting cef-dll-sys re-download
+          # Applications started from the shell load the Nix store's CEF
           env.CEF_PATH = "${cef}";
-          env.KUROGANE_CEF_VERSION = cefVersion;
         };
 
         checks = pkgs.lib.mergeAttrsList [
-          testTemplates
+          {
+            inherit kurogane;
+            bundle-fixture = bundleFixture;
+          }
           cef.tests
         ];
       }

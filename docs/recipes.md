@@ -101,36 +101,122 @@ Then load it using `fetch()` or `WebAssembly.instantiate`.
 * Source files are not needed in production
 * You are free to use higher-level tooling if desired
 
-## Creating additional windows
+## Windows
 
-Additional browser windows can be created after startup.
+### The start window
+
+`App::window` says how the window the application opens with looks and where it goes:
 
 ```rust
-runtime
-    .create_window(kurogane::WindowOptions {
-        url: "https://github.com".into(),
-        bounds: kurogane::BrowserBounds {
-            x: 100,
-            y: 100,
-            width: 800,
-            height: 600,
-        },
-        show_state: kurogane::WindowState::Normal,
-    })
-    .expect("failed to create window");
+use kurogane::{App, WindowOptions, WindowState};
+
+App::new("dist")
+    .window(
+        WindowOptions::new()
+            .title("Notes")      // without it, the window takes its page's <title>
+            .size(1100, 720)     // centred on the primary display
+            .min_size(640, 480)
+            .state(WindowState::Maximized),
+    )
+    .run_or_exit();
 ```
 
-### Multiple windows
+Sizes and places are in density-independent pixels (DIP), the window's frame included: 1100 by 720 is 1650 by 1080 pixels on a display at 150%. Without `size` or `placement` the window opens 800 by 600, centred; a size larger than the display's work area is made to fit it.
+
+The title: a window whose options fix none takes its page's `<title>` and follows it, as a browser tab does, and so does a popup. Whatever the window shows names it in the taskbar and the window switcher, a remote page too; fix a title with `title` to keep it.
+
+The minimum size is the least of the window's content the user can drag it down to, its frame aside. The states are `Normal`, `Minimized`, `Maximized`, `Fullscreen` and `Hidden`; a window opened maximized restores to its size, centred. A hidden window's browser keeps the application running, as any open browser does.
+
+An application started with `App::start_embedded` has no start window: `App::window` given to it fails to start, as do options no window can have (a size of 0, a minimum larger than the size).
+
+### Opening a window where it was
+
+`App::on_window_closing` hears each of the application's windows close, however it closes: the user, the page, the application, Ctrl+C. It says which window it was, by the name its options gave it, and where it was: its `WindowPlacement`. Save the placement under the name, and give it back next time (`load` and `save` read and write the application's settings):
 
 ```rust
-let runtime = kurogane::App::url("https://xkcd.com")
-    .start()
-    .expect("Kurogane failed to initialize");
+use kurogane::{App, WindowOptions};
 
-runtime.create_window(/* ... */)?;
-runtime.create_window(/* ... */)?;
+let mut main = WindowOptions::new().name("main").size(1100, 720);
+if let Some(placement) = load("main") {
+    main = main.placement(placement);
+}
+App::new("dist")
+    .window(main)
+    .on_window_closing(|closing, _app| {
+        if let Some(name) = closing.name() {
+            save(name, closing.placement());
+        }
+    })
+    .run_or_exit();
+```
 
-runtime.run()?;
+A `WindowPlacement` is the window's place and size, its frame included, and its state. It is serde data, `{"x":200,"y":150,"width":900,"height":600,"state":"Maximized"}` in JSON, so `load` and `save` can be a `serde_json` call each. A window maximized, minimized or fullscreen reports the place and size it restores to. Its state is `Normal`, `Maximized` or `Fullscreen`, never `Minimized` or `Hidden`: a window minimized as it closes reports how it showed before, so a window maximized and then minimized comes back maximized, and the placement given back always opens a window the user sees. The hook runs once for the start window and each window of the application's, on the UI thread, before the last window ends the application; popups and DevTools are not reported. Writing a small file there is fine, anything slow is not.
+
+`placement` opens the window as it says. The window is kept where it was, unless no display shows that place any more (the display it was on is gone): then it is brought onto the nearest display, at its size. A window larger than that display's work area is made to fit it. Wayland lets no application place its windows, so there only the size applies. `placement` decides the size over `size`, so `size` stays the first run's, and it sets the state as `state` does: of the two, the later call holds.
+
+A placement can be written out too, to put a window exactly somewhere:
+
+```rust
+use kurogane::{WindowOptions, WindowPlacement, WindowState};
+
+let options = WindowOptions::new().placement(WindowPlacement {
+    x: 200,
+    y: 150,
+    width: 900,
+    height: 600,
+    state: WindowState::Normal,
+});
+```
+
+### Naming windows
+
+A name is the application's handle on a window, never shown: `WindowOptions::name` gives it, `App::on_window_closing` gives it back, and `AppHandle::find_window_by_name` finds the open window by it. One open window holds a name at a time: `create_window` with the name of a window still open fails with `RuntimeError::WindowNameTaken`, which says which window holds it. The name is free again once that window's close is reported, and `find_window_by_name` no longer finds it. A window opened without a name, as one a page opens is, reports none.
+
+### The window class on Linux
+
+`App::window_class` gives every window Kurogane opens its class on Linux: `WM_CLASS` under X11, the `app_id` under Wayland. The desktop tells an application's windows by it: a launcher's icon attaches to them when the application's desktop entry names the class (`StartupWMClass=com.example.notes`, or under Wayland a desktop entry named `com.example.notes.desktop`), and a compositor's rules for the application match it.
+
+```rust
+use kurogane::App;
+
+App::new("dist").window_class("com.example.notes").run_or_exit();
+```
+
+It names the start window, every `create_window` window, popups and DevTools. Without it CEF names the windows. Windows and macOS have no window class and ignore it; a browser embedded in your own window is in your window, which has your class.
+
+`kurogane bundle` writes `[app].identifier` from `kurogane.toml` into the AppImage's desktop entry as `StartupWMClass`. Give `App::window_class` the same identifier, and the launcher that started the AppImage, or the one an integration tool installs, attaches to its windows. Without an identifier the entry names no class.
+
+### The window icon
+
+`App::window_icon` gives every window Kurogane opens the application's icon, a PNG:
+
+```rust
+use kurogane::App;
+
+App::new("dist")
+    .window_icon(include_bytes!("../icon.png").as_slice())
+    .run_or_exit();
+```
+
+On Windows it is the icon in the window's title bar, the taskbar and the window switcher; under X11 the one the window manager shows. A square of 256 by 256 is plenty: the system scales it. Under Wayland the desktop takes a window's icon from the desktop entry its class names (above), and on macOS windows have no icon: the Dock shows the application's. Bytes that are not a PNG fail to start.
+
+### More windows
+
+`AppInstance::create_window` opens a page in another window of the application's, with the same options:
+
+```rust
+use kurogane::{App, RuntimeError, WindowOptions};
+
+fn main() -> Result<(), RuntimeError> {
+    let runtime = App::new("dist").start()?;
+
+    runtime.create_window(
+        "app://app/settings.html",
+        WindowOptions::new().name("settings").title("Settings").size(640, 480),
+    )?;
+
+    runtime.run()
+}
 ```
 
 Each browser runs as a native top-level window. `run()` returns once the last browser has closed; a hidden window's browser counts too.
@@ -141,6 +227,183 @@ See:
 
 * [kurogane-suite/scenarios/multi-window.rs](../kurogane-suite/scenarios/multi-window.rs)
 * [kurogane-suite/scenarios/window-management.rs](../kurogane-suite/scenarios/window-management.rs): windows that start minimized, maximized or hidden
+
+## Links and new windows
+
+When a page asks for a window of its own (`window.open`, a `target="_blank"` link, a form that targets a new window, a link clicked with Ctrl (Cmd on macOS), the middle button or Shift), Kurogane decides before the window exists. Chromium's own tabbed browser window never opens:
+
+* A page of the application's own origin opens in an application window: `app://app` for `App::new`, the start URL's origin for `App::url`. So does a window the page fills in itself (`about:blank`).
+* An `http` or `https` link the user clicked opens in the system's default browser.
+* Anything else is refused: a script opening a website on its own, `mailto:`, `file:` and custom schemes.
+
+`App::on_new_window` changes that per request:
+
+```rust
+use kurogane::{App, NewWindowDecision, Origin};
+
+let sign_in = Origin::parse("https://accounts.example.com").unwrap();
+
+App::new("dist")
+    .on_new_window(move |request, _app| {
+        if request.origin() == &sign_in {
+            // The sign-in page reports back to the page that opened it,
+            // so it has to run inside the app
+            NewWindowDecision::Allow
+        } else {
+            NewWindowDecision::Default
+        }
+    })
+    .run_or_exit();
+```
+
+* `Allow` opens the page in an application window whatever its origin. That page reaches only the commands and events `App::permit` grants its origin.
+* `Deny` refuses the window.
+* `OpenExternal` sends the URL to the system browser, but only an `http` or `https` link the user clicked; anything else is refused, so a page cannot make the app start another program on its own.
+* `Default` leaves the request to Kurogane.
+
+Compare origins (`request.origin()`), not URL strings: `https://accounts.example.com.evil.net` starts with `https://accounts.example.com`.
+
+The hook runs on the UI thread before the window exists, so it must not block. A hook that panics refuses the window.
+
+### Where a window may go
+
+A page can also take the window it is in somewhere else: a link, `location = …`, a form, a redirect on the way. A window shows only what was let into it:
+
+* the application's own origin;
+* every origin the application loaded there itself: the start URL, `create_window`, `BrowserHandle::navigate`, and the redirects they lead to;
+* the origin `on_new_window` opened a popup to;
+* every origin `App::on_navigation` let in before.
+
+Within those a page navigates freely, so a site the application opened can be browsed, reloaded and gone back in. A navigation anywhere else is answered like a new window: an `http` or `https` link the user clicked opens in the system browser, and anything else is refused, the window staying on its page. Frames inside a page are not guarded; `App::permit` decides what a frame of another origin reaches.
+
+`App::on_navigation` changes that per navigation, for example for a sign-in provider the page sends the user to:
+
+```rust
+use kurogane::{App, NavigationDecision, Origin};
+
+let sign_in = Origin::parse("https://accounts.example.com").unwrap();
+
+App::url("https://app.example.com")
+    .on_navigation(move |navigation, _app| {
+        if navigation.origin() == &sign_in {
+            // Lets the provider into this window; it sends the user back
+            // to app.example.com, which the window may always show
+            NavigationDecision::Allow
+        } else {
+            NavigationDecision::Default
+        }
+    })
+    .run_or_exit();
+```
+
+`Allow` loads the page and lets its origin into that window from then on; `Deny`, `OpenExternal` and `Default` answer as for new windows. The application's own loads, going back and forward, and frames never reach the hook. It runs on the UI thread before the navigation starts; a hook that panics refuses the navigation.
+
+## Keyboard shortcuts and Chromium's commands
+
+A Kurogane window runs only Chromium's page-local commands (reload, find, print, zoom, editing, closing the window, DevTools) and refuses the rest (new windows and tabs, history, bookmarks). Two hooks narrow that further.
+
+`App::on_key` sees each key press before Chromium's shortcuts and the page do, and decides where it goes. `KeyDecision::Default` lets it go on in Chromium's own order (below). `KeyDecision::Consume` takes it: then no shortcut runs, and the page sees neither the key, its character nor its release.
+
+```rust
+use kurogane::{App, Key, KeyDecision};
+
+App::new("dist")
+    .on_key(|key, _app| {
+        // Ctrl+W (Cmd+W on macOS) does not close this window
+        if key.key() == Key::Char('W') && key.modifiers().primary() {
+            KeyDecision::Consume
+        } else {
+            KeyDecision::Default
+        }
+    })
+    .run_or_exit();
+```
+
+The hook is asked about presses only, held keys repeating included (`repeat()`), never about releases. `Key` names a key by its place, so Shift+W is still `Key::Char('W')`; `modifiers().primary()` is Ctrl on Windows and Linux and Cmd on macOS. Check `in_editable_field()` before taking keys the user may be typing.
+
+Chromium's own order depends on the shortcut. Most shortcuts (Ctrl+F, Ctrl+P, Ctrl+1, F5) reach the page first and run only if the page does not call `preventDefault()`, so a page can already bind them. The shortcuts Chromium reserves, those that open, close and switch tabs and windows (Ctrl+T, Ctrl+N, Ctrl+W, Ctrl+Shift+T, Ctrl+Tab), take the key before the page sees it, so a page's own binding for one never fires. A reserved shortcut with nothing to do lets the key through to the page, such as Ctrl+Tab in a window of one tab, or Ctrl+Shift+T while no tab was closed, but that changes as the session goes on.
+
+`KeyDecision::PageFirst` gives the page a reserved shortcut first, every time: the page gets the key, and Chromium's shortcut runs only if the page does not call `preventDefault()`. A shortcut that runs then goes on as any other: Kurogane still refuses new tabs and windows, and `on_chrome_command` is still asked about closing the window.
+
+```rust
+use kurogane::{App, Key, KeyDecision};
+
+App::new("dist")
+    .on_key(|key, _app| {
+        // The page's own Ctrl+T handler runs; Chromium's runs only if the
+        // page lets the key through
+        if key.key() == Key::Char('T') && key.modifiers().primary() {
+            KeyDecision::PageFirst
+        } else {
+            KeyDecision::Default
+        }
+    })
+    .run_or_exit();
+```
+
+`PageFirst` is for shortcuts. Chromium drops the character of a shortcut the page left alone, so a key that types, answered `PageFirst`, types nothing unless the page handles its keydown: answer it for chords such as Ctrl+T, not for every key, and mind AltGr, which arrives as Ctrl+Alt on Windows. It also hands the shortcut to the page: a page that prevents Ctrl+W keeps its window open, and one that hangs holds the key. Chromium reserves these shortcuts so that no page can keep them, so answer `PageFirst` only for windows that show your own pages (`key.browser()`). The window's own close button, and closing it from the application, are not affected. In a browser embedded in your own window, where Chromium runs no shortcuts, `PageFirst` changes nothing but that dropped character.
+
+`App::on_chrome_command` is asked about each command the window would run, from a shortcut or the context menu, and may refuse it. It is never asked about a command Kurogane refuses, so it cannot allow one.
+
+```rust
+use kurogane::{App, ChromeCommand, CommandDecision};
+
+App::new("dist")
+    .on_chrome_command(|request, _app| match request.command() {
+        // No DevTools and no reload in the shipped app
+        ChromeCommand::DevTools | ChromeCommand::Reload => CommandDecision::Refuse,
+        _ => CommandDecision::Default,
+    })
+    .run_or_exit();
+```
+
+`ChromeCommand` folds Chromium's commands by what the user asked for: refusing `DevTools` refuses Ctrl+Shift+I, F12 and the context menu's Inspect alike, and refusing `Reload` every kind of reload. A key `on_key` consumed never becomes a command, nor does one it gave the page first and the page prevented.
+
+Both hooks run on the UI thread, `on_key` for every key press, so keep them quick. A panicking `on_key` lets the key through; a panicking `on_chrome_command` refuses the command. DevTools' own windows reach neither hook. A browser embedded in your own window (`create_child_browser`) reaches `on_key`; Chromium runs no commands there, so `on_chrome_command` is never asked.
+
+## Downloads
+
+When a page downloads a file (a link the server answers with an attachment, a link with a `download` attribute, a `blob:` or `data:` export), Kurogane asks the user where to save it with the system's Save As dialog, the suggested name filled in. If they cancel, nothing is saved. A window shows one dialog at a time: a page that downloads several files asks about each in turn. Chromium alone would save every file into the Downloads folder without a word, since Kurogane's windows have no download bubble to show it.
+
+`App::on_download` decides per download instead, for example to save the application's own exports without asking:
+
+```rust
+use kurogane::{App, DownloadDecision, Origin};
+
+let exports = std::env::temp_dir().join("my-app-exports");
+let own = Origin::parse("app://app").unwrap();
+
+App::new("dist")
+    .on_download(move |download, _app| {
+        if download.origin() == &own {
+            // The app's own exports go straight into its folder
+            DownloadDecision::SaveTo(exports.join(download.suggested_name()))
+        } else {
+            // Nothing a site brings in is saved
+            DownloadDecision::Deny
+        }
+    })
+    .run_or_exit();
+```
+
+* `SaveTo` saves at that absolute path, without asking, and replaces a file already there. Its folder is created when missing; if that fails, or the path is relative, nothing is saved.
+* `Prompt` asks the user, as without a hook.
+* `Deny` saves nothing.
+* `Default` leaves the download to Kurogane: the user is asked.
+
+`download.origin()` is the origin of the page the download comes from, not of the file: a page of the application's own may export a `blob:` or link to a file anywhere. `suggested_name()` is a file name only; Chromium has already removed any folder a page tried to put in it, so joining it onto a folder of your own stays in that folder.
+
+A page may download several files at once, without a click for each: every one of them still reaches `on_download` or the Save As dialog, so Chromium's own "download multiple files" prompt never shows. The hook runs on the UI thread before the download starts, so it must not block. A hook that panics refuses the download. Downloads from DevTools never reach it and always ask the user.
+
+A `download` link to one of the application's own files (`<a href="report.pdf" download>`) does nothing: Chromium does not download from `app://` that way. Fetch the file and download it as a `blob:` instead, which reaches the hook like any other download:
+
+```js
+const response = await fetch('report.pdf');
+const link = document.createElement('a');
+link.href = URL.createObjectURL(await response.blob());
+link.download = 'report.pdf';
+link.click();
+```
 
 ## One instance per profile
 
@@ -157,6 +420,8 @@ In these cases, Kurogane sends the new launch to the copy that is already runnin
 A common use is to open the file or link in the existing window:
 
 ```rust
+use kurogane::App;
+
 App::new("dist")
     .on_second_instance(|launch, app| {
         for arg in launch.args() {
@@ -191,14 +456,17 @@ Sometimes two copies really do need to run at the same time. Give each one a dif
 Register commands using `App::command`.
 
 ```rust
-use serde_json::json;
+use kurogane::{App, AppHandle};
+use serde_json::{Value, json};
 
-let runtime = App::url("https://example.com")
-    .command("ping", |payload| {
+App::url("https://example.com")
+    .command("ping", |payload: Value, _: &AppHandle| {
         Ok(json!({"ok": true, "echo": payload}))
     })
-    .start()?;
+    .run_or_exit();
 ```
+
+The closure takes the request and the `AppHandle`. The request can be any type serde can deserialize.
 
 Invoke them from JavaScript:
 
@@ -207,6 +475,8 @@ const result = await window.kurogane.invoke("ping", { message: "hello" });
 ```
 
 Commands exchange JSON values between JavaScript and Rust.
+
+By default only the application's own pages can call a command: those of `app://app` for `App::new`, of the start URL's origin for `App::url` (here `https://example.com`). A page of any other origin, in a popup, an iframe or a window that followed a link, is refused with code `-4` unless `App::permit` names its origin for that command. `App::permit_all` opens a command to every origin, and `App::deny_unlisted` closes every command without a rule, to the application's own pages too. Event subscriptions follow the same rule through `App::permit_event`.
 
 See:
 
@@ -267,6 +537,37 @@ stream.end();
 ```
 
 Handlers and sends fail with an `IpcError`, as commands do; a string converts into one. The first `end` or `error` a handler sends closes the stream; later sends fail with `stream closed`. When the page calls `end()` and `on_end` sends neither, the runtime ends the stream with `""`, so the page always hears back. Handlers run on the UI thread; a `StreamResponder` can be cloned and used from any thread.
+
+## Logging
+
+Kurogane reports what it does through [`tracing`](https://docs.rs/tracing) events: its lifecycle and IPC detail at `debug`, problems at `warn` and `error`. It never writes to stdout or stderr itself, so nothing appears until the application installs a subscriber. With `tracing-subscriber`:
+
+```toml
+[dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+```
+
+```rust
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::LevelFilter;
+
+fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::WARN.into())
+                .from_env_lossy(),
+        )
+        .log_internal_errors(false)
+        .init();
+
+    kurogane::App::new("dist").run_or_exit();
+}
+```
+
+Warnings and errors then print by default, and `RUST_LOG=kurogane=debug kurogane run` adds the detail.
+
+Keep `log_internal_errors(false)`. With the default, a line that cannot be written, because the application's output goes into a program that has exited (`| tee` ended by Ctrl+C), is reported on stderr instead; when stderr is the same closed pipe, that report panics, and a panic inside a CEF callback aborts the application. Any other `tracing` subscriber works the same way.
 
 ## Adding Chromium flags
 

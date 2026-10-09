@@ -10,6 +10,7 @@ use std::time::Duration;
 use kurogane::App;
 
 fn main() {
+    kurogane_suite::logging();
     let kurogane = App::url("https://example.com")
         .start()
         .expect("Kurogane failed to initialize");

@@ -5,7 +5,10 @@ use crate::chromium_flags::ChromiumFlag;
 use crate::fs::CanonicalRoot;
 use crate::credentials::CredentialStorage;
 use crate::gpu::GpuMode;
+use crate::hooks::Hooks;
 use crate::scheme::CustomScheme;
+use crate::window::WindowIdentity;
+use crate::window_options::WindowOptions;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,14 +48,22 @@ pub(crate) struct RuntimeSpec {
     pub mode: RuntimeMode,
     pub sandbox_mode: SandboxMode,
     pub start_url: String,
+    /// How the start window opens; unused in embedded mode, which has none
+    pub start_window: WindowOptions,
+    /// What the system shows of every window Kurogane opens
+    pub window_identity: WindowIdentity,
     pub asset_root: Option<CanonicalRoot>,
     pub profile_id: Option<String>,
+    /// Where the profile is, when the application chose (App::profile_dir)
+    pub profile_dir: Option<std::path::PathBuf>,
     pub persist_session_cookies: bool,
     pub gpu_mode: GpuMode,
     pub credential_storage: CredentialStorage,
     pub chromium_flags: Vec<ChromiumFlag>,
     pub scheduler: Option<PumpScheduler>,
     pub on_second_instance: Option<SecondInstanceHandler>,
+    /// The only strong reference to the hooks; see [`crate::hooks`]
+    pub hooks: Arc<Hooks>,
     pub delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
     pub renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
     pub scheme_handlers: Vec<CustomScheme>,

@@ -7,9 +7,9 @@ use anyhow::{Context, Result, bail};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
-use kurogane_layout::{ResolvedDistribution, package_directory};
+use crate::distribution::{ResolvedDistribution, package_directory, sh_quote};
 use crate::config::PackagingConfig;
 
 use crate::tui;
@@ -70,10 +70,7 @@ fn tools_arch() -> Result<String> {
 }
 
 fn tools_dir() -> Result<PathBuf> {
-    let dir = dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("kurogane")
-        .join("tools");
+    let dir = crate::cache::tools_dir();
     fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create directory {}", dir.display()))?;
     Ok(dir)
@@ -96,16 +93,19 @@ fn download(url: &str) -> Result<Vec<u8>> {
         .read_to_vec()?)
 }
 
-/// Downloads and caches the pinned linuxdeploy release.
+/// Downloads, caches and extracts the pinned linuxdeploy release, returning
+/// its extracted entry point.
 ///
 /// Downloads are verified against [`LINUXDEPLOY_DIGESTS`] before being written
 /// to the cache. Cached copies are not re-hashed because [`patch_linuxdeploy`]
-/// three bytes of the file in place.
+/// changes three bytes of the file in place. linuxdeploy runs extracted in the
+/// cache because an extract-and-run leaves its copy in `$TMPDIR`.
 fn prepare_linuxdeploy(arch: &str) -> Result<PathBuf> {
     let tools = tools_dir()?;
 
     // linuxdeploy
     let path = tools.join(format!("linuxdeploy-{arch}.AppImage"));
+    let tree = tools.join(format!("linuxdeploy-{arch}"));
     if !path.exists() {
         let expected = expected_digest(arch)?;
 
@@ -128,9 +128,59 @@ fn prepare_linuxdeploy(arch: &str) -> Result<PathBuf> {
         write_and_make_executable(&path, &data)?;
         // Mask linuxdeploy's magic bytes
         patch_linuxdeploy(&path)?;
+
+        // Drop the tree extracted from an older download
+        if tree.exists() {
+            fs::remove_dir_all(&tree)
+                .with_context(|| format!("failed to remove directory {}", tree.display()))?;
+        }
     }
 
-    Ok(path)
+    let apprun = tree.join("AppRun");
+    if !apprun.exists() {
+        extract_linuxdeploy(&path, &tree)?;
+    }
+
+    Ok(apprun)
+}
+
+/// Extracts the linuxdeploy AppImage into `tree`.
+///
+/// An interrupted extraction leaves no partial tree behind.
+fn extract_linuxdeploy(appimage: &Path, tree: &Path) -> Result<()> {
+    tui::step("Extracting linuxdeploy...");
+
+    let staging = tree.with_extension("extracting");
+    if staging.exists() {
+        fs::remove_dir_all(&staging)
+            .with_context(|| format!("failed to remove directory {}", staging.display()))?;
+    }
+    fs::create_dir_all(&staging)
+        .with_context(|| format!("failed to create directory {}", staging.display()))?;
+
+    let status = Command::new(appimage)
+        .arg("--appimage-extract")
+        .current_dir(&staging)
+        .stdout(Stdio::null())
+        .status()?;
+    if !status.success() {
+        let code = status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".into());
+        bail!("failed to extract linuxdeploy (exit code: {code})");
+    }
+
+    if tree.exists() {
+        fs::remove_dir_all(tree)
+            .with_context(|| format!("failed to remove directory {}", tree.display()))?;
+    }
+    fs::rename(staging.join("squashfs-root"), tree)
+        .with_context(|| format!("failed to move linuxdeploy into {}", tree.display()))?;
+    fs::remove_dir_all(&staging)
+        .with_context(|| format!("failed to remove directory {}", staging.display()))?;
+
+    Ok(())
 }
 
 /// Disables AppImage execution metadata in the linuxdeploy binary.
@@ -158,28 +208,44 @@ fn patch_linuxdeploy(path: &Path) -> Result<()> {
 }
 
 /// Generates the AppRun entrypoint for the canonical Kurogane bundle.
+///
+/// The bundle's path is one quoted word: no character of a name expands or
+/// ends it.
 fn generate_apprun(name: &str, exe_name: &str) -> String {
+    let target = sh_quote(&format!("usr/lib/{name}/{exe_name}"));
     format!(
         r#"#!/bin/sh
 APPDIR="$(dirname "$(readlink -f "$0")")"
-exec "$APPDIR/usr/lib/{name}/{exe_name}" "$@"
+exec "$APPDIR"/{target} "$@"
 "#
     )
 }
 
-/// Generates the desktop entry consumed by AppImage tooling.
+/// Generates the desktop entry consumed by AppImage tooling. Every value is
+/// escaped as the Desktop Entry Specification asks, so none adds a line.
+/// `class` is the window class the application's windows carry, which a
+/// launcher attaches the entry to running windows by (`StartupWMClass`).
 fn generate_desktop(
     name: &str,
     exe_name: &str,
     version: &str,
     categories: &[String],
     terminal: bool,
+    class: &str,
 ) -> String {
     let categories = if categories.is_empty() {
         "Utility".to_string()
     } else {
-        categories.join(";")
+        categories
+            .iter()
+            .map(|category| desktop_list_item(category))
+            .collect::<Vec<_>>()
+            .join(";")
     };
+    let name = desktop_string(name);
+    let exec = desktop_exec(exe_name);
+    let version = desktop_string(version);
+    let class = desktop_string(class);
 
     // `Version` is the spec version; the app version uses `X-AppImage-Version`
     format!(
@@ -188,12 +254,63 @@ Type=Application
 Name={name}
 Version=1.0
 X-AppImage-Version={version}
-Exec={exe_name}
+Exec={exec}
 Icon={name}
 Categories={categories};
 Terminal={terminal}
+StartupWMClass={class}
 "#
     )
+}
+
+/// A desktop entry string value: a backslash and the characters a line
+/// cannot hold are written as escapes, and a leading space as `\s`, which
+/// would otherwise be dropped.
+fn desktop_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' => escaped.push_str(r"\\"),
+            '\n' => escaped.push_str(r"\n"),
+            '\t' => escaped.push_str(r"\t"),
+            '\r' => escaped.push_str(r"\r"),
+            c => escaped.push(c),
+        }
+    }
+    if escaped.starts_with(' ') {
+        escaped.replace_range(..1, r"\s");
+    }
+    escaped
+}
+
+/// One value of a desktop entry list, whose separator it escapes too.
+fn desktop_list_item(value: &str) -> String {
+    desktop_string(value).replace(';', r"\;")
+}
+
+/// Characters that make an `Exec=` argument need double quotes.
+const EXEC_RESERVED: &[char] = &[
+    ' ', '\t', '\n', '"', '\'', '\\', '>', '<', '~', '|', '&', ';', '$', '*', '?', '#', '(', ')',
+    '`',
+];
+
+/// The program of an `Exec=` key: `%` doubled, since a single one starts a
+/// field code; double-quoted with `"`, `` ` ``, `$` and `\` escaped when it
+/// holds a reserved character; then escaped as any string value.
+fn desktop_exec(program: &str) -> String {
+    let program = program.replace('%', "%%");
+    if !program.contains(EXEC_RESERVED) {
+        return desktop_string(&program);
+    }
+    let mut quoted = String::from('"');
+    for c in program.chars() {
+        if matches!(c, '"' | '`' | '$' | '\\') {
+            quoted.push('\\');
+        }
+        quoted.push(c);
+    }
+    quoted.push('"');
+    desktop_string(&quoted)
 }
 
 /// Builds the AppDir around the canonical Kurogane directory bundle.
@@ -220,8 +337,17 @@ fn build_appdir(
     // Desktop entry
     let categories = config.linux.categories.as_deref().unwrap_or_default();
     let terminal = config.linux.terminal.unwrap_or(false);
-    let desktop_content =
-        generate_desktop(name, exe_name, &dist.metadata.version, categories, terminal);
+    // App::window_class is to be given the identifier; without one the
+    // windows take the executable's name
+    let class = dist.metadata.identifier.as_deref().unwrap_or(exe_name);
+    let desktop_content = generate_desktop(
+        name,
+        exe_name,
+        &dist.metadata.version,
+        categories,
+        terminal,
+        class,
+    );
     let desktop_dir = app_dir.join("usr").join("share").join("applications");
     fs::create_dir_all(&desktop_dir)
         .with_context(|| format!("failed to create directory {}", desktop_dir.display()))?;
@@ -309,13 +435,13 @@ pub fn build(
 
     let linuxdeploy = prepare_linuxdeploy(&arch)?;
 
-    // Deploy external dependencies without relocating the canonical bundle
-    // CEF remains in runtime/cef/, resolved through its $ORIGIN/cef RPATH
+    // Deploy external dependencies without relocating the canonical bundle;
+    // CEF stays in runtime/cef/, which the application loads by its path
     let mut cmd = Command::new(&linuxdeploy);
     cmd.env("OUTPUT", &appimage_path);
     cmd.env("ARCH", &arch);
-    cmd.env("APPIMAGE_EXTRACT_AND_RUN", "1");
-    cmd.arg("--appimage-extract-and-run");
+    // Distribution libraries arrive stripped; linuxdeploy's own strip rejects RELR sections
+    cmd.env("NO_STRIP", "1");
     cmd.arg("--appdir").arg(&app_dir);
     cmd.arg("--deploy-deps-only").arg(&bundle_dir);
     cmd.arg("--exclude-library").arg("libcef*");
@@ -348,7 +474,7 @@ mod tests {
     }
 
     fn test_distribution(dir: &Path) -> ResolvedDistribution {
-        kurogane_layout::test_fixtures::sample_distribution(dir)
+        crate::distribution::test_fixtures::sample_distribution(dir)
     }
 
     #[test]
@@ -383,15 +509,57 @@ mod tests {
     fn apprun_targets_bundle_executable() {
         let content = generate_apprun("custom-name", "custom-bin");
 
-        assert!(content.contains("exec \"$APPDIR/usr/lib/custom-name/custom-bin\""));
+        assert!(content.contains("exec \"$APPDIR\"/'usr/lib/custom-name/custom-bin' \"$@\""));
+    }
+
+    /// AppRun reaches the bundled executable with the user's arguments
+    /// intact, whatever the name holds, and runs nothing the name says.
+    #[test]
+    fn apprun_starts_the_bundle_whatever_the_name_holds() {
+        let dir = tmp();
+        // Each command touches `mark` in the folder AppRun starts in
+        for name in [
+            "My \"Best\" App",
+            "Tom's App",
+            "Ca$h",
+            "$(touch mark)App",
+            "`touch mark`",
+            "x\" | touch mark | \"y",
+            "x\" & touch mark & \"y",
+        ] {
+            let app_dir = dir.path().join("AppDir");
+            let _ = fs::remove_dir_all(&app_dir);
+            let bundle = app_dir.join("usr/lib").join(name);
+            fs::create_dir_all(&bundle).unwrap();
+            let stub = bundle.join("my app");
+            fs::write(&stub, "#!/bin/sh\nprintf '%s|' \"$@\"\n").unwrap();
+            fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+            let apprun = app_dir.join("AppRun");
+            fs::write(&apprun, generate_apprun(name, "my app")).unwrap();
+            fs::set_permissions(&apprun, fs::Permissions::from_mode(0o755)).unwrap();
+
+            let output = Command::new(&apprun)
+                .args(["one two", "$HOME", "x'y"])
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+
+            assert!(output.status.success(), "{name:?}: {output:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                "one two|$HOME|x'y|",
+                "{name:?}"
+            );
+            assert!(!dir.path().join("mark").exists(), "{name:?} ran a command");
+        }
     }
 
     #[test]
-    fn apprun_leaves_library_loading_to_rpath() {
+    fn apprun_sets_no_library_path() {
         let content = generate_apprun("myapp", "myapp");
         assert!(
             !content.contains("LD_LIBRARY_PATH"),
-            "AppRun must not set LD_LIBRARY_PATH; loading is RPATH-owned"
+            "AppRun must not set LD_LIBRARY_PATH; the application loads libcef by its path"
         );
     }
 
@@ -403,19 +571,33 @@ mod tests {
 
     #[test]
     fn desktop_targets_executable() {
-        let content = generate_desktop("custom-name", "custom-bin", "2.0.0", &[], false);
+        let content = generate_desktop(
+            "custom-name",
+            "custom-bin",
+            "2.0.0",
+            &[],
+            false,
+            "custom-bin",
+        );
         assert!(content.contains("Exec=custom-bin"));
     }
 
     #[test]
     fn desktop_uses_application_name() {
-        let content = generate_desktop("custom-name", "custom-bin", "2.0.0", &[], false);
+        let content = generate_desktop(
+            "custom-name",
+            "custom-bin",
+            "2.0.0",
+            &[],
+            false,
+            "custom-bin",
+        );
         assert!(content.contains("Name=custom-name"));
     }
 
     #[test]
     fn desktop_contains_application_version() {
-        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], false);
+        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], false, "myapp");
         assert!(content.contains("X-AppImage-Version=1.0.0"));
         // Spec version, not app version; appimagetool validates this key
         assert!(content.contains("Version=1.0\n"));
@@ -423,7 +605,7 @@ mod tests {
 
     #[test]
     fn desktop_entry_is_valid_format() {
-        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], false);
+        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], false, "myapp");
         assert!(content.starts_with("[Desktop Entry]"));
         assert!(content.contains("Type=Application"));
         assert!(content.contains("Terminal=false"));
@@ -431,26 +613,77 @@ mod tests {
 
     #[test]
     fn desktop_defaults_match_historical_output() {
-        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], false);
+        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], false, "myapp");
 
         assert_eq!(
             content,
-            "[Desktop Entry]\nType=Application\nName=myapp\nVersion=1.0\nX-AppImage-Version=1.0.0\nExec=myapp\nIcon=myapp\nCategories=Utility;\nTerminal=false\n"
+            "[Desktop Entry]\nType=Application\nName=myapp\nVersion=1.0\nX-AppImage-Version=1.0.0\nExec=myapp\nIcon=myapp\nCategories=Utility;\nTerminal=false\nStartupWMClass=myapp\n"
         );
     }
 
     #[test]
     fn desktop_categories_override_replaces_utility() {
         let categories = vec!["Development".to_string(), "IDE".to_string()];
-        let content = generate_desktop("myapp", "myapp", "1.0.0", &categories, false);
+        let content = generate_desktop("myapp", "myapp", "1.0.0", &categories, false, "myapp");
 
         assert!(content.contains("Categories=Development;IDE;"));
         assert!(!content.contains("Utility"));
     }
 
     #[test]
+    fn no_value_adds_a_line_or_a_key_to_the_desktop_entry() {
+        let categories = vec!["Dev;Exec=evil".to_string(), "IDE\nExec=evil".to_string()];
+        let content = generate_desktop(
+            "My\nExec=evil",
+            "my app",
+            "1.0\nExec=evil",
+            &categories,
+            false,
+            "com.example\nExec=evil",
+        );
+
+        assert_eq!(
+            content
+                .lines()
+                .filter(|line| line.starts_with("Exec="))
+                .count(),
+            1
+        );
+        assert_eq!(
+            content
+                .lines()
+                .filter(|line| line.starts_with("Name="))
+                .count(),
+            1
+        );
+        assert!(content.contains(r"Name=My\nExec=evil"));
+        assert!(content.contains(r"Categories=Dev\;Exec=evil;IDE\nExec=evil;"));
+        assert!(content.contains(r"X-AppImage-Version=1.0\nExec=evil"));
+        assert!(content.contains(r"StartupWMClass=com.example\nExec=evil"));
+    }
+
+    #[test]
+    fn desktop_names_the_window_class() {
+        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], false, "com.example.notes");
+        assert!(content.ends_with("Terminal=false\nStartupWMClass=com.example.notes\n"));
+    }
+
+    #[test]
+    fn desktop_values_follow_the_specification_s_escapes() {
+        assert_eq!(desktop_string(r"a\b"), r"a\\b");
+        assert_eq!(desktop_string(" lead"), r"\slead");
+        assert_eq!(desktop_string("tab\there"), r"tab\there");
+        assert_eq!(desktop_exec("myapp"), "myapp");
+        assert_eq!(desktop_exec("100%"), "100%%");
+        // Quoted, then escaped again as a string: a literal backslash is four
+        assert_eq!(desktop_exec("my app"), "\"my app\"");
+        assert_eq!(desktop_exec("a$b"), r#""a\\$b""#);
+        assert_eq!(desktop_exec(r"a\b"), r#""a\\\\b""#);
+    }
+
+    #[test]
     fn desktop_terminal_flag_is_configurable() {
-        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], true);
+        let content = generate_desktop("myapp", "myapp", "1.0.0", &[], true, "myapp");
 
         assert!(content.contains("Terminal=true"));
     }
@@ -510,6 +743,34 @@ mod tests {
             fs::read_to_string(app_dir.join("usr/share/applications/myapp.desktop")).unwrap();
         assert!(desktop.contains("Categories=Development;"));
         assert!(desktop.contains("Terminal=true"));
+    }
+
+    #[test]
+    fn appdir_desktop_names_the_executable_without_an_identifier() {
+        let dir = tmp();
+        let mut dist = test_distribution(dir.path());
+        dist.metadata.exe_name = "myapp-bin".to_string();
+        let app_dir = dir.path().join("appdir");
+
+        build_appdir(&dist, &app_dir, &PackagingConfig::default()).unwrap();
+
+        let desktop =
+            fs::read_to_string(app_dir.join("usr/share/applications/myapp.desktop")).unwrap();
+        assert!(desktop.contains("\nStartupWMClass=myapp-bin\n"));
+    }
+
+    #[test]
+    fn appdir_desktop_names_the_identifier_as_the_window_class() {
+        let dir = tmp();
+        let mut dist = test_distribution(dir.path());
+        dist.metadata.identifier = Some("com.example.myapp".to_string());
+        let app_dir = dir.path().join("appdir");
+
+        build_appdir(&dist, &app_dir, &PackagingConfig::default()).unwrap();
+
+        let desktop =
+            fs::read_to_string(app_dir.join("usr/share/applications/myapp.desktop")).unwrap();
+        assert!(desktop.contains("\nStartupWMClass=com.example.myapp\n"));
     }
 
     #[test]
@@ -595,7 +856,7 @@ mod tests {
         let res = dir.path().join("extra.txt");
         fs::write(&res, "resource data").unwrap();
         dist.extra_resources
-            .push(kurogane_layout::ResolvedResource {
+            .push(crate::distribution::ResolvedResource {
                 source: res.clone(),
                 destination: "extra.txt".into(),
             });

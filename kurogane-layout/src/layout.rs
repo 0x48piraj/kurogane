@@ -1,131 +1,10 @@
-//! Filesystem layout and low-level bundle utilities.
+//! Bundle discovery for the running executable.
 //!
-//! This module owns managed CEF paths, bundled runtime discovery and
-//! recursive directory copying and linking.
-//!
-//! It does not define package formats or application metadata.
+//! A bundle is a directory marked with [`BUNDLE_MARKER`] beside its
+//! executable, or a macOS application bundle. It runs the Chromium runtime and
+//! resources inside it and no other.
 
 use std::path::{Path, PathBuf};
-
-use crate::platform;
-
-pub fn install_root() -> PathBuf {
-    platform::data_local_dir().join("kurogane").join("cef")
-}
-
-pub fn cef_install_dir(version: &str) -> PathBuf {
-    install_root().join(version)
-}
-
-/// Resolves a versioned managed CEF installation if it exists locally.
-pub fn installed_cef_root(version: &str) -> Option<PathBuf> {
-    let root = cef_install_dir(version);
-
-    root.exists().then_some(root)
-}
-
-/// Mirrors `src` into `dst`, reusing files where possible.
-///
-/// A staged CEF runtime is hundreds of megabytes of read-only files that are
-/// already on disk, so it is hard linked rather than copied. Linking is
-/// refused across volumes and on filesystems without hard links and each
-/// file falls back to a copy.
-///
-/// `keep` is called for every entry by name at each directory level.
-pub fn link_dir(src: &Path, dst: &Path, keep: &dyn Fn(&str) -> bool) -> std::io::Result<()> {
-    mirror_dir(src, dst, keep, &link_file)
-}
-
-pub fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
-    copy_dir_filtered(src, dst, &|_| true)
-}
-
-/// Copies `src` into `dst`, leaving out every entry `keep` refuses.
-///
-/// `keep` is asked about every entry by name, at every level.
-pub(crate) fn copy_dir_filtered(
-    src: &Path,
-    dst: &Path,
-    keep: &dyn Fn(&str) -> bool,
-) -> std::io::Result<()> {
-    mirror_dir(src, dst, keep, &|src, dst| {
-        std::fs::copy(src, dst).map(drop)
-    })
-}
-
-/// Mirrors the directory structure from `src` into `dst`.
-///
-/// Kept files are passed to `place` for copying or linking.
-fn mirror_dir(
-    src: &Path,
-    dst: &Path,
-    keep: &dyn Fn(&str) -> bool,
-    place: &dyn Fn(&Path, &Path) -> std::io::Result<()>,
-) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let name = entry.file_name();
-
-        if !keep(&name.to_string_lossy()) {
-            continue;
-        }
-
-        let path = entry.path();
-        let dest = dst.join(&name);
-
-        if path.is_dir() {
-            mirror_dir(&path, &dest, keep, place)?;
-        } else {
-            place(&path, &dest)?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Links one file into place, leaving an up-to-date destination alone.
-///
-/// Reuses the destination when its metadata matches the source.
-fn link_file(src: &Path, dst: &Path) -> std::io::Result<()> {
-    let source = std::fs::metadata(src)?;
-
-    if is_same_file(&source, dst) {
-        return Ok(());
-    }
-
-    // A stale link has to go before a fresh one can take its name
-    match std::fs::remove_file(dst) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => return Err(err),
-    }
-
-    if std::fs::hard_link(src, dst).is_ok() {
-        return Ok(());
-    }
-
-    std::fs::copy(src, dst)?;
-
-    Ok(())
-}
-
-/// Returns whether `dst` already holds what `source` describes.
-fn is_same_file(source: &std::fs::Metadata, dst: &Path) -> bool {
-    let Ok(existing) = std::fs::metadata(dst) else {
-        return false;
-    };
-
-    if existing.len() != source.len() {
-        return false;
-    }
-
-    match (existing.modified(), source.modified()) {
-        (Ok(existing), Ok(source)) => existing == source,
-        _ => false,
-    }
-}
 
 /// Returns the `Contents` directory of the `.app` directly containing `exe`.
 #[cfg(any(target_os = "macos", test))]
@@ -177,25 +56,6 @@ pub fn bundled_resource_root() -> Result<Option<PathBuf>, std::io::Error> {
 
 /// Returns the resource root for a bundled executable.
 fn bundled_resource_root_for(exe: &Path) -> Option<PathBuf> {
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    let dir = exe.parent()?;
-
-    #[cfg(target_os = "windows")]
-    {
-        // Flat bundle; executable, CEF and resources share a directory
-        if dir.join("libcef.dll").exists() {
-            return Some(dir.to_path_buf());
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        // The executable is under `runtime/`; `cef/` identifies the bundle
-        if dir.join("cef").is_dir() {
-            return dir.parent().map(Path::to_path_buf);
-        }
-    }
-
     #[cfg(target_os = "macos")]
     {
         if let Some(contents) = app_bundle_contents(exe) {
@@ -203,18 +63,20 @@ fn bundled_resource_root_for(exe: &Path) -> Option<PathBuf> {
         }
     }
 
-    None
+    let dir = marked_bundle_dir(exe)?;
+
+    // Linux keeps the executable in `runtime/`, below the bundle's root
+    if cfg!(target_os = "linux") {
+        dir.parent().map(Path::to_path_buf)
+    } else {
+        Some(dir.to_path_buf())
+    }
 }
 
-/// Returns the bundled macOS helper executable, if present.
+/// Returns the running application's bundled helper executable, if present.
+#[cfg(target_os = "macos")]
 pub fn bundled_helper_path() -> Result<Option<PathBuf>, std::io::Error> {
-    #[cfg(target_os = "macos")]
-    {
-        Ok(bundled_helper_path_for(&std::env::current_exe()?))
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    Ok(None)
+    Ok(bundled_helper_path_for(&std::env::current_exe()?))
 }
 
 /// Returns the bundled helper executable for the application containing `exe`.
@@ -235,16 +97,22 @@ pub fn bundled_helper_path_for(exe: &Path) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-/// The file `kurogane bundle` leaves beside a bundle's executable. Such an
-/// application runs the Chromium runtime inside its bundle and no other.
-pub(crate) const BUNDLE_MARKER: &str = "kurogane-bundle";
+/// The file `kurogane bundle` and the sandbox's staged run leave beside a
+/// bundle's executable. Such an application runs the Chromium runtime and
+/// resources inside its bundle and no other.
+pub const BUNDLE_MARKER: &str = "kurogane-bundle";
+
+/// The directory of `exe` when [`BUNDLE_MARKER`] marks it as a bundle's.
+fn marked_bundle_dir(exe: &Path) -> Option<&Path> {
+    exe.parent().filter(|dir| dir.join(BUNDLE_MARKER).is_file())
+}
 
 /// The Chromium runtime of the bundle `exe` belongs to, whether or not it is
 /// still in place, or `None` when `exe` belongs to no bundle.
 ///
-/// A bundle is a directory `kurogane bundle` made, which it marks with
-/// [`BUNDLE_MARKER`] beside the executable, or a macOS application bundle.
-pub(crate) fn bundle_cef_root_for(exe: &Path) -> Option<PathBuf> {
+/// A bundle is a directory marked with [`BUNDLE_MARKER`] beside the
+/// executable, or a macOS application bundle.
+pub fn bundle_cef_root_for(exe: &Path) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         if let Some(contents) = app_bundle_contents(exe) {
@@ -252,14 +120,10 @@ pub(crate) fn bundle_cef_root_for(exe: &Path) -> Option<PathBuf> {
         }
     }
 
-    let dir = exe.parent()?;
+    let dir = marked_bundle_dir(exe)?;
 
-    if !dir.join(BUNDLE_MARKER).is_file() {
-        return None;
-    }
-
-    // Linux keeps the runtime in `cef/` beside the executable; Windows and
-    // macOS directory bundles keep it beside the executable itself
+    // Linux keeps the runtime in `cef/` beside the executable; Windows keeps it
+    // beside the executable itself
     if cfg!(target_os = "linux") {
         Some(dir.join("cef"))
     } else {
@@ -267,51 +131,10 @@ pub(crate) fn bundle_cef_root_for(exe: &Path) -> Option<PathBuf> {
     }
 }
 
-pub fn bundled_cef_root() -> Result<Option<PathBuf>, std::io::Error> {
-    let exe = std::env::current_exe()?;
-
-    let dir = exe
-        .parent()
-        .ok_or_else(|| std::io::Error::other("the executable path has no parent directory"))?;
-
-    #[cfg(target_os = "windows")]
-    {
-        // CEF is next to the executable
-        let libcef = dir.join("libcef.dll");
-
-        if libcef.exists() {
-            return Ok(Some(dir.to_path_buf()));
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        // CEF is under `cef/`
-        let cef = dir.join("cef");
-
-        if cef.exists() {
-            return Ok(Some(cef));
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let framework = dir.join("Chromium Embedded Framework.framework");
-
-        if framework.exists() {
-            return Ok(Some(dir.to_path_buf()));
-        }
-
-        if let Some(contents) = app_bundle_contents(&exe) {
-            let frameworks = contents.join("Frameworks");
-
-            if frameworks.join(crate::platform::MACOS_FRAMEWORK).exists() {
-                return Ok(Some(frameworks));
-            }
-        }
-    }
-
-    Ok(None)
+/// The Chromium runtime of the bundle the running executable belongs to,
+/// whether or not it is still in place; a bundle runs it and no other.
+pub fn bundle_cef_root() -> std::io::Result<Option<PathBuf>> {
+    Ok(bundle_cef_root_for(&std::env::current_exe()?))
 }
 
 #[cfg(test)]
@@ -375,7 +198,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("dist");
         let runtime = root.join("runtime");
-        std::fs::create_dir_all(runtime.join("cef")).unwrap();
+        std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::write(runtime.join(BUNDLE_MARKER), b"").unwrap();
 
         assert_eq!(
             bundled_resource_root_for(&runtime.join("myapp")),
@@ -383,36 +207,43 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(not(target_os = "macos"))]
     #[test]
-    fn a_linux_executable_with_no_cef_sibling_is_not_a_bundle() {
+    fn a_bundle_resolves_its_resources_beside_its_runtime() {
         let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("target").join("debug");
-        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(dir.path().join(BUNDLE_MARKER), b"").unwrap();
 
-        assert_eq!(bundled_resource_root_for(&target.join("myapp")), None);
+        let exe = dir.path().join("myapp");
+        let resources = bundled_resource_root_for(&exe).unwrap();
+        let runtime = bundle_cef_root_for(&exe).unwrap();
+
+        assert!(
+            runtime.starts_with(&resources),
+            "one marker places both: resources {} and runtime {}",
+            resources.display(),
+            runtime.display()
+        );
+    }
+
+    #[test]
+    fn a_runtime_beside_an_unmarked_executable_has_no_resource_root() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("libcef.dll"), b"").unwrap();
+        std::fs::write(dir.path().join("libcef.so"), b"").unwrap();
+        std::fs::create_dir(dir.path().join("cef")).unwrap();
+
+        assert_eq!(bundled_resource_root_for(&dir.path().join("myapp")), None);
     }
 
     #[cfg(target_os = "windows")]
     #[test]
     fn a_windows_bundle_resolves_to_the_executable_directory() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("libcef.dll"), b"").unwrap();
+        std::fs::write(dir.path().join(BUNDLE_MARKER), b"").unwrap();
 
         assert_eq!(
             bundled_resource_root_for(&dir.path().join("myapp.exe")),
             Some(dir.path().to_path_buf())
-        );
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn a_windows_executable_with_no_libcef_is_not_a_bundle() {
-        let dir = tempfile::tempdir().unwrap();
-
-        assert_eq!(
-            bundled_resource_root_for(&dir.path().join("myapp.exe")),
-            None
         );
     }
 

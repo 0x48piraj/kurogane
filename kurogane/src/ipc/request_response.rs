@@ -2,10 +2,10 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 use std::collections::HashMap;
 
-use cef::*;
+use tetsu::*;
 
 use crate::acl::Origin;
-use crate::debug;
+use tracing::debug;
 use crate::ipc::browser_state::{still_addressed, ErrorCode, IpcContext, IpcError};
 use crate::ipc::envelope::*;
 use crate::ipc::pending::{PendingEntry, PendingKey, PendingMap};

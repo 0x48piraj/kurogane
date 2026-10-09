@@ -2,9 +2,11 @@
 //!
 //! This module provides a normalized intermediate representation for
 //! Chromium command-line switches. Each switch is keyed as Chromium keys
-//! it, so every spelling of one switch is one entry.
+//! it, so every spelling of one switch is one entry. The feature lists are
+//! added to, never replaced: CEF's own entries, the launch's and every
+//! setting's stay.
 
-use cef::*;
+use tetsu::*;
 use std::collections::BTreeMap;
 
 /// User supplied Chromium standalone switches and switches with values.
@@ -20,10 +22,45 @@ enum SwitchValue {
     Value(String),
 }
 
-/// Chromium switch plan with last-write-wins precedence model.
+/// The switches Chromium reads as comma-separated lists of features.
+const LIST_SWITCHES: [&str; 2] = ["disable-features", "enable-features"];
+
+/// Chromium switch plan with last-write-wins precedence model, but for the
+/// list switches, which add.
 #[derive(Default, Debug)]
 pub(crate) struct ChromiumFlags {
     switches: BTreeMap<String, SwitchValue>,
+    // The list switches' entries, each once, in the order added
+    lists: BTreeMap<String, Vec<String>>,
+}
+
+fn is_list(key: &str) -> bool {
+    LIST_SWITCHES.contains(&key)
+}
+
+/// Adds the entries of `value`, a comma-separated list, to `entries`, each
+/// once. Chromium trims each entry and skips empty ones.
+fn add_entries(entries: &mut Vec<String>, value: &str) {
+    for entry in value
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        if !entries.iter().any(|known| known == entry) {
+            entries.push(entry.to_owned());
+        }
+    }
+}
+
+/// The list `existing` (the command line's value) with `added`'s entries
+/// after its own, each once.
+fn merged(existing: &str, added: &[String]) -> String {
+    let mut entries = Vec::new();
+    add_entries(&mut entries, existing);
+    for entry in added {
+        add_entries(&mut entries, entry);
+    }
+    entries.join(",")
 }
 
 /// The name Chromium files a switch under. base::CommandLine drops one
@@ -45,27 +82,39 @@ fn key(name: &str) -> String {
 }
 
 impl ChromiumFlags {
-    /// Insert a standalone switch.
+    /// Insert a standalone switch. A list switch without a value adds no
+    /// entry.
     pub(crate) fn set(&mut self, name: impl AsRef<str>) {
         let name = key(name.as_ref());
-        self.switches.insert(name, SwitchValue::Present);
+        if is_list(&name) {
+            self.lists.entry(name).or_default();
+        } else {
+            self.switches.insert(name, SwitchValue::Present);
+        }
     }
 
-    /// Insert a switch with a value.
+    /// Insert a switch with a value. A list switch's value adds its
+    /// entries to the list.
     pub(crate) fn set_with_value(&mut self, name: impl AsRef<str>, value: impl Into<String>) {
-        let value = SwitchValue::Value(value.into());
-        self.switches.insert(key(name.as_ref()), value);
+        let name = key(name.as_ref());
+        if is_list(&name) {
+            add_entries(self.lists.entry(name).or_default(), &value.into());
+        } else {
+            self.switches.insert(name, SwitchValue::Value(value.into()));
+        }
     }
 
     /// Returns whether a switch is present, with or without a value.
     pub(crate) fn contains(&self, name: &str) -> bool {
-        self.switches.contains_key(&key(name))
+        let name = key(name);
+        self.switches.contains_key(&name) || self.lists.contains_key(&name)
     }
 
     /// Apply user-supplied Chromium flags.
     ///
     /// User flags are applied after runtime policies and therefore
-    /// override runtime defaults for the same switch, however it is spelled.
+    /// override runtime defaults for the same switch, however it is spelled;
+    /// a list switch's entries are added to the runtime's.
     pub(crate) fn extend_user_flags(&mut self, user_flags: &[ChromiumFlag]) {
         for flag in user_flags {
             match flag {
@@ -80,8 +129,24 @@ impl ChromiumFlags {
     /// Emit the finalized switch set into CEF.
     ///
     /// This is the only place where ChromiumFlags interacts with
-    /// CommandLine directly.
+    /// CommandLine directly. A list switch's entries go after those the
+    /// command line holds already (CEF's own and the launch's), since
+    /// Chromium keeps only the last value of a switch.
     pub(crate) fn apply(self, cmd: &mut CommandLine) {
+        for (name, added) in self.lists {
+            if added.is_empty() {
+                continue;
+            }
+            let name = CefString::from(name.as_str());
+            let existing = if cmd.has_switch(Some(&name)) != 0 {
+                CefString::from(&cmd.switch_value(Some(&name))).to_string()
+            } else {
+                String::new()
+            };
+            let value = CefString::from(merged(&existing, &added).as_str());
+            cmd.append_switch_with_value(Some(&name), Some(&value));
+        }
+
         for (name, value) in self.switches {
             let name = CefString::from(name.as_str());
 
@@ -110,6 +175,10 @@ impl std::fmt::Display for ChromiumFlags {
                     writeln!(f, "--{name}={v}")?;
                 }
             }
+        }
+
+        for (name, entries) in &self.lists {
+            writeln!(f, "--{name}=+{}", entries.join(","))?;
         }
 
         Ok(())
@@ -222,6 +291,55 @@ mod tests {
     }
 
     #[test]
+    fn a_feature_list_adds_entries_however_the_switch_is_spelled() {
+        let mut flags = ChromiumFlags::default();
+
+        flags.set_with_value("disable-features", "A,B");
+        flags.set_with_value("--disable-features", " B , C,,");
+        flags.extend_user_flags(&[ChromiumFlag::WithValue(
+            "disable-features".into(),
+            "D".into(),
+        )]);
+
+        assert_eq!(flags.lists["disable-features"], ["A", "B", "C", "D"]);
+        assert!(flags.switches.is_empty());
+    }
+
+    #[test]
+    fn a_feature_list_without_a_value_adds_nothing_and_removes_nothing() {
+        let mut flags = ChromiumFlags::default();
+
+        flags.set("enable-features");
+        assert!(flags.contains("enable-features"));
+        assert!(flags.lists["enable-features"].is_empty());
+
+        flags.set_with_value("enable-features", "A");
+        flags.extend_user_flags(&[ChromiumFlag::Present("--enable-features".into())]);
+        assert_eq!(flags.lists["enable-features"], ["A"]);
+    }
+
+    #[test]
+    fn the_command_line_s_entries_stay_first_and_each_entry_is_once() {
+        let cef = "GlicActorUi,AutofillActorMode,LensOverlay,KillOnInvalidNavigationHeaders";
+
+        assert_eq!(
+            merged(cef, &["LcApp".into(), "LensOverlay".into()]),
+            format!("{cef},LcApp")
+        );
+        assert_eq!(merged("", &["A".into()]), "A");
+        assert_eq!(merged("A,B", &[]), "A,B");
+    }
+
+    #[test]
+    fn a_feature_list_is_printed_as_an_addition() {
+        let mut flags = ChromiumFlags::default();
+
+        flags.set_with_value("enable-features", "A,B");
+
+        assert_eq!(flags.to_string(), "--enable-features=+A,B\n");
+    }
+
+    #[test]
     #[cfg(target_os = "windows")]
     fn windows_switch_names_ignore_case_and_take_a_slash() {
         let mut flags = ChromiumFlags::default();
@@ -258,12 +376,13 @@ mod property_tests {
     use super::*;
     use proptest::prelude::*;
 
-    // Generated names never start with '-', which Chromium strips as a prefix
+    // Generated names never start with '-', which Chromium strips as a
+    // prefix, and are never a list switch, which adds instead
 
     proptest! {
         #[test]
         fn last_write_wins(
-            key in "[a-z0-9][a-z0-9\\-]{0,31}",
+            key in "[a-z0-9][a-z0-9\\-]{0,31}".prop_filter("adds", |k| !is_list(k)),
             first in ".*",
             second in ".*",
         ) {
@@ -289,7 +408,7 @@ mod property_tests {
     proptest! {
         #[test]
         fn user_flags_always_override_runtime_values(
-            key in "[a-z0-9][a-z0-9\\-]{0,31}",
+            key in "[a-z0-9][a-z0-9\\-]{0,31}".prop_filter("adds", |k| !is_list(k)),
             runtime in ".*",
             user in ".*",
         ) {
@@ -314,7 +433,7 @@ mod property_tests {
     proptest! {
         #[test]
         fn intermediate_assignments_do_not_affect_final_state(
-            key in "[a-z0-9][a-z0-9\\-]{0,31}",
+            key in "[a-z0-9][a-z0-9\\-]{0,31}".prop_filter("adds", |k| !is_list(k)),
             a in ".*",
             b in ".*",
             c in ".*",
@@ -336,7 +455,7 @@ mod property_tests {
         #[test]
         fn number_of_switches_equals_number_of_unique_keys(
             keys in prop::collection::vec(
-                "[a-z0-9][a-z0-9\\-]{0,15}",
+                "[a-z0-9][a-z0-9\\-]{0,15}".prop_filter("adds", |k| !is_list(k)),
                 0..50
             )
         ) {

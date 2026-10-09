@@ -1,19 +1,18 @@
 //! macOS-specific CEF initialization.
 
-use std::ffi::CString;
-use std::os::unix::ffi::OsStrExt;
 use std::sync::{OnceLock, Weak};
 
-use kurogane_layout::detect_cef_root;
 use objc2::{
     ClassType, MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
-    runtime::{AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject},
+    runtime::{AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject, Sel},
+    sel,
 };
 use objc2_app_kit::{
     NSApp, NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
-    NSApplicationTerminateReply,
+    NSApplicationTerminateReply, NSEventModifierFlags, NSMenu, NSMenuItem, NSRunningApplication,
 };
+use objc2_foundation::NSString;
 
 use crate::error::RuntimeError;
 use crate::platform::macos::application::SimpleApplication;
@@ -35,8 +34,7 @@ pub fn set_app(app: &AppHandle) {
 /// `NSApplication` subclass and makes an unbundled process a regular
 /// foreground app.
 ///
-/// Uses the runtime-resolved CEF root rather than the app-bundle-only loader
-/// path used by `cef::library_loader`.
+/// Loads the CEF the runtime resolves, its bundle's or the one tetsu finds.
 ///
 /// CEF's subprocesses (`--type=renderer`, `gpu-process`, `utility`) get the
 /// library alone: an `NSApplication` registers its process with LaunchServices
@@ -46,18 +44,19 @@ pub fn set_app(app: &AppHandle) {
 /// Under [`SandboxMode::Chromium`](crate::SandboxMode::Chromium) subprocesses
 /// enter the seatbelt sandbox before the framework is loaded.
 ///
-/// Must run on the main thread before CEF initialization.
-pub fn init_ns_app(sandbox: crate::SandboxMode) -> Result<(), RuntimeError> {
+/// Must run on the main thread before CEF initialization. Returns the
+/// directory of the CEF it loaded.
+pub fn init_ns_app(sandbox: crate::SandboxMode) -> Result<std::path::PathBuf, RuntimeError> {
     let browser = crate::runtime::is_browser_process();
 
     if !browser && matches!(sandbox, crate::SandboxMode::Chromium) {
         crate::sandbox::macos::initialize_helper()?;
     }
 
-    load_framework()?;
+    let cef_root = crate::runtime::load_libcef()?;
 
     if !browser {
-        return Ok(());
+        return Ok(cef_root);
     }
 
     let mtm = MainThreadMarker::new().expect("init_ns_app must run on the main thread");
@@ -75,7 +74,7 @@ pub fn init_ns_app(sandbox: crate::SandboxMode) -> Result<(), RuntimeError> {
 
     promote_unbundled(&app);
 
-    Ok(())
+    Ok(cef_root)
 }
 
 /// Ensures unbundled browser processes use a foreground activation policy.
@@ -85,32 +84,6 @@ fn promote_unbundled(app: &NSApplication) {
     if app.activationPolicy() == NSApplicationActivationPolicy::Prohibited {
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
     }
-}
-
-/// Loads the Chromium Embedded Framework from the resolved CEF root.
-fn load_framework() -> Result<(), RuntimeError> {
-    // The library loader assumes an app-bundle layout
-    // (<exe>/../Frameworks/...), which is unavailable in non-bundled dev runs
-    let detected = detect_cef_root().map_err(crate::runtime::cef_not_found)?;
-
-    let path = detected.root.join(cef::sys::FRAMEWORK_PATH);
-    let invalid = |source: Box<dyn std::error::Error + Send + Sync>| {
-        crate::runtime::unusable_cef(detected.mode, path.clone(), source)
-    };
-    let canonical = path.canonicalize().map_err(|e| invalid(Box::new(e)))?;
-    let framework =
-        CString::new(canonical.as_os_str().as_bytes()).map_err(|e| invalid(Box::new(e)))?;
-
-    // SAFETY: `framework` is a valid, NUL-terminated C string that outlives the call.
-    // Executed prior to any other CEF invocations, satisfying CEF's pre-initialization requirement.
-    let loaded = unsafe { cef::sys::cef_load_library(framework.as_ptr()) };
-    if loaded != 1 {
-        return Err(invalid(
-            "cef_load_library could not load the Chromium Embedded Framework".into(),
-        ));
-    }
-
-    Ok(())
 }
 
 /// Installs the application delegate for the process lifetime.
@@ -135,6 +108,166 @@ pub fn setup_app_delegate() {
     // NSApplication does not retain its delegate. Keep the retained handle alive
     // until process exit so it outlives CEF initialization
     std::mem::forget(delegate);
+}
+
+/// Installs the standard App, Edit and Window menus when no menu exists.
+/// Existing menus are preserved.
+///
+/// Must run on the main thread after CEF initialization.
+pub fn install_default_menu() {
+    let mtm = MainThreadMarker::new().expect("install_default_menu must run on the main thread");
+    let app = NSApp(mtm);
+    if app.mainMenu().is_some_and(|menu| menu.numberOfItems() > 0) {
+        return;
+    }
+
+    let name = app_name();
+    let command = NSEventModifierFlags::Command;
+    let shift = command | NSEventModifierFlags::Shift;
+    let option = command | NSEventModifierFlags::Option;
+    let bar = NSMenu::new(mtm);
+
+    let app_menu = submenu(mtm, &bar, &name);
+    let about = format!("About {name}");
+    add_item(
+        &app_menu,
+        &about,
+        sel!(orderFrontStandardAboutPanel:),
+        "",
+        command,
+    );
+    app_menu.addItem(&NSMenuItem::separatorItem(mtm));
+    add_item(
+        &app_menu,
+        &format!("Hide {name}"),
+        sel!(hide:),
+        "h",
+        command,
+    );
+    add_item(
+        &app_menu,
+        "Hide Others",
+        sel!(hideOtherApplications:),
+        "h",
+        option,
+    );
+    add_item(
+        &app_menu,
+        "Show All",
+        sel!(unhideAllApplications:),
+        "",
+        command,
+    );
+    app_menu.addItem(&NSMenuItem::separatorItem(mtm));
+    add_item(
+        &app_menu,
+        &format!("Quit {name}"),
+        sel!(terminate:),
+        "q",
+        command,
+    );
+
+    let edit = submenu(mtm, &bar, "Edit");
+    add_item(&edit, "Undo", sel!(undo:), "z", command);
+    add_item(&edit, "Redo", sel!(redo:), "z", shift);
+    edit.addItem(&NSMenuItem::separatorItem(mtm));
+    add_item(&edit, "Cut", sel!(cut:), "x", command);
+    add_item(&edit, "Copy", sel!(copy:), "c", command);
+    add_item(&edit, "Paste", sel!(paste:), "v", command);
+    let match_style = option | NSEventModifierFlags::Shift;
+    add_item(
+        &edit,
+        "Paste and Match Style",
+        sel!(pasteAndMatchStyle:),
+        "v",
+        match_style,
+    );
+    add_item(&edit, "Delete", sel!(delete:), "", command);
+    add_item(&edit, "Select All", sel!(selectAll:), "a", command);
+
+    let window = submenu(mtm, &bar, "Window");
+    add_item(&window, "Minimize", sel!(performMiniaturize:), "m", command);
+    add_item(&window, "Zoom", sel!(performZoom:), "", command);
+    window.addItem(&NSMenuItem::separatorItem(mtm));
+    add_item(&window, "Close", sel!(performClose:), "w", command);
+    add_item(
+        &window,
+        "Bring All to Front",
+        sel!(arrangeInFront:),
+        "",
+        command,
+    );
+    // AppKit populates the Window menu with the application's windows
+    app.setWindowsMenu(Some(&window));
+
+    app.setMainMenu(Some(&bar));
+}
+
+/// Quits as the application menu's Quit does.
+/// Sends `terminate:` after the current event, allowing orderly
+/// shutdown to run outside the caller.
+pub fn quit() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        tracing::debug!("quit asked off the main thread; ignored");
+        return;
+    };
+    let app = NSApp(mtm);
+    // SAFETY: NSObject's `performSelector:withObject:afterDelay:` takes a
+    // selector, an object (nil) and an `NSTimeInterval` (f64); `terminate:`
+    // takes its one object argument
+    unsafe {
+        let _: () = msg_send![
+            &*app,
+            performSelector: sel!(terminate:),
+            withObject: None::<&AnyObject>,
+            afterDelay: 0.0f64
+        ];
+    }
+}
+
+/// Returns the application display name, falling back to the executable name,
+/// then to "Application" so no item reads "Quit " or "About ".
+fn app_name() -> String {
+    let localized = NSRunningApplication::currentApplication()
+        .localizedName()
+        .map(|name| name.to_string());
+    let stem = || {
+        std::env::current_exe().ok().and_then(|exe| {
+            exe.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+    };
+    menu_name(localized, stem)
+}
+
+/// The first non-empty of `localized` and `stem`, else "Application".
+fn menu_name(localized: Option<String>, stem: impl FnOnce() -> Option<String>) -> String {
+    localized
+        .filter(|name| !name.trim().is_empty())
+        .or_else(|| stem().filter(|name| !name.trim().is_empty()))
+        .unwrap_or_else(|| "Application".to_owned())
+}
+
+/// Adds a titled submenu to `bar`.
+fn submenu(mtm: MainThreadMarker, bar: &NSMenu, title: &str) -> Retained<NSMenu> {
+    let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str(title));
+    let holder = NSMenuItem::new(mtm);
+    holder.setSubmenu(Some(&menu));
+    bar.addItem(&holder);
+    menu
+}
+
+/// Adds an untargeted menu item with the given action and key equivalent.
+fn add_item(menu: &NSMenu, title: &str, action: Sel, key: &str, modifiers: NSEventModifierFlags) {
+    // SAFETY: Standard AppKit actions are dispatched through the responder chain.
+    let item = unsafe {
+        menu.addItemWithTitle_action_keyEquivalent(
+            &NSString::from_str(title),
+            Some(action),
+            &NSString::from_str(key),
+        )
+    };
+    item.setKeyEquivalentModifierMask(modifiers);
 }
 
 define_class! {
@@ -179,7 +312,7 @@ impl SimpleAppDelegate {
 mod application {
     use std::cell::Cell;
 
-    use cef::application_mac::{CefAppProtocol, CrAppControlProtocol, CrAppProtocol};
+    use tetsu::application_mac::{CefAppProtocol, CrAppControlProtocol, CrAppProtocol};
     use objc2::{
         DefinedClass, define_class, extern_methods, msg_send,
         runtime::{AnyObject, Bool},
@@ -256,5 +389,23 @@ mod application {
             #[unsafe(method(isHandlingSendEvent))]
             fn is_handling_send_event(&self) -> bool;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::menu_name;
+
+    #[test]
+    fn the_menu_names_the_application_never_nothing() {
+        let stem = |s: &str| {
+            let s = s.to_owned();
+            move || Some(s)
+        };
+        assert_eq!(menu_name(Some("Notes".into()), stem("notes")), "Notes");
+        assert_eq!(menu_name(None, stem("notes")), "notes");
+        assert_eq!(menu_name(Some("  ".into()), stem("notes")), "notes");
+        assert_eq!(menu_name(None, || None), "Application");
+        assert_eq!(menu_name(Some(String::new()), stem("")), "Application");
     }
 }

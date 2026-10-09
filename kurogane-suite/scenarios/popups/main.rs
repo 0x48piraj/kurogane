@@ -1,4 +1,5 @@
 fn main() {
+    kurogane_suite::logging();
     println!("Popups torture test starting...");
 
     kurogane::App::new("scenarios/popups/frontend")

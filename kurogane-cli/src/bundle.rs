@@ -9,16 +9,14 @@ use std::env::consts::EXE_SUFFIX;
 use std::ffi::OsString;
 use std::process::Command;
 use cargo_metadata::{MetadataCommand, Package, TargetKind};
-use kurogane_layout::{
-    AppMetadata, Executable, ResolvedDistribution, materialize_cef_runtime, resolve_cef_for_bundle,
-};
+use crate::distribution::{AppMetadata, Executable, ResolvedDistribution};
 use crate::config::{AppConfig, PackagingConfig, anchor_path};
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use crate::signing::SignConfig;
 
 use crate::launch::find_target;
 #[cfg(not(target_os = "macos"))]
-use kurogane_layout::package_directory;
+use crate::distribution::package_directory;
 #[cfg(target_os = "windows")]
 use crate::signing::{sign_tree, verify_tree};
 
@@ -139,7 +137,7 @@ impl PackageFormat {
 fn resolve_resources(
     project_root: &std::path::Path,
     configured: &[crate::config::ResourceConfig],
-) -> Result<Vec<kurogane_layout::ResolvedResource>> {
+) -> Result<Vec<crate::distribution::ResolvedResource>> {
     configured
         .iter()
         .map(|resource| {
@@ -249,24 +247,19 @@ fn build_executable(
     debug: bool,
     target_dir: &std::path::Path,
 ) -> Result<(Executable, String)> {
-    let profile: &[&str] = if debug {
-        &["--features", "kurogane/debug"]
-    } else {
-        &["--release"]
-    };
+    // Build the application in debug or release mode
+    let profile: &[&str] = if debug { &[] } else { &["--release"] };
 
     if crate::sandbox::uses_bootstrap(app) {
         // The bootstrap is CEF's; only the application's library is built
         let profile: Vec<OsString> = profile.iter().map(OsString::from).collect();
-        let library = crate::sandbox::build_library(cef, pkg, &profile)?;
+        let library = crate::sandbox::build_library(pkg, &profile)?;
         let exe_name = format!("{}{EXE_SUFFIX}", crate::sandbox::app_name(pkg)?);
 
         return Ok((crate::sandbox::bundled(cef, library)?, exe_name));
     }
 
-    let status = crate::launch::cargo_command(cef, "build")?
-        .args(profile)
-        .status()?;
+    let status = Command::new("cargo").arg("build").args(profile).status()?;
 
     if !status.success() {
         bail!("Build failed");
@@ -294,52 +287,43 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
     let packaging_config = PackagingConfig::load(metadata.workspace_root.as_std_path())?;
 
-    // Build frontend before cargo build
-    build_frontend(metadata.workspace_root.as_std_path(), &packaging_config.app)?;
-
-    tui::step("Resolving CEF runtime...");
-
-    let cef = resolve_cef_for_bundle(env!("KUROGANE_CEF_VERSION"))?;
-
-    match cef.source {
-        kurogane_layout::CefSource::ManagedCache => {
-            if let Some(p) = &cef.provenance {
-                tui::field("cef", format!("{} (managed)", p.cef_version));
-            }
-        }
-        kurogane_layout::CefSource::EnvironmentOverride => {
-            if let Some(p) = &cef.provenance {
-                tui::field("cef", format!("{} (CEF_PATH)", p.cef_version));
-            }
-        }
-    }
-
+    // What the bundle is built under and declares, checked before any build
     let pkg = metadata
         .root_package()
         .ok_or_else(|| anyhow::anyhow!("No root package"))?;
+    let app_name = packaging_config
+        .app
+        .name
+        .clone()
+        .unwrap_or_else(|| pkg.name.to_string());
+    crate::distribution::check_app_name(&app_name)
+        .with_context(|| format!("[app].name in {}", crate::config::CONFIG_FILE_NAME))?;
+    #[cfg(target_os = "macos")]
+    let macos = crate::macos_settings::MacosSettings::resolve(&packaging_config.macos)?;
+
+    // The CEF the project's application loads, installed when missing before
+    // anything is built
+    let cef_version = crate::install::cef_version_of(&metadata);
+    let cef = crate::install::ensure_cef_runtime(&cef_version)?;
+    let archive = crate::install::packaged_archive(&cef, &cef_version)?;
+    tui::field("cef", format!("{} ({})", archive.cef_version, cef.source()));
+
+    // Build frontend before cargo build
+    build_frontend(metadata.workspace_root.as_std_path(), &packaging_config.app)?;
 
     let profile = if debug { "debug" } else { "release" };
-    let kurogane_target = crate::launch::target_dir_in(metadata.target_directory.as_std_path());
-    let target_dir = kurogane_target.join(profile);
+    let target_dir = metadata.target_directory.as_std_path().join(profile);
 
     tui::step(&format!("Building {profile}..."));
 
     let (executable, exe_name) =
-        build_executable(&cef.root, pkg, &packaging_config.app, debug, &target_dir)?;
+        build_executable(cef.root(), pkg, &packaging_config.app, debug, &target_dir)?;
 
     // Resolve distribution contents
     tui::step("Resolving distribution...");
 
-    // Materialize the runnable runtime
-    let runtime_version = cef
-        .provenance
-        .as_ref()
-        .map(|p| p.cef_version.clone())
-        .unwrap_or_else(|| env!("KUROGANE_CEF_VERSION").to_string());
-
-    let runtime_dir = kurogane_target.join("cef-runtime").join(&runtime_version);
-
-    let cef_runtime = materialize_cef_runtime(&cef.root, &runtime_dir)?;
+    // The bundle copies the runtime's files straight from the distribution
+    let cef_runtime = cef.root().to_path_buf();
 
     // Configured paths are relative to the project root
     let project_root = metadata.workspace_root.as_std_path();
@@ -429,9 +413,14 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
         #[cfg(target_os = "macos")]
         PackageFormat::AppBundle => {
-            let app_dir = crate::app_bundle::build(&dist, &output_dir, sign_config.as_ref())?;
-            let name = dist.metadata.name.clone();
-            crate::dmg::build(&app_dir, &output_dir, &name)?;
+            let app_dir =
+                crate::app_bundle::build(&dist, &output_dir, &macos, sign_config.as_ref())?;
+            crate::dmg::build(
+                &app_dir,
+                &output_dir,
+                &dist.metadata.name,
+                sign_config.as_ref(),
+            )?;
             tui::field("output", tui::format_path(&app_dir));
         }
     }

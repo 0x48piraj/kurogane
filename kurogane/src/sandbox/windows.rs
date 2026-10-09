@@ -226,10 +226,10 @@ pub(super) fn preflight(_cef_root: &Path) -> Result<(), RuntimeError> {
 
 /// Returns the sandbox ABI tag `libcef.dll` was built with.
 ///
-/// The API version is fixed by the first `cef_api_hash` call, which the
-/// runtime makes before this one, so the argument here only has to match it.
+/// The API version is fixed by the first `cef_api_hash` call, which loading
+/// libcef makes before this one, so the argument here only has to match it.
 fn runtime_sandbox_hash() -> Option<&'static str> {
-    let hash = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, API_HASH_SANDBOX_COMPAT);
+    let hash = tetsu::api_hash(tetsu::sys::CEF_API_VERSION_LAST, API_HASH_SANDBOX_COMPAT);
 
     if hash.is_null() {
         return None;

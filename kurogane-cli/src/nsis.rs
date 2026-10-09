@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use kurogane_layout::{ResolvedDistribution, package_directory};
+use crate::distribution::{ResolvedDistribution, package_directory};
 use crate::config::PackagingConfig;
 use crate::signing::{SignConfig, sign_file, verify_signature};
 
@@ -447,7 +447,7 @@ mod tests {
     }
 
     fn test_distribution(dir: &Path) -> ResolvedDistribution {
-        kurogane_layout::test_fixtures::sample_distribution(dir)
+        crate::distribution::test_fixtures::sample_distribution(dir)
     }
 
     fn generated_nsi(dir: &Path) -> String {

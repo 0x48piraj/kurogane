@@ -6,74 +6,55 @@
 
 use anyhow::Result;
 use cargo_metadata::MetadataCommand;
-use kurogane_layout::{
-    CefSource, install_root, installed_cef_root, read_provenance, resolve_cef_for_bundle,
-    validate_cef_runtime,
-};
+use crate::install::{CefError, ProjectCef, cef_version_of, find_cef, packaged_archive};
 
 use crate::collector;
 use crate::tui;
 
 struct ToolCheck {
     name: &'static str,
-    cmd: &'static str,
+    found: bool,
     hint: &'static str,
 }
 
-/// The tools a CEF build needs on the running host.
+/// What a build needs on the running host, the linker rustc runs; nothing
+/// is compiled from C++.
 ///
-/// `cef-dll-sys` compiles `libcef_dll_wrapper` through CMake's Ninja generator
-/// on Windows and macOS. Its Linux branch only stages the runtime and emits
-/// link directives, so neither tool is involved there.
-///
-/// macOS needs both for Kurogane's own shared wrapper build as well,
-/// see [`crate::platform`].
+/// MSVC's linker is found as rustc and the `cc` crate find it, a developer
+/// prompt's `PATH` or else the newest Visual Studio installation, so no
+/// developer prompt is needed.
+#[cfg(windows)]
 fn required_tools() -> Vec<ToolCheck> {
-    if cfg!(windows) {
-        vec![
-            ToolCheck {
-                name: "MSVC",
-                cmd: "cl",
-                hint: "Install Visual Studio C++ build tools",
-            },
-            ToolCheck {
-                name: "CMake",
-                cmd: "cmake",
-                hint: "Install CMake",
-            },
-            ToolCheck {
-                name: "Ninja",
-                cmd: "ninja",
-                hint: "Install Ninja build system",
-            },
-        ]
-    } else if cfg!(target_os = "macos") {
-        vec![
-            ToolCheck {
-                name: "Xcode Command Line Tools (clang)",
-                cmd: "clang",
-                hint: "Install Command Line Tools: xcode-select --install",
-            },
-            ToolCheck {
-                name: "CMake",
-                cmd: "cmake",
-                hint: "Install CMake",
-            },
-            ToolCheck {
-                name: "Ninja",
-                cmd: "ninja",
-                hint: "Install Ninja build system",
-            },
-        ]
-    } else {
-        vec![ToolCheck {
-            name: "C compiler (cc)",
-            cmd: "cc",
-            hint: "Install build-essential or your distro's compiler toolchain",
-        }]
-    }
+    vec![ToolCheck {
+        name: "MSVC linker",
+        found: find_msvc_tools::find_tool(tetsu_download::DEFAULT_TARGET, "link.exe").is_some(),
+        hint: "Install Visual Studio Build Tools with the C++ workload",
+    }]
 }
 
+/// What a build needs on the running host, the linker rustc runs; nothing
+/// is compiled from C++.
+#[cfg(target_os = "macos")]
+fn required_tools() -> Vec<ToolCheck> {
+    vec![ToolCheck {
+        name: "Xcode Command Line Tools (clang)",
+        found: probe("clang"),
+        hint: "Install Command Line Tools: xcode-select --install",
+    }]
+}
+
+/// What a build needs on the running host, the linker rustc runs; nothing
+/// is compiled from C++.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn required_tools() -> Vec<ToolCheck> {
+    vec![ToolCheck {
+        name: "C compiler (cc)",
+        found: probe("cc"),
+        hint: "Install build-essential or your distro's compiler toolchain",
+    }]
+}
+
+#[cfg(unix)]
 fn probe(cmd: &str) -> bool {
     std::process::Command::new(cmd)
         .arg("--version")
@@ -94,46 +75,63 @@ pub fn run(json: bool) -> Result<()> {
     let mut warn = 0;
     let mut fail = 0;
 
-    // Check CEF installation
-    let version = env!("KUROGANE_CEF_VERSION");
+    // One read of the project, for its CEF version and its workspace
+    let metadata = MetadataCommand::new().exec();
 
-    // Managed installed runtime
-    match installed_cef_root(version) {
-        Some(root) => match validate_cef_runtime(&root) {
-            Ok(_) => {
-                tui::success("Managed Chromium runtime");
-                tui::field("version", version);
-                tui::field("path", tui::format_path(&root));
+    // The CEF the project's application loads, as run and bundle find it
+    let version = match &metadata {
+        Ok(metadata) => cef_version_of(metadata),
+        Err(_) => env!("KUROGANE_CEF_VERSION").to_owned(),
+    };
 
-                if let Ok(Some(p)) = read_provenance(&root) {
-                    tui::field("artifact", p.artifact);
-                }
-            }
+    tui::field("cef", &version);
 
-            Err(e) => {
-                tui::error("Managed Chromium runtime invalid");
-                tui::field("reason", e);
+    let found = find_cef(&version);
+    match &found {
+        Ok(ProjectCef::CefPath(root)) => {
+            tui::success("The application loads the runtime CEF_PATH names");
+            tui::field("path", tui::format_path(root));
+        }
 
-                fail += 1;
-            }
-        },
+        Ok(ProjectCef::Installed { root, archive }) => {
+            tui::success("The application loads the installed runtime");
+            tui::field("path", tui::format_path(root));
+            tui::field("artifact", &archive.name);
+        }
 
-        None => {
-            tui::error("Managed Chromium runtime not found");
-
-            tui::field("required", version);
-
-            tui::field("expected", tui::format_path(&install_root().join(version)));
-
+        Err(CefError::NotInstalled { path, .. }) => {
+            tui::error("Chromium runtime not installed");
+            tui::field("expected", tui::format_path(path));
             tui::info("Run: kurogane install");
+
+            fail += 1;
+        }
+
+        Err(e @ (CefError::NoInstallDir | CefError::UnsupportedHost(_))) => {
+            tui::error("No place to install Chromium");
+            tui::error_fields(e);
+
+            fail += 1;
+        }
+
+        Err(e) if e.concerns_cef_path() => {
+            tui::error("CEF_PATH names no usable Chromium runtime");
+            tui::error_fields(e);
+
+            fail += 1;
+        }
+
+        Err(e) => {
+            tui::error("Installed Chromium runtime invalid");
+            tui::error_fields(e);
 
             fail += 1;
         }
     }
 
-    let root = install_root();
-
-    if let Ok(entries) = std::fs::read_dir(&root) {
+    if let Some(root) = tetsu_download::cef_install_root()
+        && let Ok(entries) = std::fs::read_dir(&root)
+    {
         let versions: Vec<_> = entries
             .flatten()
             .filter(|e| e.path().is_dir())
@@ -143,7 +141,7 @@ pub fn run(json: bool) -> Result<()> {
         if !versions.is_empty() {
             tui::blank();
 
-            tui::info("Installed versions");
+            tui::info("Installed versions, shared by every tetsu project");
 
             for version in versions {
                 tui::field("cef", version);
@@ -153,45 +151,17 @@ pub fn run(json: bool) -> Result<()> {
 
     tui::blank();
 
-    tui::section("Runtime Resolution");
-
-    // What `kurogane dev`, `run` and `build` start the application with
-    let (dev, source) = crate::launch::dev_cef_root();
-    match validate_cef_runtime(&dev) {
-        Ok(_) => {
-            tui::success("dev, run and build use");
-            tui::field("path", tui::format_path(&dev));
-            tui::field("source", source);
-        }
-
-        Err(e) => {
-            tui::warn("dev, run and build find no usable runtime; they install one");
-            tui::field("path", tui::format_path(&dev));
-            tui::field("source", source);
-            tui::field("reason", e);
-
-            warn += 1;
-        }
-    }
-
-    tui::blank();
-
     // What `kurogane bundle` packages, with verified provenance
-    match resolve_cef_for_bundle(version) {
-        Ok(resolved) => {
+    let packaged = found.and_then(|cef| {
+        let archive = packaged_archive(&cef, &version)?;
+        Ok((cef, archive))
+    });
+    match packaged {
+        Ok((cef, archive)) => {
             tui::success("bundle packages");
-            tui::field("path", tui::format_path(&resolved.root));
-            tui::field(
-                "source",
-                match resolved.source {
-                    CefSource::EnvironmentOverride => "CEF_PATH",
-                    CefSource::ManagedCache => "managed install",
-                },
-            );
-
-            if let Some(p) = &resolved.provenance {
-                tui::field("provenance", p.artifact.clone());
-            }
+            tui::field("path", tui::format_path(cef.root()));
+            tui::field("source", cef.source());
+            tui::field("provenance", archive.name);
         }
 
         Err(e) => {
@@ -213,30 +183,16 @@ pub fn run(json: bool) -> Result<()> {
     let mut missing = Vec::new();
 
     for tool in tools {
-        if !probe(tool.cmd) {
+        if tool.found {
+            tui::success(tool.name);
+        } else {
             missing.push(tool);
             fail += 1;
-        } else {
-            tui::success(tool.name);
         }
     }
 
     if !missing.is_empty() {
-        // Grouped hints
-        if cfg!(windows) {
-            if std::env::var("VCINSTALLDIR").is_ok() {
-                tui::error("Missing Visual Studio components");
-                tui::field("hint", "Install C++ workload via Visual Studio Installer");
-            } else {
-                tui::error("Visual Studio environment unavailable");
-                tui::field(
-                    "hint",
-                    "Run inside Developer Command Prompt for Visual Studio",
-                );
-            }
-        } else {
-            tui::error("Build toolchain not found");
-        }
+        tui::error("Build toolchain not found");
 
         tui::blank();
 
@@ -251,7 +207,7 @@ pub fn run(json: bool) -> Result<()> {
     tui::section("Project");
 
     // Resolve workspace root
-    let workspace_root = match MetadataCommand::new().no_deps().exec() {
+    let workspace_root = match metadata {
         Ok(metadata) => {
             let root = metadata.workspace_root.into_std_path_buf();
             tui::success("Cargo workspace detected");

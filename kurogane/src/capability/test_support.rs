@@ -2,6 +2,26 @@
 
 use std::path::Path;
 
+/// A temporary directory whose path may be used in a request. Windows runners
+/// expose `TEMP` through an 8.3 alias (`C:\Users\RUNNER~1\..`), while requests
+/// reject 8.3-shaped path components. Use the canonical long-name spelling.
+pub(crate) fn tempdir() -> tempfile::TempDir {
+    #[cfg(unix)]
+    return tempfile::tempdir().unwrap();
+    #[cfg(windows)]
+    {
+        let canonical = std::env::temp_dir()
+            .canonicalize()
+            .expect("canonicalize the temp directory");
+        // canonicalize returns a verbatim path, which requests refuse too
+        let text = canonical.to_str().expect("the temp directory is Unicode");
+        let long = text
+            .strip_prefix(r"\\?\")
+            .expect("a canonical path is verbatim");
+        tempfile::tempdir_in(long).unwrap()
+    }
+}
+
 /// Creates a directory link at `link` pointing to `target`; a symlink on
 /// Unix, a junction on Windows (junctions need no privilege).
 pub(crate) fn link_dir(target: &Path, link: &Path) {

@@ -4,11 +4,11 @@
 //! Owns the per-subsystem handler maps and the ACL, which it applies once,
 //! here, before any subsystem sees a message.
 
-use cef::*;
+use tetsu::*;
 
 use crate::acl::{CommandAcl, Origin};
 use crate::browser_registry::BrowserId;
-use crate::debug;
+use tracing::debug;
 use crate::ipc::browser_state::{ErrorCode, FrameId, IpcContext, IpcError};
 use crate::ipc::envelope::*;
 use crate::ipc::request_response::RequestResponseSubsystem;
@@ -123,6 +123,12 @@ impl IpcRouter {
             stream,
             acl,
         }
+    }
+
+    /// The origin of the application's start page, which the ACL admits to
+    /// every name without a rule.
+    pub(crate) fn app_origin(&self) -> &Origin {
+        self.acl.app_origin()
     }
 
     /// Route a message received from the renderer (browser-side dispatch).
@@ -257,7 +263,7 @@ mod tests {
 
     /// `cmd` and the event `tick` only for `app://app`; everything else denied.
     fn strict_acl() -> CommandAcl {
-        let mut acl = CommandAcl::new();
+        let mut acl = CommandAcl::new(origin("app://app"));
         acl.allow("cmd", [origin("app://app")]).unwrap();
         acl.allow_event("tick", [origin("app://app")]).unwrap();
         acl.deny_unlisted();

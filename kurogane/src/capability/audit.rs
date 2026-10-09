@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::acl::{CommandAcl, Origin};
-use crate::capability::test_support::link_dir;
+use crate::capability::test_support::{link_dir, tempdir};
 use crate::capability::{Filesystem, FsAccess, FsError};
 
 /// Class-level messages for every capability denial. Each
@@ -40,7 +40,7 @@ fn assert_class_level(err: &FsError, request: &Path) {
 }
 
 fn notes_for(origin: &str) -> (tempfile::TempDir, PathBuf, Filesystem) {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempdir();
     let notes = tmp.path().join("notes");
     std::fs::create_dir_all(notes.join("secrets")).unwrap();
     std::fs::write(notes.join("secrets/foo.txt"), b"hidden").unwrap();
@@ -60,7 +60,7 @@ fn notes_for(origin: &str) -> (tempfile::TempDir, PathBuf, Filesystem) {
 #[test]
 fn acl_permission_never_implies_native_access() {
     let attacker = Origin::parse("https://attacker.example").unwrap();
-    let mut acl = CommandAcl::new();
+    let mut acl = CommandAcl::new(Origin::parse("app://notes").unwrap());
     acl.allow_all("ping").unwrap();
     acl.deny_unlisted();
     assert!(acl.allows("ping", &attacker));
@@ -75,7 +75,8 @@ fn acl_permission_never_implies_native_access() {
 #[test]
 fn acl_rejection_never_revokes_a_grant() {
     let granted = Origin::parse("app://notes").unwrap();
-    let mut acl = CommandAcl::new();
+    // The granted origin is the application's own, refused under deny_unlisted
+    let mut acl = CommandAcl::new(granted.clone());
     acl.deny_unlisted();
     assert!(!acl.allows("ping", &granted));
 

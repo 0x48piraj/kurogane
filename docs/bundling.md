@@ -89,9 +89,9 @@ flowchart TD
 The bundler resolves the CEF distribution with an override-first policy:
 
 1. **`CEF_PATH` override**: Accepted **only** when the directory contains an `archive.json` provenance file whose recorded version and platform match the build. An unverifiable or mismatched override is rejected rather than silently packaged. A set-but-broken `CEF_PATH` is a hard error, never a silent fallback.
-2. **Managed installation**: `~/.local/share/kurogane/cef/<version>/`, populated by `kurogane install`. Subjected to the same version/platform/provenance verification as overrides.
+2. **Installation**: `~/.local/share/tetsu/cef/<version>/cef_<os>_<arch>/`, tetsu's shared installation of the CEF version the application loads, populated by `kurogane install`. Subjected to the same version/platform/provenance verification as `CEF_PATH`.
 
-Chromium resolution prefers `CEF_PATH` when it is set, but an invalid override is an error rather than a fallback. Otherwise Kurogane uses the managed installation.
+Chromium resolution prefers `CEF_PATH` when it is set, but an invalid override is an error rather than a fallback. Otherwise Kurogane uses the installation.
 
 This decides only what is copied into the bundle: the bundled application then runs that copy and nothing else (see [Windows directory](#windows-directory---format-dir)).
 
@@ -107,7 +107,7 @@ flowchart TD
     A --> B{"CEF_PATH set?"}
 
     B -->|Yes| C["Inspect override"]
-    B -->|No| F["Check managed installation"]
+    B -->|No| F["Check the installation"]
 
     C --> D{"Provenance valid?"}
     D -->|No| E["Reject override"]
@@ -115,7 +115,7 @@ flowchart TD
     G -->|No| H["Reject override"]
     G -->|Yes| I["Verified CEF"]
 
-    F --> J{"Managed install available?"}
+    F --> J{"Installed?"}
     J -->|No| K["Fail"]
     J -->|Yes| L["Validate provenance"]
     L --> M{"Version + platform match?"}
@@ -135,7 +135,7 @@ flowchart TD
 
 ### Provenance
 
-`kurogane install` writes `archive.json` next to every managed installation:
+`kurogane install` writes `archive.json` into every installation:
 
 ```json
 {
@@ -154,24 +154,15 @@ An override passes verification when:
 
 | Error | Meaning | Fix |
 |-------|---------|-----|
-| `NotFound` | No managed install for the expected version and no `CEF_PATH` override | Run `kurogane install` |
-| `OverrideMissing` | `CEF_PATH` points to a nonexistent path | Correct the variable |
-| `UnverifiableOverride` | `CEF_PATH` has no `archive.json` | Use a managed install or an official distribution |
-| `UnverifiableManaged` | Managed installation has no `archive.json` | Re-run `kurogane install` |
+| `NotInstalled` | The expected version is not installed and `CEF_PATH` is not set | Run `kurogane install` |
+| `CefPathMissing` | `CEF_PATH` names no directory | Correct the variable |
+| `Unverifiable` | `CEF_PATH` or the installation has no `archive.json` | Point `CEF_PATH` at a distribution `export-cef-dir` wrote, or re-run `kurogane install` |
 | `VersionMismatch` | Resolved Chromium version differs from the build's Chromium | Install the matching version |
 | `PlatformMismatch` | Resolved Chromium was built for another platform | Install the matching platform archive |
 
-## Runtime materialization
+## Runtime files
 
-A resolved distribution is not copied into the bundle as-is. Kurogane first materializes a flat, runnable runtime into a per-version cache inside the Cargo target directory:
-
-```
-<target-dir>/kurogane/cef-runtime/<full-version>/
-```
-
-(e.g. `target/kurogane/cef-runtime/150.0.10+g8042e43/`). The cache is reused when it passes validation and rebuilt otherwise.
-
-Materialization accepts either distribution shape (raw official archives with `Release/` + `Resources/`, or already-flattened trees) and excludes, by construction:
+The bundle copies the runtime straight from the resolved distribution, which is laid out flat as tetsu writes it (libcef at its root), and leaves out, by construction:
 
 - **Development material**: `include/`, `cmake/`, `libcef_dll/`, `CMakeLists.txt`, `CREDITS.html`
 - **Download-cache residue**: `archive.json`, the original `*.tar.bz2` archive
@@ -311,7 +302,7 @@ dist/
 
 Windows places Chromium beside the executable because the Windows loader searches the executable directory for DLL dependencies automatically.
 
-The empty `kurogane-bundle` file marks the directory as a bundle, on every platform but macOS, where the `.app` itself does: a bundled application runs only the Chromium runtime inside its bundle, never `CEF_PATH` or the managed installation, and reports the bundle incomplete when that runtime is gone. Keep it beside the executable.
+The empty `kurogane-bundle` file marks the directory as a bundle, on every platform but macOS, where the `.app` itself does: a bundled application runs only the Chromium runtime inside its bundle, never `CEF_PATH` or the installation, and reports the bundle incomplete when that runtime is gone. Keep it beside the executable.
 
 > [!IMPORTANT]
 > **Keep the Chromium runtime dependencies together.** On Windows, Chromium's runtime DLLs must be discoverable by the Windows loader, typically by placing them alongside the application executable (or on `PATH`).
@@ -565,7 +556,7 @@ flowchart TD
 
 (The V8 snapshot filename varies across Chromium versions; either spelling satisfies the check.)
 
-Every format runs this check after materializing: [`package_directory()`](https://github.com/0x48piraj/kurogane/blob/2caa063cf8cd32352a57f5691417750b2bf3bc2d/kurogane-layout/src/package.rs#L21) refuses to emit a bundle with an incomplete runtime. A bundle that exists on disk has passed the gate. There is no "partial Chromium for testing" mode anymore.
+Every format runs this check after copying the runtime: [`package_directory()`](https://github.com/0x48piraj/kurogane/blob/2caa063cf8cd32352a57f5691417750b2bf3bc2d/kurogane-layout/src/package.rs#L21) refuses to emit a bundle with an incomplete runtime. A bundle that exists on disk has passed the gate. There is no "partial Chromium for testing" mode anymore.
 
 ## Frontend-less bundles
 
@@ -584,7 +575,7 @@ The bundle will not contain a `content/` directory and [`verify()`](https://gith
 
 ### No usable Chromium distribution
 
-No managed installation exists for the expected version. Run:
+The CEF version the application loads is not installed. Run:
 
 ```bash
 kurogane install
@@ -592,7 +583,7 @@ kurogane install
 
 `kurogane doctor` shows the expected version, the expected path and all installed versions.
 
-### "CEF_PATH override has no archive.json" / Unverifiable override
+### "has no archive.json provenance" / Unverifiable
 
 You pointed `CEF_PATH` at a directory without provenance (e.g. a manually extracted or self-built CEF tree). Release bundling requires traceable provenance.
 
@@ -600,7 +591,7 @@ Use `kurogane install`, or point `CEF_PATH` at an official distribution that inc
 
 ### "version mismatch" / "platform mismatch" on CEF_PATH
 
-The override exists but doesn't match the Chromium version this kurogane build links against, or was built for another platform. Check the expected values in the error message; `kurogane doctor` prints them too.
+`CEF_PATH` exists but doesn't match the Chromium version the application loads, or was built for another platform. Check the expected values in the error message; `kurogane doctor` prints them too.
 
 ### "missing required file: ..." during packaging
 

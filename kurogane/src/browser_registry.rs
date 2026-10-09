@@ -1,6 +1,12 @@
 use std::collections::HashMap;
-use cef::{Browser, ImplBrowser, RequestContext};
-use crate::debug;
+use tetsu::{Browser, DownloadItemCallback, ImplBrowser, RequestContext};
+use tracing::debug;
+use crate::acl::Origin;
+use crate::downloads::{Downloads, SavePrompt};
+use crate::context_menu::OpenMenu;
+use crate::ipc::FrameId;
+use crate::file_dialog::PendingFileDialogs;
+use crate::permissions::PendingPermissions;
 use crate::window::PendingPopups;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -40,17 +46,81 @@ pub struct BrowserMetadata {
     pub created_at: std::time::Instant,
 }
 
-pub(crate) struct BrowserState {
+pub(crate) struct BrowserEntry {
     pub browser: Browser,
     pub metadata: BrowserMetadata,
     #[allow(dead_code)]
     pub request_context: Option<RequestContext>,
     /// Popups this browser opened that are not shown yet; they go with it
     pub pending_popups: PendingPopups,
+    /// Origins let into this browser besides the application's own: by the
+    /// application's loads, by the popup it is, and by the navigation hook
+    /// (see [`crate::navigation`])
+    admitted: Vec<Origin>,
+    /// Popups this browser's page was allowed, by popup id, with the origin
+    /// each was opened to: the popup's own navigation there takes the entry
+    /// and lets that origin into the popup
+    popup_origins: Vec<(i32, Origin)>,
+    /// This browser's downloads Kurogane holds: asking the user, one Save
+    /// As dialog at a time, or refused; they go with the browser
+    pub downloads: Downloads<SavePrompt, DownloadItemCallback>,
+    /// This browser's permission requests waiting for the application's
+    /// answer (see [`crate::permissions`]); its close denies them
+    pub permissions: PendingPermissions,
+    /// This browser's file dialogs waiting for the application's answer
+    /// (see [`crate::file_dialog`]); its close cancels them
+    pub file_dialogs: PendingFileDialogs,
+    /// The last context menu this browser showed: what its items run
+    /// (see [`crate::context_menu`])
+    pub context_menu: Option<OpenMenu>,
+    /// The frames whose document's own origin is opaque (a sandboxed
+    /// document), as their renderer reports them
+    /// ([`crate::context_menu::opaque_document`])
+    pub opaque_documents: Vec<FrameId>,
+}
+
+impl BrowserEntry {
+    /// Whether `origin` was let into this browser. An opaque origin never is.
+    pub(crate) fn admits(&self, origin: &Origin) -> bool {
+        !origin.is_opaque() && self.admitted.contains(origin)
+    }
+
+    /// Lets `origin` into this browser; an opaque one is not let in.
+    pub(crate) fn admit(&mut self, origin: Origin) {
+        if !origin.is_opaque() && !self.admitted.contains(&origin) {
+            self.admitted.push(origin);
+        }
+    }
+
+    /// Records that the popup `popup_id`, which this browser's page asked
+    /// for, opens to `origin`.
+    pub(crate) fn opens_popup(&mut self, popup_id: i32, origin: Origin) {
+        self.popup_origins.push((popup_id, origin));
+    }
+
+    /// Forgets the popup `popup_id`, which CEF gave up on.
+    pub(crate) fn popup_aborted(&mut self, popup_id: i32) {
+        self.popup_origins.retain(|(id, _)| *id != popup_id);
+    }
+
+    /// Takes the entry of a popup opened to `origin`, if any.
+    pub(crate) fn take_popup_origin(&mut self, origin: &Origin) -> bool {
+        match self
+            .popup_origins
+            .iter()
+            .position(|(_, opened)| opened == origin)
+        {
+            Some(index) => {
+                self.popup_origins.remove(index);
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 pub(crate) struct BrowserRegistry {
-    browsers: HashMap<BrowserId, BrowserState>,
+    browsers: HashMap<BrowserId, BrowserEntry>,
     lookup: HashMap<i32, BrowserId>,
     next_id: u32,
 }
@@ -105,7 +175,7 @@ impl BrowserRegistry {
         let id = BrowserId(self.next_id);
         self.next_id += 1;
         let cef_id = browser.identifier();
-        let state = BrowserState {
+        let state = BrowserEntry {
             browser,
             metadata: BrowserMetadata {
                 id,
@@ -116,6 +186,13 @@ impl BrowserRegistry {
             },
             request_context,
             pending_popups: PendingPopups::default(),
+            admitted: Vec::new(),
+            popup_origins: Vec::new(),
+            downloads: Downloads::default(),
+            permissions: PendingPermissions::default(),
+            file_dialogs: PendingFileDialogs::default(),
+            context_menu: None,
+            opaque_documents: Vec::new(),
         };
         debug!(
             "[BrowserRegistry] registered browser {} (type={:?})",
@@ -159,11 +236,11 @@ impl BrowserRegistry {
         self.browsers.is_empty()
     }
 
-    pub fn get(&self, id: BrowserId) -> Option<&BrowserState> {
+    pub fn get(&self, id: BrowserId) -> Option<&BrowserEntry> {
         self.browsers.get(&id)
     }
 
-    pub fn get_mut(&mut self, id: BrowserId) -> Option<&mut BrowserState> {
+    pub fn get_mut(&mut self, id: BrowserId) -> Option<&mut BrowserEntry> {
         self.browsers.get_mut(&id)
     }
 
@@ -200,7 +277,7 @@ impl BrowserRegistry {
             .collect()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&BrowserId, &BrowserState)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&BrowserId, &BrowserEntry)> {
         self.browsers.iter()
     }
 }

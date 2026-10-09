@@ -12,6 +12,7 @@ impl StreamHandler for EchoStream {
 }
 
 fn main() {
+    kurogane_suite::logging();
     App::new("scenarios/stream-benchmark/frontend")
         .stream("echo", || EchoStream)
         .run_or_exit();

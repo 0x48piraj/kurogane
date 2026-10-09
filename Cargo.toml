@@ -2,13 +2,14 @@
 resolver = "3"
 members = [
     "kurogane",
+    "kurogane-build",
     "kurogane-cli",
     "kurogane-layout",
     "kurogane-suite"
 ]
 
 [workspace.package]
-version = "0.0.5"
+version = "0.0.6-alpha.2"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT"
@@ -18,9 +19,11 @@ authors = [
 repository = "https://github.com/0x48piraj/kurogane"
 
 [workspace.dependencies]
-cef = { git = "https://github.com/tauri-apps/cef-rs", rev = "c73f792f245d71ac1716448cdb7c165c8009e20c", default-features = false }
-download-cef = "2.3"
+tetsu = { git = "https://github.com/kurogane-rs/tetsu", tag = "v154.4.0+154.0.33", default-features = false }
+tetsu-download = { git = "https://github.com/kurogane-rs/tetsu", tag = "v154.4.0+154.0.33" }
+tetsu-build = { git = "https://github.com/kurogane-rs/tetsu", tag = "v154.4.0+154.0.33" }
 kurogane = { path = "kurogane" }
+kurogane-build = { path = "kurogane-build" }
 kurogane-cli = { path = "kurogane-cli" }
 kurogane-layout = { path = "kurogane-layout" }
 semver = "1"

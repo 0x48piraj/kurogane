@@ -3,6 +3,7 @@ use kurogane::IpcError;
 use serde_json::{Value, json};
 
 fn main() {
+    kurogane_suite::logging();
     App::new("scenarios/ipc/frontend")
         // Echo: returns exactly what was sent
         .command("echo", |payload: Value, _: &kurogane::AppHandle| {

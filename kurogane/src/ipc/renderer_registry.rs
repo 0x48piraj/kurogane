@@ -98,6 +98,12 @@ impl<C: ContextHandle, V: Clone> Registry<C, V> {
             .retain(|_, (owner, _)| !owner.context.same(context));
     }
 
+    /// Whether `context` was recorded as a document whose own origin is
+    /// opaque.
+    pub(crate) fn is_opaque(&self, context: &C) -> bool {
+        self.known(context).is_some_and(|known| known.opaque)
+    }
+
     /// Returns the envelope flags for `context`, treating unknown contexts as opaque.
     pub(crate) fn flags_for(&self, context: &C) -> u8 {
         match self.known(context) {

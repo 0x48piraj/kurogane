@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Links and new windows</title>
+    <meta charset="utf-8">
+    <style>
+      body { font-family: monospace; padding: 24px; background: #1e1e2e; color: #cdd6f4; }
+      h1 { font-size: 20px; margin: 0 0 16px; }
+      table { border-collapse: collapse; margin-bottom: 16px; }
+      td { padding: 6px 12px 6px 0; vertical-align: top; }
+      td:last-child { color: #a6adc8; }
+      a { color: #89b4fa; }
+      button { padding: 6px 12px; font: inherit; cursor: pointer; background: #45475a; color: #cdd6f4; border: none; border-radius: 6px; }
+      pre { background: #11111b; padding: 12px; border-radius: 8px; min-height: 80px; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>Links and new windows</h1>
+    <table>
+      <tr><td><a href="page.html" target="_blank">this application's page, target=_blank</a></td>
+          <td>an application window</td></tr>
+      <tr><td><button onclick="blank()">window.open(), filled in by this page</button></td>
+          <td>an application window</td></tr>
+      <tr><td><a href="https://example.com/" target="_blank">example.com, target=_blank</a></td>
+          <td>your browser</td></tr>
+      <tr><td><button onclick="open_('https://example.com/')">window.open example.com</button></td>
+          <td>your browser</td></tr>
+      <tr><td><button onclick="later('https://example.com/')">window.open example.com in 6 s, no click by then</button></td>
+          <td>nothing: a script alone opens no browser</td></tr>
+      <tr><td><a href="https://example.org/" target="_blank">example.org, target=_blank</a></td>
+          <td>an application window: the hook allows example.org</td></tr>
+      <tr><td><a href="mailto:someone@example.com" target="_blank">mailto:, target=_blank</a></td>
+          <td>nothing</td></tr>
+      <tr><td><a href="https://example.com/">example.com, a plain link: click it, Ctrl+click it (Cmd+click on macOS), middle-click it</a></td>
+          <td>your browser, this window stays here</td></tr>
+      <tr><td><a href="page.html">this application's page, a plain link</a></td>
+          <td>this window goes there</td></tr>
+    </table>
+    <pre id="output"></pre>
+    <script>
+      const output = document.getElementById('output');
+      const log = message => { output.textContent += message + '\n'; };
+
+      function open_(url) {
+        const w = window.open(url);
+        log(`window.open(${url}) returned ${w ? 'a window' : 'null'}`);
+      }
+
+      function later(url) {
+        log(`window.open(${url}) in 6 s...`);
+        setTimeout(() => open_(url), 6000);
+      }
+
+      function blank() {
+        const w = window.open('', '_blank', 'width=420,height=200');
+        if (w) {
+          w.document.write('<title>filled in</title><p>This page wrote this window.</p>');
+          w.document.close();
+        }
+        log(`window.open() returned ${w ? 'a window' : 'null'}`);
+      }
+    </script>
+  </body>
+</html>

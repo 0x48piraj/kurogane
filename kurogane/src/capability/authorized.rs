@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::acl::Origin;
 use crate::capability::error::{Denial, FsConfigError, FsError};
 use crate::capability::fold::Rules;
-use crate::capability::path::{parse_request, Key, Location, Name, RelPath, Request};
+use crate::capability::path::{parse_request, NameKey, Location, Name, RelPath, Request};
 use crate::capability::policy::FsAccess;
 use crate::capability::safe::{self, Create, Dir, DirEntry, EntryKind};
 use crate::capability::scope::{Residual, Root, Scope, ScopeBuilder};
@@ -459,7 +459,7 @@ impl<'a> AuthorizedFs<'a> {
         let dir = target.root.safe().open_dir(&target.rel)?;
         let here = self.locate(target.root, &safe::location(dir.as_file())?)?;
         let mut visible = dir.entries()?;
-        visible.retain(|entry| !self.denied(&here.join([&Key::of(entry.name())])));
+        visible.retain(|entry| !self.denied(&here.join([&NameKey::of(entry.name())])));
         Ok(visible)
     }
 
@@ -732,7 +732,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    use crate::capability::test_support::{link_dir, link_file};
+    use crate::capability::test_support::{link_dir, link_file, tempdir};
 
     fn origin() -> Origin {
         Origin::parse("app://notes").unwrap()
@@ -741,7 +741,7 @@ mod tests {
     /// `notes/{note.txt, ok.txt, secrets/secret.txt}`, recursive allow of
     /// `notes`, `notes/secrets` denied.
     fn fixture(access: FsAccess) -> (tempfile::TempDir, PathBuf, Filesystem) {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempdir();
         let notes = tmp.path().join("notes");
         std::fs::create_dir_all(notes.join("secrets")).unwrap();
         std::fs::write(notes.join("secrets/secret.txt"), b"top secret").unwrap();
@@ -809,7 +809,7 @@ mod tests {
     fn paths_outside_every_root_are_denied() {
         let (_tmp, notes, fs) = fixture(FsAccess::ALL);
         let auth = fs.authorize(&origin()).unwrap();
-        let outside = tempfile::tempdir().unwrap();
+        let outside = tempdir();
         std::fs::write(outside.path().join("o.txt"), b"o").unwrap();
         assert_eq!(
             denial(auth.read_file(&outside.path().join("o.txt"))),
@@ -1012,7 +1012,7 @@ mod tests {
 
     #[test]
     fn files_over_the_transfer_limit_are_refused() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempdir();
         std::fs::write(tmp.path().join("five.txt"), b"hello").unwrap();
         std::fs::write(tmp.path().join("four.txt"), b"four").unwrap();
         let mut builder = Filesystem::builder();
@@ -1132,7 +1132,7 @@ mod tests {
             Denial::DenyRule
         );
 
-        let other = tempfile::tempdir().unwrap();
+        let other = tempdir();
         let mut builder = Filesystem::builder();
         let a = builder.scope("a", |s| {
             s.allow_directory_recursive(&notes);
@@ -1154,7 +1154,7 @@ mod tests {
 
     #[test]
     fn grants_combine_but_deny_wins_across_them() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempdir();
         let data = tmp.path().join("data");
         std::fs::create_dir_all(data.join("private")).unwrap();
         std::fs::write(data.join("private/p.txt"), b"p").unwrap();
@@ -1192,7 +1192,7 @@ mod tests {
 
     #[test]
     fn renaming_a_directory_that_encloses_a_deny_is_refused() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempdir();
         let root = tmp.path().join("root");
         std::fs::create_dir_all(root.join("vault/inner")).unwrap();
         std::fs::write(root.join("vault/inner/secret.txt"), b"top secret").unwrap();
@@ -1231,7 +1231,7 @@ mod tests {
 
     #[test]
     fn renaming_a_directory_cannot_escape_a_glob_deny() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempdir();
         let root = tmp.path().join("root");
         std::fs::create_dir_all(root.join("vault")).unwrap();
         std::fs::create_dir_all(root.join("p/secrets")).unwrap();
@@ -1267,7 +1267,7 @@ mod tests {
 
     #[test]
     fn renames_cannot_gain_access() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempdir();
         let (x, y) = (tmp.path().join("x"), tmp.path().join("y"));
         std::fs::create_dir_all(x.join("d/deep")).unwrap();
         std::fs::create_dir(&y).unwrap();
@@ -1352,7 +1352,7 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn case_and_normalization_variants_hit_deny_rules() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempdir();
         let root = tmp.path().join("root");
         std::fs::create_dir_all(root.join("Secrets")).unwrap();
         std::fs::write(root.join("Secrets/key.txt"), b"k").unwrap();
@@ -1420,7 +1420,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_short_names_cannot_alias_denied_files() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempdir();
         let data = tmp.path().join("data");
         std::fs::create_dir(&data).unwrap();
         let long = data.join("settings-file.json");

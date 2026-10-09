@@ -3,23 +3,18 @@
 //! Adds the Kurogane Rust shell and project configuration to an existing
 //! frontend project without modifying its existing files.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::template;
+use crate::template::{self, Answers};
 use crate::tui;
 
 /// Template repository providing the Rust shell for existing projects.
 pub const SHELL_TEMPLATE_REPO: &str = "https://github.com/kurogane-rs/kurogane-shell";
 
 /// Files owned by the Kurogane integration.
-const SHELL_FILES: &[&str] = &[
-    "Cargo.toml",
-    "src/main.rs",
-    "kurogane.toml",
-    ".cargo/config.toml",
-];
+const SHELL_FILES: &[&str] = &["Cargo.toml", "src/main.rs", "kurogane.toml"];
 
 pub fn run(
     assets: Option<PathBuf>,
@@ -32,7 +27,7 @@ pub fn run(
 
 pub(crate) fn initialize(
     dir: &Path,
-    shell_source: &str,
+    shell: &str,
     consent: template::Consent,
     assets: Option<PathBuf>,
     dev_url: Option<String>,
@@ -106,12 +101,11 @@ pub(crate) fn initialize(
 
     tui::step("Integrating Kurogane");
     tui::field("project", &name);
-    let source = template::resolve(shell_source);
-    let template_dir = template::acquire(&source)?;
-    template::confirm_hooks(&template_dir, consent)?;
-
-    template::generate_into_existing_dir(&template_dir, &name, dir, &defines, consent)?;
-    template::write_cargo_config(dir)?;
+    let answers = Answers {
+        defines,
+        values: None,
+    };
+    template::generate_into_existing_dir(shell, &name, dir, &answers, consent)?;
 
     tui::success("Kurogane added");
     tui::blank();

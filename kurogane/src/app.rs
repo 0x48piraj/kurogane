@@ -3,12 +3,13 @@
 //! This is the public developer entrypoint built on top of Runtime.
 //! This helps in the abstraction of asset resolution, environment overrides and command registration.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::sync::Arc;
 use serde_json::Value;
 use std::collections::HashMap;
-use cef::*;
+use tetsu::*;
 use crate::app::resolver::ResolvedFrontend;
 use crate::ipc::{
     IpcRouter, RequestResponseSubsystem, EventSubsystem, StreamSubsystem, StreamFactory, Responder,
@@ -23,6 +24,20 @@ use crate::credentials::CredentialStorage;
 use crate::gpu::GpuMode;
 use crate::capability::{FilesystemBuilder, FsConfigError};
 use crate::acl::Origin;
+use crate::chrome_commands::{ChromeCommandRequest, CommandDecision};
+use crate::context_menu::{ContextMenu, ContextMenuCommand};
+use crate::downloads::{DownloadDecision, DownloadRequest};
+use crate::drag::{DragDecision, DragEnter};
+use crate::file_dialog::{FileDialogDecision, FileDialogRequest};
+use crate::permissions::{PermissionDecision, PermissionRequest};
+use crate::hooks::Hooks;
+use crate::keys::{KeyDecision, KeyPress};
+use crate::navigation::{NavigationDecision, NavigationRequest};
+use crate::new_window::{NewWindowDecision, NewWindowRequest};
+use crate::page_events::{FullscreenChange, TitleChange};
+use crate::window::WindowIdentity;
+use crate::window_closing::WindowClosing;
+use crate::window_options::WindowOptions;
 
 mod resolver;
 
@@ -254,7 +269,10 @@ pub struct App {
 
     acl: crate::acl::CommandAcl,
 
+    start_window: Option<WindowOptions>,
+    window_identity: WindowIdentity,
     profile_id: Option<String>,
+    profile_dir: Option<PathBuf>,
     sandbox_mode: SandboxMode,
     persist_session_cookies: bool,
     gpu_mode: GpuMode,
@@ -262,6 +280,7 @@ pub struct App {
     chromium_flags: Vec<ChromiumFlag>,
     scheduler: Option<PumpScheduler>,
     on_second_instance: Option<SecondInstanceHandler>,
+    hooks: Hooks,
     delegates: Vec<Arc<dyn ClientAppBrowserDelegate>>,
     renderer_delegates: Vec<Arc<dyn ClientAppRendererDelegate>>,
     scheme_handlers: Vec<CustomScheme>,
@@ -285,14 +304,18 @@ impl App {
     }
 
     fn with_source(source: Source) -> Self {
+        let acl = crate::acl::CommandAcl::new(resolver::app_origin(&source));
         Self {
             source,
             sync_handlers: HashMap::new(),
             async_handlers: HashMap::new(),
             stream_handlers: HashMap::new(),
-            acl: crate::acl::CommandAcl::new(),
+            acl,
 
+            start_window: None,
+            window_identity: WindowIdentity::default(),
             profile_id: None,
+            profile_dir: None,
             sandbox_mode: SandboxMode::default(),
             persist_session_cookies: true,
             gpu_mode: GpuMode::Auto,
@@ -300,6 +323,7 @@ impl App {
             chromium_flags: Vec::new(),
             scheduler: None,
             on_second_instance: None,
+            hooks: Hooks::default(),
             delegates: Vec::new(),
             renderer_delegates: Vec::new(),
             scheme_handlers: Vec::new(),
@@ -337,12 +361,18 @@ impl App {
     ///
     /// An origin is `scheme://host[:port]`, as `location.origin` reports it
     /// (`app://app` for the bundled frontend, or the development server's origin);
-    /// parse one with [`Origin::parse`]. Calls for the same name accumulate.
+    /// parse one with [`Origin::parse`]. Calls for the same name accumulate and
+    /// the list replaces the default below, name the application's own origin
+    /// too if its pages call `name`.
     ///
-    /// Until the first `permit`, `permit_all` or `deny_unlisted`, everything is
-    /// reachable from every origin, exactly as before. A refused invocation is
-    /// rejected with [`ErrorCode::Acl`](crate::ErrorCode::Acl); a refused stream
-    /// open fails the stream.
+    /// A name without a rule is reachable from the application's own origin
+    /// only: `app://app` for [`App::new`], the start URL's origin for
+    /// [`App::url`]. A page of any other origin, whether it arrived in a popup,
+    /// an iframe or a window navigated away, reaches only the names a rule gives
+    /// it. An opaque document (`about:blank`, `data:`, a sandboxed frame)
+    /// reaches only names made public with [`App::permit_all`]. A refused
+    /// invocation is rejected with [`ErrorCode::Acl`](crate::ErrorCode::Acl); a
+    /// refused stream open fails the stream.
     ///
     /// Naming a capability command such as `fs.read_file` (granted through
     /// [`Filesystem`](crate::capability::Filesystem)) or the opaque origin is
@@ -358,7 +388,8 @@ impl App {
         self
     }
 
-    /// Makes the command or stream `name` callable from any origin.
+    /// Makes the command or stream `name` callable from any origin, the
+    /// opaque origin included.
     ///
     /// Naming a capability command is a configuration error, reported by
     /// [`App::build`].
@@ -370,7 +401,9 @@ impl App {
     }
 
     /// Restricts subscriptions to the event `name` to the given origins.
-    /// Calls for the same event accumulate.
+    /// Calls for the same event accumulate. Without a rule, an event is
+    /// subscribable from the application's own origin only, as a command is
+    /// (see [`App::permit`]).
     ///
     /// A refused subscription is removed and reported to the `onError` of
     /// `kurogane.on(name, callback, onError)` with code `-4`. Naming the
@@ -386,14 +419,16 @@ impl App {
         self
     }
 
-    /// Makes the event `name` subscribable from any origin.
+    /// Makes the event `name` subscribable from any origin, the opaque origin
+    /// included.
     pub fn permit_event_all(mut self, name: impl Into<String>) -> Self {
         self.acl.allow_event_all(name);
         self
     }
 
-    /// Switches to deny-by-default. Only commands, streams and events with a
-    /// configured rule ([`App::permit`], [`App::permit_all`],
+    /// Switches to deny-by-default: a name without a rule is refused to every
+    /// origin, the application's own included. Only commands, streams and
+    /// events with a configured rule ([`App::permit`], [`App::permit_all`],
     /// [`App::permit_event`], [`App::permit_event_all`]) stay reachable, only
     /// from their permitted origins. Capability commands stay authorized by
     /// their grants.
@@ -699,14 +734,117 @@ impl App {
         self
     }
 
+    /// How the start window opens: the name the application knows it by,
+    /// its title, size and place, the size it cannot be made smaller than,
+    /// and its state (see [`WindowOptions`]).
+    ///
+    /// Without it the start window takes its page's title, 800 by 600
+    /// centred on the primary display. An application started
+    /// with [`App::start_embedded`] has no start window, and options given
+    /// to it are [`ConfigError::WindowWhenEmbedded`]; options no window can
+    /// have are [`ConfigError::InvalidWindowOptions`]. A later call replaces
+    /// an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, WindowOptions, WindowState};
+    /// App::new("dist")
+    ///     .window(WindowOptions::new().title("Notes").size(1100, 720).state(WindowState::Maximized))
+    ///     .run_or_exit();
+    /// ```
+    pub fn window(mut self, options: WindowOptions) -> Self {
+        self.start_window = Some(options);
+        self
+    }
+
+    /// The class of every window Kurogane opens on Linux: WM_CLASS under
+    /// X11, the app_id under Wayland. The desktop and the window manager
+    /// tell an application's windows by it: a launcher's icon attaches to
+    /// them when its desktop entry names the class (`StartupWMClass` under
+    /// X11; under Wayland the entry's file name is the app_id), and the
+    /// compositor's rules for the application match it. `kurogane bundle`
+    /// writes `[app].identifier` from `kurogane.toml` as the AppImage's
+    /// `StartupWMClass`, or the executable's name without one. Give this the
+    /// same identifier.
+    ///
+    /// It names the start window, [`AppInstance::create_window`]'s windows,
+    /// popups and DevTools alike; not a browser embedded in the
+    /// application's own window, whose window is the application's. Without
+    /// it the class is the executable's file name. Other platforms have no
+    /// window class and ignore it. An empty class, or one with a control character, is
+    /// [`ConfigError::InvalidWindowClass`]. A later call replaces an earlier
+    /// one.
+    ///
+    /// ```no_run
+    /// # use kurogane::App;
+    /// App::new("dist").window_class("com.example.notes").run_or_exit();
+    /// ```
+    pub fn window_class(mut self, class: impl Into<String>) -> Self {
+        self.window_identity.class = Some(class.into());
+        self
+    }
+
+    /// The icon of every window Kurogane opens, a PNG.
+    ///
+    /// On Windows it is the window's icon in its title bar, the taskbar and
+    /// the window switcher; under X11 the icon the window manager shows.
+    /// A square image of 256 by 256 is plenty: the system scales it to each
+    /// place. Under Wayland the desktop takes a window's icon from the
+    /// desktop entry its class names ([`App::window_class`]), and on macOS
+    /// windows have none: the Dock shows the application's own icon.
+    ///
+    /// It is the icon of the start window,
+    /// [`AppInstance::create_window`]'s windows, popups and DevTools alike;
+    /// not of a browser embedded in the application's own window. Without
+    /// it the windows keep the system's default. Bytes that are not a PNG
+    /// are [`ConfigError::InvalidWindowIcon`]. A later call replaces an
+    /// earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::App;
+    /// let icon = std::fs::read("icon.png").expect("the icon");
+    /// App::new("dist").window_icon(icon).run_or_exit();
+    /// ```
+    pub fn window_icon(mut self, png: impl Into<Cow<'static, [u8]>>) -> Self {
+        self.window_identity.icon = Some(png.into());
+        self
+    }
+
     /// Names the application's profile: its cookies, storage and caches.
     ///
     /// Defaults to the executable's name. CEF runs one instance per profile:
     /// launching the application while it runs brings the running instance to
     /// the front (see [`App::on_second_instance`]). Debug builds use a profile
     /// of their own, named with a `-dev` suffix.
+    ///
+    /// Profiles live in `kurogane/profiles` in the local data directory;
+    /// `~/.local/share` on Linux, `~/Library/Application Support` on macOS,
+    /// `%LOCALAPPDATA%` on Windows. [`App::profile_dir`] puts the profile
+    /// somewhere else.
     pub fn profile_id(mut self, id: impl Into<String>) -> Self {
         self.profile_id = Some(id.into());
+        self
+    }
+
+    /// Keeps the application's profile in `dir`, an absolute path, instead
+    /// of Kurogane's place for it ([`App::profile_id`]).
+    ///
+    /// The directory is created when missing and used as given, in debug
+    /// builds too: a development run then shares it and, as CEF runs one
+    /// instance per profile, hands its launch to the application already
+    /// running there. A relative path is
+    /// [`ConfigError::InvalidProfileDir`](crate::ConfigError::InvalidProfileDir),
+    /// as is a directory given together with [`App::profile_id`], which
+    /// would then name nothing. A later call replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::App;
+    /// // A portable application keeps its profile next to its executable
+    /// let exe = std::env::current_exe().expect("the executable's path");
+    /// let profile = exe.parent().expect("a folder").join("profile");
+    /// App::new("dist").profile_dir(profile).run_or_exit();
+    /// ```
+    pub fn profile_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.profile_dir = Some(dir.into());
         self
     }
 
@@ -728,6 +866,531 @@ impl App {
         F: Fn(&SecondInstance, &AppHandle) + Send + Sync + 'static,
     {
         self.on_second_instance = Some(Arc::new(f));
+        self
+    }
+
+    /// Decides what happens when a page asks for a window of its own:
+    /// `window.open`, a `target=_blank` link, a form that targets a new
+    /// window, a link clicked with Ctrl (Cmd on macOS), the middle button or
+    /// Shift. An allowed modifier click opens in a new application window,
+    /// never in Chromium's tabbed browser window.
+    ///
+    /// Without a hook, or when it answers [`NewWindowDecision::Default`],
+    /// Kurogane decides: a page of the application's own origin opens in an
+    /// application window, an `http` or `https` link the user clicked opens
+    /// in the system's default browser, and anything else is refused. That
+    /// keeps a website the application never chose out of its windows, and
+    /// a script alone never starts another program.
+    ///
+    /// The hook can widen that, for example
+    /// [`NewWindowDecision::Allow`] for a sign-in page that has to run
+    /// inside the application, or narrow it, with
+    /// [`NewWindowDecision::Deny`] or [`NewWindowDecision::OpenExternal`].
+    /// [`NewWindowDecision::OpenExternal`] opens only an `http` or `https`
+    /// link the user clicked and refuses anything else. Compare origins, not
+    /// strings: `https://trusted.example.evil.net` starts with
+    /// `https://trusted.example`.
+    ///
+    /// Runs on the UI thread, before the window exists, so it must not
+    /// block. A hook that panics refuses the window. A later call replaces an
+    /// earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, NewWindowDecision, Origin};
+    /// let sign_in = Origin::parse("https://accounts.example.com").unwrap();
+    /// App::new("./dist")
+    ///     .on_new_window(move |request, _| {
+    ///         if request.origin() == &sign_in {
+    ///             NewWindowDecision::Allow
+    ///         } else {
+    ///             NewWindowDecision::Default
+    ///         }
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_new_window<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&NewWindowRequest, &AppHandle) -> NewWindowDecision + Send + Sync + 'static,
+    {
+        self.hooks.new_window = Some(Box::new(f));
+        self
+    }
+
+    /// Decides where a page may take the window it is in: a link, a
+    /// `location` assignment, a form, and every redirect on the way.
+    ///
+    /// A window shows only what was let into it: the application's own
+    /// origin, the origins the application loaded there itself (the start
+    /// page, [`AppInstance::create_window`](crate::AppInstance::create_window),
+    /// [`BrowserHandle::navigate`](crate::BrowserHandle::navigate), and the
+    /// redirects they lead to), the origin
+    /// [`on_new_window`](App::on_new_window) opened a popup to, and the
+    /// origins this hook allowed into it before. Without a hook, or when it
+    /// answers [`NavigationDecision::Default`], a navigation to one of those
+    /// proceeds; to any other origin, an `http` or `https` link the user
+    /// clicked opens in the system's default browser and anything else is
+    /// refused, the window staying on its page. The application's own loads,
+    /// going back and forward, and frames inside a page never reach the
+    /// hook.
+    ///
+    /// [`NavigationDecision::Allow`] loads the page and lets its origin into
+    /// that window from then on, for example a sign-in provider the page
+    /// sends the user to. [`NavigationDecision::Deny`] and
+    /// [`NavigationDecision::OpenExternal`] narrow Kurogane's answer.
+    /// Compare origins, not strings.
+    ///
+    /// Runs on the UI thread before the navigation starts, so it must not
+    /// block. A hook that panics refuses the navigation. A later call
+    /// replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, NavigationDecision, Origin};
+    /// let sign_in = Origin::parse("https://accounts.example.com").unwrap();
+    /// App::url("https://app.example.com")
+    ///     .on_navigation(move |navigation, _| {
+    ///         if navigation.origin() == &sign_in {
+    ///             NavigationDecision::Allow
+    ///         } else {
+    ///             NavigationDecision::Default
+    ///         }
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_navigation<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&NavigationRequest, &AppHandle) -> NavigationDecision + Send + Sync + 'static,
+    {
+        self.hooks.navigation = Some(Box::new(f));
+        self
+    }
+
+    /// Sees each key the user presses in a window of the application's
+    /// before the page and Chromium's own shortcuts do, and decides where it
+    /// goes.
+    ///
+    /// The hook is asked about key presses only (the key going down, and
+    /// its repeats while held), never about the release or the character
+    /// it types. [`KeyDecision::Default`] lets the key go on in Chromium's
+    /// own order: the shortcuts Chromium reserves (opening, closing and
+    /// switching tabs and windows, such as Ctrl+T and Ctrl+W) take it before
+    /// the page sees it, every other shortcut only after the page, if the
+    /// page does not prevent the key's default. [`KeyDecision::Consume`]
+    /// takes the key from everyone else: Chromium's shortcuts do not run
+    /// (Ctrl+W does not close the window, Ctrl+R does not reload) and the
+    /// page sees neither the key, its character nor its release.
+    /// [`KeyDecision::PageFirst`] gives the page the key first even for a
+    /// reserved shortcut, which then runs only if the page lets it through;
+    /// it is for shortcuts, and lets the page keep one from running (see
+    /// its documentation). Compare keys with
+    /// [`Modifiers::primary`](crate::Modifiers::primary) to match Ctrl on
+    /// Windows and Linux and Cmd on macOS in one test, and mind
+    /// [`KeyPress::in_editable_field`](crate::KeyPress::in_editable_field)
+    /// so as not to take keys the user is typing.
+    ///
+    /// Runs on the UI thread for every key press, so it must be quick. A
+    /// hook that panics lets the key through. DevTools' windows are not
+    /// asked about. A later call replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, Key, KeyDecision};
+    /// App::new("./dist")
+    ///     .on_key(|key, _| {
+    ///         // Ctrl+W, Cmd+W on macOS, does not close the window
+    ///         if key.key() == Key::Char('W') && key.modifiers().primary() {
+    ///             KeyDecision::Consume
+    ///         } else {
+    ///             KeyDecision::Default
+    ///         }
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_key<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&KeyPress, &AppHandle) -> KeyDecision + Send + Sync + 'static,
+    {
+        self.hooks.key = Some(Box::new(f));
+        self
+    }
+
+    /// Decides whether one of Chromium's commands runs: one of the page-local
+    /// commands Kurogane lets run, from a key shortcut or the context menu
+    /// (reload, find, print, zoom, editing, closing the window, DevTools).
+    ///
+    /// Kurogane refuses every other command first (new windows, new tabs,
+    /// history, bookmarks: Chromium's browser UI), and the hook is never
+    /// asked about those: it can refuse a command, never allow one.
+    /// [`ChromeCommand`](crate::ChromeCommand) folds Chromium's commands by
+    /// what the user asked for, so refusing
+    /// [`ChromeCommand::DevTools`](crate::ChromeCommand::DevTools) refuses
+    /// the shortcuts and the context menu's Inspect alike. A key the
+    /// [`on_key`](App::on_key) hook consumed never becomes a command.
+    ///
+    /// Runs on the UI thread. A hook that panics refuses the command.
+    /// DevTools' own commands are not asked about. A later call replaces an
+    /// earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, ChromeCommand, CommandDecision};
+    /// App::new("./dist")
+    ///     .on_chrome_command(|request, _| match request.command() {
+    ///         // No DevTools and no reload in the shipped application
+    ///         ChromeCommand::DevTools | ChromeCommand::Reload => CommandDecision::Refuse,
+    ///         _ => CommandDecision::Default,
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_chrome_command<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&ChromeCommandRequest, &AppHandle) -> CommandDecision + Send + Sync + 'static,
+    {
+        self.hooks.chrome_command = Some(Box::new(f));
+        self
+    }
+
+    /// Decides where a file a page downloads is saved: a link the server
+    /// answers with an attachment, a link with a `download` attribute, a
+    /// `blob:` or `data:` export.
+    ///
+    /// Without a hook, or when it answers [`DownloadDecision::Default`], the
+    /// user is asked with the system's Save As dialog, the suggested name
+    /// filled in, and nothing is saved if they cancel: no page writes to
+    /// the disk unless the user picked the place. A window shows one
+    /// dialog at a time. Chromium's own behaviour, saving silently into the
+    /// Downloads folder with nothing on screen, is never used.
+    /// [`DownloadDecision::SaveTo`] saves at an absolute path the
+    /// application chose, without asking, for example its own exports into
+    /// a folder of its own; [`DownloadDecision::Deny`] saves nothing.
+    ///
+    /// Every download a page starts reaches the hook, several at once
+    /// included: Chromium's prompt for multiple downloads never shows.
+    ///
+    /// Runs on the UI thread before the download starts, so it must not
+    /// block. A hook that panics refuses the download. Downloads from
+    /// DevTools are not asked about and always ask the user. A later call
+    /// replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, DownloadDecision, Origin};
+    /// let exports = std::env::temp_dir().join("my-app-exports");
+    /// let own = Origin::parse("app://app").unwrap();
+    /// App::new("./dist")
+    ///     .on_download(move |download, _| {
+    ///         if download.origin() == &own {
+    ///             DownloadDecision::SaveTo(exports.join(download.suggested_name()))
+    ///         } else {
+    ///             DownloadDecision::Deny
+    ///         }
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_download<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&DownloadRequest, &AppHandle) -> DownloadDecision + Send + Sync + 'static,
+    {
+        self.hooks.download = Some(Box::new(f));
+        self
+    }
+
+    /// Decides what a page may use only with consent: a camera, a
+    /// microphone, the screen, the location, notifications, reading the
+    /// clipboard and the rest of [`Permission`](crate::Permission).
+    ///
+    /// Without a hook, or when it answers [`PermissionDecision::Default`],
+    /// the request is denied: no page gets a device or a permission the
+    /// application did not allow. Chromium's own prompt never shows, in a
+    /// window or an embedded browser. [`PermissionDecision::Allow`] grants
+    /// everything the request asks for and [`PermissionDecision::Deny`]
+    /// none of it: a page asking for a camera and a microphone together
+    /// gets both or neither.
+    ///
+    /// To ask the user first, the hook takes a
+    /// [`PermissionResponder`](crate::PermissionResponder) with
+    /// [`PermissionRequest::responder`] and answers
+    /// [`PermissionDecision::Later`]; the page waits until the responder
+    /// allows or denies, from any thread. A responder dropped unanswered
+    /// denies.
+    ///
+    /// Allowing [`Permission::ScreenVideo`](crate::Permission::ScreenVideo)
+    /// lets the page record the whole screen: there is no picker.
+    ///
+    /// Chromium remembers its answer to a web site (http, https), granted or
+    /// denied, in the profile, so the site's later requests get it without
+    /// reaching the hook; [`AppHandle::forget_permissions`] makes them ask
+    /// again. A camera, a microphone and the screen are never remembered.
+    /// For the application's own pages nothing is remembered, so a grant
+    /// that must still hold after the request does not: such a page is told
+    /// yes for notifications and the location, but cannot show a
+    /// notification or read the location.
+    ///
+    /// Runs on the UI thread, so it must not block. A hook that panics
+    /// denies. Requests from DevTools are not asked about and are denied. A
+    /// later call replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, Origin, Permission, PermissionDecision};
+    /// let own = Origin::parse("app://app").unwrap();
+    /// App::new("./dist")
+    ///     .on_permission(move |request, _| {
+    ///         let devices = request
+    ///             .permissions()
+    ///             .iter()
+    ///             .all(|kind| matches!(kind, Permission::Camera | Permission::Microphone));
+    ///         if request.origin() == &own && devices {
+    ///             PermissionDecision::Allow
+    ///         } else {
+    ///             PermissionDecision::Deny
+    ///         }
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_permission<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&PermissionRequest, &AppHandle) -> PermissionDecision + Send + Sync + 'static,
+    {
+        self.hooks.permission = Some(Box::new(f));
+        self
+    }
+
+    /// Edits the menu a right-click opens.
+    ///
+    /// Kurogane builds the same menu in a window and in an embedded
+    /// browser, never Chromium's own: in a text field the editing items
+    /// (Undo, Redo, Cut, Copy, Paste, Paste as plain text, Select all),
+    /// under Chromium's spelling suggestions on a misspelled word; Copy on
+    /// a selection; nothing elsewhere; and Inspect last in a debug build.
+    /// The hook gets that [`ContextMenu`](crate::ContextMenu), with what
+    /// was right-clicked ([`ContextMenu::target`](crate::ContextMenu::target):
+    /// a link, an image, a selection, a text field), and may add, remove or
+    /// reorder its items: Kurogane's own
+    /// ([`StandardItem`](crate::StandardItem)), the application's
+    /// ([`MenuItem::new`](crate::MenuItem::new), whose choice goes to
+    /// [`on_context_menu_command`](App::on_context_menu_command)),
+    /// separators and submenus. A menu left empty does not show.
+    ///
+    /// A standard item whose command
+    /// [`on_chrome_command`](App::on_chrome_command) refuses is left out,
+    /// and asked about again when chosen. Separators at an edge or next to
+    /// another, and submenus left empty, are not shown. A page that draws
+    /// its own menu calls `preventDefault()` on the `contextmenu` event, and
+    /// no menu of Kurogane's opens.
+    ///
+    /// Runs on the UI thread as the menu opens, so it must not block. A
+    /// hook that panics leaves Kurogane's menu. DevTools' menus are not
+    /// asked about. A later call replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, MenuItem};
+    /// App::new("./dist")
+    ///     .on_context_menu(|menu, _| {
+    ///         if menu.target().link_url().is_some() {
+    ///             menu.push(MenuItem::new("copy-link", "Copy link"));
+    ///         }
+    ///     })
+    ///     .on_context_menu_command(|command, _| {
+    ///         if command.id() == "copy-link" {
+    ///             println!("copy {:?}", command.target().link_url());
+    ///         }
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_context_menu<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&mut ContextMenu, &AppHandle) + Send + Sync + 'static,
+    {
+        self.hooks.context_menu = Some(Box::new(f));
+        self
+    }
+
+    /// Runs an item of the application's that the user chose from a
+    /// context menu ([`MenuItem::new`](crate::MenuItem::new) in
+    /// [`on_context_menu`](App::on_context_menu)), with what the menu was
+    /// opened on. An item chosen after the document the menu was opened on
+    /// went away, a page that navigated while its menu stayed open, runs
+    /// nothing.
+    ///
+    /// Runs on the UI thread, so it must not block. A hook that panics is
+    /// logged. A later call replaces an earlier one.
+    pub fn on_context_menu_command<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&ContextMenuCommand, &AppHandle) + Send + Sync + 'static,
+    {
+        self.hooks.context_menu_command = Some(Box::new(f));
+        self
+    }
+
+    /// Hears each window of the application's close, with which it is and
+    /// where it was, to open it there again next time.
+    ///
+    /// Asked for the start window, every [`AppInstance::create_window`]
+    /// window and every window a page opened as the application's, once
+    /// each, however it closes: the user, the page, the application, Ctrl+C.
+    /// Not for popups, DevTools or a browser embedded in the application's
+    /// own window. [`WindowClosing::name`](crate::WindowClosing::name) is
+    /// the name the window's options gave it, free for a new window from
+    /// here on, and
+    /// [`WindowClosing::placement`](crate::WindowClosing::placement) where it
+    /// was and how it showed: given back to
+    /// [`WindowOptions::placement`] it opens the window as it was, on a
+    /// display that is still there.
+    ///
+    /// Runs on the UI thread as the window closes, before the application's
+    /// last window ends it: saving a small settings file here is fine,
+    /// anything slow is not. A hook that panics is logged, and the window
+    /// closes as it would. A later call replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, WindowOptions, WindowPlacement};
+    /// # fn load(name: &str) -> Option<WindowPlacement> { None }
+    /// # fn save(name: &str, placement: WindowPlacement) {}
+    /// let mut main = WindowOptions::new().name("main").size(1100, 720);
+    /// if let Some(placement) = load("main") {
+    ///     main = main.placement(placement);
+    /// }
+    /// App::new("dist")
+    ///     .window(main)
+    ///     .on_window_closing(|closing, _| {
+    ///         if let Some(name) = closing.name() {
+    ///             save(name, closing.placement());
+    ///         }
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_window_closing<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&WindowClosing, &AppHandle) + Send + Sync + 'static,
+    {
+        self.hooks.window_closing = Some(Box::new(f));
+        self
+    }
+
+    /// Answers the file choosers pages open: `<input type=file>` and the
+    /// File System Access pickers (`showOpenFilePicker`,
+    /// `showSaveFilePicker`, `showDirectoryPicker`).
+    ///
+    /// Without a hook, or when it answers
+    /// [`FileDialogDecision::Default`](crate::FileDialogDecision::Default),
+    /// Chromium shows the system's file chooser. The hook can give the page
+    /// files of its choosing instead
+    /// ([`FileDialogDecision::Files`](crate::FileDialogDecision::Files)),
+    /// which the page then reads, or cancel the dialog. To show a picker of
+    /// the application's own, the hook takes a
+    /// [`FileDialogResponder`](crate::FileDialogResponder) with
+    /// [`FileDialogRequest::responder`](crate::FileDialogRequest::responder)
+    /// and answers [`FileDialogDecision::Later`](crate::FileDialogDecision::Later);
+    /// the page waits until the responder selects or cancels, from any
+    /// thread. A responder dropped unanswered cancels.
+    ///
+    /// Kurogane's own Save As dialog for a download is not asked about
+    /// ([`App::on_download`] decides where a download goes), nor are the
+    /// dialogs of DevTools. Runs on the UI thread, so it must not block. A
+    /// hook that panics cancels the dialog. A later call replaces an
+    /// earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, FileDialogDecision, FileDialogKind};
+    /// let inbox = std::env::temp_dir().join("inbox.txt");
+    /// App::new("./dist")
+    ///     .on_file_dialog(move |request, _| match request.kind() {
+    ///         // The page imports the inbox, whatever the user would pick
+    ///         FileDialogKind::Open => FileDialogDecision::Files(vec![inbox.clone()]),
+    ///         _ => FileDialogDecision::Default,
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_file_dialog<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&FileDialogRequest, &AppHandle) -> FileDialogDecision + Send + Sync + 'static,
+    {
+        self.hooks.file_dialog = Some(Box::new(f));
+        self
+    }
+
+    /// Decides the drags that enter a browser embedded in the application's
+    /// own window from another application: files from a file manager, a
+    /// link, selected text.
+    ///
+    /// CEF asks only such a browser (Alloy style): a drag into one of
+    /// Kurogane's own windows ([`App::window`],
+    /// [`AppInstance::create_window`], popups) is not asked about, and its
+    /// page gets the drop as a browser's would. Asked as the drag enters,
+    /// before the page sees it. The hook sees the
+    /// paths of the files dragged ([`DragEnter::files`](crate::DragEnter::files)),
+    /// which the page never does: a page gets a dropped file's name and
+    /// contents only. [`DragDecision::Refuse`](crate::DragDecision::Refuse)
+    /// keeps the drag from the page altogether, and the pointer shows it
+    /// cannot drop there; without a hook, or with
+    /// [`DragDecision::Default`](crate::DragDecision::Default), the drag
+    /// goes on to the page.
+    ///
+    /// Drags of DevTools and of a page's own content within the window are
+    /// not asked about. Runs on the UI thread, so it must not block. A hook
+    /// that panics refuses the drag. A later call replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::{App, DragDecision};
+    /// App::new("./dist")
+    ///     .on_drag_enter(|drag, _| {
+    ///         let images = !drag.files().is_empty()
+    ///             && drag.files().iter().all(|file| {
+    ///                 file.extension().is_some_and(|ext| ext == "png" || ext == "jpg")
+    ///             });
+    ///         if images { DragDecision::Allow } else { DragDecision::Refuse }
+    ///     })
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_drag_enter<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&DragEnter, &AppHandle) -> DragDecision + Send + Sync + 'static,
+    {
+        self.hooks.drag_enter = Some(Box::new(f));
+        self
+    }
+
+    /// Hears a page's title change: its `<title>` as it loads, or
+    /// `document.title` set by a script.
+    ///
+    /// Kurogane titles a window after its page itself, unless the window's
+    /// options fixed a title ([`WindowOptions::title`]); the hook hears of
+    /// every change either way, a popup's and an embedded browser's
+    /// included, DevTools' not. Runs on the UI thread, so it must not
+    /// block. A hook that panics is logged. A later call replaces an
+    /// earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::App;
+    /// App::new("./dist")
+    ///     .on_title_change(|change, _| println!("now {:?}", change.title()))
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_title_change<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&TitleChange, &AppHandle) + Send + Sync + 'static,
+    {
+        self.hooks.title_change = Some(Box::new(f));
+        self
+    }
+
+    /// Hears a page enter or leave fullscreen: `requestFullscreen()`, then
+    /// `exitFullscreen()` or the user's Escape.
+    ///
+    /// A window enters and leaves fullscreen with its page by itself; the
+    /// hook hears of it, to hide the application's own controls for
+    /// example. Not for DevTools. A browser embedded in the application's
+    /// own window is not resized by Kurogane: the application sizes it.
+    /// Runs on the UI thread, so it must not block. A hook that panics is
+    /// logged. A later call replaces an earlier one.
+    ///
+    /// ```no_run
+    /// # use kurogane::App;
+    /// App::new("./dist")
+    ///     .on_fullscreen_change(|change, _| println!("fullscreen: {}", change.is_fullscreen()))
+    ///     .run_or_exit();
+    /// ```
+    pub fn on_fullscreen_change<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&FullscreenChange, &AppHandle) + Send + Sync + 'static,
+    {
+        self.hooks.fullscreen_change = Some(Box::new(f));
         self
     }
 
@@ -769,7 +1432,8 @@ impl App {
     /// The name is a Chromium switch name, with or without its leading `--`
     /// or `-` (or `/` on Windows); on Windows it is case-insensitive, as
     /// Chromium treats it. The flag overrides the runtime's own setting of
-    /// the same switch.
+    /// the same switch; the feature lists, which only add (see
+    /// [`App::chromium_flag_with_value`]), are left as they are.
     pub fn chromium_flag(mut self, name: impl Into<String>) -> Self {
         self.chromium_flags.push(ChromiumFlag::Present(name.into()));
         self
@@ -778,7 +1442,18 @@ impl App {
     /// Add a Chromium flag with a value.
     ///
     /// The name is read as [`App::chromium_flag`] reads it. The last value
-    /// given for a switch wins, over the runtime's own value too.
+    /// given for a switch wins, over the runtime's own value too, except
+    /// for `disable-features` and `enable-features`: their value adds its
+    /// features to the list, after CEF's own, the ones the application was
+    /// launched with and those given before, each feature once.
+    ///
+    /// ```no_run
+    /// # use kurogane::App;
+    /// // CEF's own disabled features stay disabled
+    /// App::new("dist")
+    ///     .chromium_flag_with_value("disable-features", "Translate,MediaRouter")
+    ///     .run_or_exit();
+    /// ```
     pub fn chromium_flag_with_value(
         mut self,
         name: impl Into<String>,
@@ -813,6 +1488,45 @@ impl App {
 
     /// Checks the configuration, then starts the runtime in `mode`.
     fn launch(mut self, mode: RuntimeMode) -> Result<AppInstance, RuntimeError> {
+        if let Some(options) = &self.start_window {
+            if mode == RuntimeMode::Embedded {
+                self.problems.push(ConfigError::WindowWhenEmbedded);
+            } else if let Some(problem) = options.problem() {
+                self.problems
+                    .push(ConfigError::InvalidWindowOptions(problem));
+            }
+        }
+        if let Some(class) = &self.window_identity.class {
+            if class.is_empty() {
+                self.problems.push(ConfigError::InvalidWindowClass(
+                    "a window class is not empty",
+                ));
+            } else if class.chars().any(char::is_control) {
+                self.problems.push(ConfigError::InvalidWindowClass(
+                    "a window class has no control character",
+                ));
+            }
+        }
+        // A PNG begins with its signature; CEF decodes the rest with each
+        // window
+        if let Some(png) = &self.window_identity.icon
+            && !png.starts_with(b"\x89PNG\r\n\x1a\n")
+        {
+            self.problems.push(ConfigError::InvalidWindowIcon);
+        }
+        // CEF takes an absolute profile path, and one relative to the
+        // working directory would move with it
+        if let Some(dir) = &self.profile_dir {
+            if !dir.is_absolute() {
+                self.problems.push(ConfigError::InvalidProfileDir(
+                    "a profile directory is an absolute path",
+                ));
+            } else if self.profile_id.is_some() {
+                self.problems.push(ConfigError::InvalidProfileDir(
+                    "App::profile_id names a profile in Kurogane's place for profiles; give one or the other",
+                ));
+            }
+        }
         self.check_configuration()?;
 
         let Self {
@@ -821,7 +1535,10 @@ impl App {
             async_handlers,
             stream_handlers,
             acl,
+            start_window,
+            window_identity,
             profile_id,
+            profile_dir,
             sandbox_mode,
             persist_session_cookies,
             gpu_mode,
@@ -829,6 +1546,7 @@ impl App {
             chromium_flags,
             scheduler,
             on_second_instance,
+            hooks,
             delegates,
             renderer_delegates,
             scheme_handlers,
@@ -849,14 +1567,18 @@ impl App {
             mode,
             sandbox_mode,
             start_url,
+            start_window: start_window.unwrap_or_default(),
+            window_identity: window_identity.or_executable_class(),
             asset_root,
             profile_id,
+            profile_dir,
             persist_session_cookies,
             gpu_mode,
             credential_storage,
             chromium_flags,
             scheduler,
             on_second_instance,
+            hooks: Arc::new(hooks),
             delegates,
             renderer_delegates,
             scheme_handlers,
@@ -888,10 +1610,13 @@ impl App {
     /// Intended for binaries. Libraries embedding the runtime should use run() instead.
     pub fn run_or_exit(self) {
         if let Err(e) = self.run() {
-            eprintln!("\nApplication failed to start:\n{e}\n");
+            use std::io::Write as _;
+            // Report startup failure directly to stderr
+            let mut stderr = std::io::stderr().lock();
+            let _ = writeln!(stderr, "\nApplication failed to start:\n{e}\n");
             let mut cause = std::error::Error::source(&e);
             while let Some(error) = cause {
-                eprintln!("Caused by: {error}");
+                let _ = writeln!(stderr, "Caused by: {error}");
                 cause = error.source();
             }
             std::process::exit(1);
@@ -961,7 +1686,27 @@ mod tests {
                 handle.shutdown();
                 NoopStream
             })
-            .on_second_instance(|_: &SecondInstance, handle: &AppHandle| handle.shutdown());
+            .on_second_instance(|_: &SecondInstance, handle: &AppHandle| handle.shutdown())
+            .on_new_window(|_: &NewWindowRequest, handle: &AppHandle| {
+                handle.shutdown();
+                NewWindowDecision::Default
+            })
+            .on_navigation(|_: &NavigationRequest, handle: &AppHandle| {
+                handle.shutdown();
+                NavigationDecision::Default
+            })
+            .on_key(|_: &KeyPress, handle: &AppHandle| {
+                handle.shutdown();
+                KeyDecision::Default
+            })
+            .on_chrome_command(|_: &ChromeCommandRequest, handle: &AppHandle| {
+                handle.shutdown();
+                CommandDecision::Default
+            })
+            .on_download(|_: &DownloadRequest, handle: &AppHandle| {
+                handle.shutdown();
+                DownloadDecision::Default
+            });
 
         assert!(ends(|h| {
             app.sync_handlers["json"](b"", h, context()).unwrap();
@@ -989,6 +1734,38 @@ mod tests {
         };
         let hook = app.on_second_instance.as_ref().expect("registered");
         assert!(ends(|h| hook(&launch, h)));
+        let request = NewWindowRequest::new("about:blank", "app://app/");
+        let hook = app.hooks.new_window.as_ref().expect("registered");
+        assert!(ends(|h| {
+            hook(&request, h);
+        }));
+        let navigation =
+            NavigationRequest::new("app://app/b.html".into(), "app://app/", false, false);
+        let hook = app.hooks.navigation.as_ref().expect("registered");
+        assert!(ends(|h| {
+            hook(&navigation, h);
+        }));
+        let press = KeyPress::new(0x57, 0, u16::from(b'w'), false, None);
+        let hook = app.hooks.key.as_ref().expect("registered");
+        assert!(ends(|h| {
+            hook(&press, h);
+        }));
+        let command = ChromeCommandRequest::new(crate::ChromeCommand::Reload, None);
+        let hook = app.hooks.chrome_command.as_ref().expect("registered");
+        assert!(ends(|h| {
+            hook(&command, h);
+        }));
+        let download = DownloadRequest::new(
+            "app://app/a.txt".into(),
+            "app://app/",
+            "a.txt".into(),
+            "text/plain".into(),
+            None,
+        );
+        let hook = app.hooks.download.as_ref().expect("registered");
+        assert!(ends(|h| {
+            hook(&download, h);
+        }));
     }
 
     #[test]
@@ -1094,6 +1871,76 @@ mod tests {
             }
             Err(other) => panic!("expected a configuration error, got: {other}"),
             Ok(_) => panic!("a misconfigured app must not start"),
+        }
+    }
+
+    #[test]
+    fn a_profile_dir_is_absolute_and_the_only_name_for_the_profile() {
+        let problems = |app: App| match app.build() {
+            Err(RuntimeError::InvalidConfiguration(problems)) => problems,
+            Err(other) => panic!("expected a configuration error, got: {other}"),
+            Ok(_) => panic!("a misconfigured app must not start"),
+        };
+        assert!(matches!(
+            problems(App::new("./dist").profile_dir("profile"))[..],
+            [ConfigError::InvalidProfileDir(_)]
+        ));
+        let absolute = std::env::temp_dir().join("kurogane-profile");
+        assert!(matches!(
+            problems(
+                App::new("./dist")
+                    .profile_dir(&absolute)
+                    .profile_id("notes")
+            )[..],
+            [ConfigError::InvalidProfileDir(_)]
+        ));
+    }
+
+    #[test]
+    fn window_settings_no_window_can_have_are_refused_before_anything_starts() {
+        let problems = |app: App, embedded: bool| {
+            let result = if embedded {
+                app.start_embedded()
+            } else {
+                app.build()
+            };
+            match result {
+                Err(RuntimeError::InvalidConfiguration(problems)) => problems,
+                Err(other) => panic!("expected a configuration error, got: {other}"),
+                Ok(_) => panic!("a misconfigured app must not start"),
+            }
+        };
+        let window = || crate::WindowOptions::new().title("x");
+        assert_eq!(
+            problems(App::new("./dist").window(window()), true),
+            vec![ConfigError::WindowWhenEmbedded]
+        );
+        assert!(matches!(
+            problems(
+                App::new("./dist").window(window().size(800, 600).min_size(900, 1)),
+                false
+            )[..],
+            [ConfigError::InvalidWindowOptions(_)]
+        ));
+        assert!(matches!(
+            problems(App::new("./dist").window(window().name("")), false)[..],
+            [ConfigError::InvalidWindowOptions(_)]
+        ));
+        for class in ["", "notes\n"] {
+            assert!(
+                matches!(
+                    problems(App::new("./dist").window_class(class), false)[..],
+                    [ConfigError::InvalidWindowClass(_)]
+                ),
+                "{class:?}"
+            );
+        }
+        for icon in [&b""[..], b"GIF89a", b"\x89PNG\r\n"] {
+            assert_eq!(
+                problems(App::new("./dist").window_icon(icon), false),
+                vec![ConfigError::InvalidWindowIcon],
+                "{icon:?}"
+            );
         }
     }
 

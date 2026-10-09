@@ -1,15 +1,15 @@
 //! Browser-process lifecycle handling.
 
-use cef::*;
+use tetsu::*;
 use std::time::Duration;
 
 use crate::runtime::AppHandle;
 use crate::spec::{RuntimeSpec, RuntimeMode};
 use crate::browser_registry::BrowserType;
 use crate::client::KuroganeClient;
-use crate::window::{Placement, open_browser_window};
+use crate::window::{Opening, open_browser_window};
 use crate::app::{PumpRequest, SecondInstance};
-use crate::debug;
+use tracing::{debug, error, warn};
 
 wrap_browser_process_handler! {
     pub struct KuroganeBrowserProcessHandler {
@@ -26,6 +26,7 @@ wrap_browser_process_handler! {
 
             // Prevent Chromium from restoring the previous session before creating a window
             start_without_restoring_session();
+            hide_finished_downloads();
 
             // Dispatch to lifecycle delegates first
             for delegate in &self.spec.delegates {
@@ -44,13 +45,10 @@ wrap_browser_process_handler! {
             }
 
             debug!("Creating main browser with URL: {}", self.spec.start_url);
-            let placement = Placement::Main {
-                bounds: Rect::default(),
-                show_state: ShowState::NORMAL,
-            };
+            let opening = Opening::Application(self.spec.start_window.clone());
             // A CEF callback has nowhere to return the error
-            if let Err(error) = open_browser_window(&self.app, &self.spec.start_url, placement) {
-                eprintln!("kurogane: no window will appear:\n{error}");
+            if let Err(error) = open_browser_window(&self.app, &self.spec.start_url, opening) {
+                error!("no window will appear: {error}");
             }
         }
 
@@ -111,7 +109,7 @@ impl KuroganeBrowserProcessHandler {
     /// CEF requests the handler from multiple threads. Keep one handler and
     /// its state for the lifetime of the process.
     pub(crate) fn create(app: AppHandle, spec: RuntimeSpec) -> BrowserProcessHandler {
-        let chrome_ui_client = KuroganeClient::new(app.clone(), BrowserType::ChromeUi);
+        let chrome_ui_client = KuroganeClient::new(app.clone(), BrowserType::ChromeUi, None);
         Self::new(app, spec, chrome_ui_client)
     }
 }
@@ -124,7 +122,7 @@ impl KuroganeBrowserProcessHandler {
 /// for each one and CEF holds it until the factory is replaced or cleared.
 fn register_scheme_handlers(spec: &RuntimeSpec) {
     let Some(global) = request_context_get_global_context() else {
-        eprintln!("kurogane: no global request context; scheme handlers not registered");
+        error!("no global request context; scheme handlers not registered");
         return;
     };
 
@@ -166,19 +164,39 @@ const START_WITHOUT_LAST_SESSION: i32 = 5;
 /// Kurogane creates its own windows on each start, so session restore would
 /// reopen stale windows after an unclean exit.
 fn start_without_restoring_session() {
+    set_preference("session.restore_on_startup", |value| {
+        value.set_int(START_WITHOUT_LAST_SESSION);
+    });
+}
+
+/// Turns off Chromium's bubble that shows each finished download, its
+/// "Recent download history", for this profile.
+///
+/// It would open over the page, at the top of the window, even for a file
+/// the application saved itself. Kurogane's windows show no download UI of
+/// Chromium's; the application says what it saved.
+fn hide_finished_downloads() {
+    set_preference("download_bubble.partial_view_enabled", |value| {
+        value.set_bool(0);
+    });
+}
+
+/// Sets one of Chromium's preferences on the global request context, the
+/// profile every Kurogane window uses.
+fn set_preference(name: &str, set: impl FnOnce(&mut Value)) {
     let Some(context) = request_context_get_global_context() else {
         return;
     };
     let Some(mut value) = value_create() else {
         return;
     };
-    value.set_int(START_WITHOUT_LAST_SESSION);
+    set(&mut value);
 
-    let name = CefString::from("session.restore_on_startup");
+    let key = CefString::from(name);
     // CEF requires a non-null error string
     let mut error = CefString::from("");
 
-    if context.set_preference(Some(&name), Some(&mut value), Some(&mut error)) == 0 {
-        eprintln!("kurogane: failed to disable Chromium session restore: {error}");
+    if context.set_preference(Some(&key), Some(&mut value), Some(&mut error)) == 0 {
+        warn!("failed to set Chromium's {name}: {error}");
     }
 }

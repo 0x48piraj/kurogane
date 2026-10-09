@@ -39,7 +39,7 @@ Three crates with distinct responsibilities:
 | Crate | Responsibility |
 |-------|----------------|
 | `kurogane` | The runtime. Process model, browser and window lifecycle, IPC, asset resolution. |
-| `kurogane-layout` | Filesystem knowledge. Chromium discovery, provenance, validation, runtime materialization and bundle layouts. |
+| `kurogane-layout` | Filesystem knowledge. A bundle's Chromium runtime, provenance, validation and bundle layouts. |
 | `kurogane-cli` | Developer tooling. `init`, `dev`, `run`, `bundle`, `doctor`, `info`, `install`. |
 
 The runtime and CLI are separate layers: the runtime does not depend on the CLI and the CLI interacts with the runtime through its public interfaces.
@@ -85,14 +85,15 @@ It does not provide a UI framework; the frontend remains the application's respo
 
 ## Runtime layout
 
-Each command has its own rule for which Chromium it uses, and all of them read `CEF_PATH` in one place (`kurogane_layout::cef_override`):
+An application finds its Chromium the same way however it is started, and the CLI follows the same rule:
 
-* An application in a bundle runs the runtime inside its bundle and no other: neither `CEF_PATH` nor the managed installation, so it loads its resources and locales from the tree its libcef came from. `kurogane bundle` marks a bundle with a `kurogane-bundle` file beside the executable (a macOS `.app` needs none), and an application whose bundle has lost its runtime reports the bundle incomplete.
-* Any other application, frontendless or not, uses a runtime beside its executable, else the one `CEF_PATH` names.
-* `kurogane dev`, `run` and `build` use `CEF_PATH`, else the managed installation (installing it when missing), and start the application with `CEF_PATH` pointing at that choice. So in development the application uses the Chromium the CLI chose.
-* `kurogane bundle` copies into the bundle the runtime `CEF_PATH` names, else the managed installation, and requires verified provenance for either ([Chromium resolution](docs/bundling.md#chromium-resolution)). That is the only use of either: once bundled, the application never looks outside its bundle.
+* An application in a bundle runs the runtime inside its bundle and no other: neither `CEF_PATH` nor the installation, so it loads its resources and locales from the tree its libcef came from. `kurogane bundle` marks a bundle with a `kurogane-bundle` file beside the executable (a macOS `.app` needs none), and an application whose bundle has lost its runtime reports the bundle incomplete.
+* Any other application loads the runtime tetsu finds (`tetsu::sys::find_cef_dir`): one beside its executable, else the one `CEF_PATH` names (a `CEF_PATH` naming no directory is an error, never skipped), else tetsu's shared installation of the CEF version the application was built against. A plain `cargo run` and `kurogane run` start it the same way.
+* Loading refuses a libcef that is not the CEF build the application was built against.
+* `kurogane install`, `dev` and `run` install the CEF version the project's application loads, read from its tetsu-sys, when it is missing; they pass the application nothing.
+* `kurogane bundle` copies into the bundle the runtime `CEF_PATH` names, else the installation, and requires verified provenance for either ([Chromium resolution](docs/bundling.md#chromium-resolution)). That is the only use of either: once bundled, the application never looks outside its bundle.
 
-`kurogane doctor` reports the first choice of `dev` and the one `bundle` would package.
+`kurogane doctor` reports the runtime the application loads and the one `bundle` would package.
 
 The runtime follows each platform's native distribution layout rather than trying to normalize them into a single structure.
 
@@ -153,9 +154,21 @@ Browsers and windows are tracked as separate entities with separate lifetimes.
 
 The runtime maintains an ownership graph with O(1) lookup, derives popup ownership from opener browsers and classifies DevTools browsers separately from application windows.
 
+An application window (the start window, and every `create_window`) is placed before it exists, from its `WindowOptions`: at its bounds, brought onto a display when none shows them, or centred at its size on the primary display. Its title is the one its options fix, or its page's, which a display handler follows; popups follow their page's title too.
+
 Shutdown follows browser lifetime rather than individual window destruction, so DevTools and auxiliary popups do not tear down the application. The last browser's close ends the application: `should_shutdown` turns true and, if `AppInstance::run` is in CEF's message loop, Kurogane asks CEF to end that loop. Kurogane quits no loop it did not start. A closed browser leaves its window's link at once, though CEF may destroy the window later.
 
 The graph sits behind one lock. Only the UI thread changes it, and any thread may read it through `AppHandle`. Kurogane lets go of the lock before any CEF call that can call back into it, such as creating or closing a browser or a window: CEF may run those callbacks on the same thread before the call returns.
+
+A page cannot give itself a window. Before CEF creates a popup, or opens a link clicked into a new tab, Kurogane asks the application's `on_new_window` hook and then applies its own policy: a page of the application's own origin gets a window, a web link the user clicked goes to the system browser, and anything else is refused. Chromium's own tabbed browser window never opens.
+
+A page cannot take its window anywhere either. Each browser keeps the origins let into it: those the application loaded there itself (CEF marks such a load, and the redirects it leads to, with a flag a page cannot set), the origin `on_new_window` opened a popup to, and those the `on_navigation` hook allowed. A page navigates freely within those and the application's own origin; anywhere else the hook and Kurogane's policy decide, as for a new window.
+
+Chromium's commands pass Kurogane's allowlist first (page-local commands only), then the application's `on_chrome_command` hook, which may refuse what the allowlist lets run and never run what it refuses. Keys reach the `on_key` hook before Chromium turns them into commands, so a key press it consumes never becomes one, and one it gives the page first becomes one only if the page lets it through.
+
+A page cannot write to the disk on its own. Every download stops at Kurogane's download handler before a byte is saved: the application's `on_download` hook may name the file's place, ask the user or refuse; otherwise the user is asked with the system's Save As dialog, one dialog per window at a time. Chromium's prompt for several downloads is answered by Kurogane and never shows, and its bubble of finished downloads is turned off.
+
+Application hooks follow one convention. Each takes a typed request and the `AppHandle`, runs on the UI thread with no lock held, and answers with a decision whose `Default` leaves the choice to Kurogane. A hook that panics gets the safe answer, never an unwinding into CEF. The startup spec owns the hooks and the runtime state every `AppHandle` shares only points to them, so a hook that keeps a handle creates no cycle: CEF releases the spec at shutdown.
 
 ## Custom protocol (`app://`)
 
@@ -312,7 +325,7 @@ Kurogane is a platform foundation, not an application framework.
 flowchart TB
     %% Kurogane Layer
     subgraph Kurogane["Kurogane runtime"]
-        A[cef::App Lifecycle]
+        A[tetsu::App Lifecycle]
         B[BrowserProcessHandler]
         C[Native Window]
         D[Browser View]

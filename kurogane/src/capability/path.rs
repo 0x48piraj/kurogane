@@ -3,7 +3,7 @@
 //! - [`Name`]: one validated component. Only names parse; nothing downstream
 //!   re-validates strings.
 //! - [`RelPath`]: a validated path beneath an allow root (empty = the root).
-//! - [`Key`]: the comparison form of a component, folded as the platform's
+//! - [`NameKey`]: the comparison form of a component, folded as the platform's
 //!   filesystems compare names ([`Rules`]): case-folded on Windows; case-,
 //!   normalization- and ignorable-folded on macOS and Linux. Each fold
 //!   identifies at least the names the platform's filesystems treat as one,
@@ -22,17 +22,17 @@ use crate::capability::fold::Rules;
 
 /// Comparison key of one path component.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct Key(Box<[u8]>);
+pub(crate) struct NameKey(Box<[u8]>);
 
-impl Key {
-    pub(crate) fn of(component: &OsStr) -> Key {
-        Key::under(Rules::NATIVE, component)
+impl NameKey {
+    pub(crate) fn of(component: &OsStr) -> NameKey {
+        NameKey::under(Rules::NATIVE, component)
     }
 
     /// The key of `component` as `rules` compare names: another platform's
     /// for tests, which run every platform's rules on every host.
-    pub(crate) fn under(rules: Rules, component: &OsStr) -> Key {
-        Key(fold(rules, component).into_boxed_slice())
+    pub(crate) fn under(rules: Rules, component: &OsStr) -> NameKey {
+        NameKey(fold(rules, component).into_boxed_slice())
     }
 
     pub(crate) fn as_bytes(&self) -> &[u8] {
@@ -96,7 +96,7 @@ impl Extend<char> for Utf8<'_> {
 #[derive(Clone, Debug)]
 pub(crate) struct Name {
     raw: OsString,
-    key: Key,
+    key: NameKey,
 }
 
 impl Name {
@@ -115,7 +115,7 @@ impl Name {
         windows_name_rules(raw)?;
         Ok(Name {
             raw: raw.to_os_string(),
-            key: Key::of(raw),
+            key: NameKey::of(raw),
         })
     }
 
@@ -123,7 +123,7 @@ impl Name {
         &self.raw
     }
 
-    pub(crate) fn key(&self) -> &Key {
+    pub(crate) fn key(&self) -> &NameKey {
         &self.key
     }
 }
@@ -225,8 +225,8 @@ impl RelPath {
 /// `\\SERVER\SHARE` (folded) on Windows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Location {
-    volume: Key,
-    keys: Vec<Key>,
+    volume: NameKey,
+    keys: Vec<NameKey>,
 }
 
 impl Location {
@@ -245,24 +245,24 @@ impl Location {
                 Component::ParentDir => {
                     keys.pop();
                 }
-                Component::Normal(s) => keys.push(Key::of(s)),
+                Component::Normal(s) => keys.push(NameKey::of(s)),
             }
         }
         if !rooted || (cfg!(windows) && volume.is_none()) {
             return None;
         }
         Some(Location {
-            volume: volume.unwrap_or_else(|| Key::of(OsStr::new(""))),
+            volume: volume.unwrap_or_else(|| NameKey::of(OsStr::new(""))),
             keys,
         })
     }
 
-    pub(crate) fn keys(&self) -> &[Key] {
+    pub(crate) fn keys(&self) -> &[NameKey] {
         &self.keys
     }
 
     /// This location extended by `tail`.
-    pub(crate) fn join<'k>(&self, tail: impl IntoIterator<Item = &'k Key>) -> Location {
+    pub(crate) fn join<'k>(&self, tail: impl IntoIterator<Item = &'k NameKey>) -> Location {
         let mut keys = self.keys.clone();
         keys.extend(tail.into_iter().cloned());
         Location {
@@ -272,7 +272,7 @@ impl Location {
     }
 
     /// The keys of `self` beneath `base`, on a component boundary.
-    pub(crate) fn strip(&self, base: &Location) -> Option<&[Key]> {
+    pub(crate) fn strip(&self, base: &Location) -> Option<&[NameKey]> {
         if self.volume != base.volume || !self.keys.starts_with(&base.keys) {
             return None;
         }
@@ -280,7 +280,7 @@ impl Location {
     }
 
     /// The request names beneath this location, if the request lies under it.
-    pub(crate) fn relative(&self, volume: &Key, names: &[Name]) -> Option<RelPath> {
+    pub(crate) fn relative(&self, volume: &NameKey, names: &[Name]) -> Option<RelPath> {
         if &self.volume != volume || names.len() < self.keys.len() {
             return None;
         }
@@ -289,7 +289,7 @@ impl Location {
     }
 }
 
-fn volume_key(prefix: Prefix<'_>, trusted: bool) -> Option<Key> {
+fn volume_key(prefix: Prefix<'_>, trusted: bool) -> Option<NameKey> {
     let text = match prefix {
         Prefix::Disk(letter) => format!("{}:", letter.to_ascii_uppercase() as char),
         Prefix::VerbatimDisk(letter) if trusted => {
@@ -316,7 +316,7 @@ fn volume_key(prefix: Prefix<'_>, trusted: bool) -> Option<Key> {
             return None;
         }
     };
-    Some(Key::of(OsStr::new(&text)))
+    Some(NameKey::of(OsStr::new(&text)))
 }
 
 /// The most components a single request may resolve to. Beyond this a
@@ -330,7 +330,7 @@ pub(crate) const MAX_COMPONENTS: usize = 1024;
 #[derive(Debug)]
 pub(crate) enum Request {
     Absolute {
-        volume: Key,
+        volume: NameKey,
         names: Vec<Name>,
     },
     /// Anchored at the origin's single allow root.
@@ -384,7 +384,7 @@ pub(crate) fn parse_request(path: &Path) -> Result<Request, FsError> {
             "path must start with a drive or UNC share",
         )),
         (None, true) => Ok(Request::Absolute {
-            volume: Key::of(OsStr::new("")),
+            volume: NameKey::of(OsStr::new("")),
             names,
         }),
         (None, false) => Ok(Request::Relative(RelPath(names))),
@@ -441,7 +441,7 @@ mod tests {
         let base = Location::parse(&std::env::temp_dir().join("notes")).unwrap();
         let inside = Location::parse(&std::env::temp_dir().join("notes").join("a")).unwrap();
         let sibling = Location::parse(&std::env::temp_dir().join("notes-evil")).unwrap();
-        assert_eq!(inside.strip(&base).map(<[Key]>::len), Some(1));
+        assert_eq!(inside.strip(&base).map(<[NameKey]>::len), Some(1));
         assert!(sibling.strip(&base).is_none());
     }
 
@@ -505,7 +505,7 @@ mod tests {
 
     #[test]
     fn uppercase_keys_fold_simple_case() {
-        let key = |s: &str| Key::under(Rules::Uppercase, OsStr::new(s));
+        let key = |s: &str| NameKey::under(Rules::Uppercase, OsStr::new(s));
         assert_eq!(key("Secret"), key("SECRET"));
         assert_eq!(
             key("straße"),
@@ -525,7 +525,7 @@ mod tests {
 
     #[test]
     fn normalized_keys_fold_case_normalization_and_ignorables() {
-        let key = |s: &str| Key::under(Rules::Normalized, OsStr::new(s));
+        let key = |s: &str| NameKey::under(Rules::Normalized, OsStr::new(s));
         assert_eq!(key("Secret"), key("SECRET"));
         assert_eq!(key("caf\u{e9}"), key("cafe\u{301}"), "NFC and NFD");
         assert_eq!(
@@ -547,7 +547,7 @@ mod tests {
 
     #[test]
     fn exact_keys_compare_names_as_they_are() {
-        let key = |s: &str| Key::under(Rules::Exact, OsStr::new(s));
+        let key = |s: &str| NameKey::under(Rules::Exact, OsStr::new(s));
         assert_ne!(key("Secret"), key("SECRET"));
         assert_ne!(key("caf\u{e9}"), key("cafe\u{301}"));
     }

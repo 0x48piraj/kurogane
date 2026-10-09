@@ -3,10 +3,10 @@
 //! Handles subscription management for renderer processes and delivers emitted
 //! events to subscribed frames.
 
-use cef::*;
+use tetsu::*;
 
 use crate::acl::Origin;
-use crate::debug;
+use tracing::debug;
 use crate::ipc::browser_state::{still_addressed, IpcContext, IpcError};
 use crate::ipc::envelope::*;
 use crate::ipc::event::EventSubsystem;

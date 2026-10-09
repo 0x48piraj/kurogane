@@ -7,8 +7,10 @@
 //! - Policy is data: name to rule, for commands (commands and streams share a
 //!   namespace) and, separately, for events. Unlisted names follow one
 //!   default.
-//! - With no rules and the default untouched, everything is allowed, exactly
-//!   as before the ACL existed.
+//! - By default an unlisted name is reachable only from the application's own
+//!   origin, the origin of its start page. A page of any other origin, in a
+//!   popup, an iframe or a window navigated away, reaches only what a rule
+//!   names; the opaque origin reaches no unlisted name.
 //! - Rules match [`Origin`] values (`scheme://host[:port]`); the opaque origin can
 //!   never be listed.
 //! - Commands owned by a native capability (the `fs.*` family) are
@@ -152,27 +154,40 @@ enum AclRule {
 }
 
 /// Behavior for names without a rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DefaultPolicy {
-    /// Reachable from any origin (the behavior before the ACL existed).
-    #[default]
-    AllowAll,
+    /// Reachable from the application's own origin only.
+    AppOrigin,
     /// Reachable from no origin.
     Deny,
 }
 
 /// Immutable permission table for commands, streams and events, built
 /// before startup.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct CommandAcl {
     commands: HashMap<String, AclRule>,
     events: HashMap<String, AclRule>,
     default: DefaultPolicy,
+    /// The origin of the application's start page, the only one an unlisted
+    /// name admits by default. An opaque one admits nothing.
+    app_origin: Origin,
 }
 
 impl CommandAcl {
-    pub(crate) fn new() -> Self {
-        Self::default()
+    /// An empty table for the application whose start page has `app_origin`.
+    pub(crate) fn new(app_origin: Origin) -> Self {
+        Self {
+            commands: HashMap::new(),
+            events: HashMap::new(),
+            default: DefaultPolicy::AppOrigin,
+            app_origin,
+        }
+    }
+
+    /// The origin of the application's start page.
+    pub(crate) fn app_origin(&self) -> &Origin {
+        &self.app_origin
     }
 
     /// Allows `origins` to invoke the command or open the stream `name`,
@@ -258,7 +273,11 @@ impl CommandAcl {
         match rule {
             Some(AclRule::Allow(origins)) => origins.contains(origin),
             Some(AclRule::AllowAll | AclRule::Capability) => true,
-            None => self.default == DefaultPolicy::AllowAll,
+            // Two opaque origins compare equal and neither is this application
+            None => match self.default {
+                DefaultPolicy::AppOrigin => !origin.is_opaque() && *origin == self.app_origin,
+                DefaultPolicy::Deny => false,
+            },
         }
     }
 }
@@ -344,31 +363,46 @@ mod tests {
     }
 
     #[test]
-    fn no_policy_allows_everything() {
-        let acl = CommandAcl::new();
-        assert!(acl.allows("anything", &origin("https://evil.example")));
-        assert!(acl.allows("anything", &Origin::OPAQUE));
-        assert!(acl.allows_event("anything", &Origin::OPAQUE));
+    fn an_unlisted_name_admits_only_the_app_origin() {
+        let app = origin("app://app");
+        let acl = CommandAcl::new(app.clone());
+        assert!(acl.allows("anything", &app));
+        assert!(acl.allows_event("anything", &app));
+        for other in [
+            origin("https://evil.example"),
+            origin("app://other"),
+            origin("rt://app"),
+            Origin::OPAQUE,
+        ] {
+            assert!(!acl.allows("anything", &other), "{other}");
+            assert!(!acl.allows_event("anything", &other), "{other}");
+        }
+    }
+
+    #[test]
+    fn an_opaque_app_origin_admits_nothing() {
+        let acl = CommandAcl::new(Origin::from_url("file:///frontend/index.html"));
+        assert!(!acl.allows("anything", &Origin::OPAQUE));
+        assert!(!acl.allows_event("anything", &Origin::OPAQUE));
     }
 
     #[test]
     fn allow_lists_origins_and_merges() {
-        let mut acl = CommandAcl::new();
+        let mut acl = CommandAcl::new(origin("app://app"));
         acl.allow("cmd", [origin("app://app")]).unwrap();
         acl.allow("cmd", [origin("http://localhost:5173")]).unwrap();
         assert!(acl.allows("cmd", &origin("app://app")));
         assert!(acl.allows("cmd", &origin("http://localhost:5173")));
         assert!(!acl.allows("cmd", &origin("https://evil.example")));
         assert!(!acl.allows("cmd", &Origin::OPAQUE));
-        assert!(
-            acl.allows("other", &origin("https://evil.example")),
-            "default still allows"
-        );
+
+        assert!(acl.allows("other", &origin("app://app")), "unlisted");
+        assert!(!acl.allows("other", &origin("https://evil.example")));
     }
 
     #[test]
     fn deny_unlisted_blocks_unknown_names() {
-        let mut acl = CommandAcl::new();
+        let mut acl = CommandAcl::new(origin("app://app"));
         acl.allow_all("ping").unwrap();
         acl.allow("cmd", [origin("app://app")]).unwrap();
         acl.deny_unlisted();
@@ -385,26 +419,30 @@ mod tests {
     fn events_have_their_own_rules() {
         let app = origin("app://app");
         let evil = origin("https://evil.example");
-        let mut acl = CommandAcl::new();
-        acl.allow_event("tick", [app.clone()]).unwrap();
-        assert!(acl.allows_event("tick", &app));
-        assert!(!acl.allows_event("tick", &evil));
-        assert!(acl.allows_event("other", &evil), "default still allows");
+        let mut acl = CommandAcl::new(app.clone());
+        acl.allow_event("tick", [evil.clone()]).unwrap();
+        assert!(acl.allows_event("tick", &evil));
         assert!(
-            acl.allows("tick", &evil),
+            !acl.allows_event("tick", &app),
+            "the rule replaces the default"
+        );
+        assert!(!acl.allows_event("other", &evil), "unlisted");
+        assert!(
+            acl.allows("tick", &app) && !acl.allows("tick", &evil),
             "an event rule is not a command rule"
         );
 
         acl.deny_unlisted();
         acl.allow_event_all("public");
         assert!(acl.allows_event("public", &evil));
+        assert!(acl.allows_event("public", &Origin::OPAQUE));
         assert!(!acl.allows_event("other", &app));
         assert!(!acl.allows("tick", &app));
     }
 
     #[test]
     fn capability_commands_defer_to_grants() {
-        let mut acl = CommandAcl::new();
+        let mut acl = CommandAcl::new(origin("app://app"));
         acl.capability("fs.read_file").unwrap();
         acl.deny_unlisted();
         assert!(
@@ -418,21 +456,21 @@ mod tests {
     fn acl_rules_and_capabilities_cannot_share_a_command() {
         let conflict = Err(ConfigError::CapabilityCommand("fs.read_file".to_owned()));
 
-        let mut acl = CommandAcl::new();
+        let mut acl = CommandAcl::new(origin("app://app"));
         acl.capability("fs.read_file").unwrap();
         assert_eq!(acl.allow("fs.read_file", [origin("app://app")]), conflict);
         assert_eq!(acl.allow_all("fs.read_file"), conflict);
 
-        let mut acl = CommandAcl::new();
+        let mut acl = CommandAcl::new(origin("app://app"));
         acl.allow_all("fs.read_file").unwrap();
         assert_eq!(acl.capability("fs.read_file"), conflict);
     }
 
     #[test]
     fn the_opaque_origin_cannot_be_permitted() {
-        let mut acl = CommandAcl::new();
+        let mut acl = CommandAcl::new(origin("app://app"));
         assert_eq!(
-            acl.allow("cmd", [origin("app://app"), Origin::OPAQUE]),
+            acl.allow("cmd", [origin("https://x.example"), Origin::OPAQUE]),
             Err(ConfigError::OpaqueOrigin("cmd".to_owned()))
         );
         assert_eq!(
@@ -440,8 +478,9 @@ mod tests {
             Err(ConfigError::OpaqueOrigin("tick".to_owned()))
         );
         assert!(
-            acl.allows("cmd", &origin("https://evil.example")),
-            "nothing was recorded"
+            acl.allows("cmd", &origin("app://app"))
+                && !acl.allows("cmd", &origin("https://x.example")),
+            "nothing was recorded: cmd is still unlisted"
         );
     }
 }

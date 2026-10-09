@@ -22,7 +22,7 @@ pub fn run() -> Result<()> {
 
     tui::info("Environment");
 
-    match kurogane_layout::cef_override() {
+    match crate::install::cef_path() {
         Some(path) => tui::field("CEF_PATH", path.display()),
         None => tui::field("CEF_PATH", "not set"),
     }
@@ -37,7 +37,7 @@ pub fn run() -> Result<()> {
     }
 
     // Resolve workspace root
-    let workspace_root = MetadataCommand::new().exec().ok().map(|m| {
+    let workspace_root = MetadataCommand::new().no_deps().exec().ok().map(|m| {
         let root = m.workspace_root.into_std_path_buf();
         tui::field("workspace", tui::format_path(&root));
         root

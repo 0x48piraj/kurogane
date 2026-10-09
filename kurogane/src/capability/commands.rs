@@ -169,8 +169,8 @@ impl Worker {
                 Ok(sender) => self.queue.get_or_init(|| sender),
                 // Never inline: the request arrived on the CEF UI thread
                 Err(e) => {
-                    eprintln!(
-                        "kurogane: cannot start the filesystem worker ({e}); fs.* requests fail until it starts"
+                    tracing::error!(
+                        "cannot start the filesystem worker ({e}); fs.* requests fail until it starts"
                     );
                     return job
                         .responder
@@ -439,11 +439,12 @@ mod tests {
 
         use crate::acl::Origin;
         use crate::capability::policy::FsAccess;
+        use crate::capability::test_support::tempdir;
         use crate::ipc::{BinaryResponder, FrameId, IpcContext};
         use crate::runtime::AppHandle;
 
         fn notes(access: FsAccess) -> (tempfile::TempDir, PathBuf, Vec<(FsCommand, AsyncHandler)>) {
-            let tmp = tempfile::tempdir().unwrap();
+            let tmp = tempdir();
             let notes = tmp.path().join("notes");
             std::fs::create_dir_all(notes.join("secrets")).unwrap();
             std::fs::write(notes.join("secrets/secret.txt"), b"top secret").unwrap();
@@ -601,7 +602,7 @@ mod tests {
 
         #[test]
         fn oversized_writes_are_refused_before_queueing() {
-            let tmp = tempfile::tempdir().unwrap();
+            let tmp = tempdir();
             let mut builder = Filesystem::builder();
             let scope = builder.scope("data", |s| {
                 s.allow_directory(tmp.path());
@@ -626,7 +627,7 @@ mod tests {
 
         #[test]
         fn transfers_over_the_limit_are_too_large() {
-            let tmp = tempfile::tempdir().unwrap();
+            let tmp = tempdir();
             std::fs::write(tmp.path().join("five.txt"), b"hello").unwrap();
             let mut builder = Filesystem::builder();
             let scope = builder.scope("data", |s| {

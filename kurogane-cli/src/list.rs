@@ -1,20 +1,26 @@
-//! Listing of installed runtimes and cached profiles.
+//! Listing of application profiles and versions.
 //!
-//! This module provides human-readable summaries of Kurogane-managed
-//! CEF versions and application runtime profiles.
+//! Prints every application's profile, the CLI's version and the CEF
+//! version it was built with.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use std::fs;
-use kurogane_layout::cache_root;
+use kurogane_layout::profiles_root;
 
 use crate::tui;
 
-pub fn run(target: Option<String>) -> Result<()> {
-    match target.as_deref() {
-        Some("profiles") => list_profiles(),
-        Some("version") => list_version(),
+/// What `kurogane list` shows.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum Target {
+    Profiles,
+    Version,
+}
+
+pub fn run(target: Option<Target>) -> Result<()> {
+    match target {
+        Some(Target::Profiles) => list_profiles(),
+        Some(Target::Version) => list_version(),
         None => list_all(),
-        _ => bail!("Unknown list target. Valid targets: profiles, version"),
     }
 }
 
@@ -25,11 +31,12 @@ fn list_all() -> Result<()> {
     list_profiles()
 }
 
-/// Lists all cached Kurogane profiles, one per application identity.
+/// Lists every Kurogane application's profile, one per application
+/// identity.
 fn list_profiles() -> Result<()> {
     tui::section("Kurogane Profiles");
 
-    let profiles_dir = cache_root().join("profiles");
+    let profiles_dir = profiles_root();
 
     if !profiles_dir.exists() {
         tui::info("No profiles found");
@@ -62,7 +69,7 @@ fn list_profiles() -> Result<()> {
     Ok(())
 }
 
-/// Prints Kurogane and bundled CEF versions.
+/// Prints the CLI's version and the CEF version it was built with.
 fn list_version() -> Result<()> {
     tui::section("Kurogane Version");
 

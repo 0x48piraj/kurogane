@@ -1,7 +1,6 @@
 //! Styled command-line output helpers.
 //!
-//! Provides consistent prefixes and coloring for common message types
-//! like success, error, warnings and structured sections.
+//! Each kind of message has its own prefix and color.
 
 use colored::*;
 use std::path::Path;
@@ -17,7 +16,7 @@ pub fn error(msg: &str) {
     eprintln!("{} {}", "[-]".red().bold(), msg);
 }
 
-/// Prints a warning message.
+/// Prints a warning message to stderr.
 pub fn warn(msg: &str) {
     eprintln!("{} {}", "[!]".yellow().bold(), msg);
 }
@@ -27,13 +26,12 @@ pub fn blank() {
     println!();
 }
 
-/// Prints an informational message
+/// Prints an informational message.
 pub fn info(msg: &str) {
     println!("{} {}", "[~]".dimmed(), msg);
 }
 
-/// Prints a step indicator.
-/// Useful for showing progress in multi-step operations.
+/// Prints a progress step of a multi-step operation.
 pub fn step(msg: &str) {
     println!("{} {}", "[*]".cyan().bold(), msg);
 }
@@ -43,12 +41,41 @@ pub fn field(key: &str, value: impl Display) {
     println!("    {}: {}", key.dimmed(), value);
 }
 
-/// Prints a section header with surrounding spacing for readability.
+/// Prints an error as a `reason` field and each of its causes as a `cause`
+/// field.
+pub fn error_fields(error: &dyn std::error::Error) {
+    field("reason", error);
+
+    let mut cause = error.source();
+    while let Some(current) = cause {
+        field("cause", current);
+        cause = current.source();
+    }
+}
+
+/// Prints a section header between blank lines.
 pub fn section(title: &str) {
     println!("\n{}\n", title.bold());
 }
 
-/// Formats a path for display ensuring consistent output across platforms.
+/// Prompts until the answer is yes or no; empty input means no.
+pub fn confirm(question: &str) -> std::io::Result<bool> {
+    loop {
+        print!("\n{question} [y/N]: ");
+        std::io::Write::flush(&mut std::io::stdout())?;
+
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+
+        match input.trim() {
+            "y" | "Y" | "yes" | "Yes" | "YES" => return Ok(true),
+            "n" | "N" | "no" | "No" | "NO" | "" => return Ok(false),
+            _ => warn("Please enter y or n"),
+        }
+    }
+}
+
+/// Formats a path for display with forward slashes on every platform.
 pub fn format_path(path: &Path) -> String {
     path.display().to_string().replace('\\', "/")
 }

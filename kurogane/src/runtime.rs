@@ -1,58 +1,57 @@
-use cef::{args::Args, sys::cef_window_handle_t, *};
+use tetsu::{args::Args, sys::cef_window_handle_t, *};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::acl::Origin;
 use crate::cef_app::KuroganeApp;
 use crate::client::KuroganeClient;
-use crate::error::RuntimeError;
+use crate::error::{CefLocation, RuntimeError};
+use crate::hooks::Hooks;
 use crate::browser_registry::{BrowserId, BrowserMetadata, BrowserType};
 use crate::registry::Registry;
 use crate::window_registry::{WindowId, WindowMetadata};
-use crate::window::{Placement, open_browser_window};
-use kurogane_layout::{DetectError, DiscoveryMode, detect_cef_root, validate_cef_runtime, profile_dir};
+use crate::window::{Opening, WindowIdentity, open_browser_window};
+use kurogane_layout::{bundle_cef_root, validate_cef_runtime, profile_dir};
 use crate::ipc::IpcRouter;
 use crate::ipc::transport::message::RendererSandbox;
 use crate::spec::{RuntimeMode, RuntimeSpec, SandboxMode};
-use crate::debug;
+use tracing::{debug, warn};
 
 struct RuntimeLayout {
     cef_root: std::path::PathBuf,
-    cache_dir: std::path::PathBuf,
+    /// The profile CEF keeps (`cache_path`, `root_cache_path`)
+    profile_dir: std::path::PathBuf,
     /// The executable CEF starts helper processes from, when it is named.
     subprocess: Option<std::path::PathBuf>,
 }
 
-fn resolve_layout(profile_id: Option<String>) -> Result<RuntimeLayout, RuntimeError> {
+/// The runtime's layout around the CEF it loaded: the profile is `chosen`
+/// (App::profile_dir), or the one Kurogane names from `profile_id` or the
+/// executable.
+fn resolve_layout(
+    cef_root: std::path::PathBuf,
+    profile_id: Option<String>,
+    chosen: Option<std::path::PathBuf>,
+) -> Result<RuntimeLayout, RuntimeError> {
     debug!("Resolving runtime layout");
 
     let exe = std::env::current_exe().map_err(RuntimeError::ExecutableUnavailable)?;
 
-    let cache_dir = profile_dir(&profile_name(profile_id, &exe));
-    debug!("Cache dir: {}", cache_dir.display());
+    let profile_dir = chosen.unwrap_or_else(|| profile_dir(&profile_name(profile_id, &exe)));
+    debug!("Profile dir: {}", profile_dir.display());
 
-    std::fs::create_dir_all(&cache_dir).map_err(|e| RuntimeError::CacheUnavailable {
-        path: cache_dir.clone(),
+    std::fs::create_dir_all(&profile_dir).map_err(|e| RuntimeError::CacheUnavailable {
+        path: profile_dir.clone(),
         source: e,
     })?;
-
-    let detected = detect_cef_root().map_err(cef_not_found)?;
-
-    let invalid = |source: Box<dyn std::error::Error + Send + Sync>| {
-        unusable_cef(detected.mode, detected.root.clone(), source)
-    };
-    validate_cef_runtime(&detected.root).map_err(|e| invalid(Box::new(e)))?;
-    let cef_root = detected
-        .root
-        .canonicalize()
-        .map_err(|e| invalid(Box::new(e)))?;
 
     debug!("CEF root: {}", cef_root.display());
 
     Ok(RuntimeLayout {
         cef_root,
-        cache_dir,
+        profile_dir,
         subprocess: subprocess_path(&exe),
     })
 }
@@ -80,28 +79,69 @@ fn profile_name(profile_id: Option<String>, exe: &std::path::Path) -> String {
     }
 }
 
-/// Maps a failure to find the Chromium runtime onto what the user can act on.
-pub(crate) fn cef_not_found(error: DetectError) -> RuntimeError {
-    match error {
-        DetectError::CurrentExe(source) => RuntimeError::ExecutableUnavailable(source),
-        // Not found and whatever a newer layout crate adds, leaves no runtime
-        _ => RuntimeError::CefNotInstalled,
+/// Finds the application's CEF, its bundle's (which it runs and no other),
+/// else the one tetsu finds beside the executable, in `CEF_PATH` or in the
+/// shared installation of the CEF version it was built against.
+fn locate_cef() -> Result<(std::path::PathBuf, CefLocation), RuntimeError> {
+    if let Some(root) = bundle_cef_root().map_err(RuntimeError::ExecutableUnavailable)? {
+        return Ok((root, CefLocation::Bundle));
     }
+
+    let found = sys::find_cef_dir().map_err(cef_not_found)?;
+    let location = match found.found_in {
+        sys::FoundIn::AppBundle => CefLocation::Bundle,
+        sys::FoundIn::BesideExecutable => CefLocation::BesideExecutable,
+        sys::FoundIn::CefPath => CefLocation::CefPath,
+        sys::FoundIn::Installed => CefLocation::Installed,
+    };
+
+    Ok((found.path, location))
 }
 
-/// Names a Chromium runtime that cannot be used: a bundle's own leaves the
-/// bundle incomplete, since a bundle runs no other; any other is an invalid
-/// installation.
-pub(crate) fn unusable_cef(
-    mode: DiscoveryMode,
-    path: std::path::PathBuf,
-    source: Box<dyn std::error::Error + Send + Sync>,
-) -> RuntimeError {
-    match mode {
-        DiscoveryMode::Bundled => RuntimeError::IncompleteBundle { path, source },
-        DiscoveryMode::BesideExecutable | DiscoveryMode::EnvironmentOverride => {
-            RuntimeError::InvalidCefInstallation { path, source }
-        }
+/// Loads libcef from the runtime the application resolves, before any other
+/// call into CEF; the binary links none. macOS loads it in `init_ns_app`,
+/// after a sandboxed helper enters its sandbox. Returns the runtime's
+/// directory, canonical.
+pub(crate) fn load_libcef() -> Result<std::path::PathBuf, RuntimeError> {
+    let (root, location) = locate_cef()?;
+    let invalid =
+        |source: Box<dyn std::error::Error + Send + Sync>| RuntimeError::InvalidCefRuntime {
+            path: root.clone(),
+            location,
+            source,
+        };
+    validate_cef_runtime(&root).map_err(|e| invalid(Box::new(e)))?;
+    // Its own DLLs load from its directory, which takes an absolute path
+    let libcef =
+        std::path::absolute(root.join(sys::LIBCEF_FILE)).map_err(|e| invalid(Box::new(e)))?;
+
+    // SAFETY: no call into CEF precedes this one
+    unsafe { sys::load_libcef(&libcef) }.map_err(|e| match e {
+        sys::LoadError::VersionMismatch {
+            path,
+            found,
+            expected,
+        } => RuntimeError::CefVersionMismatch {
+            path,
+            location,
+            found,
+            expected,
+        },
+        other => invalid(Box::new(other)),
+    })?;
+    debug!("Loaded {} from {location}", libcef.display());
+
+    root.canonicalize().map_err(|e| invalid(Box::new(e)))
+}
+
+/// Maps a failure to find the Chromium runtime onto what the user can act on.
+fn cef_not_found(error: sys::FindError) -> RuntimeError {
+    match error {
+        sys::FindError::CurrentExe(source) => RuntimeError::ExecutableUnavailable(source),
+        sys::FindError::CefPathMissing(path) => RuntimeError::CefPathMissing(path),
+        sys::FindError::NotInstalled { installed } => RuntimeError::CefNotInstalled {
+            expected: installed,
+        },
     }
 }
 
@@ -141,8 +181,8 @@ fn build_settings(
     // This enables cookies, storage APIs and service workers
     let mut settings = Settings {
         external_message_pump: external_message_pump.into(),
-        cache_path: cef_path(&layout.cache_dir),
-        root_cache_path: cef_path(&layout.cache_dir),
+        cache_path: cef_path(&layout.profile_dir),
+        root_cache_path: cef_path(&layout.profile_dir),
         persist_session_cookies: persist_session_cookies.into(),
         no_sandbox: crate::sandbox::cef_no_sandbox(sandbox),
         ..Default::default()
@@ -252,7 +292,7 @@ fn install_ctrlc_handler(app: &AppHandle) {
     // A host that installed its own handler keeps it; the app still closes
     // normally, only not on Ctrl+C
     if let Err(err) = installed {
-        eprintln!("kurogane: Ctrl+C will not close the app: {err}");
+        warn!("Ctrl+C will not close the app: {err}");
     }
 }
 
@@ -265,7 +305,13 @@ fn install_ctrlc_handler(app: &AppHandle) {
 /// `force` uses `CloseBrowser(true)`. It also closes unlinked Views windows
 /// directly, whose browser is not created yet or has closed; linked windows
 /// close with their browser.
+///
+/// A forced close cannot be cancelled, so no browser may outlive shutdown.
+/// Cancellable closes provide no equivalent signal from CEF.
 fn close_all(app: &AppHandle, force: bool) {
+    if force {
+        app.services.ending.store(true, Ordering::Release);
+    }
     let no_browsers = app.registry().browsers.is_empty();
     let no_windows = app.registry().windows.count() == 0;
     if no_browsers && no_windows {
@@ -303,6 +349,10 @@ fn close_windows(windows: Vec<Window>) {
 
 /// Asks every live browser to close. UI thread only; [`AppHandle::request`]
 /// brings it there.
+///
+/// A forced close of every open browser begins application shutdown, like
+/// [`AppHandle::shutdown`]. Closing nothing leaves the application running.
+/// Refer [`close_all`].
 fn close_browsers(app: &AppHandle, force: bool) {
     let browsers: Vec<Browser> = {
         let reg = app.registry();
@@ -311,6 +361,9 @@ fn close_browsers(app: &AppHandle, force: bool) {
             .map(|(_, s)| s.browser.clone())
             .collect()
     };
+    if force && !browsers.is_empty() {
+        app.services.ending.store(true, Ordering::Release);
+    }
 
     for browser in browsers {
         if let Some(host) = browser.host() {
@@ -374,14 +427,19 @@ pub(crate) struct RuntimeServices {
     /// AppInstance::run is inside CEF's message loop, the only loop Kurogane
     /// may quit. Only the UI thread reads and writes it
     in_run_loop: AtomicBool,
-    /// Every browser has closed: set by the last OnBeforeClose, or by a
-    /// close request that finds nothing open
+    /// Every browser has closed, set by the final [`OnBeforeClose`].
     ended: AtomicBool,
+    /// A mandatory end has begun
+    ending: AtomicBool,
     /// Set when AppInstance::shutdown begins
     cef_shut_down: AtomicBool,
     /// Whether the renderers run in Chromium's sandbox, which decides
     /// whether the browser copies their shared memory
     renderer_sandbox: RendererSandbox,
+    /// The application's hooks, held by the spec; see [`crate::hooks`]
+    hooks: Weak<Hooks>,
+    /// What the system shows of every window Kurogane opens
+    identity: WindowIdentity,
 }
 
 impl RuntimeServices {
@@ -390,6 +448,8 @@ impl RuntimeServices {
         router: IpcRouter,
         ui_thread: std::thread::ThreadId,
         renderer_sandbox: RendererSandbox,
+        hooks: Weak<Hooks>,
+        identity: WindowIdentity,
     ) -> Self {
         Self {
             router,
@@ -397,84 +457,31 @@ impl RuntimeServices {
             ui_thread,
             in_run_loop: AtomicBool::new(false),
             ended: AtomicBool::new(false),
+            ending: AtomicBool::new(false),
             cef_shut_down: AtomicBool::new(false),
             renderer_sandbox,
+            hooks,
+            identity,
         }
     }
 }
 
-/// A rectangle: a position and a size.
+/// A browser's place inside its parent window, for
+/// [`AppInstance::create_child_browser`] and [`BrowserHandle::set_bounds`]:
+/// a position and a size in that window's own coordinates, which CEF
+/// applies unconverted. Pixels from the top-left of the client area on
+/// Windows and X11; on macOS, points in the parent `NSView`, whose origin is
+/// its top-left corner when the view is flipped (winit's is) and its
+/// bottom-left corner otherwise.
 ///
-/// In [`WindowOptions::bounds`] it is a window's place on the screen.
-///
-/// For [`AppInstance::create_child_browser`] and [`BrowserHandle::set_bounds`]
-/// it is a browser's place inside its parent window, in that window's own
-/// coordinates, which CEF applies unconverted: pixels from the top-left of the
-/// client area on Windows and X11; on macOS, points in the parent `NSView`,
-/// whose origin is its top-left corner when the view is flipped (winit's is)
-/// and its bottom-left corner otherwise.
-#[derive(Clone, Copy, Debug)]
+/// A window's place on the screen is a
+/// [`WindowPlacement`](crate::WindowPlacement).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BrowserBounds {
     pub x: i32,
     pub y: i32,
     pub width: i32,
     pub height: i32,
-}
-
-/// Initial visibility state for a newly created window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum WindowState {
-    /// Show the window normally.
-    #[default]
-    Normal,
-
-    /// Create the window minimized.
-    Minimized,
-
-    /// Create the window maximized.
-    Maximized,
-
-    /// Create the window hidden.
-    Hidden,
-}
-
-impl From<WindowState> for cef::ShowState {
-    fn from(state: WindowState) -> Self {
-        match state {
-            WindowState::Normal => cef::ShowState::NORMAL,
-            WindowState::Minimized => cef::ShowState::MINIMIZED,
-            WindowState::Maximized => cef::ShowState::MAXIMIZED,
-            WindowState::Hidden => cef::ShowState::HIDDEN,
-        }
-    }
-}
-
-impl From<cef::ShowState> for WindowState {
-    fn from(state: cef::ShowState) -> Self {
-        match state {
-            cef::ShowState::NORMAL => Self::Normal,
-            cef::ShowState::MINIMIZED => Self::Minimized,
-            cef::ShowState::MAXIMIZED => Self::Maximized,
-            cef::ShowState::HIDDEN => Self::Hidden,
-            other => {
-                debug_assert!(false, "unsupported cef::ShowState: {:?}", other);
-                Self::Normal
-            }
-        }
-    }
-}
-
-/// Options for creating a new top-level browser window.
-#[derive(Debug, Clone)]
-pub struct WindowOptions {
-    /// Initial URL to load.
-    pub url: String,
-
-    /// Initial window position and size.
-    pub bounds: BrowserBounds,
-
-    /// Initial visibility state of the window.
-    pub show_state: WindowState,
 }
 
 /// Shared lifecycle handle for a running Kurogane application.
@@ -534,6 +541,28 @@ impl AppHandle {
         self.services.renderer_sandbox
     }
 
+    /// What the system shows of every window Kurogane opens.
+    pub(crate) fn window_identity(&self) -> &WindowIdentity {
+        &self.services.identity
+    }
+
+    /// Whether a mandatory end has begun, after which no browser may open:
+    /// a forced close of every browser (see [`close_all`]), or
+    /// [`AppInstance::shutdown`], after which nothing may reach CEF at all.
+    pub(crate) fn is_ending(&self) -> bool {
+        self.services.ending.load(Ordering::Acquire) || self.cef_is_down()
+    }
+
+    /// The application's hooks, none once CEF has released them.
+    pub(crate) fn hooks(&self) -> Option<Arc<Hooks>> {
+        self.services.hooks.upgrade()
+    }
+
+    /// The origin of the application's start page.
+    pub(crate) fn app_origin(&self) -> &Origin {
+        self.services.router.app_origin()
+    }
+
     /// The runtime held weakly, for what lasts as long as the process: the
     /// Ctrl+C handler and the macOS `terminate:` override.
     pub(crate) fn downgrade(&self) -> Weak<RuntimeServices> {
@@ -563,7 +592,7 @@ impl AppHandle {
     /// CefInitialize, since Kurogane never sets `multi_threaded_message_loop`
     /// (cef_types.h:1753-1755). Compares thread ids and asks CEF nothing, so
     /// it holds before CefInitialize and after CefShutdown alike.
-    fn on_ui_thread(&self) -> bool {
+    pub(crate) fn on_ui_thread(&self) -> bool {
         std::thread::current().id() == self.services.ui_thread
     }
 
@@ -603,6 +632,13 @@ impl AppHandle {
     /// another thread posts the close to the UI thread. The call does not wait
     /// for the browsers to close. Does nothing once [`AppInstance::shutdown`]
     /// has begun.
+    ///
+    /// This end cannot be cancelled and no browser may open after it begins.
+    /// Popups are refused, [`AppInstance::create_window`] and
+    /// [`AppInstance::create_child_browser`] return [`RuntimeError::ShuttingDown`]
+    /// and any browser CEF is already creating is closed as it appears. No
+    /// context menu opens either, not even the one whose
+    /// [`App::on_context_menu`](crate::App::on_context_menu) hook began the end.
     pub fn shutdown(&self) {
         debug!("AppHandle::shutdown: closing every browser");
         self.request(Close::Everything { force: true });
@@ -677,6 +713,11 @@ impl AppHandle {
     /// application's own window closes without asking that window to close.
     /// A call from another thread is posted to the UI thread. Does nothing
     /// once [`AppInstance::shutdown`] has begun.
+    ///
+    /// With `force`, no page can cancel the close, so a call that finds a
+    /// browser open ends the application as [`AppHandle::shutdown`] does and
+    /// nothing opens after it. Without, a page's `beforeunload` may keep its
+    /// browser and the application, running.
     pub fn close_all_browsers(&self, force: bool) {
         self.request(Close::Browsers { force });
     }
@@ -687,6 +728,16 @@ impl AppHandle {
     /// its window.
     pub fn find_window_by_browser(&self, browser_id: BrowserId) -> Option<WindowId> {
         self.registry().windows.window_id_for_browser(browser_id)
+    }
+
+    /// Look up the open window named `name`
+    /// ([`WindowOptions::name`](crate::WindowOptions::name)).
+    ///
+    /// None once its close has been reported
+    /// ([`App::on_window_closing`](crate::App::on_window_closing)), even
+    /// while CEF is still closing it: the name is free for a new window.
+    pub fn find_window_by_name(&self, name: &str) -> Option<WindowId> {
+        self.registry().windows.window_named(name)
     }
 
     /// Metadata for all live browsers.
@@ -730,6 +781,22 @@ impl AppHandle {
         self.registry().windows.browser_for_window(id)
     }
 
+    /// Forgets the permission answers Chromium remembers for `origin`, so
+    /// the site's next request reaches
+    /// [`App::on_permission`](crate::App::on_permission) again: after the
+    /// application's policy changed, or the user took a permission back.
+    ///
+    /// Chromium remembers its answers to web sites (http, https), granted
+    /// or denied, in the profile, and forgets them nowhere else. Forgetting
+    /// also takes back a grant the site holds now: its notifications stop.
+    /// Applies to the profile of every open browser, an embedded browser's
+    /// own profile included. A call from another thread is posted to the UI
+    /// thread. Does nothing for the opaque origin, or once
+    /// [`AppInstance::shutdown`] has begun.
+    pub fn forget_permissions(&self, origin: &Origin) {
+        crate::permissions::forget_on_ui(self, origin);
+    }
+
     /// Creates a BrowserHandle for a registered browser, if it exists.
     ///
     /// Returns None if no browser with the given BrowserId is registered, or
@@ -752,8 +819,7 @@ impl AppHandle {
 
 #[cfg(test)]
 impl AppHandle {
-    /// A handle to an application CEF never saw: nothing open, no command,
-    /// and the calling thread as its UI thread.
+    /// A handle to an application CEF has not seen; the calling thread is its UI thread.
     pub(crate) fn detached() -> Self {
         use std::collections::HashMap;
 
@@ -761,13 +827,17 @@ impl AppHandle {
             crate::ipc::RequestResponseSubsystem::new(HashMap::new(), HashMap::new()),
             crate::ipc::EventSubsystem::new(),
             crate::ipc::StreamSubsystem::new(HashMap::new()),
-            crate::acl::CommandAcl::new(),
+            // No application origin is associated with a detached handle; only explicitly
+            // permitted names are reachable
+            crate::acl::CommandAcl::new(crate::acl::Origin::OPAQUE),
         );
         Self {
             services: Arc::new(RuntimeServices::new(
                 router,
                 std::thread::current().id(),
                 RendererSandbox::Sandboxed,
+                Weak::new(),
+                WindowIdentity::default(),
             )),
         }
     }
@@ -791,7 +861,7 @@ fn parent_window(parent: &impl HasWindowHandle) -> Result<cef_window_handle_t, R
         .map_err(|_| RuntimeError::UnsupportedParentWindow)?;
     match handle.as_raw() {
         #[cfg(target_os = "windows")]
-        RawWindowHandle::Win32(window) => Ok(cef::sys::HWND(window.hwnd.get() as *mut _)),
+        RawWindowHandle::Win32(window) => Ok(tetsu::sys::HWND(window.hwnd.get() as *mut _)),
         #[cfg(target_os = "macos")]
         RawWindowHandle::AppKit(window) => Ok(window.ns_view.as_ptr() as cef_window_handle_t),
         #[cfg(target_os = "linux")]
@@ -1001,6 +1071,10 @@ impl BrowserHandle {
 
     /// Open DevTools for this browser.
     pub fn show_devtools(&self) {
+        // DevTools is a browser and cannot open during shutdown.
+        if self.app.is_ending() {
+            return;
+        }
         if let Some(h) = self.host() {
             h.show_dev_tools(None, None, None, None);
         }
@@ -1069,31 +1143,38 @@ impl AppInstance {
         self.handle.should_shutdown()
     }
 
-    /// Creates a new top-level window with an embedded browser.
-    pub fn create_window(&self, options: WindowOptions) -> Result<WindowId, RuntimeError> {
-        let bounds = options.bounds;
-        let placement = Placement::Main {
-            bounds: Rect {
-                x: bounds.x,
-                y: bounds.y,
-                width: bounds.width,
-                height: bounds.height,
-            },
-            show_state: options.show_state.into(),
-        };
-        open_browser_window(&self.handle, &options.url, placement)
+    /// Opens `url` in a new window of the application's, as `options` say
+    /// (see [`WindowOptions`](crate::WindowOptions)).
+    ///
+    /// # Errors
+    ///
+    /// [`RuntimeError::InvalidWindowOptions`] for options no window can
+    /// have; [`RuntimeError::WindowNameTaken`] when an open window has the
+    /// name the options give; [`RuntimeError::ShuttingDown`] once
+    /// [`AppHandle::shutdown`] has begun;
+    /// [`RuntimeError::BrowserCreationFailed`] or
+    /// [`RuntimeError::WindowCreationFailed`] when CEF creates neither.
+    pub fn create_window(
+        &self,
+        url: &str,
+        options: crate::WindowOptions,
+    ) -> Result<WindowId, RuntimeError> {
+        if let Some(problem) = options.problem() {
+            return Err(RuntimeError::InvalidWindowOptions(problem));
+        }
+        open_browser_window(&self.handle, url, Opening::Application(options))
     }
 
     /// Takes ownership and blocks on the CEF message loop.
     ///
     /// The loop runs until the application's last browser has closed:
     /// after [`AppHandle::shutdown`] (from any thread), its last window
-    /// closing, or Ctrl+C. After the loop exits, cef::shutdown() is called on
+    /// closing, or Ctrl+C. After the loop exits, tetsu::shutdown() is called on
     /// the current (UI) thread.
     ///
     /// Not for an application given an [`App::scheduler`](crate::App::scheduler):
     /// the scheduler turns on CEF's external message pump, under which this
-    /// loop returns at once and cef::shutdown() would run under a window
+    /// loop returns at once and tetsu::shutdown() would run under a window
     /// still opening. Such an application calls [`AppInstance::pump`] from its
     /// own loop until [`AppInstance::should_shutdown`], then
     /// [`AppInstance::shutdown`].
@@ -1116,7 +1197,7 @@ impl AppInstance {
 
     /// Perform orderly CEF shutdown.
     ///
-    /// Calls cef::shutdown() on the UI thread; [`AppHandle::should_shutdown`]
+    /// Calls tetsu::shutdown() on the UI thread; [`AppHandle::should_shutdown`]
     /// is true from here on. Safe to call multiple times. Subsequent calls are
     /// no-ops.
     ///
@@ -1157,7 +1238,8 @@ impl AppInstance {
     ///
     /// [`RuntimeError::UnsupportedParentWindow`] when `parent` is not a
     /// Win32 window, an AppKit view or an X11 window (a Wayland surface, for
-    /// one), and [`RuntimeError::BrowserCreationFailed`] when CEF creates no
+    /// one), [`RuntimeError::ShuttingDown`] once [`AppHandle::shutdown`] has
+    /// begun, and [`RuntimeError::BrowserCreationFailed`] when CEF creates no
     /// browser.
     pub fn create_child_browser(
         &self,
@@ -1185,11 +1267,15 @@ impl AppInstance {
         parent: &impl HasWindowHandle,
         bounds: BrowserBounds,
         url: &str,
-        rc_settings: &cef::RequestContextSettings,
+        rc_settings: &tetsu::RequestContextSettings,
     ) -> Result<BrowserHandle, RuntimeError> {
+        // Nothing reaches CEF once application shutdown begins.
+        if self.handle.is_ending() {
+            return Err(RuntimeError::ShuttingDown);
+        }
         // Without its own context the browser would share the global cookie
         // and cache partition the caller asked to avoid
-        let rc = cef::request_context_create_context(Some(rc_settings), None)
+        let rc = tetsu::request_context_create_context(Some(rc_settings), None)
             .ok_or(RuntimeError::BrowserCreationFailed)?;
         self.create_child_browser_impl(parent, bounds, url, Some(rc))
     }
@@ -1199,8 +1285,11 @@ impl AppInstance {
         parent: &impl HasWindowHandle,
         bounds: BrowserBounds,
         url: &str,
-        request_context: Option<cef::RequestContext>,
+        request_context: Option<tetsu::RequestContext>,
     ) -> Result<BrowserHandle, RuntimeError> {
+        if self.handle.is_ending() {
+            return Err(RuntimeError::ShuttingDown);
+        }
         let info = WindowInfo {
             runtime_style: RuntimeStyle::ALLOY,
             ..WindowInfo::default()
@@ -1215,7 +1304,7 @@ impl AppInstance {
             },
         );
 
-        let mut client = KuroganeClient::new(self.handle.clone(), BrowserType::Main);
+        let mut client = KuroganeClient::new(self.handle.clone(), BrowserType::Main, None);
 
         let mut rc = request_context;
         let browser = browser_host_create_browser_sync(
@@ -1266,12 +1355,13 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
     // never sets `multi_threaded_message_loop`
     let ui_thread = std::thread::current().id();
 
+    // Loading fixes the CEF API version for the whole process; the Windows
+    // sandbox check compares hashes under this version later
     #[cfg(target_os = "macos")]
-    crate::platform::macos::init_ns_app(spec.sandbox_mode)?;
+    let cef_root = crate::platform::macos::init_ns_app(spec.sandbox_mode)?;
 
-    // The first call fixes the CEF API version for the whole process; the
-    // Windows sandbox check compares hashes under this version later
-    let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    let cef_root = load_libcef()?;
 
     debug!("Runtime initializing");
 
@@ -1282,6 +1372,8 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
             router,
             ui_thread,
             RendererSandbox::of(spec.sandbox_mode),
+            Arc::downgrade(&spec.hooks),
+            spec.window_identity.clone(),
         )),
     };
 
@@ -1294,7 +1386,7 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
     debug!("Executing subprocess dispatch");
     execute_subprocesses(&args, &mut app, sandbox_info);
 
-    let layout = resolve_layout(spec.profile_id)?;
+    let layout = resolve_layout(cef_root, spec.profile_id, spec.profile_dir)?;
     crate::sandbox::preflight(spec.sandbox_mode, &layout.cef_root)?;
 
     let external_message_pump = spec.scheduler.is_some();
@@ -1335,6 +1427,10 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
 
     #[cfg(target_os = "macos")]
     crate::platform::macos::setup_app_delegate();
+
+    // Preserve an existing application or host menu
+    #[cfg(target_os = "macos")]
+    crate::platform::macos::install_default_menu();
 
     // Only install Ctrl+C handler if CEF Views owns the window (non-embedded mode)
     // In embedded mode the host application manages its own lifecycle
@@ -1377,6 +1473,51 @@ mod tests {
             // never used as a window
             Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(self.0) })
         }
+    }
+
+    #[test]
+    fn nothing_opens_once_a_mandatory_end_has_begun() {
+        // Cancellable closes do not mark the application as ending
+        let graceful = AppHandle::detached();
+        graceful.request(Close::Everything { force: false });
+        assert!(!graceful.is_ending());
+        // A forced close of every browser that finds none closes and ends nothing
+        graceful.close_all_browsers(true);
+        assert!(!graceful.is_ending());
+
+        // Once CEF has shut down nothing may reach it, a browser least of all
+        let down = AppHandle::detached();
+        down.services.cef_shut_down.store(true, Ordering::SeqCst);
+        assert!(down.is_ending());
+
+        let handle = AppHandle::detached();
+        handle.shutdown();
+        assert!(handle.is_ending());
+        // Refused before any call reaches CEF, which a detached handle has none of
+        let opening = Opening::Application(crate::WindowOptions::new());
+        assert!(matches!(
+            open_browser_window(&handle, "app://app/index.html", opening),
+            Err(RuntimeError::ShuttingDown)
+        ));
+    }
+
+    #[test]
+    fn a_name_an_open_window_holds_is_refused_before_anything_opens() {
+        let handle = AppHandle::detached();
+        let held = handle
+            .registry()
+            .windows
+            .allocate_named("main")
+            .expect("no window holds the name yet");
+        // Refused before any call reaches CEF, which a detached handle has none of
+        let opening = Opening::Application(crate::WindowOptions::new().name("main"));
+        match open_browser_window(&handle, "app://app/index.html", opening) {
+            Err(RuntimeError::WindowNameTaken { name, window }) => {
+                assert_eq!((name.as_str(), window), ("main", held));
+            }
+            other => panic!("expected WindowNameTaken, got {other:?}"),
+        }
+        assert_eq!(handle.find_window_by_name("main"), Some(held));
     }
 
     #[test]
@@ -1448,13 +1589,13 @@ mod tests {
     //
     // A CEF object is a C structure of function pointers. A fake fills in
     // only the functions a test needs and counts every call made through
-    // them; cef-rs answers a default for a function left out, without
+    // them; tetsu answers a default for a function left out, without
     // calling anything. No test here loads CEF
     use std::ffi::c_int;
     use std::sync::atomic::AtomicUsize;
 
-    use cef::rc::ConvertReturnValue;
-    use cef::sys::{
+    use tetsu::rc::ConvertReturnValue;
+    use tetsu::sys::{
         _cef_base_ref_counted_t, _cef_browser_host_t, _cef_browser_t, _cef_frame_t, _cef_window_t,
     };
 
@@ -1496,7 +1637,7 @@ mod tests {
     }
 
     unsafe extern "C" fn called<T>(object: *mut T) {
-        // SAFETY: cef-rs passes the structure it wraps, a Fake<T>'s
+        // SAFETY: tetsu passes the structure it wraps, a Fake<T>'s
         unsafe { count(object) }
     }
 
@@ -1517,7 +1658,7 @@ mod tests {
         1
     }
 
-    /// Leaks a fake around `raw` and wraps it as cef-rs wraps what CEF returns.
+    /// Leaks a fake around `raw` and wraps it as tetsu wraps what CEF returns.
     fn leak<T: 'static, W>(raw: T) -> (W, &'static AtomicUsize)
     where
         *mut T: ConvertReturnValue<W>,
@@ -1526,7 +1667,7 @@ mod tests {
             raw,
             calls: AtomicUsize::new(0),
         }));
-        // cef-rs only reads the structure, and the count is atomic
+        // tetsu only reads the structure, and the count is atomic
         let object = std::ptr::from_ref(&fake.raw).cast_mut();
         (
             <*mut T as ConvertReturnValue<W>>::wrap_result(object),
@@ -1591,7 +1732,14 @@ mod tests {
                     .browsers
                     .ensure_registered(&browser, BrowserType::Main, None);
                 let window_id = registry.windows.allocate_id();
-                registry.windows.insert(window_id, window, Some(id));
+                registry.windows.insert(
+                    window_id,
+                    window,
+                    Some(id),
+                    true,
+                    crate::window_registry::WindowKind::Popup,
+                    crate::WindowState::Normal,
+                );
                 (id, window_id)
             };
             let origin = Origin::parse("app://app").unwrap();
@@ -1836,7 +1984,14 @@ mod tests {
                 .browsers
                 .ensure_registered(&browser, BrowserType::Main, None);
             let window_id = registry.windows.allocate_id();
-            registry.windows.insert(window_id, window, Some(id));
+            registry.windows.insert(
+                window_id,
+                window,
+                Some(id),
+                true,
+                crate::window_registry::WindowKind::Popup,
+                crate::WindowState::Normal,
+            );
             (id, window_id)
         };
         assert_eq!(app.find_window_by_browser(id), Some(window_id));
@@ -1846,11 +2001,54 @@ mod tests {
         let closed = closed.expect("the browser was registered");
         assert!(closed.last);
         assert!(closed.stragglers.is_empty());
+        // A popup's window is not the application's to hear of
+        assert!(closed.closing.is_none());
 
         // CEF destroys the window later; until then it names no browser
         assert_eq!(app.window_count(), 1);
         assert_eq!(app.find_window_by_browser(id), None);
         assert_eq!(app.browser_for_window(window_id), None);
+    }
+
+    #[test]
+    fn an_application_window_s_name_is_free_once_its_close_is_reported() {
+        let app = AppHandle::detached();
+        let (browser, _) = fake_browser();
+        let (window, _) = fake_window();
+        let window_id = {
+            let mut registry = app.registry();
+            let id = registry
+                .browsers
+                .ensure_registered(&browser, BrowserType::Main, None);
+            let window_id = registry
+                .windows
+                .allocate_named("main")
+                .expect("no window holds the name yet");
+            assert_eq!(registry.windows.allocate_named("main"), Err(window_id));
+            registry.windows.insert(
+                window_id,
+                window,
+                Some(id),
+                true,
+                crate::window_registry::WindowKind::Application,
+                crate::WindowState::Maximized,
+            );
+            window_id
+        };
+        assert_eq!(app.find_window_by_name("main"), Some(window_id));
+
+        let closed = app.registry().browser_closed(&browser);
+        let closing = closed
+            .and_then(|closed| closed.closing)
+            .expect("an application window's close is reported");
+        assert_eq!(closing.id, window_id);
+        assert_eq!(closing.name.as_deref(), Some("main"));
+        assert_eq!(closing.shown, crate::WindowState::Maximized);
+
+        // The window is still there for CEF to destroy; its name is free
+        assert_eq!(app.window_count(), 1);
+        assert_eq!(app.find_window_by_name("main"), None);
+        assert!(app.registry().windows.allocate_named("main").is_ok());
     }
 
     #[test]

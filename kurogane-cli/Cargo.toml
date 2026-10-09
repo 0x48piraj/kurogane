@@ -14,19 +14,35 @@ path = "src/main.rs"
 [dependencies]
 kurogane-layout.workspace = true
 anyhow = "1"
+auth-git2 = "0.6.0"
 cargo-generate = "0.23.14"
-git2 = "0.21"
 cargo_metadata = "0.23.1"
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
-download-cef = "2.3"
+git2 = { version = "0.21.0", default-features = false, features = ["https", "ssh"] }
+tetsu-download.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.8"
+toml = "1.1.4"
 colored = "3"
+thiserror = "2.0.18"
+
+[target.'cfg(target_os = "linux")'.dependencies]
 ureq = "3"
 sha2 = "0.11.0"
-thiserror = "2.0.18"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+tetsu-build.workspace = true
+find-msvc-tools = "0.1.9"
+self-replace = "1.5"
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_System_Registry",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [dev-dependencies]
 kurogane-layout = { workspace = true, features = ["test-fixtures"] }

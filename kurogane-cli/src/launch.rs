@@ -10,105 +10,14 @@
 //! Once control passes to the user's program, the program owns the exit code.
 
 use anyhow::Result;
-use cargo_metadata::{Package, Target, TargetKind};
+use cargo_metadata::{Metadata, Package, Target, TargetKind};
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, ExitStatus};
 
-use kurogane_layout::{cef_install_dir, cef_override, validate_cef_runtime};
 use crate::config::PackagingConfig;
 
 use crate::tui;
-
-/// Where `kurogane dev`, `run` and `build` look for CEF, and where that
-/// comes from: the distribution `CEF_PATH` names, else the managed
-/// installation.
-pub(crate) fn dev_cef_root() -> (PathBuf, &'static str) {
-    match cef_override() {
-        Some(root) => (root, "CEF_PATH"),
-        None => (
-            cef_install_dir(env!("KUROGANE_CEF_VERSION")),
-            "managed install",
-        ),
-    }
-}
-
-/// Resolve the CEF runtime, installing it if necessary.
-///
-/// `CEF_PATH` overrides the managed install when valid for development convenience.
-/// Provenance is deliberately not checked.
-pub(crate) fn ensure_cef_runtime() -> Result<PathBuf> {
-    let version = env!("KUROGANE_CEF_VERSION");
-
-    let (cef, _) = dev_cef_root();
-
-    tui::step("Checking Chromium engine");
-
-    match validate_cef_runtime(&cef) {
-        Ok(_) => {
-            tui::success("Chromium engine ready");
-            tui::field("path", tui::format_path(&cef));
-
-            Ok(cef)
-        }
-
-        Err(err) => {
-            tui::warn("Chromium runtime missing or invalid");
-            tui::info("Initiating install process...");
-            tui::field("reason", err);
-
-            crate::install::run()?;
-
-            // The installer populates the managed cache, not `cef`
-            // Use the managed path after a failed validation
-            let installed = cef_install_dir(version);
-
-            validate_cef_runtime(&installed).map_err(|err| {
-                anyhow::anyhow!(
-                    "CEF runtime at {} is still invalid after install: {err}",
-                    installed.display()
-                )
-            })?;
-
-            tui::success("Chromium engine ready");
-            tui::field("path", tui::format_path(&installed));
-
-            Ok(installed)
-        }
-    }
-}
-
-/// Returns Kurogane's directory under Cargo's target directory.
-///
-/// Kurogane configures `cef-dll-sys` differently from plain cargo,
-/// see [`crate::platform::cef_build_script_override`].
-pub(crate) fn target_dir_in(base: &Path) -> PathBuf {
-    base.join("kurogane")
-}
-
-/// Kurogane's target directory for the current project.
-pub(crate) fn target_dir() -> Result<PathBuf> {
-    let metadata = cargo_metadata::MetadataCommand::new().no_deps().exec()?;
-
-    Ok(target_dir_in(metadata.target_directory.as_std_path()))
-}
-
-/// Constructs a Cargo command with Kurogane's CEF build configuration.
-///
-/// Uses a shared target directory and `CEF_PATH` across build, run and bundle.
-pub(crate) fn cargo_command(cef: &Path, subcommand: &str) -> Result<Command> {
-    let mut cmd = Command::new("cargo");
-    cmd.arg(subcommand);
-
-    // Skip cef-dll-sys's redundant runtime staging
-    cmd.args(crate::platform::cef_build_script_override(cef)?);
-
-    cmd.env("CEF_PATH", cef);
-
-    cmd.env("CARGO_TARGET_DIR", target_dir()?);
-
-    Ok(cmd)
-}
 
 /// Returns the package's first target of `kind`.
 pub(crate) fn find_target(package: &Package, kind: TargetKind) -> Option<&Target> {
@@ -118,18 +27,20 @@ pub(crate) fn find_target(package: &Package, kind: TargetKind) -> Option<&Target
         .find(|target| target.kind.contains(&kind))
 }
 
-/// Runs the application with the Kurogane runtime environment, in the shape
-/// its sandbox needs.
+/// Runs the application in the shape its sandbox needs, on `cef`.
 ///
 /// Reads `kurogane.toml` from the project root; only `sandbox = true` on
 /// Windows changes the shape, see [`crate::sandbox`].
-pub(crate) fn run_app(cef: &Path, cargo_args: &[OsString]) -> Result<ExitStatus> {
-    let metadata = cargo_metadata::MetadataCommand::new().no_deps().exec()?;
+pub(crate) fn run_app(
+    metadata: &Metadata,
+    cef: &Path,
+    cargo_args: &[OsString],
+) -> Result<ExitStatus> {
     let project_root = metadata.workspace_root.as_std_path();
     let config = PackagingConfig::load(project_root)?;
 
     if !crate::sandbox::uses_bootstrap(&config.app) {
-        return cargo_run(cef, cargo_args);
+        return cargo_run(cargo_args);
     }
 
     let package = metadata
@@ -139,15 +50,11 @@ pub(crate) fn run_app(cef: &Path, cargo_args: &[OsString]) -> Result<ExitStatus>
     crate::sandbox::run(cef, cargo_args, package, project_root, &config.app)
 }
 
-/// Run Cargo with the Kurogane runtime environment.
-fn cargo_run(cef: &Path, cargo_args: &[OsString]) -> Result<ExitStatus> {
-    crate::platform::prepare_gpu_libraries(cef, cargo_args)?;
-
-    let mut cmd = cargo_command(cef, "run")?;
+/// Runs the application through plain `cargo run`.
+fn cargo_run(cargo_args: &[OsString]) -> Result<ExitStatus> {
+    let mut cmd = Command::new("cargo");
+    cmd.arg("run");
     cmd.args(cargo_args);
-
-    // Configure platform-specific runtime loading for the launched process
-    crate::platform::configure_runtime_env(&mut cmd, cef)?;
 
     tui::blank();
     tui::step("Launching application");

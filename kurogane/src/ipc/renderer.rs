@@ -3,10 +3,10 @@
 //! Connects JavaScript to the browser process via CEF messages.
 //! Defines the boundary between JavaScript and the native IPC system.
 
-use cef::*;
+use tetsu::*;
 use std::sync::Arc;
 use crate::app::ClientAppRendererDelegate;
-use crate::debug;
+use tracing::debug;
 use crate::ipc::browser_state::ErrorCode;
 use crate::ipc::envelope::*;
 use crate::ipc::transport::message::{build_message, build_message_parts, receive_from_browser};
@@ -172,6 +172,12 @@ wrap_render_process_handler! {
                 Some(origin) if origin.is_string() != 0 && v8_to_string(&origin) != "null"
             );
             state().context_created(context.clone(), FrameId::of(frame), opaque);
+            // The browser sees only URLs, which hide a sandbox: it learns of
+            // the document here, for what it reports of a frame
+            // (crate::context_menu's target)
+            if opaque {
+                tell_browser(frame, crate::context_menu::OPAQUE_DOCUMENT);
+            }
 
             global.set_value_bykey(
                 Some(&CefString::from("core")),
@@ -208,7 +214,11 @@ wrap_render_process_handler! {
             }
 
             if let Some(ctx) = context {
+                let opaque = state().is_opaque(ctx);
                 state().context_released(ctx);
+                if opaque && let Some(frame) = frame {
+                    tell_browser(frame, crate::context_menu::OPAQUE_DOCUMENT_GONE);
+                }
             }
         }
 
@@ -1015,5 +1025,12 @@ wrap_v8_handler! {
 
             1
         }
+    }
+}
+
+/// Sends the browser a message without a body, named `name`.
+fn tell_browser(frame: &Frame, name: &str) {
+    if let Some(mut message) = process_message_create(Some(&CefString::from(name))) {
+        frame.send_process_message(ProcessId::BROWSER, Some(&mut message));
     }
 }

@@ -22,8 +22,8 @@
 //! - Links inside the root that stay inside it keep working
 //! - Focused on safe, predictable asset access within the runtime
 
-use cef::*;
-use cef::sys::cef_scheme_options_t::{
+use tetsu::*;
+use tetsu::sys::cef_scheme_options_t::{
     CEF_SCHEME_OPTION_STANDARD, CEF_SCHEME_OPTION_SECURE, CEF_SCHEME_OPTION_CORS_ENABLED,
     CEF_SCHEME_OPTION_FETCH_ENABLED,
 };
@@ -36,7 +36,7 @@ use mime_guess::MimeGuess;
 use url::Url;
 use crate::fs::CanonicalRoot;
 
-use crate::debug;
+use tracing::{debug, warn};
 
 /// Errors returned when resolving an app:// request.
 /// Each variant maps to an HTTP status code.
@@ -98,7 +98,7 @@ pub struct ResolvedAsset {
 /// Implement this trait and pass the instance to
 /// [`App::register_scheme`](crate::App::register_scheme) to expose a custom
 /// scheme to the frontend. The trait method mirrors
-/// [`SchemeHandlerFactory::create`](cef::SchemeHandlerFactory) minus the
+/// [`SchemeHandlerFactory::create`](tetsu::SchemeHandlerFactory) minus the
 /// scheme name which is fixed per registration.
 ///
 /// CEF calls `create` on the browser-process IO thread, which also carries
@@ -264,7 +264,7 @@ impl Body {
             Err(e) => {
                 let status = e.http_status();
 
-                eprintln!("[kurogane] status={status} url=\"{url}\" reason={e}");
+                warn!("status={status} url=\"{url}\" reason={e}");
 
                 Self {
                     bytes: e.http_repr().to_vec(),
@@ -941,7 +941,7 @@ mod tests {
 
     #[test]
     fn a_panicking_scheme_handler_fails_its_request() {
-        // Called through cef-rs's extern "C" trampoline, as CEF calls it: a
+        // Called through tetsu's extern "C" trampoline, as CEF calls it: a
         // panic escaping the factory would abort the test process
         let factory = CustomSchemeHandlerFactory::new(Arc::new(Panics));
         assert!(factory.create(None, None, None, None).is_none());

@@ -6,9 +6,9 @@
 //! answers an open before it sends anything else of the stream, so a
 //! stream still opening receives nothing but that answer.
 
-use cef::*;
+use tetsu::*;
 
-use crate::debug;
+use tracing::debug;
 use crate::ipc::envelope::*;
 use crate::ipc::renderer_state::state;
 use crate::ipc::utils::{create_array_buffer_from_bytes, rejection};

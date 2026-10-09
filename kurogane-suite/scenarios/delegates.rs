@@ -1,5 +1,5 @@
 use kurogane::App;
-use kurogane::cef::*;
+use kurogane::tetsu::*;
 
 struct BrowserDelegate;
 
@@ -75,6 +75,7 @@ impl kurogane::ClientAppRendererDelegate for RendererDelegate {
 }
 
 fn main() {
+    kurogane_suite::logging();
     let runtime = App::url("https://example.com")
         .delegate(BrowserDelegate)
         .renderer_delegate(RendererDelegate)
