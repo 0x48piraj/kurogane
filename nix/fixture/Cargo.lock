@@ -223,7 +223,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "kurogane"
-version = "0.0.6-alpha.1"
+version = "0.0.6-alpha.2"
 dependencies = [
  "ctrlc",
  "kurogane-layout",
@@ -246,14 +246,14 @@ dependencies = [
 
 [[package]]
 name = "kurogane-build"
-version = "0.0.6-alpha.1"
+version = "0.0.6-alpha.2"
 dependencies = [
  "tetsu-build",
 ]
 
 [[package]]
 name = "kurogane-layout"
-version = "0.0.6-alpha.1"
+version = "0.0.6-alpha.2"
 dependencies = [
  "dirs",
  "thiserror",
@@ -526,7 +526,7 @@ dependencies = [
 [[package]]
 name = "tetsu"
 version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tetsu?rev=881d8cbd1209aa0379c90f121a9f00aaefd026d2#881d8cbd1209aa0379c90f121a9f00aaefd026d2"
+source = "git+https://github.com/kurogane-rs/tetsu?tag=v154.4.0%2B154.0.33#881d8cbd1209aa0379c90f121a9f00aaefd026d2"
 dependencies = [
  "libloading",
  "objc2",
@@ -537,12 +537,12 @@ dependencies = [
 [[package]]
 name = "tetsu-build"
 version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tetsu?rev=881d8cbd1209aa0379c90f121a9f00aaefd026d2#881d8cbd1209aa0379c90f121a9f00aaefd026d2"
+source = "git+https://github.com/kurogane-rs/tetsu?tag=v154.4.0%2B154.0.33#881d8cbd1209aa0379c90f121a9f00aaefd026d2"
 
 [[package]]
 name = "tetsu-sys"
 version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tetsu?rev=881d8cbd1209aa0379c90f121a9f00aaefd026d2#881d8cbd1209aa0379c90f121a9f00aaefd026d2"
+source = "git+https://github.com/kurogane-rs/tetsu?tag=v154.4.0%2B154.0.33#881d8cbd1209aa0379c90f121a9f00aaefd026d2"
 dependencies = [
  "dirs",
  "libloading",
