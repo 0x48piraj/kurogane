@@ -11,8 +11,8 @@
 
 let
   version = cefVersion;
-  gitRevision = "8042e43";
-  chromiumVersion = "150.0.7871.101";
+  gitRevision = "a03e714";
+  chromiumVersion = "154.0.8037.94";
 
   platform =
     {
@@ -32,9 +32,9 @@ let
   # Archive SHA-1 published in the CEF build index
   sha1 =
     {
-      "x86_64-linux" = "74a1186c566cbbac38c6b0f5298fc0bcfc1b9606";
-      "aarch64-linux" = "03e7a836ee73326280b8a3032e9741898133447e";
-      "aarch64-darwin" = "e73f7ce767420791b1965e15816a955d88cf1f9a";
+      "x86_64-linux" = "9794ecf85ccd4dfcca42bfaac7a7666004f051e8";
+      "aarch64-linux" = "87d20c0c25f08841db595c327125d270f5045865";
+      "aarch64-darwin" = "bfa2358a5fba8d0a016118941d9cda0bf2d06f20";
     }
     .${stdenv.hostPlatform.system};
 
@@ -49,7 +49,7 @@ let
 
           hash =
             {
-              "aarch64-darwin" = "sha256-71/kZBhOLgA4GizHPpEbtLjMIZ8Ob5/WEK8LyJ0OpY0=";
+              "aarch64-darwin" = "sha256-beeJyUKulIWWsbDGDXJQPA4SbzaKvdT+5TDo6qN3aBQ=";
             }
             .${stdenv.hostPlatform.system};
         };
@@ -62,20 +62,35 @@ let
         '';
       }
     else
-      cef-binary.override {
+      (cef-binary.override {
         inherit version gitRevision chromiumVersion;
 
         srcHashes = {
-          aarch64-linux = "sha256-+5U2KskaH3GuaoyLpNBkHK0IN1kExOfdHMPO67Gi2HU=";
-          x86_64-linux = "sha256-bB1Ike84huPM9l0JKI2DBOP343JKR8kyk+K9Y+dlKOQ=";
+          aarch64-linux = "sha256-zQ8IkqjCF7Z2DfafhZs70jFY/Kob7jXFWYpBxuCHiJk=";
+          x86_64-linux = "sha256-zYnjZgVdRBKUL6JTNKn8mKW2n/Wwq/YgnJTi2eOABaI=";
         };
-      };
+      }).overrideAttrs
+        (old: {
+          # CEF 154 bundles ANGLE in libcef.so; patch only libraries present in the archive
+          # Goes away when https://github.com/NixOS/nixpkgs/pull/571896 lands
+          installPhase = lib.concatMapStringsSep "\n" (
+            line:
+            let
+              name = lib.findFirst (name: lib.hasInfix "/${name}" line) null [
+                "libEGL.so"
+                "libGLESv2.so"
+              ];
+            in
+            if name != null && lib.hasPrefix "patchelf" (lib.trim line) then
+              "[ ! -e ${old.passthru.buildType}/${name} ] || ${line}"
+            else
+              line
+          ) (lib.splitString "\n" old.installPhase);
+        });
 
-  # Sources the libcef_dll_wrapper build needs
-  sources = linkFarm "cef-sources-${cefVersion}" (
-    lib.genAttrs [ "CMakeLists.txt" "cmake" "include" "libcef_dll" "CREDITS.html" ] (
-      name: "${cef}/${name}"
-    )
+  # CEF's license and credits which every bundle carries
+  notices = linkFarm "cef-notices-${cefVersion}" (
+    lib.genAttrs [ "LICENSE.txt" "CREDITS.html" ] (name: "${cef}/${name}")
   );
 
   archiveJson = writeTextFile {
@@ -88,7 +103,7 @@ let
     };
   };
 in
-# Mirrors the managed installation layout produced by download-cef
+# Bundle the runtime, notices and build metadata
 symlinkJoin {
   name = "cef-with-archive-${cefVersion}";
 
@@ -97,7 +112,7 @@ symlinkJoin {
   ]
   ++ lib.optional (!stdenv.hostPlatform.isDarwin) "${cef}/Resources"
   ++ [
-    sources
+    notices
     archiveJson
   ];
 

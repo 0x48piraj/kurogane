@@ -1,0 +1,14 @@
+[package]
+name = "fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+kurogane = { path = "../../kurogane" }
+
+[build-dependencies]
+kurogane-build = { path = "../../kurogane-build" }
+
+# A project of its own as an application generated from a starter is
+[workspace]

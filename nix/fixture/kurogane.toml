@@ -1,0 +1,3 @@
+[app]
+name = "fixture"
+frontend-dist = "web"
