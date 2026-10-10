@@ -264,7 +264,7 @@ flowchart TD
 * **Events:** Publish and subscribe delivery to subscribed frames.
 * **Streams:** Bi-directional transfers identified by stream ID with per-stream handlers and state. A handler accepts or refuses the open before the page holds the stream; the first end or error sent closes it. An end the page sends is always answered.
 
-JavaScript values travel as JSON and binary data as raw bytes. Each travels behind a small binary envelope in a CEF process message. Smaller messages travel inline in the process message's argument list. A larger one travels in shared memory. That avoids serialization and an extra copy across the boundary.
+JavaScript values travel as JSON and binary data as raw bytes. Each travels behind a small binary envelope in a CEF process message. Smaller messages travel inline in the process message's argument list. A larger one travels in shared memory. That avoids serialization and an extra copy across the boundary. A very large payload for the page is copied into its `ArrayBuffer` on a thread of its own. The page's main thread stays free during a big transfer. A frame's messages still arrive in the order sent.
 
 See [exposing Rust commands to JavaScript](docs/recipes.md#exposing-rust-commands-to-javascript) and [streaming data](docs/recipes.md#streaming-data) for usage.
 
@@ -286,7 +286,7 @@ Chromium ties its work to threads:
 | IO       | Resource loading |
 | Renderer | V8 execution     |
 
-Kurogane reads `app://` files on a CEF worker thread. It runs `fs.*` operations on a worker thread of its own. A request fails when that thread cannot start. Neither holds up the UI or IO thread.
+Kurogane reads `app://` files on a CEF worker thread. It runs `fs.*` operations on a worker thread of its own. A request fails when that thread cannot start. Neither holds up the UI or IO thread. In each renderer it fills very large `ArrayBuffers` on a thread of its own.
 
 The application's handlers run on the UI thread. That covers commands (the body of an async command included), stream factories, stream handlers and the second-instance hook. Every window waits until one returns. Slow work belongs on a thread of the application's own; any thread may resolve a `Responder` or use a `StreamResponder`.
 

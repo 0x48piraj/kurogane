@@ -4,14 +4,19 @@ use tracing::debug;
 use crate::ipc::browser_state::ErrorCode;
 use crate::ipc::envelope::*;
 use crate::ipc::renderer_state::state;
-use crate::ipc::utils::{create_array_buffer_from_bytes, rejection};
+use crate::ipc::utils::{array_buffer, rejection};
 use crate::ipc::FrameId;
 
 /// Handle an RPC response arriving from the browser (renderer-side dispatch).
 ///
 /// Settles the promise only for the context that asked, in the frame the
 /// browser addressed; any other answer is dropped.
-pub fn handle_rpc_renderer(frame: &mut Frame, envelope: &Envelope, payload: &[u8]) -> bool {
+pub fn handle_rpc_renderer(
+    frame: &mut Frame,
+    envelope: &Envelope,
+    payload: &[u8],
+    filled: Option<V8BackingStore>,
+) -> bool {
     if !matches!(envelope.opcode, RPC_RESOLVE | RPC_REJECT) {
         debug!("[RPC Renderer] unknown opcode {}", envelope.opcode);
         return false;
@@ -28,7 +33,7 @@ pub fn handle_rpc_renderer(frame: &mut Frame, envelope: &Envelope, payload: &[u8
         return true;
     }
     match (envelope.opcode, envelope.payload_kind) {
-        (RPC_RESOLVE, PAYLOAD_BINARY) => match create_array_buffer_from_bytes(payload) {
+        (RPC_RESOLVE, PAYLOAD_BINARY) => match array_buffer(payload, filled) {
             Some(mut buffer) => {
                 promise.resolve_promise(Some(&mut buffer));
             }

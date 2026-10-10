@@ -96,12 +96,20 @@ fn refuse_opening(frame: &Frame, envelope: &Envelope, error: IpcError) {
 ///
 /// Routes a decoded envelope + payload to the appropriate subsystem handler.
 /// Needs no [`IpcRouter`] which exists only in the browser process.
-pub fn route_renderer(frame: &mut Frame, envelope: &Envelope, payload: &[u8]) -> bool {
+/// `filled` already holds the bytes of the ArrayBuffer the message makes.
+pub fn route_renderer(
+    frame: &mut Frame,
+    envelope: &Envelope,
+    payload: &[u8],
+    filled: Option<V8BackingStore>,
+) -> bool {
     match envelope.subsystem {
-        SUB_RPC => crate::ipc::rpc::renderer::handle_rpc_renderer(frame, envelope, payload),
-        SUB_EVENT => crate::ipc::event::renderer::handle_event_renderer(frame, envelope, payload),
+        SUB_RPC => crate::ipc::rpc::renderer::handle_rpc_renderer(frame, envelope, payload, filled),
+        SUB_EVENT => {
+            crate::ipc::event::renderer::handle_event_renderer(frame, envelope, payload, filled)
+        }
         SUB_STREAM => {
-            crate::ipc::stream::renderer::handle_stream_renderer(frame, envelope, payload)
+            crate::ipc::stream::renderer::handle_stream_renderer(frame, envelope, payload, filled)
         }
         _ => {
             debug!("[Router Renderer] unknown subsystem {}", envelope.subsystem);

@@ -526,7 +526,7 @@ dependencies = [
 [[package]]
 name = "tetsu"
 version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tetsu?tag=v154.4.0%2B154.0.33#881d8cbd1209aa0379c90f121a9f00aaefd026d2"
+source = "git+https://github.com/kurogane-rs/tetsu?rev=748d237ee63b564bc8905c72d8179aa3383c0c0b#748d237ee63b564bc8905c72d8179aa3383c0c0b"
 dependencies = [
  "libloading",
  "objc2",
@@ -537,12 +537,12 @@ dependencies = [
 [[package]]
 name = "tetsu-build"
 version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tetsu?tag=v154.4.0%2B154.0.33#881d8cbd1209aa0379c90f121a9f00aaefd026d2"
+source = "git+https://github.com/kurogane-rs/tetsu?rev=748d237ee63b564bc8905c72d8179aa3383c0c0b#748d237ee63b564bc8905c72d8179aa3383c0c0b"
 
 [[package]]
 name = "tetsu-sys"
 version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tetsu?tag=v154.4.0%2B154.0.33#881d8cbd1209aa0379c90f121a9f00aaefd026d2"
+source = "git+https://github.com/kurogane-rs/tetsu?rev=748d237ee63b564bc8905c72d8179aa3383c0c0b#748d237ee63b564bc8905c72d8179aa3383c0c0b"
 dependencies = [
  "dirs",
  "libloading",

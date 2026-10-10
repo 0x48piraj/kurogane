@@ -10,7 +10,7 @@ use tracing::debug;
 use crate::ipc::browser_state::ErrorCode;
 use crate::ipc::envelope::*;
 use crate::ipc::transport::message::{build_message, build_message_parts, receive_from_browser};
-use crate::ipc::router;
+use crate::ipc::renderer_delivery;
 use crate::ipc::renderer_registry::StreamSink;
 use crate::ipc::renderer_state::state;
 use crate::ipc::utils::rejection;
@@ -326,13 +326,7 @@ wrap_render_process_handler! {
                 return 1;
             };
 
-            // A panic must not unwind across this CEF callback
-            let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                router::route_renderer(frame, &received.envelope(), received.payload());
-            }));
-            if routed.is_err() {
-                debug!("[IPC Renderer] dispatch panicked; message dropped");
-            }
+            renderer_delivery::receive(frame, received);
             1
         }
 

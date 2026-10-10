@@ -11,16 +11,21 @@ use tetsu::*;
 use tracing::debug;
 use crate::ipc::envelope::*;
 use crate::ipc::renderer_state::state;
-use crate::ipc::utils::{create_array_buffer_from_bytes, rejection};
+use crate::ipc::utils::{array_buffer, rejection};
 use crate::ipc::FrameId;
 
 /// Handle a stream message arriving from the browser (renderer-side dispatch).
-pub fn handle_stream_renderer(frame: &mut Frame, envelope: &Envelope, payload: &[u8]) -> bool {
+pub fn handle_stream_renderer(
+    frame: &mut Frame,
+    envelope: &Envelope,
+    payload: &[u8],
+    filled: Option<V8BackingStore>,
+) -> bool {
     let addressed = FrameId::of(frame);
     let id = envelope.correlation_id as i32;
     match envelope.opcode {
         STREAM_BROWSER_OPENED => on_opened(id, &addressed),
-        STREAM_BROWSER_DATA => on_data(id, &addressed, payload),
+        STREAM_BROWSER_DATA => on_data(id, &addressed, payload, filled),
         STREAM_BROWSER_END => on_end(id, &addressed, payload),
         STREAM_BROWSER_ERROR => on_error(id, &addressed, payload),
         _ => {
@@ -52,7 +57,7 @@ fn on_opened(id: i32, addressed: &FrameId) -> bool {
 
 /// `STREAM_BROWSER_DATA` for an open stream. A chunk for a stream still
 /// opening is dropped.
-fn on_data(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
+fn on_data(id: i32, addressed: &FrameId, payload: &[u8], filled: Option<V8BackingStore>) -> bool {
     let target = state().stream_data(id, addressed);
     let Some((context, callback)) = target else {
         debug!(
@@ -64,7 +69,7 @@ fn on_data(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
     if context.enter() == 0 {
         return true;
     }
-    match create_array_buffer_from_bytes(payload) {
+    match array_buffer(payload, filled) {
         Some(buffer) => {
             callback.execute_function(None, Some(&[Some(buffer)]));
         }
