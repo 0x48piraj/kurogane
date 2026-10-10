@@ -7,7 +7,7 @@ use tetsu::*;
 use tracing::debug;
 use crate::ipc::envelope::*;
 use crate::ipc::renderer_state::state;
-use crate::ipc::utils::rejection;
+use crate::ipc::utils::{create_array_buffer_from_bytes, rejection};
 use crate::ipc::FrameId;
 
 /// Handle an event message arriving from the browser (renderer-side dispatch).
@@ -64,8 +64,13 @@ fn on_emit(addressed: &FrameId, envelope: &Envelope, payload: &[u8]) -> bool {
     if context.enter() == 0 {
         return true;
     }
-    let text = String::from_utf8_lossy(data);
-    let value = v8_value_create_string(Some(&CefString::from(text.as_ref())));
+    // Bytes arrive as an ArrayBuffer, JSON as a string
+    let value = if envelope.payload_kind == PAYLOAD_BINARY {
+        create_array_buffer_from_bytes(data)
+    } else {
+        let text = String::from_utf8_lossy(data);
+        v8_value_create_string(Some(&CefString::from(text.as_ref())))
+    };
     callback.execute_function(None, Some(&[value]));
     context.exit();
     true

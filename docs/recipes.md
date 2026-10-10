@@ -803,7 +803,7 @@ Kurogane checks every request before the handler runs.
 app.broadcast_json("progress", &42);
 ```
 
-A page subscribes with `kurogane.on` and gets the JSON text. `kurogane.off` ends the subscription:
+A page subscribes with `kurogane.on` and gets the JSON text. An event from `broadcast` arrives as an `ArrayBuffer` instead. `kurogane.off` ends the subscription:
 
 ```javascript
 const id = window.kurogane.on(

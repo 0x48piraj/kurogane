@@ -15,6 +15,7 @@ use crate::window_registry::{WindowId, WindowMetadata};
 use crate::window::{Opening, WindowIdentity, open_browser_window};
 use kurogane_layout::{bundle_cef_root, validate_cef_runtime, profile_dir};
 use crate::ipc::IpcRouter;
+use crate::ipc::envelope::{PAYLOAD_BINARY, PAYLOAD_JSON};
 use crate::ipc::transport::message::RendererSandbox;
 use crate::spec::{RuntimeMode, RuntimeSpec, SandboxMode};
 use tracing::{debug, warn};
@@ -656,28 +657,35 @@ impl AppHandle {
             || self.services.cef_shut_down.load(Ordering::Acquire)
     }
 
-    /// Broadcast an event to all renderers subscribed to event.
+    /// Broadcast bytes to all renderers subscribed to event.
     ///
-    /// The event is delivered asynchronously to every active subscription for the
+    /// A page's `kurogane.on` callback receives them as an `ArrayBuffer`. The
+    /// event is delivered asynchronously to every active subscription for the
     /// given event name. This method is thread-safe and returns immediately after
     /// queuing the event for delivery. Does nothing once
     /// [`AppInstance::shutdown`] has begun.
     pub fn broadcast(&self, event: &str, data: &[u8]) {
-        // Subscriptions hold CEF frames
-        if self.cef_is_down() {
-            return;
-        }
-        self.router().event.broadcast(event, data);
+        self.broadcast_payload(event, data, PAYLOAD_BINARY);
     }
 
     /// Broadcast a JSON-serializable event to all renderers subscribed to event.
     ///
-    /// The value is serialized to JSON and sent as a string payload.
-    /// This is the preferred way to emit structured events.
+    /// The value is serialized to JSON. A page's `kurogane.on` callback receives
+    /// the JSON text as a string. This is the preferred way to emit structured
+    /// events.
     pub fn broadcast_json<T: serde::Serialize>(&self, event: &str, value: &T) {
         if let Ok(json) = serde_json::to_string(value) {
-            self.broadcast(event, json.as_bytes());
+            self.broadcast_payload(event, json.as_bytes(), PAYLOAD_JSON);
         }
+    }
+
+    /// Broadcasts a payload of one kind unless the runtime is shutting down.
+    fn broadcast_payload(&self, event: &str, data: &[u8], payload_kind: u8) {
+        // Subscriptions hold CEF frames
+        if self.cef_is_down() {
+            return;
+        }
+        self.router().event.broadcast(event, data, payload_kind);
     }
 
     /// Number of currently live browser instances.

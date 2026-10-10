@@ -111,8 +111,9 @@ impl EventSubsystem {
     /// Each subscription gets its own message, addressed by its id, so the
     /// renderer runs exactly the callback of that subscription (which the ACL
     /// admitted) and nothing else in the process. A subscription whose frame
-    /// now shows another document receives nothing.
-    pub fn broadcast(&self, cmd: &str, data: &[u8]) {
+    /// now shows another document receives nothing. `payload_kind` decides
+    /// whether the page receives an `ArrayBuffer` or a string.
+    pub fn broadcast(&self, cmd: &str, data: &[u8], payload_kind: u8) {
         let Some(payload) = encode_cmd_payload(cmd, data) else {
             debug!("[Event Browser] event name exceeds the protocol length limit");
             return;
@@ -143,7 +144,7 @@ impl EventSubsystem {
                 opcode: EVENT_EMIT,
                 flags: 0,
                 correlation_id: id,
-                payload_kind: PAYLOAD_JSON,
+                payload_kind,
             };
             // A sent message belongs to CEF; build one per subscription
             match build_message("kurogane_event", &envelope, &payload) {

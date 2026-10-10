@@ -118,7 +118,9 @@
      * is reported with console.warn.
      *
      * @param {string} eventName
-     * @param {Function} callback - receives (payload) when the event fires
+     * @param {Function} callback - receives (payload) when the event fires,
+     *     an ArrayBuffer from AppHandle::broadcast or a JSON string from
+     *     AppHandle::broadcast_json
      * @param {Function} [onError] - receives (Error) if the subscription is refused
      * @returns {number} subscription id (pass to off() to unsubscribe)
      * @throws {TypeError} if eventName is not a string, or a callback is not a function
