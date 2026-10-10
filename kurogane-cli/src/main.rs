@@ -143,7 +143,7 @@ enum Commands {
     },
     /// Remove the project's dist/ and Kurogane's caches.
     Clean {
-        /// `all` also removes tetsu's shared Chromium installation, build tools
+        /// `all` also removes tanso's shared Chromium installation, build tools
         /// and every application profile.
         #[arg(value_parser = ["all"])]
         target: Option<String>,
@@ -181,8 +181,8 @@ enum Commands {
 enum SelfCommand {
     /// Remove an installer-managed Kurogane installation.
     ///
-    /// Removes the CLI, PATH setup, Kurogane's caches and tetsu's shared
-    /// Chromium runtimes, which other tetsu projects use too. Application
+    /// Removes the CLI, PATH setup, Kurogane's caches and tanso's shared
+    /// Chromium runtimes, which other tanso projects use too. Application
     /// profiles and unmanaged installations are preserved.
     Uninstall {
         /// Accept the confirmation without prompting.

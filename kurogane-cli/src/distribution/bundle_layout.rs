@@ -256,7 +256,7 @@ exec "$ROOT"/{runtime_target} "$@"
         #[cfg(target_os = "windows")]
         {
             let manifest = self.manifest_path(exe_name);
-            fs::write(&manifest, tetsu_build::WINDOWS_MANIFEST)
+            fs::write(&manifest, tanso_build::WINDOWS_MANIFEST)
                 .map_err(BundleError::io("write", &manifest))?;
         }
 
@@ -369,7 +369,7 @@ mod tests {
         layout.materialize(&dist).unwrap();
 
         let manifest = fs::read_to_string(layout.manifest_path(test_exe_name())).unwrap();
-        assert_eq!(manifest, tetsu_build::WINDOWS_MANIFEST);
+        assert_eq!(manifest, tanso_build::WINDOWS_MANIFEST);
         assert!(
             layout
                 .manifest_path(test_exe_name())

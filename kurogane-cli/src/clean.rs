@@ -1,6 +1,6 @@
 //! Removes generated project artifacts and Kurogane's caches.
 //!
-//! `clean all` also removes tetsu's shared CEF installation, build tools
+//! `clean all` also removes tanso's shared CEF installation, build tools
 //! and application profiles.
 
 use anyhow::Result;
@@ -20,11 +20,11 @@ pub(crate) struct Data {
     pub(crate) path: PathBuf,
 }
 
-/// Returns tetsu's shared CEF installation and Kurogane's build tools.
+/// Returns tanso's shared CEF installation and Kurogane's build tools.
 pub(crate) fn runtimes() -> Vec<Data> {
-    let cef = tetsu_download::cef_install_root().map(|path| Data {
+    let cef = tanso_download::cef_install_root().map(|path| Data {
         label: "cef",
-        what: "tetsu's shared CEF installation",
+        what: "tanso's shared CEF installation",
         path,
     });
 
@@ -67,7 +67,7 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
     // Confirm destructive system-wide cleanup
     if nuclear && !confirmed {
         tui::warn("This will remove ALL Kurogane data.");
-        tui::warn("Including tetsu's shared CEF installation, which other tetsu projects use too.");
+        tui::warn("Including tanso's shared CEF installation, which other tanso projects use too.");
         tui::warn("Including every Kurogane application's browser profile (cookies, storage).");
 
         // Never prompt when running unattended
@@ -92,7 +92,7 @@ pub fn run(target: Option<String>, confirmed: bool, non_interactive: bool) -> Re
     if nuclear {
         tui::step("Deprovisioning Kurogane environment");
 
-        // tetsu's shared CEF installation and Kurogane's build tools
+        // tanso's shared CEF installation and Kurogane's build tools
         for data in runtimes() {
             remove(data.label, data.what, &data.path, &mut failed);
         }

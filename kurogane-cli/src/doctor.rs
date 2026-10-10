@@ -27,7 +27,7 @@ struct ToolCheck {
 fn required_tools() -> Vec<ToolCheck> {
     vec![ToolCheck {
         name: "MSVC linker",
-        found: find_msvc_tools::find_tool(tetsu_download::DEFAULT_TARGET, "link.exe").is_some(),
+        found: find_msvc_tools::find_tool(tanso_download::DEFAULT_TARGET, "link.exe").is_some(),
         hint: "Install Visual Studio Build Tools with the C++ workload",
     }]
 }
@@ -129,7 +129,7 @@ pub fn run(json: bool) -> Result<()> {
         }
     }
 
-    if let Some(root) = tetsu_download::cef_install_root()
+    if let Some(root) = tanso_download::cef_install_root()
         && let Ok(entries) = std::fs::read_dir(&root)
     {
         let versions: Vec<_> = entries
@@ -141,7 +141,7 @@ pub fn run(json: bool) -> Result<()> {
         if !versions.is_empty() {
             tui::blank();
 
-            tui::info("Installed versions, shared by every tetsu project");
+            tui::info("Installed versions, shared by every tanso project");
 
             for version in versions {
                 tui::field("cef", version);

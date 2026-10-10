@@ -2,7 +2,7 @@
 //!
 //! Events are delivered only to their addressed subscription and owning frame.
 
-use tetsu::*;
+use tanso::*;
 
 use tracing::debug;
 use crate::ipc::envelope::*;

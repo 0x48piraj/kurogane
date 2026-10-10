@@ -27,9 +27,9 @@ use std::fmt::Write as _;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::OnceLock;
 
-use tetsu::sys::cef_context_menu_edit_state_flags_t as EditFlags;
-use tetsu::sys::cef_menu_id_t as MenuId;
-use tetsu::*;
+use tanso::sys::cef_context_menu_edit_state_flags_t as EditFlags;
+use tanso::sys::cef_menu_id_t as MenuId;
+use tanso::*;
 use tracing::{debug, error, warn};
 
 use crate::acl::Origin;
@@ -663,7 +663,7 @@ fn label(item: StandardItem) -> String {
     };
     // SAFETY: `name` is a valid, null-terminated C string, only read for
     // the call.
-    let id = unsafe { tetsu::sys::cef_id_for_pack_string_name(name.as_ptr()) };
+    let id = unsafe { tanso::sys::cef_id_for_pack_string_name(name.as_ptr()) };
     let localized = (id >= 0)
         .then(resource_bundle_get_global)
         .flatten()

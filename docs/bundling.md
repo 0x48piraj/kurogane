@@ -95,7 +95,7 @@ flowchart TD
 The bundler resolves the CEF distribution with an override-first policy:
 
 1. **`CEF_PATH` override:** Accepted **only** when the directory holds a complete runtime with CEF's notices (`LICENSE.txt` and `CREDITS.html`) and an `archive.json` provenance file. Its recorded version and platform must match the build. An unverifiable or mismatched override is rejected and never packaged. A `CEF_PATH` that is set but broken is a hard error and never falls back.
-2. **Installation:** tetsu's shared installation of the CEF version the application loads. It lives at `tetsu/cef/<version>/cef_<os>_<arch>/` in the local data directory (`~/.local/share`, `%LOCALAPPDATA%` or `~/Library/Application Support`). `kurogane install` fills it. It passes the same checks as `CEF_PATH`.
+2. **Installation:** tanso's shared installation of the CEF version the application loads. It lives at `tanso/cef/<version>/cef_<os>_<arch>/` in the local data directory (`~/.local/share`, `%LOCALAPPDATA%` or `~/Library/Application Support`). `kurogane install` fills it. It passes the same checks as `CEF_PATH`.
 
 Resolution prefers `CEF_PATH` when it is set. Otherwise Kurogane uses the installation of the project's CEF version. It installs it first when it is missing, incomplete or unverified. Chromium is resolved before the frontend is built.
 
@@ -184,7 +184,7 @@ These errors name `CEF_PATH` because `kurogane bundle` reinstalls a missing, inc
 
 ## Runtime files
 
-The bundle copies the runtime straight from the resolved distribution. It is laid out flat as tetsu writes it with libcef at its root. By construction the bundle leaves out:
+The bundle copies the runtime straight from the resolved distribution. It is laid out flat as tanso writes it with libcef at its root. By construction the bundle leaves out:
 
 * **Development material:** `include/`, `cmake/`, `libcef_dll/`, `CMakeLists.txt` and `libcef.lib`
 * **Download records:** `archive.json` and the original `*.tar.bz2` archive

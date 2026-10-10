@@ -6,7 +6,7 @@
 use std::fmt;
 use std::num::NonZeroU16;
 
-use tetsu::{CefStringUtf16, Frame, ImplFrame};
+use tanso::{CefStringUtf16, Frame, ImplFrame};
 
 use crate::acl::Origin;
 use crate::browser_registry::BrowserId;

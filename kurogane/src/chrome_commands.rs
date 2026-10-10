@@ -20,7 +20,7 @@ use std::ffi::{CStr, c_int};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::OnceLock;
 
-use tetsu::*;
+use tanso::*;
 
 use tracing::{debug, error};
 
@@ -149,7 +149,7 @@ const ALLOWED: &[(&CStr, ChromeCommand)] = &[
 pub(crate) fn command_id(name: &CStr) -> Option<c_int> {
     // SAFETY: `name` is a valid, null-terminated C-string. The FFI boundary
     // guarantees read-only access and the backing memory outlives the call.
-    let id = unsafe { tetsu::sys::cef_id_for_command_id_name(name.as_ptr()) };
+    let id = unsafe { tanso::sys::cef_id_for_command_id_name(name.as_ptr()) };
     (id >= 0).then_some(id)
 }
 

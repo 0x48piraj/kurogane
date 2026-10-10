@@ -102,7 +102,7 @@ fn main() {
 
 Chromium comes as a runtime installed apart from your crate.
 
-* `kurogane install` downloads and verifies the Chromium runtime your application loads into tetsu's shared installation.
+* `kurogane install` downloads and verifies the Chromium runtime your application loads into tanso's shared installation.
 * `kurogane dev`, `run` and `bundle` find that runtime. They install it when it is missing, incomplete or unverified.
 * `kurogane doctor` checks your setup. It reports the expected Chromium version, the installed versions, the runtime `bundle` packages, the toolchain and the frontend.
 * `kurogane list` shows application profiles, the CLI's version and the CEF version it was built with. `kurogane info` shows the CLI, environment and project configuration.
@@ -130,7 +130,7 @@ A `CEF_PATH` that names no directory stops the application. It never falls back 
 | `kurogane doctor` | Checks the Chromium runtime, the toolchain and the project (`--json` prints the full report) |
 | `kurogane list` | Lists application profiles and versions |
 | `kurogane info` | Shows the CLI, environment and project configuration |
-| `kurogane clean` | Removes the project's `dist/` and Kurogane's caches (`clean all` also removes tetsu's shared Chromium installation, build tools and every application profile) |
+| `kurogane clean` | Removes the project's `dist/` and Kurogane's caches (`clean all` also removes tanso's shared Chromium installation, build tools and every application profile) |
 | `kurogane showcase` | Runs Kurogane's showcase application |
 | `kurogane self uninstall` | Removes an installer-managed Kurogane installation |
 

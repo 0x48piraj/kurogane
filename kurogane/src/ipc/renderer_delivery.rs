@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::OnceLock;
 
-use tetsu::*;
+use tanso::*;
 use tracing::debug;
 
 use crate::ipc::envelope::*;

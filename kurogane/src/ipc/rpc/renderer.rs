@@ -1,4 +1,4 @@
-use tetsu::*;
+use tanso::*;
 
 use tracing::debug;
 use crate::ipc::browser_state::ErrorCode;

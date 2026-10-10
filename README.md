@@ -193,7 +193,7 @@ Early days! Architecture and APIs may change as the project evolves.
 #### Roadmap
 
 - [x] Cross-platform Rust-native CEF runtime integration (process model, browser lifecycle, shutdown correctness)
-- [x] Own CEF bindings ([tetsu](https://github.com/kurogane-rs/tetsu)) that load Chromium when the app starts
+- [x] Own CEF bindings ([tanso](https://github.com/kurogane-rs/tanso)) that load Chromium when the app starts
 - [x] Modular runtime architecture with clear ownership boundaries
 - [x] External event-loop integration
 - [x] Native window creation and lifecycle management (CEF Views + embedded mode)

@@ -1,5 +1,6 @@
 [package]
 name = "kurogane-layout"
+description = "Contract between a Kurogane bundle and the runtime that runs it"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

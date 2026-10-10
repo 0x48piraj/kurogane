@@ -44,7 +44,7 @@ Five crates with distinct responsibilities:
 | `kurogane-build` | Build-time setup. An application's `build.rs` calls `kurogane_build::build()` to embed the Windows application manifest CEF's own executables carry. |
 | `kurogane-suite` | Test scenarios and the `winit` examples, each an example of the crate. Not published. |
 
-CEF's Rust bindings are tetsu. It is a separate project. The runtime builds on `tetsu` and re-exports it as `kurogane::tetsu`. The CLI installs CEF through `tetsu-download`. `kurogane-build` calls `tetsu-build`.
+CEF's Rust bindings are tanso. It is a separate project. The runtime builds on `tanso` and re-exports it as `kurogane::tanso`. The CLI installs CEF through `tanso-download`. `kurogane-build` calls `tanso-build`.
 
 The runtime and CLI are separate layers. Neither depends on the other; both depend on `kurogane-layout`. That is the contract they share.
 
@@ -93,9 +93,9 @@ It does not provide a UI framework; the frontend remains the application's respo
 An application finds its Chromium the same way however it is started. The CLI follows the same rule:
 
 * An application in a bundle runs the runtime inside its bundle and no other. It uses neither `CEF_PATH` nor the installation and loads its resources and locales from the tree its libcef came from. `kurogane bundle` marks a bundle with a `kurogane-bundle` file beside the executable (a macOS `.app` needs none). An application whose bundle has lost its runtime reports the bundle incomplete.
-* Any other application loads the runtime tetsu finds (`tetsu::sys::find_cef_dir`). That is a runtime beside its executable, else the one `CEF_PATH` names, else tetsu's shared installation of the CEF version the application was built against. A `CEF_PATH` naming no directory is an error and never skipped. A plain `cargo run` and `kurogane run` start the application the same way.
+* Any other application loads the runtime tanso finds (`tanso::sys::find_cef_dir`). That is a runtime beside its executable, else the one `CEF_PATH` names, else tanso's shared installation of the CEF version the application was built against. A `CEF_PATH` naming no directory is an error and never skipped. A plain `cargo run` and `kurogane run` start the application the same way.
 * Loading refuses a libcef that is not the CEF build the application was built against.
-* `kurogane install`, `dev`, `run` and `bundle` install the CEF version the project's application loads when it is missing. They read that version from the project's tetsu-sys. `dev` and `run` pass the application nothing.
+* `kurogane install`, `dev`, `run` and `bundle` install the CEF version the project's application loads when it is missing. They read that version from the project's tanso-sys. `dev` and `run` pass the application nothing.
 * `kurogane bundle` copies into the bundle the runtime `CEF_PATH` names, else the installation; either needs verified provenance ([Chromium resolution](docs/bundling.md#chromium-resolution)). That is the only use of either. Once bundled the application never looks outside its bundle.
 
 `kurogane doctor` reports the runtime the application loads and the one `bundle` would package.
@@ -320,7 +320,7 @@ flowchart LR
 
 `AppHandle` and `BrowserHandle` calls that would reach CEF do nothing once `AppInstance::shutdown` has begun. CEF takes no call after `CefShutdown`. A call on another thread at that very moment can still reach CEF. An application stops using its handles on other threads before it shuts CEF down.
 
-CEF calls into Kurogane through the `extern "C"` trampolines tetsu generates. They do not catch panics. A panic that reaches one aborts the process it runs in. In the browser process that ends the application. In a renderer it ends that renderer. Kurogane's own callbacks never unwrap a value CEF may leave out.
+CEF calls into Kurogane through the `extern "C"` trampolines tanso generates. They do not catch panics. A panic that reaches one aborts the process it runs in. In the browser process that ends the application. In a renderer it ends that renderer. Kurogane's own callbacks never unwrap a value CEF may leave out.
 
 Kurogane catches a panic in the application code it runs to answer a page's request:
 
@@ -357,7 +357,7 @@ Kurogane is a platform foundation and not an application framework.
 flowchart TB
     %% Kurogane Layer
     subgraph Kurogane["Kurogane runtime"]
-        A[tetsu::App Lifecycle]
+        A[tanso::App Lifecycle]
         B[BrowserProcessHandler]
         C[Native Window]
         D[Browser View]

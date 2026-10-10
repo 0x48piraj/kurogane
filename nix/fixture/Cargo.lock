@@ -236,7 +236,7 @@ dependencies = [
  "raw-window-handle",
  "serde",
  "serde_json",
- "tetsu",
+ "tanso",
  "tracing",
  "unicode-normalization",
  "url",
@@ -248,7 +248,7 @@ dependencies = [
 name = "kurogane-build"
 version = "0.0.6-alpha.2"
 dependencies = [
- "tetsu-build",
+ "tanso-build",
 ]
 
 [[package]]
@@ -524,25 +524,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "tetsu"
+name = "tanso"
 version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tetsu?rev=748d237ee63b564bc8905c72d8179aa3383c0c0b#748d237ee63b564bc8905c72d8179aa3383c0c0b"
+source = "git+https://github.com/kurogane-rs/tanso?rev=9ed82e6bff5879740b215b3c2a0f970260933e2d#9ed82e6bff5879740b215b3c2a0f970260933e2d"
 dependencies = [
  "libloading",
  "objc2",
- "tetsu-sys",
+ "tanso-sys",
  "windows-sys",
 ]
 
 [[package]]
-name = "tetsu-build"
+name = "tanso-build"
 version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tetsu?rev=748d237ee63b564bc8905c72d8179aa3383c0c0b#748d237ee63b564bc8905c72d8179aa3383c0c0b"
+source = "git+https://github.com/kurogane-rs/tanso?rev=9ed82e6bff5879740b215b3c2a0f970260933e2d#9ed82e6bff5879740b215b3c2a0f970260933e2d"
 
 [[package]]
-name = "tetsu-sys"
+name = "tanso-sys"
 version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tetsu?rev=748d237ee63b564bc8905c72d8179aa3383c0c0b#748d237ee63b564bc8905c72d8179aa3383c0c0b"
+source = "git+https://github.com/kurogane-rs/tanso?rev=9ed82e6bff5879740b215b3c2a0f970260933e2d#9ed82e6bff5879740b215b3c2a0f970260933e2d"
 dependencies = [
  "dirs",
  "libloading",

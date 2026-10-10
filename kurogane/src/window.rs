@@ -3,7 +3,7 @@
 //! Controls how the native window behaves and embeds the
 //! browser view into the platform window.
 
-use tetsu::*;
+use tanso::*;
 use std::borrow::Cow;
 use std::collections::VecDeque;
 

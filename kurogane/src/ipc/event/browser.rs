@@ -3,7 +3,7 @@
 //! Handles subscription management for renderer processes and delivers emitted
 //! events to subscribed frames.
 
-use tetsu::*;
+use tanso::*;
 
 use crate::acl::Origin;
 use tracing::debug;

@@ -1,4 +1,4 @@
-use tetsu::*;
+use tanso::*;
 
 use crate::ipc::envelope::*;
 use crate::spec::SandboxMode;

@@ -4,7 +4,7 @@
 //! Owns the per-subsystem handler maps and the ACL, which it applies once,
 //! here, before any subsystem sees a message.
 
-use tetsu::*;
+use tanso::*;
 
 use crate::acl::{CommandAcl, Origin};
 use crate::browser_registry::BrowserId;

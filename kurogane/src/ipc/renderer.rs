@@ -3,7 +3,7 @@
 //! Connects JavaScript to the browser process via CEF messages.
 //! Defines the boundary between JavaScript and the native IPC system.
 
-use tetsu::*;
+use tanso::*;
 use std::sync::Arc;
 use crate::app::ClientAppRendererDelegate;
 use tracing::debug;

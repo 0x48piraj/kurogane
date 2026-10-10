@@ -6,7 +6,7 @@
 //! answers an open before it sends anything else of the stream, so a
 //! stream still opening receives nothing but that answer.
 
-use tetsu::*;
+use tanso::*;
 
 use tracing::debug;
 use crate::ipc::envelope::*;

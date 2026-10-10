@@ -1,6 +1,6 @@
 //! Browser-process lifecycle handling.
 
-use tetsu::*;
+use tanso::*;
 use std::time::Duration;
 
 use crate::runtime::AppHandle;

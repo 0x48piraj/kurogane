@@ -8,8 +8,8 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use kurogane_layout::bundled_helper_path;
-use tetsu::args::Args;
-use tetsu::sandbox::Sandbox;
+use tanso::args::Args;
+use tanso::sandbox::Sandbox;
 
 use crate::chromium_flags::ChromiumFlags;
 use crate::error::RuntimeError;

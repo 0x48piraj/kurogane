@@ -6,7 +6,7 @@
 
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
-use tetsu::*;
+use tanso::*;
 
 use crate::ipc::renderer_registry::{ContextHandle, Registry};
 

@@ -24,10 +24,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
-use tetsu::sys::cef_content_setting_types_t as Setting;
-use tetsu::sys::cef_media_access_permission_types_t as Media;
-use tetsu::sys::cef_permission_request_types_t as Prompt;
-use tetsu::*;
+use tanso::sys::cef_content_setting_types_t as Setting;
+use tanso::sys::cef_media_access_permission_types_t as Media;
+use tanso::sys::cef_permission_request_types_t as Prompt;
+use tanso::*;
 use tracing::{debug, error, warn};
 
 use crate::acl::Origin;
@@ -698,7 +698,7 @@ impl Pending {
 /// The answer to Chromium's prompt: Chromium remembers either one for a web
 /// site.
 pub(crate) fn prompt_result(allow: bool) -> PermissionRequestResult {
-    use tetsu::sys::cef_permission_request_result_t as Outcome;
+    use tanso::sys::cef_permission_request_result_t as Outcome;
     PermissionRequestResult::from(if allow {
         Outcome::CEF_PERMISSION_RESULT_ACCEPT
     } else {

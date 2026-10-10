@@ -1,4 +1,4 @@
-use tetsu::{args::Args, sys::cef_window_handle_t, *};
+use tanso::{args::Args, sys::cef_window_handle_t, *};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
@@ -81,7 +81,7 @@ fn profile_name(profile_id: Option<String>, exe: &std::path::Path) -> String {
 }
 
 /// Finds the application's CEF, its bundle's (which it runs and no other),
-/// else the one tetsu finds beside the executable, in `CEF_PATH` or in the
+/// else the one tanso finds beside the executable, in `CEF_PATH` or in the
 /// shared installation of the CEF version it was built against.
 fn locate_cef() -> Result<(std::path::PathBuf, CefLocation), RuntimeError> {
     if let Some(root) = bundle_cef_root().map_err(RuntimeError::ExecutableUnavailable)? {
@@ -869,7 +869,7 @@ fn parent_window(parent: &impl HasWindowHandle) -> Result<cef_window_handle_t, R
         .map_err(|_| RuntimeError::UnsupportedParentWindow)?;
     match handle.as_raw() {
         #[cfg(target_os = "windows")]
-        RawWindowHandle::Win32(window) => Ok(tetsu::sys::HWND(window.hwnd.get() as *mut _)),
+        RawWindowHandle::Win32(window) => Ok(tanso::sys::HWND(window.hwnd.get() as *mut _)),
         #[cfg(target_os = "macos")]
         RawWindowHandle::AppKit(window) => Ok(window.ns_view.as_ptr() as cef_window_handle_t),
         #[cfg(target_os = "linux")]
@@ -1177,12 +1177,12 @@ impl AppInstance {
     ///
     /// The loop runs until the application's last browser has closed:
     /// after [`AppHandle::shutdown`] (from any thread), its last window
-    /// closing, or Ctrl+C. After the loop exits, tetsu::shutdown() is called on
+    /// closing, or Ctrl+C. After the loop exits, tanso::shutdown() is called on
     /// the current (UI) thread.
     ///
     /// Not for an application given an [`App::scheduler`](crate::App::scheduler):
     /// the scheduler turns on CEF's external message pump, under which this
-    /// loop returns at once and tetsu::shutdown() would run under a window
+    /// loop returns at once and tanso::shutdown() would run under a window
     /// still opening. Such an application calls [`AppInstance::pump`] from its
     /// own loop until [`AppInstance::should_shutdown`], then
     /// [`AppInstance::shutdown`].
@@ -1205,7 +1205,7 @@ impl AppInstance {
 
     /// Perform orderly CEF shutdown.
     ///
-    /// Calls tetsu::shutdown() on the UI thread; [`AppHandle::should_shutdown`]
+    /// Calls tanso::shutdown() on the UI thread; [`AppHandle::should_shutdown`]
     /// is true from here on. Safe to call multiple times. Subsequent calls are
     /// no-ops.
     ///
@@ -1275,7 +1275,7 @@ impl AppInstance {
         parent: &impl HasWindowHandle,
         bounds: BrowserBounds,
         url: &str,
-        rc_settings: &tetsu::RequestContextSettings,
+        rc_settings: &tanso::RequestContextSettings,
     ) -> Result<BrowserHandle, RuntimeError> {
         // Nothing reaches CEF once application shutdown begins.
         if self.handle.is_ending() {
@@ -1283,7 +1283,7 @@ impl AppInstance {
         }
         // Without its own context the browser would share the global cookie
         // and cache partition the caller asked to avoid
-        let rc = tetsu::request_context_create_context(Some(rc_settings), None)
+        let rc = tanso::request_context_create_context(Some(rc_settings), None)
             .ok_or(RuntimeError::BrowserCreationFailed)?;
         self.create_child_browser_impl(parent, bounds, url, Some(rc))
     }
@@ -1293,7 +1293,7 @@ impl AppInstance {
         parent: &impl HasWindowHandle,
         bounds: BrowserBounds,
         url: &str,
-        request_context: Option<tetsu::RequestContext>,
+        request_context: Option<tanso::RequestContext>,
     ) -> Result<BrowserHandle, RuntimeError> {
         if self.handle.is_ending() {
             return Err(RuntimeError::ShuttingDown);
@@ -1600,13 +1600,13 @@ mod tests {
     //
     // A CEF object is a C structure of function pointers. A fake fills in
     // only the functions a test needs and counts every call made through
-    // them; tetsu answers a default for a function left out, without
+    // them; tanso answers a default for a function left out, without
     // calling anything. No test here loads CEF
     use std::ffi::c_int;
     use std::sync::atomic::AtomicUsize;
 
-    use tetsu::rc::ConvertReturnValue;
-    use tetsu::sys::{
+    use tanso::rc::ConvertReturnValue;
+    use tanso::sys::{
         _cef_base_ref_counted_t, _cef_browser_host_t, _cef_browser_t, _cef_frame_t, _cef_window_t,
     };
 
@@ -1648,7 +1648,7 @@ mod tests {
     }
 
     unsafe extern "C" fn called<T>(object: *mut T) {
-        // SAFETY: tetsu passes the structure it wraps, a Fake<T>'s
+        // SAFETY: tanso passes the structure it wraps, a Fake<T>'s
         unsafe { count(object) }
     }
 
@@ -1669,7 +1669,7 @@ mod tests {
         1
     }
 
-    /// Leaks a fake around `raw` and wraps it as tetsu wraps what CEF returns.
+    /// Leaks a fake around `raw` and wraps it as tanso wraps what CEF returns.
     fn leak<T: 'static, W>(raw: T) -> (W, &'static AtomicUsize)
     where
         *mut T: ConvertReturnValue<W>,
@@ -1678,7 +1678,7 @@ mod tests {
             raw,
             calls: AtomicUsize::new(0),
         }));
-        // tetsu only reads the structure, and the count is atomic
+        // tanso only reads the structure, and the count is atomic
         let object = std::ptr::from_ref(&fake.raw).cast_mut();
         (
             <*mut T as ConvertReturnValue<W>>::wrap_result(object),

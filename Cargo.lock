@@ -1814,8 +1814,8 @@ dependencies = [
  "raw-window-handle",
  "serde",
  "serde_json",
+ "tanso",
  "tempfile",
- "tetsu",
  "tracing",
  "unicode-normalization",
  "url",
@@ -1827,7 +1827,7 @@ dependencies = [
 name = "kurogane-build"
 version = "0.0.6-alpha.2"
 dependencies = [
- "tetsu-build",
+ "tanso-build",
 ]
 
 [[package]]
@@ -1848,9 +1848,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tanso-build",
+ "tanso-download",
+ "tanso-sys",
  "tempfile",
- "tetsu-build",
- "tetsu-download",
  "thiserror 2.0.18",
  "toml 1.1.4+spec-1.1.0",
  "ureq",
@@ -3426,6 +3427,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "tanso"
+version = "154.4.0+154.0.33"
+source = "git+https://github.com/kurogane-rs/tanso?rev=9ed82e6bff5879740b215b3c2a0f970260933e2d#9ed82e6bff5879740b215b3c2a0f970260933e2d"
+dependencies = [
+ "libloading 0.9.0",
+ "objc2 0.6.4",
+ "tanso-sys",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tanso-build"
+version = "154.4.0+154.0.33"
+source = "git+https://github.com/kurogane-rs/tanso?rev=9ed82e6bff5879740b215b3c2a0f970260933e2d#9ed82e6bff5879740b215b3c2a0f970260933e2d"
+
+[[package]]
+name = "tanso-download"
+version = "3.0.0"
+source = "git+https://github.com/kurogane-rs/tanso?rev=9ed82e6bff5879740b215b3c2a0f970260933e2d#9ed82e6bff5879740b215b3c2a0f970260933e2d"
+dependencies = [
+ "bzip2",
+ "dirs",
+ "fs-err",
+ "indicatif",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "tar",
+ "thiserror 2.0.18",
+ "ureq",
+]
+
+[[package]]
+name = "tanso-sys"
+version = "154.4.0+154.0.33"
+source = "git+https://github.com/kurogane-rs/tanso?rev=9ed82e6bff5879740b215b3c2a0f970260933e2d#9ed82e6bff5879740b215b3c2a0f970260933e2d"
+dependencies = [
+ "dirs",
+ "libloading 0.9.0",
+]
+
+[[package]]
 name = "tar"
 version = "0.4.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3467,48 +3510,6 @@ checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "tetsu"
-version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tetsu?rev=748d237ee63b564bc8905c72d8179aa3383c0c0b#748d237ee63b564bc8905c72d8179aa3383c0c0b"
-dependencies = [
- "libloading 0.9.0",
- "objc2 0.6.4",
- "tetsu-sys",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "tetsu-build"
-version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tetsu?rev=748d237ee63b564bc8905c72d8179aa3383c0c0b#748d237ee63b564bc8905c72d8179aa3383c0c0b"
-
-[[package]]
-name = "tetsu-download"
-version = "3.0.0"
-source = "git+https://github.com/kurogane-rs/tetsu?rev=748d237ee63b564bc8905c72d8179aa3383c0c0b#748d237ee63b564bc8905c72d8179aa3383c0c0b"
-dependencies = [
- "bzip2",
- "dirs",
- "fs-err",
- "indicatif",
- "serde",
- "serde_json",
- "sha1_smol",
- "tar",
- "thiserror 2.0.18",
- "ureq",
-]
-
-[[package]]
-name = "tetsu-sys"
-version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tetsu?rev=748d237ee63b564bc8905c72d8179aa3383c0c0b#748d237ee63b564bc8905c72d8179aa3383c0c0b"
-dependencies = [
- "dirs",
- "libloading 0.9.0",
 ]
 
 [[package]]

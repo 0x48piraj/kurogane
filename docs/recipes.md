@@ -1140,10 +1140,10 @@ Not suited to profiles holding data worth protecting.
 
 ## Custom URL schemes
 
-Register a handler for a custom URL scheme with `App::register_scheme`. The handler takes tetsu types. Kurogane re-exports them as `kurogane::tetsu`. An application does not depend on `tetsu` itself.
+Register a handler for a custom URL scheme with `App::register_scheme`. The handler takes tanso types. Kurogane re-exports them as `kurogane::tanso`. An application does not depend on `tanso` itself.
 
 ```rust
-use kurogane::tetsu::{Browser, Frame, Request, ResourceHandler};
+use kurogane::tanso::{Browser, Frame, Request, ResourceHandler};
 use kurogane::{App, SchemeHandler, resource_handler_from_bytes};
 
 struct VirtualFile;
@@ -1334,7 +1334,7 @@ Renderer delegates expose renderer-process lifecycle hooks.
 
 ```rust
 use kurogane::App;
-use kurogane::tetsu::{Browser, Frame, V8Context};
+use kurogane::tanso::{Browser, Frame, V8Context};
 
 struct RendererDelegate;
 

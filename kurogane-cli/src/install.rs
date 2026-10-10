@@ -1,7 +1,7 @@
 //! The CEF the project's application loads.
 //!
 //! Finds it where the application does, in the runtime `CEF_PATH` names or
-//! else in tetsu's shared installation, verifies it and installs the
+//! else in tanso's shared installation, verifies it and installs the
 //! project's CEF version when the installation is missing or unverified.
 
 use std::fmt::{self, Display};
@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use cargo_metadata::Metadata;
 use kurogane_layout::{IncompleteRuntime, validate_cef_runtime};
-use tetsu_download::{Archive, DEFAULT_TARGET, OsAndArch};
+use tanso_download::{Archive, DEFAULT_TARGET, OsAndArch};
 use thiserror::Error;
 
 use crate::tui;
@@ -25,7 +25,7 @@ pub(crate) enum CefSource {
     /// The runtime `CEF_PATH` names.
     CefPath,
 
-    /// tetsu's shared installation of the CEF version.
+    /// tanso's shared installation of the CEF version.
     Installed,
 }
 
@@ -57,7 +57,7 @@ pub(crate) enum ProjectCef {
     /// The runtime `CEF_PATH` names, used as it is.
     CefPath(PathBuf),
 
-    /// tetsu's shared installation, verified against the CEF build its
+    /// tanso's shared installation, verified against the CEF build its
     /// `archive.json` names.
     Installed { root: PathBuf, archive: Archive },
 }
@@ -91,7 +91,7 @@ pub(crate) enum CefError {
     NoInstallDir,
 
     #[error("CEF publishes no build for this host")]
-    UnsupportedHost(#[source] tetsu_download::Error),
+    UnsupportedHost(#[source] tanso_download::Error),
 
     #[error("the {from} runtime is incomplete. {}", .from.remedy())]
     InvalidRuntime {
@@ -104,7 +104,7 @@ pub(crate) enum CefError {
     Unverified {
         from: CefSource,
         #[source]
-        error: tetsu_download::Error,
+        error: tanso_download::Error,
     },
 
     #[error("{} has no {notice}, which a bundle passes on. {}", .path.display(), .from.remedy())]
@@ -145,13 +145,13 @@ pub(crate) fn project_cef_version() -> String {
     }
 }
 
-/// Returns the CEF version a resolved project loads, the one its tetsu-sys
+/// Returns the CEF version a resolved project loads, the one its tanso-sys
 /// was generated for (`154.0.33` in `154.4.0+154.0.33`), else the CLI's own.
 pub(crate) fn cef_version_of(metadata: &Metadata) -> String {
     metadata
         .packages
         .iter()
-        .find(|package| package.name == "tetsu-sys")
+        .find(|package| package.name == "tanso-sys")
         .map(|package| package.version.build.as_str())
         .filter(|version| !version.is_empty())
         .unwrap_or(env!("KUROGANE_CEF_VERSION"))
@@ -162,7 +162,7 @@ pub(crate) fn cef_version_of(metadata: &Metadata) -> String {
 pub(crate) fn installed_cef_dir(version: &str) -> Result<PathBuf, CefError> {
     let host = OsAndArch::try_from(DEFAULT_TARGET).map_err(CefError::UnsupportedHost)?;
 
-    tetsu_download::cef_install_dir(version, &host).ok_or(CefError::NoInstallDir)
+    tanso_download::cef_install_dir(version, &host).ok_or(CefError::NoInstallDir)
 }
 
 /// Finds the CEF the application loads without installing anything, the
@@ -209,7 +209,7 @@ pub(crate) fn verify_installation(root: &Path, version: &str) -> Result<Archive,
     }
 
     let archive =
-        tetsu_download::check_archive_json(root, version, DEFAULT_TARGET).map_err(|error| {
+        tanso_download::check_archive_json(root, version, DEFAULT_TARGET).map_err(|error| {
             CefError::Unverified {
                 from: CefSource::Installed,
                 error,
@@ -242,7 +242,7 @@ pub(crate) fn packaged_archive(cef: &ProjectCef, version: &str) -> Result<Archiv
     match cef {
         ProjectCef::Installed { archive, .. } => Ok(archive.clone()),
         ProjectCef::CefPath(root) => {
-            let archive = tetsu_download::check_archive_json(root, version, DEFAULT_TARGET)
+            let archive = tanso_download::check_archive_json(root, version, DEFAULT_TARGET)
                 .map_err(|error| CefError::Unverified {
                     from: CefSource::CefPath,
                     error,
@@ -328,10 +328,10 @@ pub(crate) fn install(cef_version: &str) -> Result<ProjectCef> {
     tui::field("chromium", cef_version);
     tui::field("path", tui::format_path(&install_dir));
 
-    let installed = tetsu_download::install(
+    let installed = tanso_download::install(
         DEFAULT_TARGET,
         cef_version,
-        &tetsu_download::default_download_url(),
+        &tanso_download::default_download_url(),
         true,
     )
     .context("failed to install Chromium")?;
@@ -378,12 +378,12 @@ mod tests {
     }
 
     fn host_platform() -> &'static str {
-        tetsu_download::cef_platform_name(DEFAULT_TARGET).unwrap()
+        tanso_download::cef_platform_name(DEFAULT_TARGET).unwrap()
     }
 
     #[test]
     fn the_cli_s_own_workspace_loads_the_cli_s_cef() {
-        // The tests run in Kurogane's workspace, whose tetsu-sys the CLI was
+        // The tests run in Kurogane's workspace, whose tanso-sys the CLI was
         // built against
         assert_eq!(project_cef_version(), env!("KUROGANE_CEF_VERSION"));
     }

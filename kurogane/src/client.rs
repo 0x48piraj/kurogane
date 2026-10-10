@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use tetsu::*;
+use tanso::*;
 use tracing::{debug, warn};
 use crate::runtime::AppHandle;
 use crate::browser_registry::{BrowserId, BrowserType};
@@ -300,10 +300,10 @@ fn opens_new_window(disposition: WindowOpenDisposition) -> bool {
 /// popup (its opener's). DevTools gets one of its own the same way
 /// (`on_before_dev_tools_popup`).
 ///
-/// tetsu keeps the reference CEF passes with that client when a handler
+/// tanso keeps the reference CEF passes with that client when a handler
 /// leaves it unchanged, so the opener's client, and the application's state
 /// it holds, would never be released. Replacing the client releases that
-/// reference. Remove this once tetsu releases it itself.
+/// reference. Remove this once tanso releases it itself.
 fn own_client(client: Option<&mut Option<Client>>, app: &AppHandle, browser_type: BrowserType) {
     // No client stays no client
     if let Some(client) = client
@@ -438,7 +438,7 @@ wrap_request_handler! {
 //
 // KEYBOARD HANDLER
 //
-// tetsu types the platform's own event differently on each platform. Its
+// tanso types the platform's own event differently on each platform. Its
 // macro takes no attribute on a parameter, so the handler is written once
 // per platform around one body
 #[cfg(target_os = "windows")]
@@ -1011,7 +1011,7 @@ wrap_load_handler! {
 //
 // DISPLAY HANDLER
 //
-// Every other method keeps CEF's default, which tetsu's defaults return
+// Every other method keeps CEF's default, which tanso's defaults return
 wrap_display_handler! {
     pub struct KuroganeDisplayHandler {
         app: AppHandle,
@@ -1264,7 +1264,7 @@ wrap_client! {
         }
 
         // Only OnOpenURLFromTab is answered; every other method keeps CEF's
-        // default, which tetsu's defaults return
+        // default, which tanso's defaults return
         fn request_handler(&self) -> Option<RequestHandler> {
             Some(KuroganeRequestHandler::new(self.app.clone()))
         }
@@ -1381,12 +1381,12 @@ mod tests {
         own_client(Some(&mut passed), &app, BrowserType::Main);
         let own = passed.expect("a client is replaced, not cleared");
         assert_ne!(
-            tetsu::ImplClient::get_raw(&own),
-            tetsu::ImplClient::get_raw(&opener),
+            tanso::ImplClient::get_raw(&own),
+            tanso::ImplClient::get_raw(&opener),
             "the new browser gets a client of its own"
         );
         assert!(
-            tetsu::rc::Rc::has_one_ref(&opener),
+            tanso::rc::Rc::has_one_ref(&opener),
             "the reference that came with the opener's client is released"
         );
 

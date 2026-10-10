@@ -22,8 +22,8 @@
 //! - Links inside the root that stay inside it keep working
 //! - Focused on safe, predictable asset access within the runtime
 
-use tetsu::*;
-use tetsu::sys::cef_scheme_options_t::{
+use tanso::*;
+use tanso::sys::cef_scheme_options_t::{
     CEF_SCHEME_OPTION_STANDARD, CEF_SCHEME_OPTION_SECURE, CEF_SCHEME_OPTION_CORS_ENABLED,
     CEF_SCHEME_OPTION_FETCH_ENABLED,
 };
@@ -98,7 +98,7 @@ pub struct ResolvedAsset {
 /// Implement this trait and pass the instance to
 /// [`App::register_scheme`](crate::App::register_scheme) to expose a custom
 /// scheme to the frontend. The trait method mirrors
-/// [`SchemeHandlerFactory::create`](tetsu::SchemeHandlerFactory) minus the
+/// [`SchemeHandlerFactory::create`](tanso::SchemeHandlerFactory) minus the
 /// scheme name which is fixed per registration.
 ///
 /// CEF calls `create` on the browser-process IO thread, which also carries
@@ -941,7 +941,7 @@ mod tests {
 
     #[test]
     fn a_panicking_scheme_handler_fails_its_request() {
-        // Called through tetsu's extern "C" trampoline, as CEF calls it: a
+        // Called through tanso's extern "C" trampoline, as CEF calls it: a
         // panic escaping the factory would abort the test process
         let factory = CustomSchemeHandlerFactory::new(Arc::new(Panics));
         assert!(factory.create(None, None, None, None).is_none());
