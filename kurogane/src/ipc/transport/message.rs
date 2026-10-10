@@ -6,7 +6,13 @@ use crate::spec::SandboxMode;
 /// Minimum message size for shared-memory transport.
 ///
 /// Smaller messages are sent inline.
-pub const SHM_THRESHOLD: usize = 16 * 1024;
+pub const SHM_THRESHOLD: usize = if cfg!(target_os = "windows") {
+    256 * 1024
+} else if cfg!(target_os = "macos") {
+    32 * 1024
+} else {
+    96 * 1024
+};
 
 /// A message received over CEF: its envelope and its payload.
 ///

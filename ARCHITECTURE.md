@@ -264,7 +264,7 @@ flowchart TD
 * **Events:** Publish and subscribe delivery to subscribed frames.
 * **Streams:** Bi-directional transfers identified by stream ID with per-stream handlers and state. A handler accepts or refuses the open before the page holds the stream; the first end or error sent closes it. An end the page sends is always answered.
 
-JavaScript values travel as JSON and binary data as raw bytes. Each travels behind a small binary envelope in a CEF process message. A message under 16 KiB travels inline in the process message's argument list. A larger one travels in shared memory. That avoids serialization and an extra copy across the boundary.
+JavaScript values travel as JSON and binary data as raw bytes. Each travels behind a small binary envelope in a CEF process message. Smaller messages travel inline in the process message's argument list. A larger one travels in shared memory. That avoids serialization and an extra copy across the boundary.
 
 See [exposing Rust commands to JavaScript](docs/recipes.md#exposing-rust-commands-to-javascript) and [streaming data](docs/recipes.md#streaming-data) for usage.
 
