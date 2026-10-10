@@ -20,6 +20,7 @@ use crate::page_events::{self, FullscreenChange, TitleChange};
 use crate::permissions::{self, Answer as PermissionAnswer, Pending, PermissionRequest};
 use crate::window::{Opening, PopupGeometry, open_browser_window};
 use crate::window_closing;
+use crate::before_unload::{self, BeforeUnload, UnloadDecision};
 
 /// A load the application made itself, through CreateBrowser, LoadURL or
 /// LoadRequest, and the redirects it leads to (cef_types.h)
@@ -1194,6 +1195,50 @@ wrap_drag_handler! {
     }
 }
 
+//
+// JS DIALOGS
+//
+// Only beforeunload is answered; alert, confirm and prompt keep CEF's
+// default, which tetsu's defaults return
+wrap_jsdialog_handler! {
+    pub struct KuroganeJsdialogHandler {
+        app: AppHandle,
+    }
+
+    impl JsdialogHandler {
+        fn on_before_unload_dialog(
+            &self,
+            browser: Option<&mut Browser>,
+            _message_text: Option<&CefString>,
+            is_reload: i32,
+            callback: Option<&mut JsdialogCallback>,
+        ) -> i32 {
+            let (Some(browser), Some(callback)) = (browser, callback) else {
+                return 0;
+            };
+            let id = {
+                let reg = self.app.registry();
+                application_browser(&reg, browser).map(|(id, _)| id)
+            };
+            let Some(id) = id else {
+                return 0;
+            };
+            let request = BeforeUnload::new(id, is_reload != 0);
+            match before_unload::decide(&self.app, &request) {
+                None | Some(UnloadDecision::Ask) => 0,
+                Some(UnloadDecision::Leave) => {
+                    callback.cont(1, None);
+                    1
+                }
+                Some(UnloadDecision::Stay) => {
+                    callback.cont(0, None);
+                    1
+                }
+            }
+        }
+    }
+}
+
 /// `browser` and its window, if it is a browser of the application's:
 /// registered, and neither DevTools nor one of Chromium's own.
 fn application_browser(
@@ -1255,6 +1300,12 @@ wrap_client! {
         fn drag_handler(&self) -> Option<DragHandler> {
             let wanted = self.app.hooks().is_some_and(|hooks| hooks.drag_enter.is_some());
             wanted.then(|| KuroganeDragHandler::new(self.app.clone()))
+        }
+
+        // Only for an application that answers a page asking to stay
+        fn jsdialog_handler(&self) -> Option<JsdialogHandler> {
+            let wanted = self.app.hooks().is_some_and(|hooks| hooks.before_unload.is_some());
+            wanted.then(|| KuroganeJsdialogHandler::new(self.app.clone()))
         }
 
         // Only for an application that asks to see keys
