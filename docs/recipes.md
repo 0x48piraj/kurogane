@@ -180,6 +180,36 @@ let options = WindowOptions::new().placement(WindowPlacement {
 });
 ```
 
+### Asking before a window closes
+
+A page that cancels `beforeunload` makes Chromium ask the user whether to leave, in a dialog of its own. `App::on_before_unload` answers in its place. It returns `UnloadDecision::Leave`, `Stay` or `Ask`. `Ask` shows Chromium's dialog as without the hook. `BeforeUnload::is_reload` tells a reload from the window closing or the page navigating away.
+
+An application that asks the user its own question keeps the window and tells the page. Here a reload goes through and a close stays:
+
+```rust
+use kurogane::{App, UnloadDecision};
+
+App::new("dist")
+    .on_before_unload(|unload, app| {
+        if unload.is_reload() {
+            return UnloadDecision::Leave;
+        }
+        if let Some(page) = app.get_browser_handle(unload.browser()) {
+            page.execute_javascript("window.dispatchEvent(new Event('close-requested'))", "", 0);
+        }
+        UnloadDecision::Stay
+    })
+    .run_or_exit();
+```
+
+The page cancels `beforeunload` and asks on `close-requested`. Once it has its answer it closes the window through a command of the application's, which leaves on its own close.
+
+Chromium only honours the cancel on a page the user has clicked or typed into. A window closed before that closes without the hook being asked.
+
+A close with `force` still runs the page's `beforeunload` for a browser in a Chrome-style window. An application that closes its own windows answers that close with `Leave`.
+
+The hook runs on the UI thread. It is not asked for DevTools or Chromium's own pages.
+
 ### Naming windows
 
 A name is the application's handle on a window and is never shown. `WindowOptions::name` gives it. `App::on_window_closing` reports it. `AppHandle::find_window_by_name` finds the open window by it.
