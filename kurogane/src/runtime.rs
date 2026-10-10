@@ -1397,6 +1397,9 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
     let layout = resolve_layout(cef_root, spec.profile_id, spec.profile_dir)?;
     crate::sandbox::preflight(spec.sandbox_mode, &layout.cef_root)?;
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    crate::platform::raise_open_file_limit();
+
     let external_message_pump = spec.scheduler.is_some();
     let settings = build_settings(
         &layout,
