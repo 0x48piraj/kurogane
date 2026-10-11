@@ -20,8 +20,8 @@ Apps run unsandboxed by default. An app that opts in with `SandboxMode::Chromium
 * The setuid helper shipped with CEF:
 
 ```bash
-sudo chown root:root ~/.local/share/tetsu/cef/{INSTALLED_CEF_VERSION}/cef_linux_x86_64/chrome-sandbox
-sudo chmod 4755 ~/.local/share/tetsu/cef/{INSTALLED_CEF_VERSION}/cef_linux_x86_64/chrome-sandbox
+sudo chown root:root ~/.local/share/tanso/cef/{INSTALLED_CEF_VERSION}/cef_linux_x86_64/chrome-sandbox
+sudo chmod 4755 ~/.local/share/tanso/cef/{INSTALLED_CEF_VERSION}/cef_linux_x86_64/chrome-sandbox
 ```
 
 The app checks both at startup. When neither is usable it refuses to start and prints these instructions. AppImages and Nix-store installations cannot use the setuid helper and need user namespaces.

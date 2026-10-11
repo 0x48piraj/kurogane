@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use tetsu::{Frame, ImplFrame};
+use tanso::{Frame, ImplFrame};
 
 use crate::acl::Origin;
 use crate::browser_registry::BrowserId;

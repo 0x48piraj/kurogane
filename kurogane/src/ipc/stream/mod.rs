@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tetsu::*;
+use tanso::*;
 
 use crate::acl::Origin;
 use crate::browser_registry::BrowserId;

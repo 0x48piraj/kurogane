@@ -60,8 +60,8 @@ pub use resources::resource_dir;
 /// The window-handle traits [`AppInstance::create_child_browser`] takes, at
 /// the version Kurogane uses: a host passes its window as it is.
 pub use raw_window_handle;
-/// tetsu, Kurogane's CEF bindings, at the revision Kurogane is built with.
-pub use tetsu;
+/// tanso, Kurogane's CEF bindings, at the revision Kurogane is built with.
+pub use tanso;
 
 /// What Kurogane's macros expand to. Not a public API.
 #[doc(hidden)]

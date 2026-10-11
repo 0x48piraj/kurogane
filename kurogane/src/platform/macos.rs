@@ -34,7 +34,7 @@ pub fn set_app(app: &AppHandle) {
 /// `NSApplication` subclass and makes an unbundled process a regular
 /// foreground app.
 ///
-/// Loads the CEF the runtime resolves, its bundle's or the one tetsu finds.
+/// Loads the CEF the runtime resolves, its bundle's or the one tanso finds.
 ///
 /// CEF's subprocesses (`--type=renderer`, `gpu-process`, `utility`) get the
 /// library alone: an `NSApplication` registers its process with LaunchServices
@@ -312,7 +312,7 @@ impl SimpleAppDelegate {
 mod application {
     use std::cell::Cell;
 
-    use tetsu::application_mac::{CefAppProtocol, CrAppControlProtocol, CrAppProtocol};
+    use tanso::application_mac::{CefAppProtocol, CrAppControlProtocol, CrAppProtocol};
     use objc2::{
         DefinedClass, define_class, extern_methods, msg_send,
         runtime::{AnyObject, Bool},

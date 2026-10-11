@@ -1,5 +1,5 @@
 use kurogane::App;
-use kurogane::tetsu::*;
+use kurogane::tanso::*;
 
 struct BrowserDelegate;
 

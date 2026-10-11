@@ -95,7 +95,7 @@ fn uninstall(exe: &Path, installed: &Installed, keep_data: bool, confirm: Confir
     tui::warn("This removes the kurogane binary and the PATH setup the installer added.");
     if !keep_data {
         tui::warn(
-            "Including Kurogane's caches and tetsu's shared Chromium runtimes, which other tetsu projects use too.",
+            "Including Kurogane's caches and tanso's shared Chromium runtimes, which other tanso projects use too.",
         );
     }
     note_profiles();
@@ -165,7 +165,7 @@ fn remove_data_only(exe: &Path, owner: Owner, keep_data: bool, confirm: Confirm)
     }
 
     tui::warn(
-        "This removes Kurogane's caches and tetsu's shared Chromium runtimes, which other tetsu projects use too.",
+        "This removes Kurogane's caches and tanso's shared Chromium runtimes, which other tanso projects use too.",
     );
     tui::warn("The kurogane binary stays.");
     note_profiles();
@@ -318,17 +318,17 @@ fn prune(home: &Path, bin: &Path) {
     remove_if_empty(home);
 }
 
-/// Removes Kurogane's data folder, its cache folder and tetsu's data folder
+/// Removes Kurogane's data folder, its cache folder and tanso's data folder
 /// when nothing is left in them.
 fn prune_data_roots() {
     if let Some(data) = profiles_root().parent() {
         remove_if_empty(data);
     }
-    if let Some(tetsu) = tetsu_download::cef_install_root()
+    if let Some(tanso) = tanso_download::cef_install_root()
         .as_deref()
         .and_then(Path::parent)
     {
-        remove_if_empty(tetsu);
+        remove_if_empty(tanso);
     }
     remove_if_empty(&cache_root());
 }

@@ -41,7 +41,7 @@ jobs:
       - run: cargo check -p kurogane-layout -p kurogane-cli -p kurogane-build --all-targets --locked
 
   # Check advisories, licenses, bans and dependency sources
-  # Note: tetsu's git dependencies are outside advisory coverage; see deny.toml
+  # Note: tanso's git dependencies are outside advisory coverage; see deny.toml
   audit:
     name: cargo-deny
     runs-on: ubuntu-latest
@@ -142,10 +142,10 @@ jobs:
         with:
           key: starters
 
-      # CEF version follows tetsu-sys in the lock
+      # CEF version follows tanso-sys in the lock
       - uses: actions/cache@v4
         with:
-          path: ~/.local/share/tetsu/cef
+          path: ~/.local/share/tanso/cef
           key: cef-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
 
       - name: Build the CLI

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
-use tetsu::*;
+use tanso::*;
 use tracing::{debug, error, warn};
 
 use crate::acl::Origin;
@@ -37,14 +37,14 @@ pub enum FileDialogKind {
 }
 
 impl FileDialogKind {
-    pub(crate) fn from_cef(mode: tetsu::FileDialogMode) -> Option<Self> {
-        if mode == tetsu::FileDialogMode::OPEN {
+    pub(crate) fn from_cef(mode: tanso::FileDialogMode) -> Option<Self> {
+        if mode == tanso::FileDialogMode::OPEN {
             Some(Self::Open)
-        } else if mode == tetsu::FileDialogMode::OPEN_MULTIPLE {
+        } else if mode == tanso::FileDialogMode::OPEN_MULTIPLE {
             Some(Self::OpenMultiple)
-        } else if mode == tetsu::FileDialogMode::OPEN_FOLDER {
+        } else if mode == tanso::FileDialogMode::OPEN_FOLDER {
             Some(Self::OpenFolder)
-        } else if mode == tetsu::FileDialogMode::SAVE {
+        } else if mode == tanso::FileDialogMode::SAVE {
             Some(Self::Save)
         } else {
             None

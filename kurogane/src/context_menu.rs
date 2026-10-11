@@ -27,9 +27,9 @@ use std::fmt::Write as _;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::OnceLock;
 
-use tetsu::sys::cef_context_menu_edit_state_flags_t as EditFlags;
-use tetsu::sys::cef_menu_id_t as MenuId;
-use tetsu::*;
+use tanso::sys::cef_context_menu_edit_state_flags_t as EditFlags;
+use tanso::sys::cef_menu_id_t as MenuId;
+use tanso::*;
 use tracing::{debug, error, warn};
 
 use crate::acl::Origin;
@@ -552,7 +552,7 @@ fn command_id(style: Style, item: StandardItem) -> Option<c_int> {
                 SpellingSuggestions | AddToDictionary | Inspect => return None,
             }) as c_int,
         ),
-        Style::Chrome => chrome_commands::command_id(match item {
+        Style::Chrome => tanso::id_for_command_id_name(match item {
             Undo => c"IDC_CONTENT_CONTEXT_UNDO",
             Redo => c"IDC_CONTENT_CONTEXT_REDO",
             Cut => c"IDC_CONTENT_CONTEXT_CUT",
@@ -595,11 +595,11 @@ fn spelling_ids(style: Style) -> (Vec<c_int>, Option<c_int>) {
                     c"IDC_CONTENT_CONTEXT_NO_SPELLING_SUGGESTIONS",
                 ]
                 .into_iter()
-                .filter_map(chrome_commands::command_id)
+                .filter_map(tanso::id_for_command_id_name)
                 .collect();
                 (
                     suggestions,
-                    chrome_commands::command_id(c"IDC_SPELLCHECK_ADD_TO_DICTIONARY"),
+                    tanso::id_for_command_id_name(c"IDC_SPELLCHECK_ADD_TO_DICTIONARY"),
                 )
             })
             .clone()
@@ -663,7 +663,7 @@ fn label(item: StandardItem) -> String {
     };
     // SAFETY: `name` is a valid, null-terminated C string, only read for
     // the call.
-    let id = unsafe { tetsu::sys::cef_id_for_pack_string_name(name.as_ptr()) };
+    let id = unsafe { tanso::sys::cef_id_for_pack_string_name(name.as_ptr()) };
     let localized = (id >= 0)
         .then(resource_bundle_get_global)
         .flatten()

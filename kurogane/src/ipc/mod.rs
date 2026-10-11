@@ -15,6 +15,8 @@ pub(crate) mod request_response;
 pub(crate) mod router;
 pub(crate) mod browser;
 pub(crate) mod renderer;
+pub(crate) mod renderer_inbox;
+pub(crate) mod renderer_delivery;
 
 // Public API: the types handlers see.
 pub use browser_state::{ErrorCode, IpcError};

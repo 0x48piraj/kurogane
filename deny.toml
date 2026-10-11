@@ -32,8 +32,8 @@ wildcards = "warn"
 unknown-registry = "deny"
 unknown-git = "deny"
 
-# tetsu, Kurogane's CEF bindings, is pinned to the Git revision Kurogane was
+# tanso, Kurogane's CEF bindings, is pinned to the Git revision Kurogane was
 # tested with. Changes to the pinned revision can affect Kurogane's API.
 allow-git = [
-    "https://github.com/kurogane-rs/tetsu",
+    "https://github.com/kurogane-rs/tanso",
 ]

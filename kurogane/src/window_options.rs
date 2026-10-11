@@ -3,7 +3,7 @@
 //! [`AppInstance::create_window`](crate::AppInstance::create_window); and
 //! where one is, to open it there again ([`WindowPlacement`]).
 
-use tetsu::Rect;
+use tanso::Rect;
 use serde::{Deserialize, Serialize};
 
 /// How an application window opens: the name the application knows it by,
@@ -236,14 +236,14 @@ impl WindowState {
     }
 }
 
-impl From<WindowState> for tetsu::ShowState {
+impl From<WindowState> for tanso::ShowState {
     fn from(state: WindowState) -> Self {
         match state {
-            WindowState::Normal => tetsu::ShowState::NORMAL,
-            WindowState::Minimized => tetsu::ShowState::MINIMIZED,
-            WindowState::Maximized => tetsu::ShowState::MAXIMIZED,
-            WindowState::Fullscreen => tetsu::ShowState::FULLSCREEN,
-            WindowState::Hidden => tetsu::ShowState::HIDDEN,
+            WindowState::Normal => tanso::ShowState::NORMAL,
+            WindowState::Minimized => tanso::ShowState::MINIMIZED,
+            WindowState::Maximized => tanso::ShowState::MAXIMIZED,
+            WindowState::Fullscreen => tanso::ShowState::FULLSCREEN,
+            WindowState::Hidden => tanso::ShowState::HIDDEN,
         }
     }
 }
@@ -357,13 +357,13 @@ mod tests {
     #[test]
     fn every_state_has_its_show_state() {
         for (state, shown) in [
-            (WindowState::Normal, tetsu::ShowState::NORMAL),
-            (WindowState::Minimized, tetsu::ShowState::MINIMIZED),
-            (WindowState::Maximized, tetsu::ShowState::MAXIMIZED),
-            (WindowState::Fullscreen, tetsu::ShowState::FULLSCREEN),
-            (WindowState::Hidden, tetsu::ShowState::HIDDEN),
+            (WindowState::Normal, tanso::ShowState::NORMAL),
+            (WindowState::Minimized, tanso::ShowState::MINIMIZED),
+            (WindowState::Maximized, tanso::ShowState::MAXIMIZED),
+            (WindowState::Fullscreen, tanso::ShowState::FULLSCREEN),
+            (WindowState::Hidden, tanso::ShowState::HIDDEN),
         ] {
-            assert_eq!(tetsu::ShowState::from(state), shown, "{state:?}");
+            assert_eq!(tanso::ShowState::from(state), shown, "{state:?}");
         }
     }
 }

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use std::sync::Arc;
 use serde_json::Value;
 use std::collections::HashMap;
-use tetsu::*;
+use tanso::*;
 use crate::app::resolver::ResolvedFrontend;
 use crate::ipc::{
     IpcRouter, RequestResponseSubsystem, EventSubsystem, StreamSubsystem, StreamFactory, Responder,

@@ -2,19 +2,24 @@
 //!
 //! Events are delivered only to their addressed subscription and owning frame.
 
-use tetsu::*;
+use tanso::*;
 
 use tracing::debug;
 use crate::ipc::envelope::*;
 use crate::ipc::renderer_state::state;
-use crate::ipc::utils::rejection;
+use crate::ipc::utils::{array_buffer, rejection};
 use crate::ipc::FrameId;
 
 /// Handle an event message arriving from the browser (renderer-side dispatch).
-pub fn handle_event_renderer(frame: &mut Frame, envelope: &Envelope, payload: &[u8]) -> bool {
+pub fn handle_event_renderer(
+    frame: &mut Frame,
+    envelope: &Envelope,
+    payload: &[u8],
+    filled: Option<V8BackingStore>,
+) -> bool {
     let addressed = FrameId::of(frame);
     match envelope.opcode {
-        EVENT_EMIT => on_emit(&addressed, envelope, payload),
+        EVENT_EMIT => on_emit(&addressed, envelope, payload, filled),
         EVENT_REFUSED => on_refused(&addressed, envelope, payload),
         _ => {
             debug!("[Event Renderer] unknown opcode {}", envelope.opcode);
@@ -46,7 +51,12 @@ fn on_refused(addressed: &FrameId, envelope: &Envelope, payload: &[u8]) -> bool 
     true
 }
 
-fn on_emit(addressed: &FrameId, envelope: &Envelope, payload: &[u8]) -> bool {
+fn on_emit(
+    addressed: &FrameId,
+    envelope: &Envelope,
+    payload: &[u8],
+    filled: Option<V8BackingStore>,
+) -> bool {
     let Some((event_name, data)) = decode_cmd_payload(payload) else {
         debug!("[Event Renderer] invalid emit payload");
         return false;
@@ -64,8 +74,13 @@ fn on_emit(addressed: &FrameId, envelope: &Envelope, payload: &[u8]) -> bool {
     if context.enter() == 0 {
         return true;
     }
-    let text = String::from_utf8_lossy(data);
-    let value = v8_value_create_string(Some(&CefString::from(text.as_ref())));
+    // Bytes arrive as an ArrayBuffer, JSON as a string
+    let value = if envelope.payload_kind == PAYLOAD_BINARY {
+        array_buffer(data, filled)
+    } else {
+        let text = String::from_utf8_lossy(data);
+        v8_value_create_string(Some(&CefString::from(text.as_ref())))
+    };
     callback.execute_function(None, Some(&[value]));
     context.exit();
     true

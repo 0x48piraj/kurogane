@@ -9,7 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-tetsu-build.workspace = true
+tanso-build.workspace = true
 
 [lints]
 workspace = true

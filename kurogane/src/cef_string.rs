@@ -1,6 +1,6 @@
 //! Strings Kurogane hands to CEF in a struct a callback fills in.
 
-use tetsu::{CefString, sys};
+use tanso::{CefString, sys};
 
 /// `value` as a string in a buffer CEF allocated, for a string field of a
 /// struct a callback fills in for CEF (`LinuxWindowProperties`).

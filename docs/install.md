@@ -39,7 +39,7 @@ An app also needs at least the glibc of the machine that built it. Build Linux b
 | CLI | `~/.kurogane/bin/kurogane` | `%LOCALAPPDATA%\kurogane\bin\kurogane.exe` |
 | PATH setup | `~/.kurogane/env` sourced from `~/.profile`, `~/.bashrc`, `~/.bash_profile`, `~/.bash_login` and `~/.zshenv` where they exist (`.profile` is created, `.zshenv` too when zsh is installed); fish `conf.d/kurogane.fish` | user `Path` in `HKCU\Environment` |
 | Install receipt, read by `kurogane self uninstall` | `~/.kurogane/receipt.json` | `%LOCALAPPDATA%\kurogane\receipt.json` |
-| Chromium runtime (`kurogane install`), shared with every project built with tetsu | `~/.local/share/tetsu/cef/<version>/cef_linux_<arch>` (Linux), `~/Library/Application Support/tetsu/cef/<version>/cef_macos_<arch>` (macOS) | `%LOCALAPPDATA%\tetsu\cef\<version>\cef_windows_<arch>` |
+| Chromium runtime (`kurogane install`), shared with every project built with tanso | `~/.local/share/tanso/cef/<version>/cef_linux_<arch>` (Linux), `~/Library/Application Support/tanso/cef/<version>/cef_macos_<arch>` (macOS) | `%LOCALAPPDATA%\tanso\cef\<version>\cef_windows_<arch>` |
 
 Running the installer again upgrades in place. The existing binary is replaced only after the new one has been downloaded, verified and run successfully. An interrupted or failed install leaves the previous version intact.
 
@@ -115,7 +115,7 @@ kurogane self uninstall
 
 It removes an installer-managed Kurogane installation with its CLI, PATH setup, Chromium runtimes and caches.
 
-The Chromium runtimes live in tetsu's shared installation at `tetsu/cef` in the local data directory. Other projects built on tetsu use it too. Uninstalling removes all of it.
+The Chromium runtimes live in tanso's shared installation at `tanso/cef` in the local data directory. Other projects built on tanso use it too. Uninstalling removes all of it.
 
 The command shows what it will remove and asks for confirmation. Use `--yes` to skip the prompt. Use `--keep-data` to keep runtimes and caches.
 
@@ -152,14 +152,14 @@ On Unix:
 
 ```bash
 rm -r ~/.kurogane
-rm -r ~/.cache/kurogane ~/.local/share/tetsu/cef
+rm -r ~/.cache/kurogane ~/.local/share/tanso/cef
 ```
 
 On macOS the cache and runtime directories are:
 
 ```text
 ~/Library/Caches/kurogane
-~/Library/Application Support/tetsu/cef
+~/Library/Application Support/tanso/cef
 ```
 
 Remove the installer's line from your shell startup files. It names your home directory in full:
@@ -174,7 +174,7 @@ Fish users remove:
 ~/.config/fish/conf.d/kurogane.fish
 ```
 
-On Windows remove everything under `%LOCALAPPDATA%\kurogane` except `profiles`. Remove the Chromium runtimes in `%LOCALAPPDATA%\tetsu\cef` too. Then remove `%LOCALAPPDATA%\kurogane\bin` from your user `Path` in **Edit environment variables for your account**.
+On Windows remove everything under `%LOCALAPPDATA%\kurogane` except `profiles`. Remove the Chromium runtimes in `%LOCALAPPDATA%\tanso\cef` too. Then remove `%LOCALAPPDATA%\kurogane\bin` from your user `Path` in **Edit environment variables for your account**.
 
 ## What else you need
 

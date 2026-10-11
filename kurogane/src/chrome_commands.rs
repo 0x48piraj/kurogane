@@ -20,7 +20,7 @@ use std::ffi::{CStr, c_int};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::OnceLock;
 
-use tetsu::*;
+use tanso::*;
 
 use tracing::{debug, error};
 
@@ -145,14 +145,6 @@ const ALLOWED: &[(&CStr, ChromeCommand)] = &[
     ),
 ];
 
-/// Resolves a stable command name to its dynamic runtime ID.
-pub(crate) fn command_id(name: &CStr) -> Option<c_int> {
-    // SAFETY: `name` is a valid, null-terminated C-string. The FFI boundary
-    // guarantees read-only access and the backing memory outlives the call.
-    let id = unsafe { tetsu::sys::cef_id_for_command_id_name(name.as_ptr()) };
-    (id >= 0).then_some(id)
-}
-
 /// Translates [`ALLOWED`] command names to runtime IDs.
 /// Cached via [`OnceLock`] because CEF command IDs are unstable across Chromium
 /// versions, whereas string names provide a stable resolution ABI.
@@ -161,7 +153,7 @@ fn allowed_ids() -> &'static [(c_int, ChromeCommand)] {
     IDS.get_or_init(|| {
         ALLOWED
             .iter()
-            .filter_map(|&(name, command)| Some((command_id(name)?, command)))
+            .filter_map(|&(name, command)| Some((tanso::id_for_command_id_name(name)?, command)))
             .collect()
     })
 }
@@ -171,8 +163,8 @@ fn custom_context_ids() -> Option<(c_int, c_int)> {
     static RANGE: OnceLock<Option<(c_int, c_int)>> = OnceLock::new();
     *RANGE.get_or_init(|| {
         Some((
-            command_id(c"IDC_CONTENT_CONTEXT_CUSTOM_FIRST")?,
-            command_id(c"IDC_CONTENT_CONTEXT_CUSTOM_LAST")?,
+            tanso::id_for_command_id_name(c"IDC_CONTENT_CONTEXT_CUSTOM_FIRST")?,
+            tanso::id_for_command_id_name(c"IDC_CONTENT_CONTEXT_CUSTOM_LAST")?,
         ))
     })
 }
@@ -181,7 +173,7 @@ fn custom_context_ids() -> Option<(c_int, c_int)> {
 #[cfg(target_os = "macos")]
 fn exit_id() -> Option<c_int> {
     static ID: OnceLock<Option<c_int>> = OnceLock::new();
-    *ID.get_or_init(|| command_id(c"IDC_EXIT"))
+    *ID.get_or_init(|| tanso::id_for_command_id_name(c"IDC_EXIT"))
 }
 
 /// What Kurogane does with the command `id`.
