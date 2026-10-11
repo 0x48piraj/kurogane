@@ -23,9 +23,9 @@ use crate::window_closing;
 
 /// A load the application made itself, through CreateBrowser, LoadURL or
 /// LoadRequest, and the redirects it leads to (cef_types.h)
-const DIRECT_LOAD: u32 = sys::cef_transition_type_t::TT_DIRECT_LOAD_FLAG as u32;
+const DIRECT_LOAD: TransitionType = TransitionType::DIRECT_LOAD_FLAG;
 /// Back or forward through the browser's history (cef_types.h)
-const FORWARD_BACK: u32 = sys::cef_transition_type_t::TT_FORWARD_BACK_FLAG as u32;
+const FORWARD_BACK: TransitionType = TransitionType::FORWARD_BACK_FLAG;
 
 //
 // LifeSpanHandler
@@ -222,29 +222,9 @@ wrap_life_span_handler! {
     }
 }
 
-/// The transition of `request`, as the bits CEF returns: the source in the
-/// low byte, qualifier flags above it (cef_types.h, cef_transition_type_t).
-///
-/// cef-rs binds that type as a Rust enum, but CEF returns a source ORed with
-/// qualifiers, which no variant names, and holding such a value in the enum
-/// is undefined behaviour. So `ImplRequest::transition_type` is never
-/// called: CEF's function is called as returning the integer it does.
-fn transition(request: &Request) -> u32 {
-    let raw = request.get_raw();
-    type GetTransitionType = unsafe extern "C" fn(*mut sys::_cef_request_t) -> i32;
-    // SAFETY: `raw` is the live request CEF passed to this callback, borrowed
-    // as the call's `self` like every method cef-rs calls (no reference is
-    // taken or released). The slot's C type returns cef_transition_type_t, a
-    // C enum: a 32-bit integer on every platform CEF supports, so reading it
-    // through an `i32` return type is the same call; only the Rust enum
-    // cef-rs declares cannot hold the value.
-    unsafe {
-        let Some(get) = (*raw).get_transition_type else {
-            return 0;
-        };
-        let get: GetTransitionType = std::mem::transmute(get);
-        get(raw) as u32
-    }
+/// Whether `transition` carries the qualifier `flag`.
+fn has_qualifier(transition: TransitionType, flag: TransitionType) -> bool {
+    transition.get_raw() & flag.get_raw() != 0
 }
 
 /// A page's request, made in `frame`, for a window showing `target_url`.
@@ -335,10 +315,11 @@ wrap_request_handler! {
                 return 0;
             };
             let url = CefString::from(&request.url()).to_string();
-            let transition = transition(request);
+            let transition = request.transition_type();
             debug!(
-                "[nav] main={} url={url} transition={transition:#010x} gesture={user_gesture} redirect={is_redirect}",
-                frame.is_main()
+                "[nav] main={} url={url} transition={:#010x} gesture={user_gesture} redirect={is_redirect}",
+                frame.is_main(),
+                transition.get_raw()
             );
             // Frames inside a page are not guarded: the ACL keeps another
             // origin's frame from the bridge
@@ -362,14 +343,14 @@ wrap_request_handler! {
                 }
                 // The application's own loads and their redirects; pages
                 // cannot set this flag
-                if transition & DIRECT_LOAD != 0 {
+                if has_qualifier(transition, DIRECT_LOAD) {
                     if let Some(state) = id.and_then(|id| reg.browsers.get_mut(id)) {
                         state.admit(origin);
                     }
                     return 0;
                 }
                 // History holds only pages that were let in
-                if transition & FORWARD_BACK != 0 {
+                if has_qualifier(transition, FORWARD_BACK) {
                     return 0;
                 }
                 let admitted = (!origin.is_opaque() && origin == *self.app.app_origin())

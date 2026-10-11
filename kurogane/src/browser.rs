@@ -193,8 +193,7 @@ fn set_preference(name: &str, set: impl FnOnce(&mut Value)) {
     set(&mut value);
 
     let key = CefString::from(name);
-    // CEF requires a non-null error string
-    let mut error = CefString::from("");
+    let mut error = CefString::default();
 
     if context.set_preference(Some(&key), Some(&mut value), Some(&mut error)) == 0 {
         warn!("failed to set Chromium's {name}: {error}");

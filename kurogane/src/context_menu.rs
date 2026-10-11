@@ -552,7 +552,7 @@ fn command_id(style: Style, item: StandardItem) -> Option<c_int> {
                 SpellingSuggestions | AddToDictionary | Inspect => return None,
             }) as c_int,
         ),
-        Style::Chrome => chrome_commands::command_id(match item {
+        Style::Chrome => tanso::id_for_command_id_name(match item {
             Undo => c"IDC_CONTENT_CONTEXT_UNDO",
             Redo => c"IDC_CONTENT_CONTEXT_REDO",
             Cut => c"IDC_CONTENT_CONTEXT_CUT",
@@ -595,11 +595,11 @@ fn spelling_ids(style: Style) -> (Vec<c_int>, Option<c_int>) {
                     c"IDC_CONTENT_CONTEXT_NO_SPELLING_SUGGESTIONS",
                 ]
                 .into_iter()
-                .filter_map(chrome_commands::command_id)
+                .filter_map(tanso::id_for_command_id_name)
                 .collect();
                 (
                     suggestions,
-                    chrome_commands::command_id(c"IDC_SPELLCHECK_ADD_TO_DICTIONARY"),
+                    tanso::id_for_command_id_name(c"IDC_SPELLCHECK_ADD_TO_DICTIONARY"),
                 )
             })
             .clone()
