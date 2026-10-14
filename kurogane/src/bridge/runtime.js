@@ -62,11 +62,7 @@
         if (payload instanceof ArrayBuffer) {
             p = window.core.invoke(command, payload);
         } else if (ArrayBuffer.isView(payload)) {
-            const buffer = payload.buffer.slice(
-                payload.byteOffset,
-                payload.byteOffset + payload.byteLength,
-            );
-            p = window.core.invoke(command, buffer);
+            p = window.core.invoke(command, payload.buffer, payload.byteOffset, payload.byteLength);
         } else {
             const json = payload !== undefined ? JSON.stringify(payload) : '';
             p = window.core.invoke(command, json);
@@ -229,20 +225,13 @@
          * @param {ArrayBuffer | ArrayBufferView} data
          */
         write(data) {
-            let buffer;
-
             if (data instanceof ArrayBuffer) {
-                buffer = data;
+                window.core.writeStream(this._id, data);
             } else if (ArrayBuffer.isView(data)) {
-                buffer = data.buffer.slice(
-                    data.byteOffset,
-                    data.byteOffset + data.byteLength,
-                );
+                window.core.writeStream(this._id, data.buffer, data.byteOffset, data.byteLength);
             } else {
                 throw new TypeError('Stream.write: expected ArrayBuffer or ArrayBufferView');
             }
-
-            window.core.writeStream(this._id, buffer);
         }
 
         /**

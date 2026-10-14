@@ -38,20 +38,48 @@ fn throw(exception: Option<&mut CefString>, message: &str) -> i32 {
     1
 }
 
-/// A message whose payload is `header`, then `buffer`'s bytes: `None` when
-/// a non-empty buffer has no memory or the message cannot be built.
+/// Returns `value` as a byte offset or length when it is a whole number from
+/// zero up.
+fn byte_index(value: &V8Value) -> Option<usize> {
+    if value.is_int() == 0 && value.is_uint() == 0 && value.is_double() == 0 {
+        return None;
+    }
+    let index = value.double_value();
+    (index >= 0.0 && index.fract() == 0.0).then_some(index as usize)
+}
+
+/// Returns the offset and length that follow an ArrayBuffer argument, or
+/// `None` for the whole buffer when nothing follows it. `Err` when the
+/// arguments are not two whole numbers.
+fn parse_view(rest: &[Option<V8Value>]) -> Result<Option<(usize, usize)>, ()> {
+    match rest {
+        [] => Ok(None),
+        [Some(offset), Some(len)] => match (byte_index(offset), byte_index(len)) {
+            (Some(offset), Some(len)) => Ok(Some((offset, len))),
+            _ => Err(()),
+        },
+        _ => Err(()),
+    }
+}
+
+/// Returns a message whose payload is `header` then the bytes of `buffer`
+/// that `view` names as an offset and length, or every byte without a view.
+/// `None` when a non-empty buffer has no memory, the view lies outside the
+/// buffer or the message cannot be built.
 ///
 /// The only reader of an ArrayBuffer's memory. The bytes are borrowed just
 /// to build the message, which copies them, so no JavaScript, which could
-/// detach or resize the buffer, runs while they are borrowed.
+/// detach or resize the buffer, runs while they are borrowed. Any page script
+/// can pass a view, so it is checked against the buffer's length.
 fn buffer_message(
     name: &str,
     envelope: &Envelope,
     header: &[u8],
     buffer: &V8Value,
+    view: Option<(usize, usize)>,
 ) -> Option<ProcessMessage> {
     let len = buffer.array_buffer_byte_length();
-    let bytes: &[u8] = if len == 0 {
+    let whole: &[u8] = if len == 0 {
         &[]
     } else {
         let data = buffer.array_buffer_data() as *const u8;
@@ -63,6 +91,10 @@ fn buffer_message(
         // JavaScript runs before the slice's last use: building the message
         // only copies it
         unsafe { std::slice::from_raw_parts(data, len) }
+    };
+    let bytes = match view {
+        Some((offset, len)) => whole.get(offset..)?.get(..len)?,
+        None => whole,
     };
     if header.is_empty() {
         build_message(name, envelope, bytes)
@@ -409,6 +441,9 @@ wrap_v8_handler! {
             let binary = args.get(1)
                 .and_then(|v| v.as_ref())
                 .filter(|v| v.is_array_buffer() != 0);
+            let Ok(view) = binary.map_or(Ok(None), |_| parse_view(args.get(2..).unwrap_or_default())) else {
+                return throw(exception, "invoke: byteOffset and byteLength must be whole numbers");
+            };
 
             let Some(cmd_header) = encode_cmd_header(&cmd) else {
                 return throw(
@@ -453,7 +488,7 @@ wrap_v8_handler! {
                     payload_kind: PAYLOAD_BINARY,
                 };
 
-                if let Some(mut msg) = buffer_message("kurogane_rpc", &envelope, &cmd_header, buffer) {
+                if let Some(mut msg) = buffer_message("kurogane_rpc", &envelope, &cmd_header, buffer, view) {
                     frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
                 } else {
                     state().forget(id);
@@ -900,6 +935,9 @@ wrap_v8_handler! {
                     return throw(exception, "writeStream: second argument must be an ArrayBuffer");
                 }
             };
+            let Ok(view) = parse_view(args.get(2..).unwrap_or_default()) else {
+                return throw(exception, "writeStream: byteOffset and byteLength must be whole numbers");
+            };
 
             let context = match v8_context_get_current_context() {
                 Some(ctx) => ctx,
@@ -930,7 +968,7 @@ wrap_v8_handler! {
                 payload_kind: PAYLOAD_BINARY,
             };
 
-            if let Some(mut msg) = buffer_message("kurogane_stream", &envelope, &[], buffer) {
+            if let Some(mut msg) = buffer_message("kurogane_stream", &envelope, &[], buffer, view) {
                 frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
             }
 
