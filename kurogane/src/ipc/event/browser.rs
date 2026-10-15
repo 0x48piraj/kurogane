@@ -7,6 +7,7 @@ use tanso::*;
 
 use crate::acl::Origin;
 use tracing::debug;
+use crate::ipc::browser_outbox;
 use crate::ipc::browser_state::{still_addressed, IpcContext, IpcError};
 use crate::ipc::envelope::*;
 use crate::ipc::event::EventSubsystem;
@@ -101,7 +102,7 @@ impl EventSubsystem {
         };
         let payload = encode_error_payload(error.code().wire(), error.message());
         match build_message("kurogane_event", &reply, &payload) {
-            Some(mut msg) => frame.send_process_message(ProcessId::RENDERER, Some(&mut msg)),
+            Some(mut msg) => browser_outbox::send(frame, &mut msg),
             None => debug!("[Event Browser] failed to build refusal message"),
         }
     }
@@ -148,7 +149,7 @@ impl EventSubsystem {
             };
             // A sent message belongs to CEF; build one per subscription
             match build_message("kurogane_event", &envelope, &payload) {
-                Some(mut msg) => frame.send_process_message(ProcessId::RENDERER, Some(&mut msg)),
+                Some(mut msg) => browser_outbox::send(&frame, &mut msg),
                 None => debug!("[Event Browser] failed to build an event message"),
             }
         }

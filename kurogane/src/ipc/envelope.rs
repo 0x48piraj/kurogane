@@ -24,7 +24,11 @@ pub const ENVELOPE_VERSION: u8 = 3;
 pub const FLAG_OPAQUE_CONTEXT: u8 = 0x01;
 
 /// Flags defined by this protocol version.
-pub const KNOWN_FLAGS: u8 = FLAG_OPAQUE_CONTEXT;
+pub const KNOWN_FLAGS: u8 = FLAG_OPAQUE_CONTEXT | FLAG_ANSWERS;
+
+/// Marks a message of calls the browser closes with one message of answers
+/// (`RPC_ANSWERS`).
+pub const FLAG_ANSWERS: u8 = 0x02;
 
 /// Fixed-size envelope header (9 bytes).
 /// version (1) | subsystem (1) | opcode (1) | flags (1) | correlation_id (4 LE u32) | payload_kind (1)
@@ -40,6 +44,11 @@ pub const RPC_INVOKE: u8 = 0;
 pub const RPC_RESOLVE: u8 = 1;
 pub const RPC_REJECT: u8 = 2;
 pub const RPC_CANCEL: u8 = 3;
+/// Several messages in one (`ipc::batch`), calls one way and replies the other.
+pub const RPC_BATCH: u8 = 4;
+/// The browser's answers that close messages of calls, as many as its
+/// correlation id counts.
+pub const RPC_ANSWERS: u8 = 5;
 
 /// Event protocol opcodes.
 /// Renderers subscribe to events. Browsers emit events to subscribed frames.

@@ -16,18 +16,17 @@ use crate::ipc::FrameId;
 
 /// Handle a stream message arriving from the browser (renderer-side dispatch).
 pub fn handle_stream_renderer(
-    frame: &mut Frame,
+    addressed: &FrameId,
     envelope: &Envelope,
     payload: &[u8],
     filled: Option<V8BackingStore>,
 ) -> bool {
-    let addressed = FrameId::of(frame);
     let id = envelope.correlation_id as i32;
     match envelope.opcode {
-        STREAM_BROWSER_OPENED => on_opened(id, &addressed),
-        STREAM_BROWSER_DATA => on_data(id, &addressed, payload, filled),
-        STREAM_BROWSER_END => on_end(id, &addressed, payload),
-        STREAM_BROWSER_ERROR => on_error(id, &addressed, payload),
+        STREAM_BROWSER_OPENED => on_opened(id, addressed),
+        STREAM_BROWSER_DATA => on_data(id, addressed, payload, filled),
+        STREAM_BROWSER_END => on_end(id, addressed, payload),
+        STREAM_BROWSER_ERROR => on_error(id, addressed, payload),
         _ => {
             debug!("[Stream Renderer] unknown opcode {}", envelope.opcode);
             false

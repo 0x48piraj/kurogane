@@ -6,7 +6,8 @@ use tanso::*;
 
 use crate::acl::Origin;
 use tracing::debug;
-use crate::ipc::browser_state::{still_addressed, ErrorCode, IpcContext, IpcError};
+use crate::ipc::browser_outbox;
+use crate::ipc::browser_state::{still_addressed, ErrorCode, FrameId, IpcContext, IpcError};
 use crate::ipc::envelope::*;
 use crate::ipc::pending::{PendingEntry, PendingKey, PendingMap};
 use crate::ipc::transport::message::build_message;
@@ -68,8 +69,9 @@ impl RequestResponseSubsystem {
     /// Rejects the invocation with `error`, while the message is being
     /// handled (so the frame still shows its sender).
     pub(crate) fn reject(frame: &Frame, envelope: &Envelope, error: IpcError) {
-        send_response(
+        reply(
             frame,
+            None,
             envelope.payload_kind,
             envelope.correlation_id,
             Err(error),
@@ -99,6 +101,7 @@ impl RequestResponseSubsystem {
 
         let url_origin = ctx.url_origin.clone();
         if self.is_async(cmd) {
+            let sender = ctx.frame.clone();
             let aborted = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let key = PendingKey::new(ctx.browser_id, ctx.frame.clone(), ctx.origin.clone(), id);
             self.pending.insert(
@@ -115,8 +118,9 @@ impl RequestResponseSubsystem {
                     let payload_kind = envelope.payload_kind;
                     move |result| {
                         pending.remove(&key);
-                        send_response(
+                        reply(
                             &frame,
+                            Some(&sender),
                             payload_kind,
                             correlation_id,
                             result,
@@ -129,6 +133,8 @@ impl RequestResponseSubsystem {
 
             self.dispatch_async(app, cmd, data, responder, ctx);
         } else {
+            // The frame's id is needed only to join a reply batch
+            let sender = browser_outbox::collecting().then(|| ctx.frame.clone());
             let result = catch_unwind(AssertUnwindSafe(|| self.dispatch(app, cmd, data, ctx)));
 
             let response = match result {
@@ -136,8 +142,9 @@ impl RequestResponseSubsystem {
                 Err(_) => Err(IpcError::with_code("handler panicked", ErrorCode::Panic)),
             };
 
-            send_response(
+            reply(
                 frame,
+                sender.as_ref(),
                 envelope.payload_kind,
                 correlation_id,
                 response,
@@ -195,37 +202,17 @@ impl RequestResponseSubsystem {
     }
 }
 
-/// Sends a response to `frame`.
-///
-/// When `url_origin` is set, the response is dropped if the frame has been
-/// destroyed or now shows a document of another origin. A navigation within
-/// the origin aborts the request instead
-/// ([`IpcRouter::clear_for_frame`](crate::ipc::router::IpcRouter::clear_for_frame)).
-fn send_response(
+/// Answers a call. A reply made while a message of calls from `sender` is
+/// handled joins the answers that close it. One made off the UI thread waits
+/// for the UI thread's next task. Any other leaves at once (`send_response`).
+fn reply(
     frame: &Frame,
+    sender: Option<&FrameId>,
     payload_kind: u8,
     correlation_id: u32,
     result: Result<Vec<u8>, IpcError>,
     url_origin: Option<&Origin>,
 ) {
-    if frame.is_valid() == 0 {
-        debug!(
-            "[RequestResponse Browser] frame destroyed, dropping id={}",
-            correlation_id
-        );
-        return;
-    }
-    if let Some(url_origin) = url_origin {
-        let url: CefString = (&frame.url()).into();
-        if !still_addressed(url_origin, &url.to_string()) {
-            debug!(
-                "[RequestResponse Browser] frame shows another document, dropping id={}",
-                correlation_id
-            );
-            return;
-        }
-    }
-
     let (opcode, data) = match result {
         Ok(bytes) => (RPC_RESOLVE, bytes),
         Err(err) => (
@@ -243,8 +230,59 @@ fn send_response(
         payload_kind,
     };
 
-    if let Some(mut msg) = build_message("kurogane_rr", &envelope, &data) {
-        frame.send_process_message(ProcessId::RENDERER, Some(&mut msg));
+    // A reply that joins a batch skips the URL check. It is made while the
+    // browser handles the batch, which the frame's current document sent
+    if sender.is_some_and(|sender| browser_outbox::collect(sender, &envelope, &data)) {
+        return;
+    }
+    // A reply made off the UI thread travels with the others made there,
+    // from one task on the UI thread
+    if currently_on(ThreadId::UI) == 0 {
+        if deliverable(frame, correlation_id, url_origin) {
+            let frame_id = sender.cloned().unwrap_or_else(|| FrameId::of(frame));
+            browser_outbox::send_later(frame.clone(), frame_id, envelope, data);
+        }
+        return;
+    }
+    send_response(frame, &envelope, &data, url_origin);
+}
+
+/// Returns whether a reply to `frame` still goes. It goes while the frame
+/// lives and shows a document of `url_origin`, when that is set.
+fn deliverable(frame: &Frame, correlation_id: u32, url_origin: Option<&Origin>) -> bool {
+    if frame.is_valid() == 0 {
+        debug!(
+            "[RequestResponse Browser] frame destroyed, dropping id={}",
+            correlation_id
+        );
+        return false;
+    }
+    if let Some(url_origin) = url_origin {
+        let url: CefString = (&frame.url()).into();
+        if !still_addressed(url_origin, &url.to_string()) {
+            debug!(
+                "[RequestResponse Browser] frame shows another document, dropping id={}",
+                correlation_id
+            );
+            return false;
+        }
+    }
+    true
+}
+
+/// Sends a response to `frame`.
+///
+/// When `url_origin` is set, the response is dropped if the frame has been
+/// destroyed or now shows a document of another origin. A navigation within
+/// the origin aborts the request instead
+/// ([`IpcRouter::clear_for_frame`](crate::ipc::router::IpcRouter::clear_for_frame)).
+fn send_response(frame: &Frame, envelope: &Envelope, data: &[u8], url_origin: Option<&Origin>) {
+    if !deliverable(frame, envelope.correlation_id, url_origin) {
+        return;
+    }
+
+    if let Some(mut msg) = build_message("kurogane_rr", envelope, data) {
+        browser_outbox::send(frame, &mut msg);
     } else {
         debug!("[RequestResponse Browser] failed to build response message");
     }

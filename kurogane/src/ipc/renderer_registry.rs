@@ -112,11 +112,19 @@ impl<C: ContextHandle, V: Clone> Registry<C, V> {
         }
     }
 
-    pub(crate) fn register_rpc(&mut self, context: &C, promise: V) -> Option<i32> {
-        let owner = self.owner(context)?;
+    /// Registers a call's promise and returns its id, its envelope flags and
+    /// its frame, from one lookup of the context.
+    pub(crate) fn register_rpc(&mut self, context: &C, promise: V) -> Option<(i32, u8, FrameId)> {
+        let known = self.known(context)?;
+        let flags = if known.opaque { FLAG_OPAQUE_CONTEXT } else { 0 };
+        let frame = known.frame.clone();
+        let owner = Owner {
+            context: known.context.clone(),
+            frame: frame.clone(),
+        };
         let id = self.allocate();
         self.pending.insert(id, (owner, Pending::Rpc(promise)));
-        Some(id)
+        Some((id, flags, frame))
     }
 
     pub(crate) fn register_stream_open(
@@ -138,16 +146,16 @@ impl<C: ContextHandle, V: Clone> Registry<C, V> {
     }
 
     /// Cancels a pending request, only for the context that made it. Returns
-    /// its context, promise and subsystem.
-    pub(crate) fn cancel(&mut self, id: i32, current: &C) -> Option<(C, V, u8)> {
+    /// its promise and subsystem.
+    pub(crate) fn cancel(&mut self, id: i32, current: &C) -> Option<(V, u8)> {
         let (owner, _) = self.pending.get(&id)?;
         if !owner.context.same(current) {
             return None;
         }
-        let (owner, pending) = self.pending.remove(&id)?;
+        let (_, pending) = self.pending.remove(&id)?;
         Some(match pending {
-            Pending::Rpc(promise) => (owner.context, promise, SUB_RPC),
-            Pending::StreamOpen { promise, .. } => (owner.context, promise, SUB_STREAM),
+            Pending::Rpc(promise) => (promise, SUB_RPC),
+            Pending::StreamOpen { promise, .. } => (promise, SUB_STREAM),
         })
     }
 
@@ -355,15 +363,15 @@ mod tests {
     #[test]
     fn only_the_requesting_context_can_cancel() {
         let mut r = two_frames();
-        let id = r.register_rpc(&Ctx(1), "promise").unwrap();
+        let id = r.register_rpc(&Ctx(1), "promise").unwrap().0;
         assert!(r.cancel(id, &Ctx(2)).is_none(), "B cancelled A's request");
-        assert_eq!(r.cancel(id, &Ctx(1)), Some((Ctx(1), "promise", SUB_RPC)));
+        assert_eq!(r.cancel(id, &Ctx(1)), Some(("promise", SUB_RPC)));
     }
 
     #[test]
     fn answers_reach_only_the_addressed_frame() {
         let mut r = two_frames();
-        let id = r.register_rpc(&Ctx(1), "promise").unwrap();
+        let id = r.register_rpc(&Ctx(1), "promise").unwrap().0;
         assert!(
             r.settle(id, &frame("B")).is_none(),
             "an answer addressed to B took A's promise"
@@ -441,7 +449,7 @@ mod tests {
     #[test]
     fn a_released_context_takes_everything_with_it() {
         let mut r = two_frames();
-        let rpc = r.register_rpc(&Ctx(1), "p").unwrap();
+        let rpc = r.register_rpc(&Ctx(1), "p").unwrap().0;
         let open = r.register_stream_open(&Ctx(1), "o", sink()).unwrap();
         let sub = r.subscribe(&Ctx(1), "tick".into(), "cb", None).unwrap();
         r.context_released(&Ctx(1));
@@ -467,7 +475,7 @@ mod tests {
     fn ids_are_unique_across_kinds() {
         let mut r = two_frames();
         r.next_id = i32::MAX;
-        let first = r.register_rpc(&Ctx(1), "p").unwrap();
+        let first = r.register_rpc(&Ctx(1), "p").unwrap().0;
         let second = r.subscribe(&Ctx(1), "e".into(), "cb", None).unwrap();
         let third = r.register_stream_open(&Ctx(2), "o", sink()).unwrap();
         assert_eq!(first, i32::MAX);

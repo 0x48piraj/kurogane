@@ -15,6 +15,7 @@ use tanso::*;
 
 use crate::acl::Origin;
 use crate::browser_registry::BrowserId;
+use crate::ipc::browser_outbox;
 use crate::ipc::browser_state::still_addressed;
 use crate::ipc::envelope::*;
 use crate::ipc::{FrameId, IpcContext, IpcError};
@@ -92,8 +93,7 @@ impl StreamResponder {
     pub fn send_data(&self, data: &[u8]) -> Result<(), IpcError> {
         self.deliverable()?;
         let mut msg = self.message(STREAM_BROWSER_DATA, PAYLOAD_BINARY, data)?;
-        self.frame
-            .send_process_message(ProcessId::RENDERER, Some(&mut msg));
+        browser_outbox::send(&self.frame, &mut msg);
         Ok(())
     }
 
@@ -128,8 +128,7 @@ impl StreamResponder {
     pub(crate) fn opened(&self) -> Result<(), IpcError> {
         self.deliverable()?;
         let mut msg = self.message(STREAM_BROWSER_OPENED, PAYLOAD_EMPTY, &[])?;
-        self.frame
-            .send_process_message(ProcessId::RENDERER, Some(&mut msg));
+        browser_outbox::send(&self.frame, &mut msg);
         Ok(())
     }
 
@@ -142,8 +141,7 @@ impl StreamResponder {
         if self.closed.swap(true, Ordering::SeqCst) {
             return Err(IpcError::new("stream closed"));
         }
-        self.frame
-            .send_process_message(ProcessId::RENDERER, Some(&mut msg));
+        browser_outbox::send(&self.frame, &mut msg);
         Ok(())
     }
 

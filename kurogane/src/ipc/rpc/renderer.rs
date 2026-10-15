@@ -1,8 +1,10 @@
 use tanso::*;
 
 use tracing::debug;
+use crate::ipc::batch;
 use crate::ipc::browser_state::ErrorCode;
 use crate::ipc::envelope::*;
+use crate::ipc::renderer_outbox;
 use crate::ipc::renderer_state::state;
 use crate::ipc::utils::{array_buffer, rejection};
 use crate::ipc::FrameId;
@@ -12,17 +14,22 @@ use crate::ipc::FrameId;
 /// Settles the promise only for the context that asked, in the frame the
 /// browser addressed; any other answer is dropped.
 pub fn handle_rpc_renderer(
-    frame: &mut Frame,
+    addressed: &FrameId,
     envelope: &Envelope,
     payload: &[u8],
     filled: Option<V8BackingStore>,
 ) -> bool {
+    if matches!(envelope.opcode, RPC_BATCH | RPC_ANSWERS) {
+        settle_batch(addressed, payload);
+        return true;
+    }
     if !matches!(envelope.opcode, RPC_RESOLVE | RPC_REJECT) {
         debug!("[RPC Renderer] unknown opcode {}", envelope.opcode);
         return false;
     }
     let id = envelope.correlation_id as i32;
-    let settled = state().settle(id, &FrameId::of(frame));
+    let settled = state().settle(id, addressed);
+    renderer_outbox::answered(addressed, envelope.correlation_id);
     // The lock is released before JavaScript runs
     let Some((context, promise)) = settled else {
         debug!("[RPC Renderer] answer for unknown or foreign id={}", id);
@@ -32,6 +39,53 @@ pub fn handle_rpc_renderer(
         debug!("[RPC Renderer] failed to enter V8 context for id={}", id);
         return true;
     }
+    settle(&promise, envelope, payload, filled);
+    context.exit();
+    true
+}
+
+/// Settles every answer of a batch. A run of answers to one context settles
+/// inside one enter and exit, so the page's continuations run together when
+/// it exits.
+fn settle_batch(addressed: &FrameId, payload: &[u8]) {
+    let mut entered: Option<V8Context> = None;
+    for (envelope, data) in batch::items(payload) {
+        if envelope.subsystem != SUB_RPC || !matches!(envelope.opcode, RPC_RESOLVE | RPC_REJECT) {
+            debug!(
+                "[RPC Renderer] batch item {}:{} dropped",
+                envelope.subsystem, envelope.opcode
+            );
+            continue;
+        }
+        let id = envelope.correlation_id as i32;
+        let settled = state().settle(id, addressed);
+        renderer_outbox::answered(addressed, envelope.correlation_id);
+        let Some((context, promise)) = settled else {
+            debug!("[RPC Renderer] answer for unknown or foreign id={}", id);
+            continue;
+        };
+        let same = entered
+            .as_ref()
+            .is_some_and(|current| current.is_same(Some(&mut context.clone())) != 0);
+        if !same {
+            if let Some(current) = entered.take() {
+                current.exit();
+            }
+            if context.enter() == 0 {
+                debug!("[RPC Renderer] failed to enter V8 context for id={}", id);
+                continue;
+            }
+            entered = Some(context);
+        }
+        settle(&promise, &envelope, data, None);
+    }
+    if let Some(current) = entered {
+        current.exit();
+    }
+}
+
+/// Resolves or rejects `promise` with an answer, inside its entered context.
+fn settle(promise: &V8Value, envelope: &Envelope, payload: &[u8], filled: Option<V8BackingStore>) {
     match (envelope.opcode, envelope.payload_kind) {
         (RPC_RESOLVE, PAYLOAD_BINARY) => match array_buffer(payload, filled) {
             Some(mut buffer) => {
@@ -53,6 +107,4 @@ pub fn handle_rpc_renderer(
             promise.reject_promise(Some(&text));
         }
     }
-    context.exit();
-    true
 }

@@ -12,15 +12,14 @@ use crate::ipc::FrameId;
 
 /// Handle an event message arriving from the browser (renderer-side dispatch).
 pub fn handle_event_renderer(
-    frame: &mut Frame,
+    addressed: &FrameId,
     envelope: &Envelope,
     payload: &[u8],
     filled: Option<V8BackingStore>,
 ) -> bool {
-    let addressed = FrameId::of(frame);
     match envelope.opcode {
-        EVENT_EMIT => on_emit(&addressed, envelope, payload, filled),
-        EVENT_REFUSED => on_refused(&addressed, envelope, payload),
+        EVENT_EMIT => on_emit(addressed, envelope, payload, filled),
+        EVENT_REFUSED => on_refused(addressed, envelope, payload),
         _ => {
             debug!("[Event Renderer] unknown opcode {}", envelope.opcode);
             false

@@ -2,7 +2,8 @@
 //!
 //! A large ArrayBuffer for the page is filled on a thread of its own, which
 //! keeps the main thread free during big transfers. `renderer_inbox` keeps
-//! each frame's order.
+//! each frame's order. Answers that close calls in flight let the frame's
+//! queued calls leave (`renderer_outbox`).
 
 use std::cell::RefCell;
 use std::sync::mpsc::{SyncSender, sync_channel};
@@ -13,6 +14,7 @@ use tracing::debug;
 
 use crate::ipc::envelope::*;
 use crate::ipc::renderer_inbox::{Arrival, FILL_MIN, Inbox, Job, MAX_FILLS};
+use crate::ipc::renderer_outbox;
 use crate::ipc::router::route_renderer;
 use crate::ipc::transport::message::ReceivedMessage;
 use crate::ipc::FrameId;
@@ -116,9 +118,16 @@ fn deliver_ready() {
 
 fn route(frame: &mut Frame, message: &ReceivedMessage, filled: Option<V8BackingStore>) {
     // A panic must not unwind across this CEF callback
-    let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        route_renderer(frame, &message.envelope(), message.payload(), filled);
-    }));
+    let envelope = message.envelope();
+    // Answers close the frame's oldest messages of calls, as many as counted
+    let answers = envelope.subsystem == SUB_RPC && envelope.opcode == RPC_ANSWERS;
+    let addressed = FrameId::of(frame);
+    let answered = answers.then(|| (addressed.clone(), envelope.correlation_id));
+    let routed = renderer_outbox::delivering(answered, || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            route_renderer(&addressed, &envelope, message.payload(), filled);
+        }))
+    });
     if routed.is_err() {
         debug!("[IPC Renderer] dispatch panicked; message dropped");
     }
