@@ -1,7 +1,6 @@
 use tanso::*;
 
 use tracing::debug;
-use crate::ipc::batch;
 use crate::ipc::browser_state::ErrorCode;
 use crate::ipc::envelope::*;
 use crate::ipc::renderer_outbox;
@@ -19,10 +18,6 @@ pub fn handle_rpc_renderer(
     payload: &[u8],
     filled: Option<V8BackingStore>,
 ) -> bool {
-    if matches!(envelope.opcode, RPC_BATCH | RPC_ANSWERS) {
-        settle_batch(addressed, payload);
-        return true;
-    }
     if !matches!(envelope.opcode, RPC_RESOLVE | RPC_REJECT) {
         debug!("[RPC Renderer] unknown opcode {}", envelope.opcode);
         return false;
@@ -44,19 +39,15 @@ pub fn handle_rpc_renderer(
     true
 }
 
-/// Settles every answer of a batch. A run of answers to one context settles
-/// inside one enter and exit, so the page's continuations run together when
-/// it exits.
-fn settle_batch(addressed: &FrameId, payload: &[u8]) {
+/// Settles a run of answers to calls. Answers to one context settle inside
+/// one enter and exit, so the page's continuations run together when it
+/// exits.
+pub(crate) fn settle_answers<'p>(
+    addressed: &FrameId,
+    answers: impl Iterator<Item = (Envelope, &'p [u8])>,
+) {
     let mut entered: Option<V8Context> = None;
-    for (envelope, data) in batch::items(payload) {
-        if envelope.subsystem != SUB_RPC || !matches!(envelope.opcode, RPC_RESOLVE | RPC_REJECT) {
-            debug!(
-                "[RPC Renderer] batch item {}:{} dropped",
-                envelope.subsystem, envelope.opcode
-            );
-            continue;
-        }
+    for (envelope, data) in answers {
         let id = envelope.correlation_id as i32;
         let settled = state().settle(id, addressed);
         renderer_outbox::answered(addressed, envelope.correlation_id);

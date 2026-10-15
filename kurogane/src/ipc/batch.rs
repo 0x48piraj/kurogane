@@ -1,8 +1,9 @@
 //! Batches of IPC messages.
 //!
-//! Calls the page sends together travel to the browser as one CEF message.
-//! Replies travel back the same way. Each item is a `u32` little-endian
-//! length, then the envelope and the payload it counts.
+//! Messages of any subsystem for one frame travel as one CEF message, either
+//! way. Each item is a `u32` little-endian length, then the envelope and the
+//! payload it counts. The batch's own envelope ([`SUB_BATCH`]) counts the
+//! page's messages it closes.
 
 use tanso::*;
 
@@ -21,6 +22,12 @@ pub(crate) const BATCH_MAX: usize = if SHM_THRESHOLD < 64 * 1024 {
     64 * 1024
 };
 
+/// Returns whether a message whose payload is `parts` joins a batch rather
+/// than travelling alone.
+pub(crate) fn fits(parts: &[&[u8]]) -> bool {
+    ENVELOPE_SIZE + parts.iter().map(|part| part.len()).sum::<usize>() < BATCH_MAX
+}
+
 /// Messages in the order they were pushed.
 #[derive(Default)]
 pub(crate) struct Batch {
@@ -30,13 +37,14 @@ pub(crate) struct Batch {
 
 impl Batch {
     /// Appends a message whose payload is `parts` in order. Returns false,
-    /// leaving the batch as it was, for a message of `BATCH_MAX` bytes or
-    /// more, which travels alone.
+    /// leaving the batch as it was, for a message that does not [`fits`].
     pub(crate) fn push(&mut self, envelope: &Envelope, parts: &[&[u8]]) -> bool {
-        let len = ENVELOPE_SIZE + parts.iter().map(|part| part.len()).sum::<usize>();
-        let Some(prefix) = u32::try_from(len).ok().filter(|_| len < BATCH_MAX) else {
+        if !fits(parts) {
             return false;
-        };
+        }
+        let len = ENVELOPE_SIZE + parts.iter().map(|part| part.len()).sum::<usize>();
+        // Lossless; `fits` bounds it by BATCH_MAX
+        let prefix = len as u32;
         self.bytes.reserve(4 + len);
         self.bytes.extend_from_slice(&prefix.to_le_bytes());
         self.bytes
@@ -63,49 +71,39 @@ impl Batch {
         self.bytes.len() >= BATCH_MAX
     }
 
-    /// Builds the message that carries the batch, with `flags` on it. A
-    /// batch of one message builds that message as it would travel alone.
-    pub(crate) fn build(&self, name: &str, flags: u8) -> Option<ProcessMessage> {
-        match self.count {
-            0 => None,
-            1 => {
-                let (mut envelope, payload) = items(&self.bytes).next()?;
-                envelope.flags |= flags;
-                build_message(name, &envelope, payload)
-            }
-            count => {
-                let envelope = Envelope {
-                    version: ENVELOPE_VERSION,
-                    subsystem: SUB_RPC,
-                    opcode: RPC_BATCH,
-                    flags,
-                    correlation_id: count,
-                    payload_kind: PAYLOAD_EMPTY,
-                };
-                build_message(name, &envelope, &self.bytes)
-            }
-        }
-    }
-
-    /// Returns the correlation id of the first message.
-    pub(crate) fn first_id(&self) -> Option<u32> {
+    /// Returns the messages in order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (Envelope, &[u8])> {
         items(&self.bytes)
-            .next()
-            .map(|(envelope, _)| envelope.correlation_id)
     }
 
-    /// Builds the message that closes `closes` messages of calls, holding
-    /// these answers, none or more.
-    pub(crate) fn build_answers(&self, name: &str, closes: u32) -> Option<ProcessMessage> {
+    /// Builds the message that carries the batch with `flags` on it, closing
+    /// `closes` of the page's messages. One message that closes nothing
+    /// travels as itself. `None` for an empty batch that closes nothing, or
+    /// when CEF builds no message.
+    pub(crate) fn build(&self, flags: u8, closes: u32) -> Option<ProcessMessage> {
+        if self.count == 1 && closes == 0 {
+            let (mut envelope, payload) = self.iter().next()?;
+            envelope.flags |= flags;
+            return build_message(&envelope, payload);
+        }
+        if self.count == 0 && closes == 0 {
+            return None;
+        }
         let envelope = Envelope {
             version: ENVELOPE_VERSION,
-            subsystem: SUB_RPC,
-            opcode: RPC_ANSWERS,
-            flags: 0,
+            subsystem: SUB_BATCH,
+            opcode: BATCH_ITEMS,
+            flags,
             correlation_id: closes,
             payload_kind: PAYLOAD_EMPTY,
         };
-        build_message(name, &envelope, &self.bytes)
+        build_message(&envelope, &self.bytes)
+    }
+
+    /// Empties the batch, keeping its memory for the next messages.
+    pub(crate) fn clear(&mut self) {
+        self.bytes.clear();
+        self.count = 0;
     }
 }
 
@@ -159,15 +157,27 @@ mod tests {
     #[test]
     fn a_message_of_batch_max_travels_alone() {
         let mut batch = Batch::default();
-        let fits = vec![0u8; BATCH_MAX - ENVELOPE_SIZE - 1];
+        let largest = vec![0u8; BATCH_MAX - ENVELOPE_SIZE - 1];
         let too_long = vec![0u8; BATCH_MAX - ENVELOPE_SIZE];
+        assert!(fits(&[&largest]) && !fits(&[&too_long]));
+        assert!(!fits(&[&largest, b"x"]), "parts count together");
         assert!(!batch.push(&envelope(1), &[&too_long]));
         assert!(
             batch.is_empty(),
             "a refused message leaves the batch as it was"
         );
-        assert!(batch.push(&envelope(2), &[&fits]));
+        assert!(batch.push(&envelope(2), &[&largest]));
         assert!(batch.is_full(), "a batch near the limit leaves");
+    }
+
+    #[test]
+    fn a_cleared_batch_starts_over() {
+        let mut batch = Batch::default();
+        batch.push(&envelope(1), &[b"one"]);
+        batch.clear();
+        assert!(batch.is_empty() && batch.iter().next().is_none());
+        batch.push(&envelope(2), &[b"two"]);
+        assert_eq!(ids_and_payloads(&batch.bytes), vec![(2, b"two".to_vec())]);
     }
 
     #[test]

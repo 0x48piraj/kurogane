@@ -8,10 +8,9 @@ use tanso::*;
 use crate::acl::Origin;
 use tracing::debug;
 use crate::ipc::browser_outbox;
-use crate::ipc::browser_state::{still_addressed, IpcContext, IpcError};
+use crate::ipc::browser_state::{still_addressed, FrameId, IpcContext, IpcError};
 use crate::ipc::envelope::*;
 use crate::ipc::event::EventSubsystem;
-use crate::ipc::transport::message::build_message;
 
 impl EventSubsystem {
     /// Handle an event message arriving from the renderer (browser-side dispatch).
@@ -101,17 +100,15 @@ impl EventSubsystem {
             payload_kind: PAYLOAD_BINARY,
         };
         let payload = encode_error_payload(error.code().wire(), error.message());
-        match build_message("kurogane_event", &reply, &payload) {
-            Some(mut msg) => browser_outbox::send(frame, &mut msg),
-            None => debug!("[Event Browser] failed to build refusal message"),
-        }
+        browser_outbox::send_owned(frame, &FrameId::of(frame), &reply, payload);
     }
 
     /// Broadcast an event to all subscribers of a given event name.
     ///
     /// Each subscription gets its own message, addressed by its id, so the
     /// renderer runs exactly the callback of that subscription (which the ACL
-    /// admitted) and nothing else in the process. A subscription whose frame
+    /// admitted) and nothing else in the process. A frame's messages may
+    /// travel together ([`browser_outbox`]). A subscription whose frame
     /// now shows another document receives nothing. `payload_kind` decides
     /// whether the page receives an `ArrayBuffer` or a string.
     pub fn broadcast(&self, cmd: &str, data: &[u8], payload_kind: u8) {
@@ -121,17 +118,24 @@ impl EventSubsystem {
         };
 
         // Copied out, so no CEF call runs under the lock
-        let targets: Vec<(Frame, u32, Origin)> = {
+        let targets: Vec<(Frame, FrameId, u32, Origin)> = {
             let subs = self.subscriptions.lock().unwrap();
             let Some(entries) = subs.get(cmd) else {
                 return;
             };
             entries
                 .iter()
-                .map(|sub| (sub.frame.clone(), sub.id, sub.url_origin.clone()))
+                .map(|sub| {
+                    (
+                        sub.frame.clone(),
+                        sub.frame_id.clone(),
+                        sub.id,
+                        sub.url_origin.clone(),
+                    )
+                })
                 .collect()
         };
-        for (frame, id, url_origin) in targets {
+        for (frame, frame_id, id, url_origin) in targets {
             if frame.is_valid() == 0 {
                 continue;
             }
@@ -147,11 +151,7 @@ impl EventSubsystem {
                 correlation_id: id,
                 payload_kind,
             };
-            // A sent message belongs to CEF; build one per subscription
-            match build_message("kurogane_event", &envelope, &payload) {
-                Some(mut msg) => browser_outbox::send(&frame, &mut msg),
-                None => debug!("[Event Browser] failed to build an event message"),
-            }
+            browser_outbox::send(&frame, &frame_id, &envelope, &payload);
         }
     }
 }

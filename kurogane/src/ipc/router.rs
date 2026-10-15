@@ -9,6 +9,7 @@ use tanso::*;
 use crate::acl::{CommandAcl, Origin};
 use crate::browser_registry::BrowserId;
 use tracing::debug;
+use crate::ipc::batch;
 use crate::ipc::browser_state::{ErrorCode, FrameId, IpcContext, IpcError};
 use crate::ipc::envelope::*;
 use crate::ipc::request_response::RequestResponseSubsystem;
@@ -114,9 +115,35 @@ pub fn route_renderer(
         SUB_STREAM => crate::ipc::stream::renderer::handle_stream_renderer(
             addressed, envelope, payload, filled,
         ),
+        SUB_BATCH => {
+            route_batch(addressed, payload);
+            true
+        }
         _ => {
             debug!("[Router Renderer] unknown subsystem {}", envelope.subsystem);
             false
+        }
+    }
+}
+
+/// Routes each message of a batch to `addressed` as if it came alone. A run
+/// of answers to calls settles under one enter of its context
+/// ([`settle_answers`](crate::ipc::rpc::renderer::settle_answers)).
+fn route_batch(addressed: &FrameId, payload: &[u8]) {
+    let is_answer =
+        |e: &Envelope| e.subsystem == SUB_RPC && matches!(e.opcode, RPC_RESOLVE | RPC_REJECT);
+    let mut items = batch::items(payload).peekable();
+    while let Some((envelope, data)) = items.next() {
+        if is_answer(&envelope) {
+            let more = std::iter::from_fn(|| items.next_if(|(e, _)| is_answer(e)));
+            crate::ipc::rpc::renderer::settle_answers(
+                addressed,
+                std::iter::once((envelope, data)).chain(more),
+            );
+        } else if envelope.subsystem == SUB_BATCH {
+            debug!("[Router Renderer] batch inside a batch dropped");
+        } else {
+            route_renderer(addressed, &envelope, data, None);
         }
     }
 }

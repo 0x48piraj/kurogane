@@ -73,6 +73,7 @@ impl StreamSubsystem {
         let closed = Arc::new(AtomicBool::new(false));
         let responder = StreamResponder::bound(
             frame.clone(),
+            ctx.frame.clone(),
             stream_id,
             ctx.url_origin.clone(),
             closed.clone(),
@@ -187,7 +188,7 @@ impl StreamSubsystem {
             return true;
         }
 
-        let responder = entry.responder(stream_id);
+        let responder = entry.responder(&key);
         let data_result = catch_unwind(AssertUnwindSafe(|| {
             entry.handler.on_chunk(payload, &responder)
         }));
@@ -227,7 +228,7 @@ impl StreamSubsystem {
             // Another thread ended or failed the stream: the page has its answer
             return true;
         }
-        let responder = entry.responder(stream_id);
+        let responder = entry.responder(&key);
         let responder_clone = responder.clone();
         let end_result = catch_unwind(AssertUnwindSafe(|| {
             entry.handler.on_end(&result_str, responder)

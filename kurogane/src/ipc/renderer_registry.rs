@@ -51,6 +51,13 @@ struct Known<C> {
     opaque: bool,
 }
 
+impl<C> Known<C> {
+    /// Returns the envelope flags of the context's messages.
+    fn flags(&self) -> u8 {
+        if self.opaque { FLAG_OPAQUE_CONTEXT } else { 0 }
+    }
+}
+
 pub(crate) struct Registry<C, V> {
     next_id: i32,
     contexts: Vec<Known<C>>,
@@ -104,19 +111,18 @@ impl<C: ContextHandle, V: Clone> Registry<C, V> {
         self.known(context).is_some_and(|known| known.opaque)
     }
 
-    /// Returns the envelope flags for `context`, treating unknown contexts as opaque.
-    pub(crate) fn flags_for(&self, context: &C) -> u8 {
-        match self.known(context) {
-            Some(known) if !known.opaque => 0,
-            _ => FLAG_OPAQUE_CONTEXT,
-        }
+    /// Returns the envelope flags and the frame of a context's messages, from
+    /// one lookup. An unknown context sends nothing.
+    pub(crate) fn sender(&self, context: &C) -> Option<(u8, FrameId)> {
+        let known = self.known(context)?;
+        Some((known.flags(), known.frame.clone()))
     }
 
     /// Registers a call's promise and returns its id, its envelope flags and
     /// its frame, from one lookup of the context.
     pub(crate) fn register_rpc(&mut self, context: &C, promise: V) -> Option<(i32, u8, FrameId)> {
         let known = self.known(context)?;
-        let flags = if known.opaque { FLAG_OPAQUE_CONTEXT } else { 0 };
+        let flags = known.flags();
         let frame = known.frame.clone();
         let owner = Owner {
             context: known.context.clone(),
@@ -463,12 +469,12 @@ mod tests {
     }
 
     #[test]
-    fn unknown_and_opaque_contexts_act_for_no_origin() {
+    fn opaque_contexts_act_for_no_origin_and_unknown_ones_send_nothing() {
         let mut r: Registry<Ctx, Values> = two_frames();
         r.context_created(Ctx(3), frame("C"), true);
-        assert_eq!(r.flags_for(&Ctx(1)), 0);
-        assert_eq!(r.flags_for(&Ctx(3)), FLAG_OPAQUE_CONTEXT);
-        assert_eq!(r.flags_for(&Ctx(9)), FLAG_OPAQUE_CONTEXT);
+        assert_eq!(r.sender(&Ctx(1)), Some((0, frame("A"))));
+        assert_eq!(r.sender(&Ctx(3)), Some((FLAG_OPAQUE_CONTEXT, frame("C"))));
+        assert_eq!(r.sender(&Ctx(9)), None);
     }
 
     #[test]

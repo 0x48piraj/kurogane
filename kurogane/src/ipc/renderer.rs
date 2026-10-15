@@ -9,7 +9,7 @@ use crate::app::ClientAppRendererDelegate;
 use tracing::debug;
 use crate::ipc::browser_state::ErrorCode;
 use crate::ipc::envelope::*;
-use crate::ipc::transport::message::{build_message, build_message_parts, receive_from_browser};
+use crate::ipc::transport::message::{receive_from_browser, IPC_MESSAGE};
 use crate::ipc::renderer_delivery;
 use crate::ipc::renderer_outbox;
 use crate::ipc::renderer_registry::StreamSink;
@@ -63,39 +63,23 @@ fn parse_view(rest: &[Option<V8Value>]) -> Result<Option<(usize, usize)>, ()> {
     }
 }
 
-/// Returns a message whose payload is `header` then the bytes of `buffer`
-/// that `view` names (`with_buffer_bytes`). `None` when those bytes cannot
-/// be read or the message cannot be built.
-fn buffer_message(
-    name: &str,
+/// Sends a message of `frame`'s page whose payload is `header` then the
+/// bytes of `buffer` that `view` names as an offset and length, or every
+/// byte without a view. `None` when a non-empty buffer has no memory, the
+/// view lies outside the buffer or the message cannot be built.
+///
+/// The only reader of an ArrayBuffer's memory. The outbox only copies the
+/// bytes, so no JavaScript, which could detach or resize the buffer, runs
+/// while they are borrowed. Any page script can pass a view, so it is
+/// checked against the buffer's length.
+fn send_buffer(
+    frame: &Frame,
+    frame_id: &FrameId,
     envelope: &Envelope,
     header: &[u8],
     buffer: &V8Value,
     view: Option<(usize, usize)>,
-) -> Option<ProcessMessage> {
-    with_buffer_bytes(buffer, view, |bytes| {
-        if header.is_empty() {
-            build_message(name, envelope, bytes)
-        } else {
-            build_message_parts(name, envelope, &[header, bytes])
-        }
-    })
-    .flatten()
-}
-
-/// Runs `f` on the bytes of `buffer` that `view` names as an offset and
-/// length, or on every byte without a view. `None` when a non-empty buffer
-/// has no memory or the view lies outside the buffer.
-///
-/// The only reader of an ArrayBuffer's memory. `f` must only copy the bytes,
-/// so no JavaScript, which could detach or resize the buffer, runs while
-/// they are borrowed. Any page script can pass a view, so it is checked
-/// against the buffer's length.
-fn with_buffer_bytes<R>(
-    buffer: &V8Value,
-    view: Option<(usize, usize)>,
-    f: impl FnOnce(&[u8]) -> R,
-) -> Option<R> {
+) -> Option<()> {
     let len = buffer.array_buffer_byte_length();
     let whole: &[u8] = if len == 0 {
         &[]
@@ -106,14 +90,21 @@ fn with_buffer_bytes<R>(
         }
         // SAFETY: V8 keeps an ArrayBuffer's `len` bytes at `data` until
         // JavaScript detaches or resizes it, and `buffer` keeps it alive. No
-        // JavaScript runs before the slice's last use: `f` only copies it
+        // JavaScript runs before the slice's last use, since the outbox only
+        // copies it
         unsafe { std::slice::from_raw_parts(data, len) }
     };
     let bytes = match view {
         Some((offset, len)) => whole.get(offset..)?.get(..len)?,
         None => whole,
     };
-    Some(f(bytes))
+    let parts = [header, bytes];
+    let parts = if header.is_empty() {
+        &parts[1..]
+    } else {
+        &parts[..]
+    };
+    renderer_outbox::send(frame, frame_id, envelope, parts)
 }
 
 /// Encode [cmd_len:u16 LE][cmd_bytes] into a Vec.
@@ -258,7 +249,7 @@ wrap_render_process_handler! {
                 delegate.on_context_released(browser_ref, frame_ref, context_ref);
             }
 
-            // Calls the page made just before its context went still leave
+            // Messages the page sent just before its context went still leave
             if let Some(frame) = frame_ref {
                 renderer_outbox::release_frame(&FrameId::of(frame));
             }
@@ -363,7 +354,7 @@ wrap_render_process_handler! {
             let Some(msg) = message else { return 0; };
 
             let name: CefString = (&msg.name()).into();
-            if !name.to_string().starts_with("kurogane_") { return 0; }
+            if name.to_string() != IPC_MESSAGE { return 0; }
 
             let Some(frame) = frame else {
                 debug!("[IPC Renderer] missing frame");
@@ -503,10 +494,7 @@ wrap_v8_handler! {
                     payload_kind: PAYLOAD_BINARY,
                 };
 
-                with_buffer_bytes(buffer, view, |bytes| {
-                    renderer_outbox::send_call(&frame, &frame_id, &envelope, &[&cmd_header, bytes])
-                })
-                .flatten()
+                send_buffer(&frame, &frame_id, &envelope, &cmd_header, buffer, view)
             } else {
                 let payload = match args.get(1) {
                     Some(Some(v)) if v.is_string() != 0 => v8_to_string(v),
@@ -522,7 +510,7 @@ wrap_v8_handler! {
                     payload_kind: PAYLOAD_STRING,
                 };
 
-                renderer_outbox::send_call(&frame, &frame_id, &envelope, &[&cmd_header, payload.as_bytes()])
+                renderer_outbox::send(&frame, &frame_id, &envelope, &[&cmd_header, payload.as_bytes()])
             };
 
             if sent.is_none() {
@@ -577,11 +565,11 @@ wrap_v8_handler! {
                 return 1;
             };
             // Only the context that made a request can cancel it
-            let (cancelled, flags) = {
+            let (cancelled, sender) = {
                 let mut state = state();
-                (state.cancel(id, &context), state.flags_for(&context))
+                (state.cancel(id, &context), state.sender(&context))
             };
-            let Some((promise, sub)) = cancelled else {
+            let (Some((promise, sub)), Some((flags, frame_id))) = (cancelled, sender) else {
                 if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
                 return 1;
             };
@@ -601,11 +589,9 @@ wrap_v8_handler! {
             if let Some(frame) = context.frame() {
                 // A canceled call may get no reply
                 if sub == SUB_RPC {
-                    renderer_outbox::answered(&FrameId::of(&frame), id as u32);
+                    renderer_outbox::answered(&frame_id, id as u32);
                 }
-                if let Some(mut msg) = build_message("kurogane_rpc", &envelope, &[]) {
-                    renderer_outbox::send(&frame, &mut msg);
-                }
+                renderer_outbox::send(&frame, &frame_id, &envelope, &[]);
             }
 
             // The page calls from the owner's context, which is entered
@@ -690,30 +676,24 @@ wrap_v8_handler! {
                 return throw(exception, "on: event name exceeds the 65535-byte protocol limit");
             };
 
-            let (id, flags) = {
+            let (id, sender) = {
                 let mut state = state();
                 let id = state.subscribe(&context, event_name.clone(), callback.clone(), on_error);
-                (id, state.flags_for(&context))
+                (id, state.sender(&context))
             };
-            let Some(id) = id else {
+            let (Some(id), Some((flags, frame_id))) = (id, sender) else {
                 return throw(exception, "on: this context is not connected");
             };
 
-            let subscribe = {
-                let envelope = Envelope {
-                    version: ENVELOPE_VERSION,
-                    subsystem: SUB_EVENT,
-                    opcode: EVENT_SUBSCRIBE,
-                    flags,
-                    correlation_id: id as u32,
-                    payload_kind: PAYLOAD_EMPTY,
-                };
-                build_message("kurogane_event", &envelope, &payload)
+            let envelope = Envelope {
+                version: ENVELOPE_VERSION,
+                subsystem: SUB_EVENT,
+                opcode: EVENT_SUBSCRIBE,
+                flags,
+                correlation_id: id as u32,
+                payload_kind: PAYLOAD_EMPTY,
             };
-
-            if let Some(mut msg) = subscribe {
-                renderer_outbox::send(&frame, &mut msg);
-            } else {
+            if renderer_outbox::send(&frame, &frame_id, &envelope, &[&payload]).is_none() {
                 debug!("[IPC Renderer] failed to build subscribe message");
             }
 
@@ -766,13 +746,14 @@ wrap_v8_handler! {
             };
 
             // Only the context that subscribed can unsubscribe
-            let (event_name, flags) = {
+            let (event_name, sender) = {
                 let mut state = state();
-                (state.unsubscribe(id, &context), state.flags_for(&context))
+                (state.unsubscribe(id, &context), state.sender(&context))
             };
             let was_valid = event_name.is_some();
 
             if let Some(event_name) = event_name
+                && let Some((flags, frame_id)) = sender
                 && let Some(frame) = context.frame()
                 && let Some(payload) = encode_cmd_payload(&event_name, &[])
             {
@@ -784,9 +765,7 @@ wrap_v8_handler! {
                     correlation_id: id as u32,
                     payload_kind: PAYLOAD_EMPTY,
                 };
-                if let Some(mut msg) = build_message("kurogane_event", &envelope, &payload) {
-                    renderer_outbox::send(&frame, &mut msg);
-                }
+                renderer_outbox::send(&frame, &frame_id, &envelope, &[&payload]);
             }
 
             if let Some(ret) = retval {
@@ -863,12 +842,12 @@ wrap_v8_handler! {
             let Some(promise) = v8_value_create_promise() else {
                 return throw(exception, "openStream: cannot create a promise");
             };
-            let (stream_id, flags) = {
+            let (stream_id, sender) = {
                 let mut state = state();
                 let sink = StreamSink { data, end, error };
-                (state.register_stream_open(&context, promise.clone(), sink), state.flags_for(&context))
+                (state.register_stream_open(&context, promise.clone(), sink), state.sender(&context))
             };
-            let Some(stream_id) = stream_id else {
+            let (Some(stream_id), Some((flags, frame_id))) = (stream_id, sender) else {
                 return throw(exception, "openStream: this context is not connected");
             };
 
@@ -883,15 +862,9 @@ wrap_v8_handler! {
                 payload_kind: PAYLOAD_STRING,
             };
 
-            let sent = if let Some(payload) = encode_cmd_payload(&handler_name, metadata.as_bytes())
-                && let Some(mut msg) = build_message("kurogane_stream", &envelope, &payload)
-            {
-                renderer_outbox::send(&frame, &mut msg);
-                true
-            } else {
-                false
-            };
-            if !sent {
+            let sent = encode_cmd_payload(&handler_name, metadata.as_bytes())
+                .and_then(|payload| renderer_outbox::send(&frame, &frame_id, &envelope, &[&payload]));
+            if sent.is_none() {
                 state().forget(stream_id);
                 let reject_msg = rejection(ErrorCode::Buffer.wire(), "Failed to build IPC message");
                 promise.reject_promise(Some(&reject_msg));
@@ -960,14 +933,14 @@ wrap_v8_handler! {
                 return throw(exception, "writeStream: no frame for current context");
             };
 
-            let (owned, flags) = {
+            let sender = {
                 let state = state();
-                (state.owns_stream(stream_id, &context), state.flags_for(&context))
+                state.owns_stream(stream_id, &context).then(|| state.sender(&context)).flatten()
             };
-            if !owned {
+            let Some((flags, frame_id)) = sender else {
                 if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
                 return 1;
-            }
+            };
 
             let envelope = Envelope {
                 version: ENVELOPE_VERSION,
@@ -978,9 +951,7 @@ wrap_v8_handler! {
                 payload_kind: PAYLOAD_BINARY,
             };
 
-            if let Some(mut msg) = buffer_message("kurogane_stream", &envelope, &[], buffer, view) {
-                renderer_outbox::send(&frame, &mut msg);
-            }
+            send_buffer(&frame, &frame_id, &envelope, &[], buffer, view);
 
             if let Some(ret) = retval {
                 *ret = v8_value_create_uint(1);
@@ -1037,14 +1008,14 @@ wrap_v8_handler! {
                 return throw(exception, "endStream: no frame for current context");
             };
 
-            let (owned, flags) = {
+            let sender = {
                 let state = state();
-                (state.owns_stream(stream_id, &context), state.flags_for(&context))
+                state.owns_stream(stream_id, &context).then(|| state.sender(&context)).flatten()
             };
-            if !owned {
+            let Some((flags, frame_id)) = sender else {
                 if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
                 return 1;
-            }
+            };
 
             let payload = result.as_bytes();
 
@@ -1057,9 +1028,7 @@ wrap_v8_handler! {
                 payload_kind: PAYLOAD_STRING,
             };
 
-            if let Some(mut msg) = build_message("kurogane_stream", &envelope, payload) {
-                renderer_outbox::send(&frame, &mut msg);
-            }
+            renderer_outbox::send(&frame, &frame_id, &envelope, &[payload]);
 
             if let Some(ret) = retval {
                 *ret = v8_value_create_uint(1);
@@ -1070,9 +1039,10 @@ wrap_v8_handler! {
     }
 }
 
-/// Sends the browser a message without a body, named `name`.
+/// Sends the browser a message without a body, named `name`, after the
+/// page's messages.
 fn tell_browser(frame: &Frame, name: &str) {
     if let Some(mut message) = process_message_create(Some(&CefString::from(name))) {
-        renderer_outbox::send(frame, &mut message);
+        renderer_outbox::send_after(frame, &FrameId::of(frame), &mut message);
     }
 }

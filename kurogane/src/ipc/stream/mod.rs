@@ -19,7 +19,6 @@ use crate::ipc::browser_outbox;
 use crate::ipc::browser_state::still_addressed;
 use crate::ipc::envelope::*;
 use crate::ipc::{FrameId, IpcContext, IpcError};
-use crate::ipc::transport::message::build_message;
 use crate::runtime::AppHandle;
 
 /// Responder for sending data from a browser-side stream handler to the renderer.
@@ -30,6 +29,7 @@ use crate::runtime::AppHandle;
 #[derive(Clone)]
 pub struct StreamResponder {
     frame: Frame,
+    frame_id: FrameId,
     stream_id: u32,
     /// URL origin of the document that opened the stream. Responses are sent only
     /// while the frame still shows that origin.
@@ -44,6 +44,7 @@ impl StreamResponder {
     /// sent the open, so there is nothing to check. Never handed to a handler.
     pub(crate) fn unbound(frame: Frame, stream_id: u32) -> Self {
         Self {
+            frame_id: FrameId::of(&frame),
             frame,
             stream_id,
             url_origin: None,
@@ -54,12 +55,14 @@ impl StreamResponder {
     /// A responder bound to a stream's document and lifetime.
     pub(crate) fn bound(
         frame: Frame,
+        frame_id: FrameId,
         stream_id: u32,
         url_origin: Origin,
         closed: Arc<AtomicBool>,
     ) -> Self {
         Self {
             frame,
+            frame_id,
             stream_id,
             url_origin: Some(url_origin),
             closed,
@@ -88,12 +91,10 @@ impl StreamResponder {
     /// # Errors
     ///
     /// Returns `Err` and sends nothing when the stream has ended or failed,
-    /// its frame is gone or shows another document, or the message cannot
-    /// be built.
+    /// or its frame is gone or shows another document.
     pub fn send_data(&self, data: &[u8]) -> Result<(), IpcError> {
         self.deliverable()?;
-        let mut msg = self.message(STREAM_BROWSER_DATA, PAYLOAD_BINARY, data)?;
-        browser_outbox::send(&self.frame, &mut msg);
+        self.send(STREAM_BROWSER_DATA, PAYLOAD_BINARY, data);
         Ok(())
     }
 
@@ -127,31 +128,23 @@ impl StreamResponder {
     /// `openStream`. Sent before anything else of the stream.
     pub(crate) fn opened(&self) -> Result<(), IpcError> {
         self.deliverable()?;
-        let mut msg = self.message(STREAM_BROWSER_OPENED, PAYLOAD_EMPTY, &[])?;
-        browser_outbox::send(&self.frame, &mut msg);
+        self.send(STREAM_BROWSER_OPENED, PAYLOAD_EMPTY, &[]);
         Ok(())
     }
 
-    /// Sends the stream's last message. It is built first, so only a message
-    /// that is sent closes the stream, and the swap lets exactly one end or
+    /// Sends the stream's last message. The swap lets exactly one end or
     /// error through, whichever thread sends it.
     fn finish(&self, opcode: u8, payload_kind: u8, payload: &[u8]) -> Result<(), IpcError> {
         self.deliverable()?;
-        let mut msg = self.message(opcode, payload_kind, payload)?;
         if self.closed.swap(true, Ordering::SeqCst) {
             return Err(IpcError::new("stream closed"));
         }
-        browser_outbox::send(&self.frame, &mut msg);
+        self.send(opcode, payload_kind, payload);
         Ok(())
     }
 
-    /// Builds a message of this stream.
-    fn message(
-        &self,
-        opcode: u8,
-        payload_kind: u8,
-        payload: &[u8],
-    ) -> Result<ProcessMessage, IpcError> {
+    /// Sends a message of this stream.
+    fn send(&self, opcode: u8, payload_kind: u8, payload: &[u8]) {
         let envelope = Envelope {
             version: ENVELOPE_VERSION,
             subsystem: SUB_STREAM,
@@ -160,8 +153,7 @@ impl StreamResponder {
             correlation_id: self.stream_id,
             payload_kind,
         };
-        build_message("kurogane_stream", &envelope, payload)
-            .ok_or_else(|| IpcError::new(format!("failed to build stream message {opcode}")))
+        browser_outbox::send(&self.frame, &self.frame_id, &envelope, payload);
     }
 }
 
@@ -279,11 +271,12 @@ pub(crate) struct StreamEntry {
 }
 
 impl StreamEntry {
-    /// Returns a responder for this stream.
-    fn responder(&self, stream_id: u32) -> StreamResponder {
+    /// Returns a responder for the stream `key` names.
+    fn responder(&self, key: &StreamKey) -> StreamResponder {
         StreamResponder::bound(
             self.frame.clone(),
-            stream_id,
+            key.frame.clone(),
+            key.id,
             self.url_origin.clone(),
             self.closed.clone(),
         )

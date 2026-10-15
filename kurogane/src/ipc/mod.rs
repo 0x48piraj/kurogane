@@ -18,6 +18,7 @@ pub(crate) mod browser;
 pub(crate) mod renderer;
 pub(crate) mod renderer_inbox;
 pub(crate) mod renderer_delivery;
+pub(crate) mod pacing;
 pub(crate) mod renderer_outbox;
 pub(crate) mod browser_outbox;
 

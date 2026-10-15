@@ -14,6 +14,9 @@ pub const SHM_THRESHOLD: usize = if cfg!(target_os = "windows") {
     96 * 1024
 };
 
+/// Name of every IPC message, either way. The envelope says what it is.
+pub const IPC_MESSAGE: &str = "kurogane_ipc";
+
 /// A message received over CEF: its envelope and its payload.
 ///
 /// An inline payload is read in place, in the message that holds it. Where
@@ -217,33 +220,29 @@ unsafe fn copy_shared(base: *const u8, len: usize) -> Option<(Envelope, Vec<u8>)
 ///
 /// Uses shared-memory transport for large messages and falls back to
 /// inline transport if shared memory is unavailable.
-pub fn build_message(name: &str, envelope: &Envelope, payload: &[u8]) -> Option<ProcessMessage> {
-    build_message_parts(name, envelope, &[payload])
+pub fn build_message(envelope: &Envelope, payload: &[u8]) -> Option<ProcessMessage> {
+    build_message_parts(envelope, &[payload])
 }
 
 /// Builds a ProcessMessage from an envelope and payload segments.
 ///
 /// The payload is assembled directly from the provided slices.
-pub fn build_message_parts(
-    name: &str,
-    envelope: &Envelope,
-    parts: &[&[u8]],
-) -> Option<ProcessMessage> {
+pub fn build_message_parts(envelope: &Envelope, parts: &[&[u8]]) -> Option<ProcessMessage> {
     let total_payload: usize = parts.iter().map(|p| p.len()).sum();
     let total_size = ENVELOPE_SIZE + total_payload;
 
     if total_size < SHM_THRESHOLD {
-        build_inline_parts(name, envelope, parts)
+        build_inline_parts(envelope, parts)
     } else {
-        build_shm_parts(name, envelope, parts).or_else(|| build_inline_parts(name, envelope, parts))
+        build_shm_parts(envelope, parts).or_else(|| build_inline_parts(envelope, parts))
     }
 }
 
 /// Builds an inline ProcessMessage with the envelope's bytes in one binary
 /// value, the payload in a second. CEF converts every ListValue entry on
 /// both sides, so two entries cost less than an int per envelope field.
-fn build_inline_parts(name: &str, envelope: &Envelope, parts: &[&[u8]]) -> Option<ProcessMessage> {
-    let msg = process_message_create(Some(&CefString::from(name)))?;
+fn build_inline_parts(envelope: &Envelope, parts: &[&[u8]]) -> Option<ProcessMessage> {
+    let msg = process_message_create(Some(&CefString::from(IPC_MESSAGE)))?;
     let args = msg.argument_list()?;
 
     let mut header = binary_value_create(Some(&encode_envelope_bytes(envelope)))?;
@@ -267,10 +266,11 @@ fn build_inline_parts(name: &str, envelope: &Envelope, parts: &[&[u8]]) -> Optio
     Some(msg)
 }
 
-fn build_shm_parts(name: &str, envelope: &Envelope, parts: &[&[u8]]) -> Option<ProcessMessage> {
+fn build_shm_parts(envelope: &Envelope, parts: &[&[u8]]) -> Option<ProcessMessage> {
     let total_payload: usize = parts.iter().map(|p| p.len()).sum();
     let total_size = ENVELOPE_SIZE + total_payload;
-    let builder = shared_process_message_builder_create(Some(&CefString::from(name)), total_size)?;
+    let builder =
+        shared_process_message_builder_create(Some(&CefString::from(IPC_MESSAGE)), total_size)?;
     if builder.is_valid() == 0 {
         return None;
     }

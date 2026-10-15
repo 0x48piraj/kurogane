@@ -16,7 +16,7 @@ pub struct Envelope {
 /// Current wire protocol version.
 ///
 /// Peers reject messages with an unsupported version.
-pub const ENVELOPE_VERSION: u8 = 3;
+pub const ENVELOPE_VERSION: u8 = 4;
 
 /// Marks a message from a context with an opaque origin (a sandboxed frame).
 ///
@@ -26,8 +26,8 @@ pub const FLAG_OPAQUE_CONTEXT: u8 = 0x01;
 /// Flags defined by this protocol version.
 pub const KNOWN_FLAGS: u8 = FLAG_OPAQUE_CONTEXT | FLAG_ANSWERS;
 
-/// Marks a message of calls the browser closes with one message of answers
-/// (`RPC_ANSWERS`).
+/// Marks a message of the page's that the browser closes with a batch that
+/// counts it ([`SUB_BATCH`]).
 pub const FLAG_ANSWERS: u8 = 0x02;
 
 /// Fixed-size envelope header (9 bytes).
@@ -38,17 +38,18 @@ pub const ENVELOPE_SIZE: usize = 9;
 pub const SUB_RPC: u8 = 0;
 pub const SUB_EVENT: u8 = 1;
 pub const SUB_STREAM: u8 = 2;
+/// Several messages in one (`ipc::batch`), of any subsystem.
+pub const SUB_BATCH: u8 = 3;
+
+/// A batch's only opcode. Its correlation id counts the page's messages it
+/// closes.
+pub const BATCH_ITEMS: u8 = 0;
 
 /// RPC protocol opcodes.
 pub const RPC_INVOKE: u8 = 0;
 pub const RPC_RESOLVE: u8 = 1;
 pub const RPC_REJECT: u8 = 2;
 pub const RPC_CANCEL: u8 = 3;
-/// Several messages in one (`ipc::batch`), calls one way and replies the other.
-pub const RPC_BATCH: u8 = 4;
-/// The browser's answers that close messages of calls, as many as its
-/// correlation id counts.
-pub const RPC_ANSWERS: u8 = 5;
 
 /// Event protocol opcodes.
 /// Renderers subscribe to events. Browsers emit events to subscribed frames.
@@ -226,7 +227,7 @@ mod tests {
 
     #[test]
     fn envelope_roundtrip_all_subsystems() {
-        for sub in [SUB_RPC, SUB_EVENT, SUB_STREAM] {
+        for sub in [SUB_RPC, SUB_EVENT, SUB_STREAM, SUB_BATCH] {
             let env = Envelope {
                 version: ENVELOPE_VERSION,
                 subsystem: sub,
@@ -723,6 +724,7 @@ mod property_tests {
                 Just(SUB_RPC),
                 Just(SUB_EVENT),
                 Just(SUB_STREAM),
+                Just(SUB_BATCH),
             ],
             opcode in 0u8..=10,
             flags in 0u8..=0xFF,
