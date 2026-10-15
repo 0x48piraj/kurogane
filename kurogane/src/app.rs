@@ -225,9 +225,10 @@ pub trait ClientAppRendererDelegate: Send + Sync {
     }
 
     /// Invoked when a process message is received from another CEF process.
+    /// Kurogane's own IPC messages never reach it.
     ///
-    /// Returning a non-zero value marks the message as handled and prevents
-    /// subsequent delegates and Kurogane's default processing from running.
+    /// A non-zero return marks the message as handled and keeps it from
+    /// later delegates.
     fn on_process_message_received(
         &self,
         _browser: Option<&Browser>,

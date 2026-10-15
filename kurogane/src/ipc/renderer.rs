@@ -336,39 +336,41 @@ wrap_render_process_handler! {
             source_process: ProcessId,
             message: Option<&mut ProcessMessage>,
         ) -> i32 {
-            {
-                let browser_ref = browser.as_deref();
-                let frame_ref = frame.as_deref();
-                let message_ref = message.as_deref();
+            let ipc = source_process == ProcessId::BROWSER
+                && message.as_deref().is_some_and(|msg| {
+                    let name: CefString = (&msg.name()).into();
+                    name.to_string() == IPC_MESSAGE
+                });
 
-                for delegate in &self.delegates {
-                    if delegate.on_process_message_received(
-                        browser_ref, frame_ref, source_process, message_ref,
-                    ) != 0 {
-                        return 1;
-                    }
-                }
+            // Kurogane's own messages never reach the delegates. One a
+            // delegate kept would hold its frame's later messages for good
+            if ipc {
+                let (Some(frame), Some(msg)) = (frame, message) else {
+                    debug!("[IPC Renderer] missing frame");
+                    return 0;
+                };
+
+                // SAFETY: the browser sent it, as source_process says
+                let Some(received) = (unsafe { receive_from_browser(msg) }) else {
+                    debug!("[IPC Renderer] failed to extract message");
+                    return 1;
+                };
+
+                renderer_delivery::receive(frame, received);
+                return 1;
             }
 
-            if source_process != ProcessId::BROWSER { return 0; }
-            let Some(msg) = message else { return 0; };
-
-            let name: CefString = (&msg.name()).into();
-            if name.to_string() != IPC_MESSAGE { return 0; }
-
-            let Some(frame) = frame else {
-                debug!("[IPC Renderer] missing frame");
-                return 0;
-            };
-
-            // SAFETY: the browser sent it: source_process was checked above
-            let Some(received) = (unsafe { receive_from_browser(msg) }) else {
-                debug!("[IPC Renderer] failed to extract message");
-                return 1;
-            };
-
-            renderer_delivery::receive(frame, received);
-            1
+            let browser_ref = browser.as_deref();
+            let frame_ref = frame.as_deref();
+            let message_ref = message.as_deref();
+            for delegate in &self.delegates {
+                if delegate.on_process_message_received(
+                    browser_ref, frame_ref, source_process, message_ref,
+                ) != 0 {
+                    return 1;
+                }
+            }
+            0
         }
 
         fn load_handler(&self) -> Option<LoadHandler> {
