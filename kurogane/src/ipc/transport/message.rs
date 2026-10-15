@@ -16,9 +16,10 @@ pub const SHM_THRESHOLD: usize = if cfg!(target_os = "windows") {
 
 /// A message received over CEF: its envelope and its payload.
 ///
-/// Where the payload lives depends on who sent it. A renderer's message is
-/// copied ([`receive_from_renderer`]); the browser's may stay in its
-/// shared-memory region and be read in place ([`receive_from_browser`]).
+/// An inline payload is read in place, in the message that holds it. Where
+/// a shared-memory payload lives depends on who sent it. A sandboxed
+/// renderer's is copied ([`receive_from_renderer`]); the browser's stays in
+/// its region and is read in place ([`receive_from_browser`]).
 pub struct ReceivedMessage {
     envelope: Envelope,
     bytes: Bytes,
@@ -27,10 +28,19 @@ pub struct ReceivedMessage {
 /// Private, so that only the receive functions decide which region stays in
 /// place: one the browser sent, or an unsandboxed renderer's.
 enum Bytes {
-    /// Inline ListValue data, or a region copied out of shared memory.
+    /// A region copied out of shared memory.
     Owned(Vec<u8>),
     /// A region at least an envelope long, read in place.
     Shared(SharedMemoryRegion),
+    /// An inline payload, read in place. CEF deserialized it into this
+    /// process's own memory, which no other process writes. The message
+    /// keeps it alive.
+    Inline {
+        _message: ProcessMessage,
+        payload: BinaryValue,
+    },
+    /// An inline message without a payload.
+    Empty,
 }
 
 /// Whether the renderers run in Chromium's sandbox, which decides whether
@@ -62,6 +72,8 @@ impl ReceivedMessage {
     pub fn payload(&self) -> &[u8] {
         match &self.bytes {
             Bytes::Owned(payload) => payload,
+            Bytes::Inline { payload, .. } => raw_bytes(payload),
+            Bytes::Empty => &[],
             Bytes::Shared(region) => {
                 // SAFETY: only shared_message makes a Shared, whose callers
                 // stand for the region (see receive_from_browser and
@@ -227,35 +239,28 @@ pub fn build_message_parts(
     }
 }
 
-/// Build an inline ProcessMessage using CEF ListValue fields.
-///
-/// Envelope fields are stored as individual ListValue entries to avoid
-/// an extra flat-buffer serialization. CEF's native IPC transports
-/// the structured ListValue directly.
+/// Builds an inline ProcessMessage with the envelope's bytes in one binary
+/// value, the payload in a second. CEF converts every ListValue entry on
+/// both sides, so two entries cost less than an int per envelope field.
 fn build_inline_parts(name: &str, envelope: &Envelope, parts: &[&[u8]]) -> Option<ProcessMessage> {
     let msg = process_message_create(Some(&CefString::from(name)))?;
     let args = msg.argument_list()?;
 
-    args.set_int(0, envelope.version.into());
-    args.set_int(1, envelope.subsystem.into());
-    args.set_int(2, envelope.opcode.into());
-    args.set_int(3, envelope.flags.into());
-    // A ListValue holds only i32; the id travels as its bit pattern
-    args.set_int(4, envelope.correlation_id as i32);
-    args.set_int(5, envelope.payload_kind.into());
+    let mut header = binary_value_create(Some(&encode_envelope_bytes(envelope)))?;
+    args.set_binary(0, Some(&mut header));
 
     let total_payload: usize = parts.iter().map(|p| p.len()).sum();
     if total_payload > 0 {
         if parts.len() == 1 {
             let mut binary = binary_value_create(Some(parts[0]))?;
-            args.set_binary(6, Some(&mut binary));
+            args.set_binary(1, Some(&mut binary));
         } else {
             let mut buf = Vec::with_capacity(total_payload);
             for part in parts {
                 buf.extend_from_slice(part);
             }
             let mut binary = binary_value_create(Some(&buf))?;
-            args.set_binary(6, Some(&mut binary));
+            args.set_binary(1, Some(&mut binary));
         }
     }
 
@@ -289,40 +294,36 @@ fn build_shm_parts(name: &str, envelope: &Envelope, parts: &[&[u8]]) -> Option<P
     builder.build()
 }
 
-/// A message sent inline, in CEF ListValue fields.
+/// A message sent inline, its envelope's bytes then the payload when it has
+/// one, both read in place.
 fn receive_inline(message: &ProcessMessage) -> Option<ReceivedMessage> {
     let args = message.argument_list()?;
-
-    // A byte field out of range is malformed, not truncated into another value
-    let byte = |index| u8::try_from(args.int(index)).ok();
-
-    let envelope = Envelope {
-        version: byte(0)?,
-        subsystem: byte(1)?,
-        opcode: byte(2)?,
-        flags: byte(3)?,
-        correlation_id: args.int(4) as u32,
-        payload_kind: byte(5)?,
-    };
-
-    if envelope.version != ENVELOPE_VERSION {
+    let header = args.binary(0)?;
+    let (envelope, rest) = parse_envelope(raw_bytes(&header))?;
+    if !rest.is_empty() {
         return None;
     }
-
-    let payload = if let Some(binary) = args.binary(6) {
-        let size = binary.size();
-        let mut buf = vec![0u8; size];
-        let written = binary.data(Some(&mut buf), 0);
-        buf.truncate(written);
-        buf
-    } else {
-        Vec::new()
+    let bytes = match args.binary(1) {
+        Some(payload) => Bytes::Inline {
+            _message: message.clone(),
+            payload,
+        },
+        None => Bytes::Empty,
     };
+    Some(ReceivedMessage { envelope, bytes })
+}
 
-    Some(ReceivedMessage {
-        envelope,
-        bytes: Bytes::Owned(payload),
-    })
+/// Returns the bytes of a binary value, in place.
+fn raw_bytes(binary: &BinaryValue) -> &[u8] {
+    let data = binary.raw_data() as *const u8;
+    let size = binary.size();
+    if data.is_null() || size == 0 {
+        return &[];
+    }
+    // SAFETY: CEF keeps `size` bytes at `raw_data` while the value lives,
+    // which the slice cannot outlive; a received value's bytes are this
+    // process's own copy, which nothing writes
+    unsafe { std::slice::from_raw_parts(data, size) }
 }
 
 #[cfg(test)]
