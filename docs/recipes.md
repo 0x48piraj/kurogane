@@ -1070,9 +1070,12 @@ Kurogane turns off what Chromium would run for every application and an applicat
 | The omnibox's AI Mode check | feature `AimEnabled` | `.chromium_flag_with_value("enable-features", "AimEnabled")` |
 | Cast | feature `MediaRouter` | `.chromium_flag_with_value("enable-features", "MediaRouter")` |
 | A renderer kept ready for the next site | feature `SpareRendererForSitePerProcess` | `.chromium_flag_with_value("enable-features", "SpareRendererForSitePerProcess")` |
+| A copy of the whole bundle at every macOS start | feature `MacAppCodeSignClone` | `.chromium_flag_with_value("enable-features", "MacAppCodeSignClone")` |
 | Chrome's stack-sampling profiler, busy in three processes at rest | switch `disable-stack-profiler` | `.without_chromium_flag("disable-stack-profiler")` |
 
 An `enable-features` entry turns a feature back on in any form Chromium reads (`Name`, `Name:param/value`, `Name<Study` or `*Name`).
+
+On macOS Chromium copies the application bundle into the user's temporary folder at every start, so the running application's code signature stays valid when an updater replaces the bundle in place. A killed application leaves its copy behind. An application whose updater replaces the bundle while it runs turns `MacAppCodeSignClone` back on.
 
 ### Chromium preferences
 

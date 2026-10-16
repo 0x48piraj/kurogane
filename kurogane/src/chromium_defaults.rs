@@ -15,13 +15,17 @@ use tracing::warn;
 use crate::chromium_flags::ChromiumFlags;
 
 /// Features Kurogane turns off, none of which a preference gates.
-const DISABLED_FEATURES: [&str; 3] = [
+const DISABLED_FEATURES: [&str; 4] = [
     // The omnibox's AI Mode check, a request to Google with its cookies at every start
     "AimEnabled",
     // Cast, which searches the local network for devices at every start
     "MediaRouter",
     // A renderer kept ready for the next site, a process the application never uses
     "SpareRendererForSitePerProcess",
+    // The copy of the whole bundle macOS builds make at every start for an
+    // updater that replaces a running bundle; a killed application leaves
+    // its copy behind
+    "MacAppCodeSignClone",
 ];
 
 /// Switches Kurogane sets for work neither a preference nor a feature gates.

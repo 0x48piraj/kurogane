@@ -1514,8 +1514,9 @@ impl App {
     /// | `component_updates.component_updates_enabled` | `false` |
     /// | `network_time.network_time_queries_enabled` | `false` |
     ///
-    /// It also turns off the features `AimEnabled`, `MediaRouter` and
-    /// `SpareRendererForSitePerProcess`, which no preference gates. An
+    /// It also turns off the features `AimEnabled`, `MediaRouter`,
+    /// `SpareRendererForSitePerProcess` and `MacAppCodeSignClone`, which no
+    /// preference gates. An
     /// `enable-features` entry turns one back on (see
     /// [`App::chromium_flag_with_value`]). Chrome's stack-sampling profiler,
     /// which nothing else gates, is off through `--disable-stack-profiler`;
