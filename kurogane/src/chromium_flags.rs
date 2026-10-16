@@ -181,6 +181,9 @@ impl ChromiumFlags {
 
     /// Emit the finalized switch set into CEF.
     ///
+    /// Each switch is then read back through CEF's command line, Chromium's
+    /// own parse; one it holds otherwise than passed is logged.
+    ///
     /// This is the only place where ChromiumFlags interacts with
     /// CommandLine directly. A list switch's entries go after those the
     /// command line holds already (CEF's own and the launch's), since
@@ -200,25 +203,29 @@ impl ChromiumFlags {
                 String::new()
             }
         };
-        let lists = self.list_values(existing);
-        for (name, value) in lists {
+        let mut passed = self.list_values(existing);
+        passed.extend(self.switches.into_iter().map(|(name, value)| match value {
+            SwitchValue::Present => (name, String::new()),
+            SwitchValue::Value(value) => (name, value),
+        }));
+
+        for (name, value) in &passed {
             let name = CefString::from(name.as_str());
-            let value = CefString::from(value.as_str());
-            cmd.append_switch_with_value(Some(&name), Some(&value));
+            if value.is_empty() {
+                cmd.append_switch(Some(&name));
+            } else {
+                cmd.append_switch_with_value(Some(&name), Some(&CefString::from(value.as_str())));
+            }
         }
 
-        for (name, value) in self.switches {
-            let name = CefString::from(name.as_str());
-
-            match value {
-                SwitchValue::Present => {
-                    cmd.append_switch(Some(&name));
-                }
-                SwitchValue::Value(value) => {
-                    let value = CefString::from(value.as_str());
-                    cmd.append_switch_with_value(Some(&name), Some(&value));
-                }
-            }
+        let held = |name: &str| {
+            let name = CefString::from(name);
+            (cmd.has_switch(Some(&name)) != 0)
+                .then(|| CefString::from(&cmd.switch_value(Some(&name))).to_string())
+        };
+        for (name, value, held) in unheld(&passed, held) {
+            let held = held.map_or_else(|| "no such switch".to_owned(), |held| format!("{held:?}"));
+            warn!("Chromium does not hold --{name} as passed ({value:?}); it holds {held}");
         }
     }
 }
@@ -268,6 +275,25 @@ impl ChromiumFlags {
             })
             .collect()
     }
+}
+
+/// Returns each switch of `passed` that `held`, the command line read back,
+/// holds otherwise, with what it holds.
+fn unheld(
+    passed: &[(String, String)],
+    held: impl Fn(&str) -> Option<String>,
+) -> Vec<(&str, &str, Option<String>)> {
+    passed
+        .iter()
+        .filter_map(|(name, value)| {
+            let found = held(name);
+            (found.as_deref() != Some(value.as_str())).then_some((
+                name.as_str(),
+                value.as_str(),
+                found,
+            ))
+        })
+        .collect()
 }
 
 impl std::fmt::Display for ChromiumFlags {
@@ -552,6 +578,28 @@ mod tests {
         flags.extend_user_flags(&[ChromiumFlag::Removed("disable-features".into())]);
 
         assert!(lists_over(&flags, &[("disable-features", "CefOwn")]).is_empty());
+    }
+
+    #[test]
+    fn a_switch_read_back_otherwise_than_passed_is_reported() {
+        let passed = [
+            ("kept".to_owned(), String::new()),
+            ("changed".to_owned(), "a".to_owned()),
+            ("lost".to_owned(), "b".to_owned()),
+        ];
+        let held = |name: &str| match name {
+            "kept" => Some(String::new()),
+            "changed" => Some("other".to_owned()),
+            _ => None,
+        };
+
+        assert_eq!(
+            unheld(&passed, held),
+            [
+                ("changed", "a", Some("other".to_owned())),
+                ("lost", "b", None),
+            ]
+        );
     }
 
     #[test]

@@ -35,19 +35,9 @@ const SWITCHES: [&str; 1] = [
 /// Global preference recording the preferences Kurogane set at the previous start
 const SET_LAST_START: &str = "kurogane.chromium_preferences";
 
-/// Chrome's `session.restore_on_startup` value for starting without the
-/// last session ([`SessionStartupPref::kPrefValueNewTab`](https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/prefs/session_startup_pref.h)).
-const START_WITHOUT_LAST_SESSION: i32 = 5;
-
-/// Preferences Kurogane sets on every start, before the application's.
-fn default_preferences() -> [(&'static str, Json); 5] {
+/// Preferences Kurogane sets on every start unless the application sets them.
+fn default_preferences() -> [(&'static str, Json); 4] {
     [
-        // Kurogane opens its own windows; a restored session would reopen
-        // stale ones after an unclean exit
-        (
-            "session.restore_on_startup",
-            Json::from(START_WITHOUT_LAST_SESSION),
-        ),
         // The bubble of finished downloads would open over the page, even
         // for a file the application saved itself
         ("download_bubble.partial_view_enabled", Json::from(false)),

@@ -686,7 +686,19 @@ App::new("dist").profile_dir(profile).run_or_exit();
 
 The directory is created when missing. It is used as given in debug builds too. A development run then shares it and hands its launch over to a copy already running there. A relative path fails at startup. So does a directory given together with `App::profile_id`.
 
-Session cookies (those without an expiry date) persist across restarts. `App::persist_session_cookies(false)` keeps them for one session only.
+### What lasts from one run to the next
+
+Cookies with an expiry, local storage and everything else the profile holds last from one run to the next.
+
+Session cookies end with each run as in a browser. They are the cookies a server sets without `Expires` or `Max-Age`. Chromium keeps them only while it reopens the last session's windows. Those would come back stale beside the application's own after an unclean exit. Every run starts with the application's windows alone.
+
+A login meant to outlast a run uses a cookie with an expiry:
+
+```http
+Set-Cookie: session=...; Max-Age=2592000; Path=/; Secure; HttpOnly; SameSite=Lax
+```
+
+A page can keep its token in local storage instead.
 
 ## Exposing Rust commands to JavaScript
 
@@ -1090,6 +1102,12 @@ fn main() {
 ```
 
 Preferences are declarative. One set at an earlier start and set no more returns to Chromium's default. A preference applies once the runtime has started. Chromium reads some only as the profile starts; those take effect at the next start. A name Chromium does not have is logged and skipped.
+
+### Limits
+
+* `without_chromium_flag` removes only what Kurogane would pass. A switch CEF passes or the application was launched with stays and is logged.
+* Chromium ignores a switch or feature name it does not know and says nothing. Kurogane reads every switch back once Chromium holds it and logs one held otherwise than passed.
+* The final command line is logged at debug level.
 
 > [!NOTE]
 > Cast and component updates including Widevine are disabled by default. Re-enable Cast with `enable-features=MediaRouter` and component updates with `chromium_pref("component_updates.component_updates_enabled", true)`.

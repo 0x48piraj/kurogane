@@ -275,7 +275,6 @@ pub struct App {
     profile_id: Option<String>,
     profile_dir: Option<PathBuf>,
     sandbox_mode: SandboxMode,
-    persist_session_cookies: bool,
     gpu_mode: GpuMode,
     credential_storage: CredentialStorage,
     chromium_flags: Vec<ChromiumFlag>,
@@ -319,7 +318,6 @@ impl App {
             profile_id: None,
             profile_dir: None,
             sandbox_mode: SandboxMode::default(),
-            persist_session_cookies: true,
             gpu_mode: GpuMode::Auto,
             credential_storage: CredentialStorage::System,
             chromium_flags: Vec::new(),
@@ -1409,11 +1407,6 @@ impl App {
         self
     }
 
-    pub fn persist_session_cookies(mut self, value: bool) -> Self {
-        self.persist_session_cookies = value;
-        self
-    }
-
     /// Override GPU backend selection.
     pub fn gpu_mode(mut self, mode: GpuMode) -> Self {
         self.gpu_mode = mode;
@@ -1516,7 +1509,6 @@ impl App {
     ///
     /// | Preference | Kurogane's value |
     /// |---|---|
-    /// | `session.restore_on_startup` | `5`, start without the last session |
     /// | `download_bubble.partial_view_enabled` | `false` |
     /// | `extensions.block_external_extensions` | `true` |
     /// | `component_updates.component_updates_enabled` | `false` |
@@ -1617,7 +1609,6 @@ impl App {
             profile_id,
             profile_dir,
             sandbox_mode,
-            persist_session_cookies,
             gpu_mode,
             credential_storage,
             chromium_flags,
@@ -1650,7 +1641,6 @@ impl App {
             asset_root,
             profile_id,
             profile_dir,
-            persist_session_cookies,
             gpu_mode,
             credential_storage,
             chromium_flags,

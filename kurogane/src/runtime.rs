@@ -175,7 +175,6 @@ fn subprocess_path(exe: &std::path::Path) -> Option<std::path::PathBuf> {
 
 fn build_settings(
     layout: &RuntimeLayout,
-    persist_session_cookies: bool,
     external_message_pump: bool,
     sandbox: SandboxMode,
 ) -> Settings {
@@ -185,7 +184,10 @@ fn build_settings(
         external_message_pump: external_message_pump.into(),
         cache_path: cef_path(&layout.profile_dir),
         root_cache_path: cef_path(&layout.profile_dir),
-        persist_session_cookies: persist_session_cookies.into(),
+        // Off, so CEF starts each run without the last session's windows.
+        // Chrome keeps session cookies only by restoring those, stale after
+        // an unclean exit
+        persist_session_cookies: 0,
         no_sandbox: crate::sandbox::cef_no_sandbox(sandbox),
         ..Default::default()
     };
@@ -1402,12 +1404,7 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
     crate::platform::raise_open_file_limit();
 
     let external_message_pump = spec.scheduler.is_some();
-    let settings = build_settings(
-        &layout,
-        spec.persist_session_cookies,
-        external_message_pump,
-        spec.sandbox_mode,
-    );
+    let settings = build_settings(&layout, external_message_pump, spec.sandbox_mode);
 
     debug!("Initializing CEF");
 

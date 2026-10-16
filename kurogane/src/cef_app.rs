@@ -57,6 +57,7 @@ wrap_app! {
             debug!("Chromium startup flags:\n{}", flags);
 
             flags.apply(cmd);
+            debug!("Chromium command line: {}", CefString::from(&cmd.command_line_string()));
         }
 
         fn on_register_custom_schemes(
