@@ -21,6 +21,14 @@ wrap_browser_process_handler! {
     }
 
     impl BrowserProcessHandler {
+        fn on_register_custom_preferences(
+            &self,
+            type_: PreferencesType,
+            registrar: Option<&mut PreferenceRegistrar>,
+        ) {
+            crate::chromium_defaults::register_preferences(type_, registrar);
+        }
+
         fn on_context_initialized(&self) {
             debug!("on_context_initialized called");
 

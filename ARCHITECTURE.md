@@ -120,7 +120,7 @@ Cocoa's default `terminate:` calls `exit()`. That bypasses the run loop Chromium
 
 ## Startup policy
 
-Chromium's command line is assembled once in the browser process from a small set of runtime policies and user overrides. Each policy adds switches to a normalized switch set with last-write-wins precedence. User-supplied flags apply last and override runtime defaults. The feature lists `enable-features` and `disable-features` are merged instead and keep every entry. Chromium applies `disable-features` over `enable-features`. A feature Kurogane turns off by default therefore leaves the list when any `enable-features` entry names it.
+Chromium's command line is assembled once in the browser process from a small set of runtime policies and user overrides. Each policy adds switches to a normalized switch set with last-write-wins precedence. User-supplied flags apply last and in order. They set, override or remove any switch the runtime would pass. The feature lists `enable-features` and `disable-features` are merged instead and keep every entry. Chromium applies `disable-features` over `enable-features`. A feature Kurogane turns off by default therefore leaves the list when any `enable-features` entry names it.
 
 ```mermaid
 flowchart LR
@@ -157,7 +157,7 @@ flowchart LR
 * **GPU:** Backend selection (`GpuMode`) for the detected environment.
 * **Credentials:** Whether cookies and passwords are stored in the platform credential store (`CredentialStorage`).
 * **Embedding:** On Linux an embedded application runs Chromium on X11. CEF parents a browser only to an X11 window there.
-* **Chromium defaults:** What Chromium would run for every application and an application rarely needs. Features no preference gates are turned off on the command line. A switch covers what neither gates. Preferences are set once the profile exists and before the application's own (`App::chromium_pref`). The application turns each back on.
+* **Chromium defaults:** What Chromium would run for every application and an application rarely needs. Features no preference gates are turned off on the command line. A switch covers what neither gates. Preferences are set once the profile exists. The application's own (`App::chromium_pref`) take the place of Kurogane's, so each is written once. Preferences are declarative; one set at an earlier start and set no more returns to Chromium's default. The application turns each default back on.
 
 ## Browser and window ownership
 

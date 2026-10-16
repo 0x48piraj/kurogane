@@ -1436,7 +1436,12 @@ impl App {
     /// or `-` (or `/` on Windows); on Windows it is case-insensitive, as
     /// Chromium treats it. The flag overrides the runtime's own setting of
     /// the same switch; the feature lists, which only add (see
-    /// [`App::chromium_flag_with_value`]), are left as they are.
+    /// [`App::chromium_flag_with_value`]), are left as they are. A name
+    /// holding `=` is logged and skipped; a value goes in
+    /// [`App::chromium_flag_with_value`].
+    ///
+    /// The application's flags apply after Kurogane's own and in the order
+    /// given.
     pub fn chromium_flag(mut self, name: impl Into<String>) -> Self {
         self.chromium_flags.push(ChromiumFlag::Present(name.into()));
         self
@@ -1449,8 +1454,9 @@ impl App {
     /// for `disable-features` and `enable-features`: their value adds its
     /// features to the list, after CEF's own, the ones the application was
     /// launched with and those given before, each feature once. An
-    /// `enable-features` entry turns back on a feature Kurogane turns off
-    /// (see [`App::chromium_pref`]).
+    /// `enable-features` entry in any form Chromium reads (`Name`,
+    /// `Name:param/value`, `Name<Study` or `*Name`) turns back on a feature
+    /// Kurogane turns off (see [`App::chromium_pref`]).
     ///
     /// ```no_run
     /// # use kurogane::App;
@@ -1469,15 +1475,41 @@ impl App {
         self
     }
 
+    /// Remove a Chromium flag Kurogane would pass.
+    ///
+    /// The name is read as [`App::chromium_flag`] reads it. Kurogane then
+    /// passes no such switch, neither one of its defaults nor one a setting
+    /// such as [`App::gpu_mode`] sets, nor one the application gave before.
+    /// A flag given after sets it again. For `disable-features` or
+    /// `enable-features` it drops Kurogane's entries and the application's
+    /// earlier ones; CEF's own and the launch's stay. A switch the
+    /// application was launched with stays and is logged.
+    ///
+    /// ```no_run
+    /// # use kurogane::App;
+    /// // Chrome's stack-sampling profiler, which Kurogane turns off
+    /// App::new("dist")
+    ///     .without_chromium_flag("disable-stack-profiler")
+    ///     .run_or_exit();
+    /// ```
+    pub fn without_chromium_flag(mut self, name: impl Into<String>) -> Self {
+        self.chromium_flags.push(ChromiumFlag::Removed(name.into()));
+        self
+    }
+
     /// Set a Chromium preference.
     ///
     /// The name is Chromium's, such as `extensions.block_external_extensions`.
     /// It is the profile's preference when the profile has one of that name
-    /// and else Chromium's global one. The value applies once the runtime
-    /// has started and after Kurogane's own preferences, which it
-    /// overrides. Chromium reads some preferences only as the profile
-    /// starts; those take effect at the next start. A name Chromium does
-    /// not have, or a value it refuses, is logged and skipped.
+    /// and else Chromium's global one. The value takes the place of
+    /// Kurogane's own and applies once the runtime has started. Chromium
+    /// reads some preferences only as the profile starts; those take effect
+    /// at the next start. A null value returns the preference to Chromium's
+    /// default. A name Chromium does not have, or a value it refuses, is
+    /// logged and skipped.
+    ///
+    /// Preferences are declarative. One set at an earlier start and given
+    /// no more returns to Chromium's default.
     ///
     /// Kurogane turns off what an application rarely needs and Chromium
     /// would run anyway:
@@ -1495,8 +1527,7 @@ impl App {
     /// `enable-features` entry turns one back on (see
     /// [`App::chromium_flag_with_value`]). Chrome's stack-sampling profiler,
     /// which nothing else gates, is off through `--disable-stack-profiler`;
-    /// the flag `start-stack-profiler` turns it back on (see
-    /// [`App::chromium_flag`]).
+    /// [`App::without_chromium_flag`] turns it back on.
     ///
     /// ```no_run
     /// # use kurogane::App;

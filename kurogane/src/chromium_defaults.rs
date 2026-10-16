@@ -3,8 +3,10 @@
 //! A default is a preference where one gates the work, a feature turned off
 //! where none does and a switch where neither exists. An application turns a
 //! preference back on with [`App::chromium_pref`](crate::App::chromium_pref),
-//! a feature with an `enable-features` entry and a switch with the switch
-//! that undoes it.
+//! a feature with an `enable-features` entry and a switch with
+//! [`App::without_chromium_flag`](crate::App::without_chromium_flag).
+//! Preferences are declarative. One set at an earlier start and set no more
+//! returns to Chromium's default.
 
 use serde_json::Value as Json;
 use tanso::*;
@@ -22,14 +24,16 @@ const DISABLED_FEATURES: [&str; 3] = [
     "SpareRendererForSitePerProcess",
 ];
 
-/// Switches Kurogane sets, each with the switch that undoes it, for work
-/// neither a preference nor a feature gates.
-const UNDOABLE_SWITCHES: [(&str, &str); 1] = [
-    // Chrome's stack-sampling profiler, which runs in CEF's builds as in a
+/// Switches Kurogane sets for work neither a preference nor a feature gates.
+const SWITCHES: [&str; 1] = [
+    // Chrome's stack-sampling profiler which runs in CEF's builds as in a
     // development build and keeps the browser, GPU and network processes
     // busy at rest; CEF uploads none of its samples
-    ("disable-stack-profiler", "start-stack-profiler"),
+    "disable-stack-profiler",
 ];
+
+/// Global preference recording the preferences Kurogane set at the previous start
+const SET_LAST_START: &str = "kurogane.chromium_preferences";
 
 /// Chrome's `session.restore_on_startup` value for starting without the
 /// last session ([`SessionStartupPref::kPrefValueNewTab`](https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/prefs/session_startup_pref.h)).
@@ -65,47 +69,112 @@ fn default_preferences() -> [(&'static str, Json); 5] {
 }
 
 /// Turns Kurogane's features off in `flags`, each unless an
-/// `enable-features` entry turns it on, and sets its switches, each unless
-/// the switch that undoes it is named.
+/// `enable-features` entry turns it on, and sets its switches.
 pub(crate) fn apply_flag_defaults(flags: &mut ChromiumFlags) {
     for feature in DISABLED_FEATURES {
         flags.disable_by_default(feature);
     }
-    for (name, undone_by) in UNDOABLE_SWITCHES {
-        flags.set_unless(name, undone_by);
+    for name in SWITCHES {
+        flags.set(name);
     }
 }
 
-/// Sets Kurogane's preferences, then `chosen`, the application's, which
-/// override them. Preferences apply once the profile exists, so one that
-/// Chromium reads only as the profile starts takes effect at the next start.
-pub(crate) fn apply_preferences(chosen: &[(String, Json)]) {
-    for (name, value) in default_preferences() {
-        set_preference(name, &value);
+/// Registers global preference [`SET_LAST_START`].
+pub(crate) fn register_preferences(
+    kind: PreferencesType,
+    registrar: Option<&mut PreferenceRegistrar>,
+) {
+    if kind != PreferencesType::GLOBAL {
+        return;
     }
-    for (name, value) in chosen {
+    let (Some(registrar), Some(mut empty), Some(mut list)) =
+        (registrar, value_create(), list_value_create())
+    else {
+        return;
+    };
+    empty.set_list(Some(&mut list));
+    if registrar.add_preference(Some(&CefString::from(SET_LAST_START)), Some(&mut empty)) == 0 {
+        warn!("Chromium refused Kurogane's preference {SET_LAST_START}");
+    }
+}
+
+/// Sets Kurogane's preferences and the application's (`chosen`), each once
+/// and the application's in place of Kurogane's. One set at the last start
+/// and set no more returns to Chromium's default. One Chromium reads only as
+/// the profile starts takes effect at the next start.
+pub(crate) fn apply_preferences(chosen: &[(String, Json)]) {
+    let wanted = resolved(default_preferences(), chosen);
+
+    for name in set_last_start() {
+        if !wanted.iter().any(|(wanted, _)| *wanted == name) {
+            set_preference(&name, &Json::Null);
+        }
+    }
+    for (name, value) in &wanted {
         set_preference(name, value);
     }
+
+    let set: Vec<Json> = wanted
+        .iter()
+        .filter(|(_, value)| !value.is_null())
+        .map(|(name, _)| Json::from(name.as_str()))
+        .collect();
+    set_preference(SET_LAST_START, &Json::Array(set));
+}
+
+/// Returns `defaults` with `chosen` in their place, each name once with the
+/// last value given for it.
+fn resolved(
+    defaults: impl IntoIterator<Item = (&'static str, Json)>,
+    chosen: &[(String, Json)],
+) -> Vec<(String, Json)> {
+    let mut wanted: Vec<(String, Json)> = defaults
+        .into_iter()
+        .map(|(name, value)| (name.to_owned(), value))
+        .collect();
+    for (name, value) in chosen {
+        match wanted.iter_mut().find(|(wanted, _)| wanted == name) {
+            Some((_, held)) => *held = value.clone(),
+            None => wanted.push((name.clone(), value.clone())),
+        }
+    }
+    wanted
+}
+
+/// Returns the names of the preferences Kurogane set at the last start.
+fn set_last_start() -> Vec<String> {
+    let Some(list) = preference_manager_get_global()
+        .and_then(|global| global.preference(Some(&CefString::from(SET_LAST_START))))
+        .and_then(|value| value.list())
+    else {
+        return Vec::new();
+    };
+    (0..list.size())
+        .map(|index| CefString::from(&list.string(index)).to_string())
+        .filter(|name| !name.is_empty())
+        .collect()
 }
 
 /// Sets a Chromium preference, the profile's when the profile has one of
-/// that name, else Chromium's global one ("Local State").
+/// that name, else Chromium's global one ("Local State"). A null returns it
+/// to Chromium's default.
 fn set_preference(name: &str, value: &Json) {
-    let Some(mut cef) = cef_value(value) else {
+    let mut cef = cef_value(value);
+    if cef.is_none() && !value.is_null() {
         warn!("Chromium's preference {name} takes no {value}");
         return;
-    };
+    }
     let key = CefString::from(name);
     let mut error = CefString::default();
 
     let set = if let Some(context) = request_context_get_global_context()
         && context.has_preference(Some(&key)) != 0
     {
-        context.set_preference(Some(&key), Some(&mut cef), Some(&mut error))
+        context.set_preference(Some(&key), cef.as_mut(), Some(&mut error))
     } else if let Some(global) = preference_manager_get_global()
         && global.has_preference(Some(&key)) != 0
     {
-        global.set_preference(Some(&key), Some(&mut cef), Some(&mut error))
+        global.set_preference(Some(&key), cef.as_mut(), Some(&mut error))
     } else {
         warn!("Chromium has no preference {name}");
         return;
@@ -153,18 +222,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_default_is_set_with_what_undoes_it() {
+    fn every_default_flag_is_set() {
         let mut flags = ChromiumFlags::default();
         apply_flag_defaults(&mut flags);
         let shown = flags.to_string();
         for feature in DISABLED_FEATURES {
             assert!(shown.contains(feature), "{feature} is not off: {shown}");
         }
-        for (name, undone_by) in UNDOABLE_SWITCHES {
-            assert!(
-                shown.contains(&format!("--{name} unless --{undone_by}")),
-                "{name} is not set: {shown}"
-            );
+        for name in SWITCHES {
+            assert!(flags.contains(name), "{name} is not set: {shown}");
         }
+    }
+
+    #[test]
+    fn the_application_s_preferences_take_the_defaults_place() {
+        let chosen = [
+            ("b".to_owned(), Json::from(false)),
+            ("c".to_owned(), Json::from(1)),
+            ("b".to_owned(), Json::Null),
+        ];
+
+        assert_eq!(
+            resolved([("a", Json::from(1)), ("b", Json::from(true))], &chosen),
+            [
+                ("a".to_owned(), Json::from(1)),
+                ("b".to_owned(), Json::Null),
+                ("c".to_owned(), Json::from(1)),
+            ]
+        );
     }
 }

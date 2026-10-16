@@ -8,12 +8,23 @@
 
 use tanso::*;
 use std::collections::BTreeMap;
+use tracing::warn;
 
-/// User supplied Chromium standalone switches and switches with values.
+/// User supplied Chromium switches, standalone, with a value or removed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChromiumFlag {
     Present(String),
     WithValue(String, String),
+    Removed(String),
+}
+
+impl ChromiumFlag {
+    /// Switch name as the application wrote it.
+    fn name(&self) -> &str {
+        match self {
+            Self::Present(name) | Self::WithValue(name, _) | Self::Removed(name) => name,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,13 +46,19 @@ pub(crate) struct ChromiumFlags {
     /// Features the runtime turns off unless an `enable-features` entry
     /// turns them on, the application's, the launch's or CEF's.
     disabled_by_default: Vec<String>,
-    /// Switches the runtime sets, each with the switch that undoes it,
-    /// unless the application or the launch names that one.
-    undoable: Vec<(String, String)>,
+    /// Switches the application removed.
+    removed: Vec<String>,
 }
 
 fn is_list(key: &str) -> bool {
     LIST_SWITCHES.contains(&key)
+}
+
+/// The feature a feature list's entry names. Chromium reads `*Name`,
+/// `Name<Study.Group` and `Name:param/value` as `Name`.
+fn feature_name(entry: &str) -> &str {
+    let entry = entry.strip_prefix('*').unwrap_or(entry);
+    entry.split(['<', '.', ':']).next().unwrap_or(entry)
 }
 
 /// Adds the entries of `value`, a comma-separated list, to `entries`, each
@@ -117,10 +134,18 @@ impl ChromiumFlags {
         add_entries(&mut self.disabled_by_default, feature);
     }
 
-    /// Sets the switch `name` unless the application's flags or the
-    /// launch's name `undone_by`, for work no feature or preference gates.
-    pub(crate) fn set_unless(&mut self, name: &str, undone_by: &str) {
-        self.undoable.push((key(name), key(undone_by)));
+    /// Removes the switch `name` with a list switch's entries. Removing
+    /// `disable-features` also turns the runtime's default features back on.
+    pub(crate) fn remove(&mut self, name: impl AsRef<str>) {
+        let name = key(name.as_ref());
+        self.switches.remove(&name);
+        self.lists.remove(&name);
+        if name == "disable-features" {
+            self.disabled_by_default.clear();
+        }
+        if !self.removed.contains(&name) {
+            self.removed.push(name);
+        }
     }
 
     /// Returns whether a switch is present, with or without a value.
@@ -131,16 +156,25 @@ impl ChromiumFlags {
 
     /// Apply user-supplied Chromium flags.
     ///
-    /// User flags are applied after runtime policies and therefore
-    /// override runtime defaults for the same switch, however it is spelled;
-    /// a list switch's entries are added to the runtime's.
+    /// User flags are applied after runtime policies and in order and therefore
+    /// override or remove the runtime's switches however they are
+    /// spelled; a list switch's entries are added to the runtime's. A name
+    /// holding `=` is skipped, as no switch name holds one.
     pub(crate) fn extend_user_flags(&mut self, user_flags: &[ChromiumFlag]) {
         for flag in user_flags {
+            if flag.name().contains('=') {
+                warn!(
+                    "skipped Chromium flag {}: a switch name holds no '=' (chromium_flag_with_value takes a value)",
+                    flag.name()
+                );
+                continue;
+            }
             match flag {
                 ChromiumFlag::Present(name) => self.set(name),
                 ChromiumFlag::WithValue(name, value) => {
                     self.set_with_value(name, value.clone());
                 }
+                ChromiumFlag::Removed(name) => self.remove(name),
             }
         }
     }
@@ -152,6 +186,12 @@ impl ChromiumFlags {
     /// command line holds already (CEF's own and the launch's), since
     /// Chromium keeps only the last value of a switch.
     pub(crate) fn apply(self, cmd: &mut CommandLine) {
+        for name in self.removed_switches() {
+            if cmd.has_switch(Some(&CefString::from(name))) != 0 {
+                warn!("--{name} stays: the application was launched with it or CEF passes it");
+            }
+        }
+
         let existing = |name: &str| {
             let name = CefString::from(name);
             if cmd.has_switch(Some(&name)) != 0 {
@@ -165,11 +205,6 @@ impl ChromiumFlags {
             let name = CefString::from(name.as_str());
             let value = CefString::from(value.as_str());
             cmd.append_switch_with_value(Some(&name), Some(&value));
-        }
-
-        let kept = self.undoable_kept(|name| cmd.has_switch(Some(&CefString::from(name))) != 0);
-        for name in kept {
-            cmd.append_switch(Some(&CefString::from(name.as_str())));
         }
 
         for (name, value) in self.switches {
@@ -189,21 +224,19 @@ impl ChromiumFlags {
 }
 
 impl ChromiumFlags {
-    /// Returns the runtime's undoable switches that stay, `launched` telling
-    /// whether the command line holds a switch. A switch stays unless the
-    /// application or the launch names the switch that undoes it.
-    fn undoable_kept(&self, launched: impl Fn(&str) -> bool) -> Vec<String> {
-        self.undoable
+    /// Returns the switches the application removed and set no more. The
+    /// list switches are left out; CEF's and the launch's entries stay.
+    fn removed_switches(&self) -> impl Iterator<Item = &str> {
+        self.removed
             .iter()
-            .filter(|(_, undone_by)| !self.switches.contains_key(undone_by) && !launched(undone_by))
-            .map(|(name, _)| name.clone())
-            .collect()
+            .filter(|name| !is_list(name) && !self.switches.contains_key(*name))
+            .map(String::as_str)
     }
 
     /// Returns each list switch that gains entries with its whole value,
     /// `existing` giving the value the command line holds. The runtime's
     /// defaults go first in `disable-features`, but for any feature an
-    /// `enable-features` entry names.
+    /// `enable-features` entry names, in whatever form Chromium reads.
     fn list_values(&self, existing: impl Fn(&str) -> String) -> Vec<(String, String)> {
         let mut lists = self.lists.clone();
 
@@ -215,7 +248,7 @@ impl ChromiumFlags {
         let mut disabled: Vec<String> = self
             .disabled_by_default
             .iter()
-            .filter(|feature| !enabled.contains(feature))
+            .filter(|feature| !enabled.iter().any(|entry| feature_name(entry) == *feature))
             .cloned()
             .collect();
         if !disabled.is_empty() {
@@ -263,8 +296,8 @@ impl std::fmt::Display for ChromiumFlags {
             )?;
         }
 
-        for (name, undone_by) in &self.undoable {
-            writeln!(f, "--{name} unless --{undone_by}")?;
+        for name in self.removed_switches() {
+            writeln!(f, "without --{name}")?;
         }
 
         Ok(())
@@ -481,22 +514,57 @@ mod tests {
     }
 
     #[test]
-    fn an_undoable_switch_stays_unless_its_undoing_switch_is_named() {
+    fn a_feature_entry_in_any_form_turns_a_default_back_on() {
         let mut flags = ChromiumFlags::default();
-        flags.set_unless("disable-stack-profiler", "start-stack-profiler");
-        assert_eq!(flags.undoable_kept(|_| false), ["disable-stack-profiler"]);
-        assert!(
-            flags
-                .undoable_kept(|name| name == "start-stack-profiler")
-                .is_empty(),
-            "the launch undoes it"
-        );
+        for feature in ["Spare", "Aim", "Cast", "Kept"] {
+            flags.disable_by_default(feature);
+        }
+        flags.extend_user_flags(&[ChromiumFlag::WithValue(
+            "enable-features".into(),
+            "Spare:lc/1,Aim<Study.Group,*Cast".into(),
+        )]);
 
-        flags.extend_user_flags(&[ChromiumFlag::Present("--start-stack-profiler".into())]);
-        assert!(
-            flags.undoable_kept(|_| false).is_empty(),
-            "the application undoes it"
+        assert_eq!(
+            lists_over(&flags, &[])[0],
+            ("disable-features".to_owned(), "Kept".to_owned())
         );
+    }
+
+    #[test]
+    fn a_removed_switch_is_gone_until_set_again() {
+        let mut flags = ChromiumFlags::default();
+        flags.set("disable-stack-profiler");
+
+        flags.extend_user_flags(&[ChromiumFlag::Removed("--disable-stack-profiler".into())]);
+        assert!(!flags.contains("disable-stack-profiler"));
+        assert_eq!(flags.to_string(), "without --disable-stack-profiler\n");
+
+        flags.extend_user_flags(&[ChromiumFlag::Present("disable-stack-profiler".into())]);
+        assert!(flags.contains("disable-stack-profiler"));
+    }
+
+    #[test]
+    fn removing_disable_features_turns_every_default_back_on() {
+        let mut flags = ChromiumFlags::default();
+        flags.disable_by_default("Spare");
+        flags.set_with_value("disable-features", "Runtime");
+
+        flags.extend_user_flags(&[ChromiumFlag::Removed("disable-features".into())]);
+
+        assert!(lists_over(&flags, &[("disable-features", "CefOwn")]).is_empty());
+    }
+
+    #[test]
+    fn a_flag_name_holding_a_value_is_skipped() {
+        let mut flags = ChromiumFlags::default();
+
+        flags.extend_user_flags(&[
+            ChromiumFlag::Present("--enable-features=Spare".into()),
+            ChromiumFlag::WithValue("use-gl=egl".into(), "egl".into()),
+            ChromiumFlag::Removed("use-gl=egl".into()),
+        ]);
+
+        assert_eq!(flags.to_string(), "");
     }
 
     #[test]

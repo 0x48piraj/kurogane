@@ -60,7 +60,7 @@ pub(crate) struct RuntimeSpec {
     pub gpu_mode: GpuMode,
     pub credential_storage: CredentialStorage,
     pub chromium_flags: Vec<ChromiumFlag>,
-    /// Chromium preferences the application sets, after Kurogane's own
+    /// Chromium preferences the application sets, in place of Kurogane's own
     pub chromium_prefs: Vec<(String, serde_json::Value)>,
     pub scheduler: Option<PumpScheduler>,
     pub on_second_instance: Option<SecondInstanceHandler>,
