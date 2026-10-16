@@ -38,6 +38,9 @@ mod app_bundle;
 mod dmg;
 
 #[cfg(target_os = "macos")]
+mod framework_link;
+
+#[cfg(target_os = "macos")]
 mod macos_settings;
 
 #[cfg(target_os = "macos")]

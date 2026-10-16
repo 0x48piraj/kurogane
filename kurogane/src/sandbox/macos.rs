@@ -1,7 +1,9 @@
 //! macOS Chromium sandbox.
 //!
 //! Chromium sandboxes macOS helpers with seatbelt profiles. Each helper enters
-//! its sandbox through `libcef_sandbox.dylib` before it loads the CEF framework.
+//! its sandbox through `libcef_sandbox.dylib` before it loads CEF. A bundle's
+//! helper links the framework at launch, so dyld has mapped it and run its
+//! initializers by then.
 
 use std::error::Error;
 use std::path::Path;
@@ -46,8 +48,8 @@ pub(super) fn preflight(_cef_root: &Path) -> Result<(), RuntimeError> {
 
 /// Enters the seatbelt sandbox in a helper process.
 ///
-/// Must run before the CEF framework is loaded. Only the first call enters the
-/// sandbox; later calls return its outcome.
+/// Must run before CEF is loaded. Only the first call enters the sandbox;
+/// later calls return its outcome.
 pub(crate) fn initialize_helper() -> Result<(), RuntimeError> {
     match HELPER_SANDBOX.get_or_init(enter_sandbox) {
         Ok(_) => Ok(()),

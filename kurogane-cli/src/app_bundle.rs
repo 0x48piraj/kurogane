@@ -145,7 +145,8 @@ fn write_helper_plist(
     write_plist(helper_app, &plist)
 }
 
-/// Installs the helper bundles into `Contents/Frameworks/`.
+/// Installs the helper bundles into `Contents/Frameworks/`, each running
+/// `executable`.
 fn install_helpers(
     frameworks: &Path,
     executable: &Path,
@@ -247,9 +248,11 @@ fn install_icon(resources: &Path, icon: &Path) -> Result<bool> {
 }
 
 /// Builds and optionally signs a macOS `.app` bundle declaring what `macos`
-/// says.
+/// says, its helpers running `helper` (see
+/// [`crate::framework_link::helper_executable`]).
 pub fn build(
     dist: &crate::distribution::ResolvedDistribution,
+    helper: &Path,
     output_dir: &Path,
     macos: &MacosSettings,
     sign_config: Option<&SignConfig>,
@@ -322,7 +325,7 @@ pub fn build(
     // renderer and the packaged app shows a blank window.
     install_helpers(
         &frameworks_dir(&app_dir),
-        &exe_dest,
+        helper,
         &app_name,
         &bundle_identifier(&dist.metadata),
         &dist.metadata.version,
@@ -448,14 +451,14 @@ mod tests {
 
         let dist = ResolvedDistribution {
             metadata: sample_metadata(),
-            executable: Executable::Application(exe),
+            executable: Executable::Application(exe.clone()),
             frontend: None,
             cef_runtime: cef,
             extra_resources: Vec::new(),
         };
 
         let output = dir.path().join("dist");
-        let app_dir = build(&dist, &output, &settings(), None).unwrap();
+        let app_dir = build(&dist, &exe, &output, &settings(), None).unwrap();
 
         // Avoid asserting on platform tooling unavailable in every test environment
         assert!(
@@ -492,26 +495,34 @@ mod tests {
         framework_fixture(&cef);
         let exe = dir.path().join("target").join("release").join("myapp");
         write_executable(&exe);
+        let helper_exe = dir.path().join("helper");
+        fs::write(&helper_exe, b"helper mach-o").unwrap();
 
         let dist = ResolvedDistribution {
             metadata: sample_metadata(),
-            executable: Executable::Application(exe),
+            executable: Executable::Application(exe.clone()),
             frontend: None,
             cef_runtime: cef,
             extra_resources: Vec::new(),
         };
 
         let output = dir.path().join("dist");
-        let app_dir = build(&dist, &output, &settings(), None).unwrap();
+        let app_dir = build(&dist, &helper_exe, &output, &settings(), None).unwrap();
         let frameworks = app_dir.join("Contents").join("Frameworks");
 
+        assert_eq!(
+            fs::read(macos_dir(&app_dir).join("myapp")).unwrap(),
+            b"mach-o",
+            "the application runs its own binary"
+        );
         for (suffix, id_suffix) in HELPERS {
             let name = format!("MyApp Helper{suffix}");
             let helper = frameworks.join(format!("{name}.app"));
 
-            assert!(
-                helper.join("Contents").join("MacOS").join(&name).is_file(),
-                "{name} must carry the application binary"
+            assert_eq!(
+                fs::read(helper.join("Contents").join("MacOS").join(&name)).unwrap(),
+                b"helper mach-o",
+                "{name} must carry the helpers' binary"
             );
 
             let plist = fs::read_to_string(helper.join("Contents").join("Info.plist")).unwrap();
@@ -534,7 +545,7 @@ mod tests {
         write_executable(&exe);
         let dist = ResolvedDistribution {
             metadata: sample_metadata(),
-            executable: Executable::Application(exe),
+            executable: Executable::Application(exe.clone()),
             frontend: None,
             cef_runtime: cef,
             extra_resources: Vec::new(),
@@ -549,6 +560,7 @@ mod tests {
         let output = dir.path().join("dist");
         let app_dir = build(
             &dist,
+            &exe,
             &output,
             &MacosSettings::resolve(&macos).unwrap(),
             None,
@@ -601,14 +613,14 @@ mod tests {
 
         let dist = ResolvedDistribution {
             metadata: sample_metadata(),
-            executable: Executable::Application(exe),
+            executable: Executable::Application(exe.clone()),
             frontend: None,
             cef_runtime: cef,
             extra_resources: Vec::new(),
         };
 
         let output = dir.path().join("dist");
-        let app_dir = build(&dist, &output, &settings(), None).unwrap();
+        let app_dir = build(&dist, &exe, &output, &settings(), None).unwrap();
         assert!(app_dir.exists());
     }
 
@@ -626,14 +638,14 @@ mod tests {
 
         let dist = ResolvedDistribution {
             metadata: sample_metadata(),
-            executable: Executable::Application(exe),
+            executable: Executable::Application(exe.clone()),
             frontend: Some(frontend),
             cef_runtime: cef,
             extra_resources: Vec::new(),
         };
 
         let output = dir.path().join("dist");
-        let app_dir = build(&dist, &output, &settings(), None).unwrap();
+        let app_dir = build(&dist, &exe, &output, &settings(), None).unwrap();
 
         // Contents/Resources is the bundle resource root
         assert!(
@@ -664,14 +676,14 @@ mod tests {
 
         let dist = ResolvedDistribution {
             metadata: sample_metadata(),
-            executable: Executable::Application(exe),
+            executable: Executable::Application(exe.clone()),
             frontend: None,
             cef_runtime: cef,
             extra_resources: Vec::new(),
         };
 
         let output = dir.path().join("dist");
-        let app_dir = build(&dist, &output, &settings(), None).unwrap();
+        let app_dir = build(&dist, &exe, &output, &settings(), None).unwrap();
 
         let mut links = Vec::new();
         let mut stack = vec![app_dir.clone()];
@@ -773,7 +785,7 @@ mod tests {
 
         let dist = ResolvedDistribution {
             metadata: sample_metadata(),
-            executable: Executable::Application(exe),
+            executable: Executable::Application(exe.clone()),
             frontend: None,
             cef_runtime: cef,
             extra_resources: vec![ResolvedResource {
@@ -783,7 +795,7 @@ mod tests {
         };
 
         let output = dir.path().join("dist");
-        let app_dir = build(&dist, &output, &settings(), None).unwrap();
+        let app_dir = build(&dist, &exe, &output, &settings(), None).unwrap();
         assert!(
             app_dir
                 .join("Contents")

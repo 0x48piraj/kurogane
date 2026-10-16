@@ -42,7 +42,7 @@ pub fn set_app(app: &AppHandle) {
 /// Dock tile of its own. CEF's helper executables install none.
 ///
 /// Under [`SandboxMode::Chromium`](crate::SandboxMode::Chromium) subprocesses
-/// enter the seatbelt sandbox before the framework is loaded.
+/// enter the seatbelt sandbox before CEF is loaded.
 ///
 /// Must run on the main thread before CEF initialization. Returns the
 /// directory of the CEF it loaded.

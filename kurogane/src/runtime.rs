@@ -100,9 +100,10 @@ fn locate_cef() -> Result<(std::path::PathBuf, CefLocation), RuntimeError> {
 }
 
 /// Loads libcef from the runtime the application resolves, before any other
-/// call into CEF; the binary links none. macOS loads it in `init_ns_app`,
-/// after a sandboxed helper enters its sandbox. Returns the runtime's
-/// directory, canonical.
+/// call into CEF. The executables `kurogane bundle` builds for macOS link
+/// their framework at launch, which loading takes as it is. macOS loads it in
+/// `init_ns_app`, after a sandboxed helper enters its sandbox. Returns the
+/// runtime's directory, canonical.
 pub(crate) fn load_libcef() -> Result<std::path::PathBuf, RuntimeError> {
     let (root, location) = locate_cef()?;
     let invalid =

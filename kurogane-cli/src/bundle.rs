@@ -237,6 +237,28 @@ fn refuse_sign(sign_requested: bool, config: &PackagingConfig) -> Result<()> {
     )
 }
 
+/// The cargo command that builds the application's binaries.
+#[cfg(not(target_os = "macos"))]
+fn build_command(profile: &[&str], _bin: &str, _cef: &std::path::Path) -> Command {
+    let mut cargo = Command::new("cargo");
+    cargo.arg("build").args(profile);
+    cargo
+}
+
+/// The cargo command that builds the application's binary `bin`, its final
+/// link weakly linking the framework of the CEF installation at `cef` (see
+/// [`crate::framework_link`]).
+#[cfg(target_os = "macos")]
+fn build_command(profile: &[&str], bin: &str, cef: &std::path::Path) -> Command {
+    let mut cargo = Command::new("cargo");
+    cargo
+        .arg("rustc")
+        .args(profile)
+        .args(["--bin", bin, "--"])
+        .args(crate::framework_link::link_args(cef));
+    cargo
+}
+
 /// Builds the application in the requested profile.
 ///
 /// Returns what the bundle starts and the name it is installed under.
@@ -259,14 +281,14 @@ fn build_executable(
         return Ok((crate::sandbox::bundled(cef, library)?, exe_name));
     }
 
-    let status = Command::new("cargo").arg("build").args(profile).status()?;
+    let target = find_target(pkg, TargetKind::Bin)
+        .ok_or_else(|| anyhow::anyhow!("No binary target found"))?;
+
+    let status = build_command(profile, &target.name, cef).status()?;
 
     if !status.success() {
         bail!("Build failed");
     }
-
-    let target = find_target(pkg, TargetKind::Bin)
-        .ok_or_else(|| anyhow::anyhow!("No binary target found"))?;
 
     let exe_name = format!("{}{EXE_SUFFIX}", target.name);
     let executable = target_dir.join(&exe_name);
@@ -413,8 +435,14 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
         #[cfg(target_os = "macos")]
         PackageFormat::AppBundle => {
-            let app_dir =
-                crate::app_bundle::build(&dist, &output_dir, &macos, sign_config.as_ref())?;
+            let helper = crate::framework_link::helper_executable(dist.executable.binary())?;
+            let app_dir = crate::app_bundle::build(
+                &dist,
+                helper.path(),
+                &output_dir,
+                &macos,
+                sign_config.as_ref(),
+            )?;
             crate::dmg::build(
                 &app_dir,
                 &output_dir,
