@@ -35,6 +35,9 @@ pub(crate) struct ChromiumFlags {
     /// Features the runtime turns off unless an `enable-features` entry
     /// turns them on, the application's, the launch's or CEF's.
     disabled_by_default: Vec<String>,
+    /// Switches the runtime sets, each with the switch that undoes it,
+    /// unless the application or the launch names that one.
+    undoable: Vec<(String, String)>,
 }
 
 fn is_list(key: &str) -> bool {
@@ -114,6 +117,12 @@ impl ChromiumFlags {
         add_entries(&mut self.disabled_by_default, feature);
     }
 
+    /// Sets the switch `name` unless the application's flags or the
+    /// launch's name `undone_by`, for work no feature or preference gates.
+    pub(crate) fn set_unless(&mut self, name: &str, undone_by: &str) {
+        self.undoable.push((key(name), key(undone_by)));
+    }
+
     /// Returns whether a switch is present, with or without a value.
     pub(crate) fn contains(&self, name: &str) -> bool {
         let name = key(name);
@@ -158,6 +167,11 @@ impl ChromiumFlags {
             cmd.append_switch_with_value(Some(&name), Some(&value));
         }
 
+        let kept = self.undoable_kept(|name| cmd.has_switch(Some(&CefString::from(name))) != 0);
+        for name in kept {
+            cmd.append_switch(Some(&CefString::from(name.as_str())));
+        }
+
         for (name, value) in self.switches {
             let name = CefString::from(name.as_str());
 
@@ -175,6 +189,17 @@ impl ChromiumFlags {
 }
 
 impl ChromiumFlags {
+    /// Returns the runtime's undoable switches that stay, `launched` telling
+    /// whether the command line holds a switch. A switch stays unless the
+    /// application or the launch names the switch that undoes it.
+    fn undoable_kept(&self, launched: impl Fn(&str) -> bool) -> Vec<String> {
+        self.undoable
+            .iter()
+            .filter(|(_, undone_by)| !self.switches.contains_key(undone_by) && !launched(undone_by))
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
     /// Returns each list switch that gains entries with its whole value,
     /// `existing` giving the value the command line holds. The runtime's
     /// defaults go first in `disable-features`, but for any feature an
@@ -236,6 +261,10 @@ impl std::fmt::Display for ChromiumFlags {
                 "disabled unless enabled: {}",
                 self.disabled_by_default.join(",")
             )?;
+        }
+
+        for (name, undone_by) in &self.undoable {
+            writeln!(f, "--{name} unless --{undone_by}")?;
         }
 
         Ok(())
@@ -448,6 +477,25 @@ mod tests {
         assert!(
             lists_over(&flags, &[("enable-features", "Other,Spare")]).is_empty(),
             "nothing is added once the launch enables the only default"
+        );
+    }
+
+    #[test]
+    fn an_undoable_switch_stays_unless_its_undoing_switch_is_named() {
+        let mut flags = ChromiumFlags::default();
+        flags.set_unless("disable-stack-profiler", "start-stack-profiler");
+        assert_eq!(flags.undoable_kept(|_| false), ["disable-stack-profiler"]);
+        assert!(
+            flags
+                .undoable_kept(|name| name == "start-stack-profiler")
+                .is_empty(),
+            "the launch undoes it"
+        );
+
+        flags.extend_user_flags(&[ChromiumFlag::Present("--start-stack-profiler".into())]);
+        assert!(
+            flags.undoable_kept(|_| false).is_empty(),
+            "the application undoes it"
         );
     }
 

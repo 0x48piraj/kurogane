@@ -1044,6 +1044,7 @@ Kurogane turns off what Chromium would run for every application and an applicat
 | The omnibox's AI Mode check | feature `AimEnabled` |
 | Cast | feature `MediaRouter` |
 | A renderer kept ready for the next site | feature `SpareRendererForSitePerProcess` |
+| Chrome's stack-sampling profiler, busy in three processes at rest | switch `disable-stack-profiler` |
 
 Set any Chromium preference with `chromium_pref`. It applies after Kurogane's own and overrides them.
 
@@ -1068,6 +1069,8 @@ fn main() {
         .run_or_exit();
 }
 ```
+
+Turn the profiler back on with `chromium_flag("start-stack-profiler")`.
 
 A preference applies once the runtime has started. Chromium reads some only as the profile starts; those take effect at the next start. A name Chromium does not have is logged and skipped.
 

@@ -1493,7 +1493,10 @@ impl App {
     /// It also turns off the features `AimEnabled`, `MediaRouter` and
     /// `SpareRendererForSitePerProcess`, which no preference gates. An
     /// `enable-features` entry turns one back on (see
-    /// [`App::chromium_flag_with_value`]).
+    /// [`App::chromium_flag_with_value`]). Chrome's stack-sampling profiler,
+    /// which nothing else gates, is off through `--disable-stack-profiler`;
+    /// the flag `start-stack-profiler` turns it back on (see
+    /// [`App::chromium_flag`]).
     ///
     /// ```no_run
     /// # use kurogane::App;

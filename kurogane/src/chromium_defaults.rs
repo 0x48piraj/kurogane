@@ -1,9 +1,10 @@
 //! What Kurogane turns off in Chromium for every application.
 //!
-//! A default is a preference where one gates the work and a feature turned
-//! off where none does. An application turns a preference back on with
-//! [`App::chromium_pref`](crate::App::chromium_pref) and a feature with an
-//! `enable-features` entry.
+//! A default is a preference where one gates the work, a feature turned off
+//! where none does and a switch where neither exists. An application turns a
+//! preference back on with [`App::chromium_pref`](crate::App::chromium_pref),
+//! a feature with an `enable-features` entry and a switch with the switch
+//! that undoes it.
 
 use serde_json::Value as Json;
 use tanso::*;
@@ -19,6 +20,15 @@ const DISABLED_FEATURES: [&str; 3] = [
     "MediaRouter",
     // A renderer kept ready for the next site, a process the application never uses
     "SpareRendererForSitePerProcess",
+];
+
+/// Switches Kurogane sets, each with the switch that undoes it, for work
+/// neither a preference nor a feature gates.
+const UNDOABLE_SWITCHES: [(&str, &str); 1] = [
+    // Chrome's stack-sampling profiler, which runs in CEF's builds as in a
+    // development build and keeps the browser, GPU and network processes
+    // busy at rest; CEF uploads none of its samples
+    ("disable-stack-profiler", "start-stack-profiler"),
 ];
 
 /// Chrome's `session.restore_on_startup` value for starting without the
@@ -55,10 +65,14 @@ fn default_preferences() -> [(&'static str, Json); 5] {
 }
 
 /// Turns Kurogane's features off in `flags`, each unless an
-/// `enable-features` entry turns it on.
-pub(crate) fn apply_feature_defaults(flags: &mut ChromiumFlags) {
+/// `enable-features` entry turns it on, and sets its switches, each unless
+/// the switch that undoes it is named.
+pub(crate) fn apply_flag_defaults(flags: &mut ChromiumFlags) {
     for feature in DISABLED_FEATURES {
         flags.disable_by_default(feature);
+    }
+    for (name, undone_by) in UNDOABLE_SWITCHES {
+        flags.set_unless(name, undone_by);
     }
 }
 
@@ -139,12 +153,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_default_feature_is_off_until_an_entry_turns_it_on() {
+    fn every_default_is_set_with_what_undoes_it() {
         let mut flags = ChromiumFlags::default();
-        apply_feature_defaults(&mut flags);
+        apply_flag_defaults(&mut flags);
         let shown = flags.to_string();
         for feature in DISABLED_FEATURES {
             assert!(shown.contains(feature), "{feature} is not off: {shown}");
+        }
+        for (name, undone_by) in UNDOABLE_SWITCHES {
+            assert!(
+                shown.contains(&format!("--{name} unless --{undone_by}")),
+                "{name} is not set: {shown}"
+            );
         }
     }
 }

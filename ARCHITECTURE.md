@@ -157,7 +157,7 @@ flowchart LR
 * **GPU:** Backend selection (`GpuMode`) for the detected environment.
 * **Credentials:** Whether cookies and passwords are stored in the platform credential store (`CredentialStorage`).
 * **Embedding:** On Linux an embedded application runs Chromium on X11. CEF parents a browser only to an X11 window there.
-* **Chromium defaults:** What Chromium would run for every application and an application rarely needs. Features no preference gates are turned off on the command line. Preferences are set once the profile exists and before the application's own (`App::chromium_pref`). The application turns either back on.
+* **Chromium defaults:** What Chromium would run for every application and an application rarely needs. Features no preference gates are turned off on the command line. A switch covers what neither gates. Preferences are set once the profile exists and before the application's own (`App::chromium_pref`). The application turns each back on.
 
 ## Browser and window ownership
 
