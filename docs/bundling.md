@@ -508,7 +508,7 @@ These values are checked when bundling starts on macOS before anything is built.
 
 #### Subprocess helpers
 
-Chromium runs its GPU, renderer and utility work in separate processes. On macOS it finds the executable for them in the **main bundle** and not through `browser_subprocess_path`. A `.app` whose `Contents/Frameworks` carries no helper bundles starts no renderer. The window opens and never paints.
+Chromium runs its GPU, renderer and utility work in separate processes. On macOS each runs from a helper bundle in `Contents/Frameworks`. The runtime starts them from the one bundle there named `<name> Helper.app` and Chromium finds the GPU, renderer and other helpers beside it by name. The runtime finds it whatever the `.app` is called. A renamed bundle runs the same, and so does one started through a link. A `.app` without exactly one such helper refuses to start and says to reinstall the application.
 
 Each helper is the application binary again under its own bundle identity. The binary dispatches on `--type=` and serves as both the application and its helpers. The helpers are copies and not links because each carries its own `CFBundleIdentifier` and once signed its own signature. Every helper plist sets `LSUIElement`. That keeps the helpers out of the Dock and the app switcher.
 

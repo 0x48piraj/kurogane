@@ -53,7 +53,7 @@ fn resolve_layout(
     Ok(RuntimeLayout {
         cef_root,
         profile_dir,
-        subprocess: subprocess_path(&exe),
+        subprocess: subprocess_path(&exe)?,
     })
 }
 
@@ -154,23 +154,29 @@ fn cef_not_found(error: sys::FindError) -> RuntimeError {
 /// turns the sandbox off without saying so. Helpers relaunch this executable
 /// either way, which is what the setting would have named.
 #[cfg(target_os = "windows")]
-fn subprocess_path(_exe: &std::path::Path) -> Option<std::path::PathBuf> {
-    None
+fn subprocess_path(_exe: &std::path::Path) -> Result<Option<std::path::PathBuf>, RuntimeError> {
+    Ok(None)
 }
 
 /// Returns the executable CEF should start helper processes from.
 #[cfg(target_os = "linux")]
-fn subprocess_path(exe: &std::path::Path) -> Option<std::path::PathBuf> {
-    Some(exe.to_path_buf())
+fn subprocess_path(exe: &std::path::Path) -> Result<Option<std::path::PathBuf>, RuntimeError> {
+    Ok(Some(exe.to_path_buf()))
 }
 
 /// Returns the executable CEF should start helper processes from: the
-/// bundle's helper app, or this executable when running unbundled.
+/// bundle's helper app, or this executable when running unbundled. A bundle
+/// without one helper app is an error; Chromium would look for the
+/// renderer's beside the bundle and start none.
 #[cfg(target_os = "macos")]
-fn subprocess_path(exe: &std::path::Path) -> Option<std::path::PathBuf> {
-    let helper = kurogane_layout::bundled_helper_path_for(exe);
+fn subprocess_path(exe: &std::path::Path) -> Result<Option<std::path::PathBuf>, RuntimeError> {
+    let helper = kurogane_layout::bundled_helper_path_for(exe).map_err(|source| {
+        RuntimeError::BundleHelperUnavailable {
+            source: Box::new(source),
+        }
+    })?;
 
-    Some(helper.unwrap_or_else(|| exe.to_path_buf()))
+    Ok(Some(helper.unwrap_or_else(|| exe.to_path_buf())))
 }
 
 fn build_settings(
@@ -1567,7 +1573,7 @@ mod tests {
         // executable regardless, so the setting buys nothing and costs the
         // sandbox.
         assert_eq!(
-            subprocess_path(std::path::Path::new(r"C:\app\myapp.exe")),
+            subprocess_path(std::path::Path::new(r"C:\app\myapp.exe")).unwrap(),
             None,
             "naming a subprocess executable silently disables the Windows sandbox"
         );
@@ -1578,7 +1584,7 @@ mod tests {
     fn linux_names_its_own_executable() {
         // Linux has no such rule, and the helpers are this same binary
         assert_eq!(
-            subprocess_path(std::path::Path::new("/app/myapp")),
+            subprocess_path(std::path::Path::new("/app/myapp")).unwrap(),
             Some(std::path::PathBuf::from("/app/myapp"))
         );
     }
@@ -1589,7 +1595,7 @@ mod tests {
         // Outside an app bundle there are no helper apps, so helpers are this
         // same binary, as on Linux
         assert_eq!(
-            subprocess_path(std::path::Path::new("/app/myapp")),
+            subprocess_path(std::path::Path::new("/app/myapp")).unwrap(),
             Some(std::path::PathBuf::from("/app/myapp"))
         );
     }

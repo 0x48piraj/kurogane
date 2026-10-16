@@ -15,7 +15,7 @@ pub mod test_fixtures;
 pub use cef::{IncompleteRuntime, validate_cef_runtime};
 pub use layout::{BUNDLE_MARKER, bundle_cef_root, bundle_cef_root_for, bundled_resource_root};
 #[cfg(target_os = "macos")]
-pub use layout::{bundled_helper_path, bundled_helper_path_for};
+pub use layout::{NoSingleHelper, bundled_helper_path_for};
 pub use profile::{profile_dir, profiles_root};
 /// The name of CEF's framework inside a macOS runtime or bundle.
 #[cfg(target_os = "macos")]

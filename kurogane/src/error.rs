@@ -51,6 +51,13 @@ pub enum RuntimeError {
     /// The path to the running executable could not be determined.
     ExecutableUnavailable(std::io::Error),
 
+    /// The macOS application bundle the executable belongs to has no single
+    /// helper app to start Chromium's processes from; `source` says what it
+    /// holds.
+    BundleHelperUnavailable {
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
     CacheUnavailable {
         path: PathBuf,
         source: std::io::Error,
@@ -280,6 +287,20 @@ impl Display for RuntimeError {
                 location.remedy()
             ),
 
+            RuntimeError::BundleHelperUnavailable { source } => write!(
+                f,
+                concat!(
+                    "The application bundle cannot start Chromium's processes:
+
+",
+                    "  {}
+
+",
+                    "Reinstall the application."
+                ),
+                source
+            ),
+
             RuntimeError::ExecutableUnavailable(_) => write!(
                 f,
                 concat!(
@@ -381,7 +402,8 @@ impl std::error::Error for RuntimeError {
             RuntimeError::ExecutableUnavailable(source) => Some(source),
 
             RuntimeError::InvalidFrontendUrl { source, .. }
-            | RuntimeError::InvalidCefRuntime { source, .. } => Some(&**source),
+            | RuntimeError::InvalidCefRuntime { source, .. }
+            | RuntimeError::BundleHelperUnavailable { source } => Some(&**source),
 
             RuntimeError::InvalidFilesystem(error) => Some(error),
 
