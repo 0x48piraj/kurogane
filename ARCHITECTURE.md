@@ -120,7 +120,7 @@ Cocoa's default `terminate:` calls `exit()`. That bypasses the run loop Chromium
 
 ## Startup policy
 
-Chromium's command line is assembled once in the browser process from a small set of runtime policies and user overrides. Each policy adds switches to a normalized switch set with last-write-wins precedence. User-supplied flags apply last and override runtime defaults. The feature lists `enable-features` and `disable-features` are merged instead and keep every entry.
+Chromium's command line is assembled once in the browser process from a small set of runtime policies and user overrides. Each policy adds switches to a normalized switch set with last-write-wins precedence. User-supplied flags apply last and override runtime defaults. The feature lists `enable-features` and `disable-features` are merged instead and keep every entry. Chromium applies `disable-features` over `enable-features`. A feature Kurogane turns off by default therefore leaves the list when any `enable-features` entry names it.
 
 ```mermaid
 flowchart LR
@@ -128,6 +128,7 @@ flowchart LR
     B["GPU policy"]
     C["Credential policy"]
     F["Embedding policy"]
+    G["Chromium defaults"]
     D["User flags"]
 
     E["Chromium command line<br/><span style='font-size:12px'>normalized switch set</span>"]
@@ -136,6 +137,7 @@ flowchart LR
     B --> E
     C --> E
     F --> E
+    G --> E
     D --> E
 
     N["Last write wins<br/><span style='font-size:12px'>user flags override runtime defaults</span>"]
@@ -146,7 +148,7 @@ flowchart LR
     classDef command fill:#ddf4ff,stroke:#0969da,stroke-width:2px;
     classDef note fill:#fff8c5,stroke:#9a6700,stroke-width:2px;
 
-    class A,B,C,F,D policy;
+    class A,B,C,F,G,D policy;
     class E command;
     class N note;
 ```
@@ -155,6 +157,7 @@ flowchart LR
 * **GPU:** Backend selection (`GpuMode`) for the detected environment.
 * **Credentials:** Whether cookies and passwords are stored in the platform credential store (`CredentialStorage`).
 * **Embedding:** On Linux an embedded application runs Chromium on X11. CEF parents a browser only to an X11 window there.
+* **Chromium defaults:** What Chromium would run for every application and an application rarely needs. Features no preference gates are turned off on the command line. Preferences are set once the profile exists and before the application's own (`App::chromium_pref`). The application turns either back on.
 
 ## Browser and window ownership
 

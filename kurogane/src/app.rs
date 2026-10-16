@@ -279,6 +279,7 @@ pub struct App {
     gpu_mode: GpuMode,
     credential_storage: CredentialStorage,
     chromium_flags: Vec<ChromiumFlag>,
+    chromium_prefs: Vec<(String, Value)>,
     scheduler: Option<PumpScheduler>,
     on_second_instance: Option<SecondInstanceHandler>,
     hooks: Hooks,
@@ -322,6 +323,7 @@ impl App {
             gpu_mode: GpuMode::Auto,
             credential_storage: CredentialStorage::System,
             chromium_flags: Vec::new(),
+            chromium_prefs: Vec::new(),
             scheduler: None,
             on_second_instance: None,
             hooks: Hooks::default(),
@@ -1446,7 +1448,9 @@ impl App {
     /// given for a switch wins, over the runtime's own value too, except
     /// for `disable-features` and `enable-features`: their value adds its
     /// features to the list, after CEF's own, the ones the application was
-    /// launched with and those given before, each feature once.
+    /// launched with and those given before, each feature once. An
+    /// `enable-features` entry turns back on a feature Kurogane turns off
+    /// (see [`App::chromium_pref`]).
     ///
     /// ```no_run
     /// # use kurogane::App;
@@ -1462,6 +1466,44 @@ impl App {
     ) -> Self {
         self.chromium_flags
             .push(ChromiumFlag::WithValue(name.into(), value.into()));
+        self
+    }
+
+    /// Set a Chromium preference.
+    ///
+    /// The name is Chromium's, such as `extensions.block_external_extensions`.
+    /// It is the profile's preference when the profile has one of that name
+    /// and else Chromium's global one. The value applies once the runtime
+    /// has started and after Kurogane's own preferences, which it
+    /// overrides. Chromium reads some preferences only as the profile
+    /// starts; those take effect at the next start. A name Chromium does
+    /// not have, or a value it refuses, is logged and skipped.
+    ///
+    /// Kurogane turns off what an application rarely needs and Chromium
+    /// would run anyway:
+    ///
+    /// | Preference | Kurogane's value |
+    /// |---|---|
+    /// | `session.restore_on_startup` | `5`, start without the last session |
+    /// | `download_bubble.partial_view_enabled` | `false` |
+    /// | `extensions.block_external_extensions` | `true` |
+    /// | `component_updates.component_updates_enabled` | `false` |
+    /// | `network_time.network_time_queries_enabled` | `false` |
+    ///
+    /// It also turns off the features `AimEnabled`, `MediaRouter` and
+    /// `SpareRendererForSitePerProcess`, which no preference gates. An
+    /// `enable-features` entry turns one back on (see
+    /// [`App::chromium_flag_with_value`]).
+    ///
+    /// ```no_run
+    /// # use kurogane::App;
+    /// // Widevine arrives as a component
+    /// App::new("dist")
+    ///     .chromium_pref("component_updates.component_updates_enabled", true)
+    ///     .run_or_exit();
+    /// ```
+    pub fn chromium_pref(mut self, name: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.chromium_prefs.push((name.into(), value.into()));
         self
     }
 
@@ -1545,6 +1587,7 @@ impl App {
             gpu_mode,
             credential_storage,
             chromium_flags,
+            chromium_prefs,
             scheduler,
             on_second_instance,
             hooks,
@@ -1577,6 +1620,7 @@ impl App {
             gpu_mode,
             credential_storage,
             chromium_flags,
+            chromium_prefs,
             scheduler,
             on_second_instance,
             hooks: Arc::new(hooks),

@@ -33,6 +33,7 @@ mod scheme;
 mod error;
 mod fs;
 mod resources;
+mod chromium_defaults;
 mod chromium_flags;
 mod sandbox;
 mod gpu;

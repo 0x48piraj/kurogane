@@ -32,6 +32,9 @@ pub(crate) struct ChromiumFlags {
     switches: BTreeMap<String, SwitchValue>,
     // The list switches' entries, each once, in the order added
     lists: BTreeMap<String, Vec<String>>,
+    /// Features the runtime turns off unless an `enable-features` entry
+    /// turns them on, the application's, the launch's or CEF's.
+    disabled_by_default: Vec<String>,
 }
 
 fn is_list(key: &str) -> bool {
@@ -104,6 +107,13 @@ impl ChromiumFlags {
         }
     }
 
+    /// Turns `feature` off unless an `enable-features` entry turns it on.
+    /// Chromium applies `disable-features` over `enable-features`, so a
+    /// default that stayed in the list would win over the application.
+    pub(crate) fn disable_by_default(&mut self, feature: &str) {
+        add_entries(&mut self.disabled_by_default, feature);
+    }
+
     /// Returns whether a switch is present, with or without a value.
     pub(crate) fn contains(&self, name: &str) -> bool {
         let name = key(name);
@@ -133,17 +143,18 @@ impl ChromiumFlags {
     /// command line holds already (CEF's own and the launch's), since
     /// Chromium keeps only the last value of a switch.
     pub(crate) fn apply(self, cmd: &mut CommandLine) {
-        for (name, added) in self.lists {
-            if added.is_empty() {
-                continue;
-            }
-            let name = CefString::from(name.as_str());
-            let existing = if cmd.has_switch(Some(&name)) != 0 {
+        let existing = |name: &str| {
+            let name = CefString::from(name);
+            if cmd.has_switch(Some(&name)) != 0 {
                 CefString::from(&cmd.switch_value(Some(&name))).to_string()
             } else {
                 String::new()
-            };
-            let value = CefString::from(merged(&existing, &added).as_str());
+            }
+        };
+        let lists = self.list_values(existing);
+        for (name, value) in lists {
+            let name = CefString::from(name.as_str());
+            let value = CefString::from(value.as_str());
             cmd.append_switch_with_value(Some(&name), Some(&value));
         }
 
@@ -163,6 +174,44 @@ impl ChromiumFlags {
     }
 }
 
+impl ChromiumFlags {
+    /// Returns each list switch that gains entries with its whole value,
+    /// `existing` giving the value the command line holds. The runtime's
+    /// defaults go first in `disable-features`, but for any feature an
+    /// `enable-features` entry names.
+    fn list_values(&self, existing: impl Fn(&str) -> String) -> Vec<(String, String)> {
+        let mut lists = self.lists.clone();
+
+        let mut enabled = Vec::new();
+        add_entries(&mut enabled, &existing("enable-features"));
+        for entry in lists.get("enable-features").into_iter().flatten() {
+            add_entries(&mut enabled, entry);
+        }
+        let mut disabled: Vec<String> = self
+            .disabled_by_default
+            .iter()
+            .filter(|feature| !enabled.contains(feature))
+            .cloned()
+            .collect();
+        if !disabled.is_empty() {
+            let own = lists.remove("disable-features").unwrap_or_default();
+            for entry in &own {
+                add_entries(&mut disabled, entry);
+            }
+            lists.insert("disable-features".to_owned(), disabled);
+        }
+
+        lists
+            .into_iter()
+            .filter(|(_, added)| !added.is_empty())
+            .map(|(name, added)| {
+                let value = merged(&existing(&name), &added);
+                (name, value)
+            })
+            .collect()
+    }
+}
+
 impl std::fmt::Display for ChromiumFlags {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (name, value) in &self.switches {
@@ -179,6 +228,14 @@ impl std::fmt::Display for ChromiumFlags {
 
         for (name, entries) in &self.lists {
             writeln!(f, "--{name}=+{}", entries.join(","))?;
+        }
+
+        if !self.disabled_by_default.is_empty() {
+            writeln!(
+                f,
+                "disabled unless enabled: {}",
+                self.disabled_by_default.join(",")
+            )?;
         }
 
         Ok(())
@@ -337,6 +394,61 @@ mod tests {
         flags.set_with_value("enable-features", "A,B");
 
         assert_eq!(flags.to_string(), "--enable-features=+A,B\n");
+    }
+
+    /// The list values `flags` gives a command line that holds `existing`.
+    fn lists_over(flags: &ChromiumFlags, existing: &[(&str, &str)]) -> Vec<(String, String)> {
+        flags.list_values(|name| {
+            existing
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map_or_else(String::new, |(_, value)| (*value).to_owned())
+        })
+    }
+
+    #[test]
+    fn defaults_follow_the_command_line_s_disabled_features() {
+        let mut flags = ChromiumFlags::default();
+        flags.disable_by_default("Spare");
+        flags.disable_by_default("Cast");
+
+        assert_eq!(
+            lists_over(&flags, &[("disable-features", "CefOwn")]),
+            [(
+                "disable-features".to_owned(),
+                "CefOwn,Spare,Cast".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn the_application_turns_a_default_back_on() {
+        let mut flags = ChromiumFlags::default();
+        flags.disable_by_default("Spare");
+        flags.disable_by_default("Cast");
+        flags.extend_user_flags(&[
+            ChromiumFlag::WithValue("enable-features".into(), "Spare".into()),
+            ChromiumFlag::WithValue("disable-features".into(), "Mine".into()),
+        ]);
+
+        assert_eq!(
+            lists_over(&flags, &[]),
+            [
+                ("disable-features".to_owned(), "Cast,Mine".to_owned()),
+                ("enable-features".to_owned(), "Spare".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_launch_turns_a_default_back_on() {
+        let mut flags = ChromiumFlags::default();
+        flags.disable_by_default("Spare");
+
+        assert!(
+            lists_over(&flags, &[("enable-features", "Other,Spare")]).is_empty(),
+            "nothing is added once the launch enables the only default"
+        );
     }
 
     #[test]

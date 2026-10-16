@@ -7,6 +7,7 @@ use crate::ipc::IpcRenderProcessHandler;
 use crate::runtime::AppHandle;
 use crate::spec::RuntimeSpec;
 use tracing::{debug, warn};
+use crate::chromium_defaults::apply_feature_defaults;
 use crate::chromium_flags::ChromiumFlags;
 use crate::credentials::apply_credential_flags;
 use crate::gpu::apply_gpu_flags;
@@ -44,6 +45,7 @@ wrap_app! {
             apply_gpu_flags(&mut flags, self.spec.gpu_mode, self.spec.sandbox_mode);
             apply_credential_flags(&mut flags, self.spec.credential_storage);
             apply_embedding_flags(&mut flags, self.spec.mode);
+            apply_feature_defaults(&mut flags);
 
             // Apply user overrides
             flags.extend_user_flags(&self.spec.chromium_flags);

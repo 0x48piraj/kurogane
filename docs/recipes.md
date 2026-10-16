@@ -1023,7 +1023,7 @@ fn main() {
 }
 ```
 
-A flag's name may be written with or without its leading `--`. A flag you pass overrides Kurogane's own value for the same switch. `enable-features` and `disable-features` are lists instead; a value adds its features to them.
+A flag's name may be written with or without its leading `--`. A flag you pass overrides Kurogane's own value for the same switch. `enable-features` and `disable-features` are lists instead; a value adds its features to them. An `enable-features` entry also turns back on a feature Kurogane turns off (see [Chromium preferences](#chromium-preferences)).
 
 Flags enable Chromium features, diagnostics and experimental functionality.
 
@@ -1031,6 +1031,48 @@ Examples:
 
 * [kurogane-suite/scenarios/popups/main.rs](../kurogane-suite/scenarios/popups/main.rs)
 * [kurogane-suite/scenarios/css-to-shader/main.rs](../kurogane-suite/scenarios/css-to-shader/main.rs)
+
+## Chromium preferences
+
+Kurogane turns off what Chromium would run for every application and an application rarely needs.
+
+| What | Turned off by |
+|---|---|
+| Extensions other programs register for Google Chrome | preference `extensions.block_external_extensions` |
+| Component updates, Widevine among them | preference `component_updates.component_updates_enabled` |
+| Queries to Google's time server | preference `network_time.network_time_queries_enabled` |
+| The omnibox's AI Mode check | feature `AimEnabled` |
+| Cast | feature `MediaRouter` |
+| A renderer kept ready for the next site | feature `SpareRendererForSitePerProcess` |
+
+Set any Chromium preference with `chromium_pref`. It applies after Kurogane's own and overrides them.
+
+```rust
+use kurogane::App;
+
+fn main() {
+    App::new("frontend")
+        .chromium_pref("component_updates.component_updates_enabled", true)
+        .run_or_exit();
+}
+```
+
+Turn a feature back on with an `enable-features` entry.
+
+```rust
+use kurogane::App;
+
+fn main() {
+    App::new("frontend")
+        .chromium_flag_with_value("enable-features", "MediaRouter")
+        .run_or_exit();
+}
+```
+
+A preference applies once the runtime has started. Chromium reads some only as the profile starts; those take effect at the next start. A name Chromium does not have is logged and skipped.
+
+> [!NOTE]
+> Cast and component updates including Widevine are disabled by default. Re-enable Cast with `enable-features=MediaRouter` and component updates with `chromium_pref("component_updates.component_updates_enabled", true)`.
 
 ## GPU mode selection
 
