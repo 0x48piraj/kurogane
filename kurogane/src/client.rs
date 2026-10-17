@@ -1172,6 +1172,38 @@ fn application_browser(
 }
 
 //
+// JS DIALOGS
+//
+// A page's beforeunload cannot hold an end no page may cancel. Every other
+// dialog keeps CEF's default.
+wrap_jsdialog_handler! {
+    pub struct KuroganeJsdialogHandler {
+        app: AppHandle,
+    }
+
+    impl JsdialogHandler {
+        // Leaves the page without asking once the application is ending;
+        // until then Chromium asks the user
+        fn on_before_unload_dialog(
+            &self,
+            _browser: Option<&mut Browser>,
+            _message_text: Option<&CefString>,
+            _is_reload: ::std::os::raw::c_int,
+            callback: Option<&mut JsdialogCallback>,
+        ) -> ::std::os::raw::c_int {
+            match callback {
+                Some(callback) if self.app.is_ending() => {
+                    debug!("[Close] a page's beforeunload passed: the application is ending");
+                    callback.cont(1, None);
+                    1
+                }
+                _ => 0,
+            }
+        }
+    }
+}
+
+//
 // CLIENT
 //
 wrap_client! {
@@ -1206,6 +1238,10 @@ wrap_client! {
 
         fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
             Some(KuroganeContextMenuHandler::new(self.app.clone()))
+        }
+
+        fn jsdialog_handler(&self) -> Option<JsdialogHandler> {
+            Some(KuroganeJsdialogHandler::new(self.app.clone()))
         }
 
         // Only for an application that answers file dialogs
