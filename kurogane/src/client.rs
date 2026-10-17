@@ -40,9 +40,9 @@ wrap_life_span_handler! {
     }
 
     impl LifeSpanHandler {
-        // Give the popup a client of its own, decide whether it opens, and
-        // save the requested geometry of one that does until CEF creates
-        // its window.
+        // Decide whether the popup opens, and save the requested geometry of
+        // one that does until CEF creates its window. The popup keeps its
+        // opener's client.
         fn on_before_popup(
             &self,
             browser: Option<&mut Browser>,
@@ -54,14 +54,11 @@ wrap_life_span_handler! {
             user_gesture: i32,
             popup_features: Option<&PopupFeatures>,
             _window_info: Option<&mut WindowInfo>,
-            client: Option<&mut Option<Client>>,
+            _client: Option<&mut Option<Client>>,
             _settings: Option<&mut BrowserSettings>,
             _extra_info: Option<&mut Option<DictionaryValue>>,
             _no_javascript_access: Option<&mut i32>,
         ) -> i32 {
-            // On every path, a cancelled popup's included
-            own_client(client, &self.app, self.browser_type);
-
             // Before the geometry is saved: CEF reports no abort for a popup
             // cancelled here
             let request = new_window_request(frame, target_url, target_disposition, user_gesture);
@@ -123,10 +120,9 @@ wrap_life_span_handler! {
 
             let mut reg = self.app.registry();
 
-            // A popup has a client of its opener's kind (own_client). The
-            // BrowserView delegate classifies a Views popup exactly; CEF does
-            // not promise which of the two sees it first, and the first
-            // registers it
+            // A popup has its opener's client. The BrowserView delegate
+            // classifies a Views popup exactly; CEF does not promise which of
+            // the two sees it first, and the first registers it
             let (browser_type, opener) = match self.browser_type {
                 // DevTools, with the browser it inspects
                 _ if self.inspects.is_some() => (BrowserType::DevTools, self.inspects),
@@ -274,23 +270,6 @@ fn opens_new_window(disposition: WindowOpenDisposition) -> bool {
         WindowOpenDisposition::IGNORE_ACTION,
     ]
     .contains(&disposition)
-}
-
-/// Puts a new client in `client`, in place of the one CEF passes in for a
-/// popup (its opener's). DevTools gets one of its own the same way
-/// (`on_before_dev_tools_popup`).
-///
-/// tanso keeps the reference CEF passes with that client when a handler
-/// leaves it unchanged, so the opener's client, and the application's state
-/// it holds, would never be released. Replacing the client releases that
-/// reference. Remove this once tanso releases it itself.
-fn own_client(client: Option<&mut Option<Client>>, app: &AppHandle, browser_type: BrowserType) {
-    // No client stays no client
-    if let Some(client) = client
-        && client.is_some()
-    {
-        *client = Some(KuroganeClient::new(app.clone(), browser_type, None));
-    }
 }
 
 //
@@ -1350,31 +1329,6 @@ mod tests {
         ] {
             assert!(!opens_new_window(disposition), "{disposition:?}");
         }
-    }
-
-    #[test]
-    fn a_new_browser_gets_a_client_of_its_own() {
-        let app = AppHandle::detached();
-        let opener = KuroganeClient::new(app.clone(), BrowserType::Main, None);
-
-        // What CEF passes in: the opener's client, with a reference of its own
-        let mut passed = Some(opener.clone());
-        own_client(Some(&mut passed), &app, BrowserType::Main);
-        let own = passed.expect("a client is replaced, not cleared");
-        assert_ne!(
-            tanso::ImplClient::get_raw(&own),
-            tanso::ImplClient::get_raw(&opener),
-            "the new browser gets a client of its own"
-        );
-        assert!(
-            tanso::rc::Rc::has_one_ref(&opener),
-            "the reference that came with the opener's client is released"
-        );
-
-        // CEF passed no client: none is made up
-        let mut none: Option<Client> = None;
-        own_client(Some(&mut none), &app, BrowserType::Main);
-        assert!(none.is_none());
     }
 
     #[test]

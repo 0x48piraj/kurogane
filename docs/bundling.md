@@ -531,7 +531,7 @@ Every executable of a `.app` links the CEF framework at launch. The application 
 
 macOS applies the fixups of a framework linked at launch as it pages them in. Those pages stay clean and shared between processes. A framework opened later is fixed up in every process, about 12 MB more each. The link is weak. A bundle missing its framework still starts far enough to say so.
 
-The runtime then loads CEF from the `Contents/Frameworks` of the bundle the running executable belongs to. It takes the image macOS mapped at launch and checks that it is the CEF build Kurogane was built for. A helper maps the framework before it enters its seatbelt sandbox, as Electron's helpers do. CEF itself starts inside the sandbox.
+The runtime then loads CEF from the `Contents/Frameworks` of the bundle the running executable belongs to. It takes the image macOS mapped at launch and checks that it is the CEF build Kurogane was built for. Another CEF already mapped is an error. A helper maps the framework before it enters its seatbelt sandbox, as Electron's helpers do. CEF itself starts inside the sandbox.
 
 Only `kurogane bundle` links the framework. A binary from `cargo build` or `kurogane run` links no CEF. The runtime opens the framework by absolute path there.
 

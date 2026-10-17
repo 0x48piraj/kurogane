@@ -3429,7 +3429,7 @@ dependencies = [
 [[package]]
 name = "tanso"
 version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tanso?rev=b946486f4d025ffd2828773cede4e72f54833c4d#b946486f4d025ffd2828773cede4e72f54833c4d"
+source = "git+https://github.com/kurogane-rs/tanso?rev=1c15c1432d3bdea55303eef55f0b710045f61a24#1c15c1432d3bdea55303eef55f0b710045f61a24"
 dependencies = [
  "libloading 0.9.0",
  "objc2 0.6.4",
@@ -3440,12 +3440,12 @@ dependencies = [
 [[package]]
 name = "tanso-build"
 version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tanso?rev=b946486f4d025ffd2828773cede4e72f54833c4d#b946486f4d025ffd2828773cede4e72f54833c4d"
+source = "git+https://github.com/kurogane-rs/tanso?rev=1c15c1432d3bdea55303eef55f0b710045f61a24#1c15c1432d3bdea55303eef55f0b710045f61a24"
 
 [[package]]
 name = "tanso-download"
 version = "3.0.0"
-source = "git+https://github.com/kurogane-rs/tanso?rev=b946486f4d025ffd2828773cede4e72f54833c4d#b946486f4d025ffd2828773cede4e72f54833c4d"
+source = "git+https://github.com/kurogane-rs/tanso?rev=1c15c1432d3bdea55303eef55f0b710045f61a24#1c15c1432d3bdea55303eef55f0b710045f61a24"
 dependencies = [
  "bzip2",
  "dirs",
@@ -3462,7 +3462,7 @@ dependencies = [
 [[package]]
 name = "tanso-sys"
 version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tanso?rev=b946486f4d025ffd2828773cede4e72f54833c4d#b946486f4d025ffd2828773cede4e72f54833c4d"
+source = "git+https://github.com/kurogane-rs/tanso?rev=1c15c1432d3bdea55303eef55f0b710045f61a24#1c15c1432d3bdea55303eef55f0b710045f61a24"
 dependencies = [
  "dirs",
  "libloading 0.9.0",
