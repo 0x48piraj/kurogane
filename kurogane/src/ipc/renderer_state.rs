@@ -1,10 +1,9 @@
-//! Renderer IPC state, shared across the renderer's V8 contexts.
+//! Renderer IPC state on the main thread.
 //!
-//! Access is synchronized with a short-lived lock that is never held while
-//! calling into JavaScript, since IPC callbacks may re-enter. A poisoned lock
-//! is recovered so a callback does not panic across the CEF boundary.
+//! The main thread owns every V8 context and receives every IPC message.
+//! No borrow spans a call into JavaScript; IPC callbacks may re-enter.
 
-use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+use std::cell::RefCell;
 
 use tanso::*;
 
@@ -19,12 +18,11 @@ impl ContextHandle for V8Context {
     }
 }
 
-static STATE: OnceLock<Mutex<RendererState>> = OnceLock::new();
+thread_local! {
+    static STATE: RefCell<RendererState> = RefCell::new(Registry::new());
+}
 
-/// The renderer's IPC state.
-pub(crate) fn state() -> MutexGuard<'static, RendererState> {
-    STATE
-        .get_or_init(|| Mutex::new(Registry::new()))
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+/// Runs `f` on the renderer's IPC state.
+pub(crate) fn with_state<R>(f: impl FnOnce(&mut RendererState) -> R) -> R {
+    STATE.with(|state| f(&mut state.borrow_mut()))
 }

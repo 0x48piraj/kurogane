@@ -6,7 +6,7 @@ use tanso::*;
 
 use tracing::debug;
 use crate::ipc::envelope::*;
-use crate::ipc::renderer_state::state;
+use crate::ipc::renderer_state::with_state;
 use crate::ipc::utils::{array_buffer, rejection};
 use crate::ipc::FrameId;
 
@@ -31,7 +31,7 @@ pub fn handle_event_renderer(
 /// with `"{code}: {message}"`, the form the bridge's `toError` parses.
 fn on_refused(addressed: &FrameId, envelope: &Envelope, payload: &[u8]) -> bool {
     let (code, message) = decode_error_payload(payload);
-    let removed = state().refused(envelope.correlation_id as i32, addressed);
+    let removed = with_state(|state| state.refused(envelope.correlation_id as i32, addressed));
     debug!(
         "[Event Renderer] subscription {} refused: {}",
         envelope.correlation_id, message
@@ -61,7 +61,7 @@ fn on_emit(
         return false;
     };
 
-    let target = state().event(envelope.correlation_id as i32, addressed);
+    let target = with_state(|state| state.event(envelope.correlation_id as i32, addressed));
     // The lock is released before JavaScript runs: the callback may re-enter
     let Some((context, callback)) = target else {
         debug!(

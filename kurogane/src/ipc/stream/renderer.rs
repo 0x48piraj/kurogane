@@ -10,7 +10,7 @@ use tanso::*;
 
 use tracing::debug;
 use crate::ipc::envelope::*;
-use crate::ipc::renderer_state::state;
+use crate::ipc::renderer_state::with_state;
 use crate::ipc::utils::{array_buffer, rejection};
 use crate::ipc::FrameId;
 
@@ -37,7 +37,7 @@ pub fn handle_stream_renderer(
 /// `STREAM_BROWSER_OPENED`: the handler accepted the open. The stream's
 /// callbacks become live and `openStream` resolves with its id.
 fn on_opened(id: i32, addressed: &FrameId) -> bool {
-    let opened = state().stream_opened(id, addressed);
+    let opened = with_state(|state| state.stream_opened(id, addressed));
     let Some((context, promise)) = opened else {
         debug!(
             "[Stream Renderer] opened for unknown or foreign stream {}",
@@ -57,7 +57,7 @@ fn on_opened(id: i32, addressed: &FrameId) -> bool {
 /// `STREAM_BROWSER_DATA` for an open stream. A chunk for a stream still
 /// opening is dropped.
 fn on_data(id: i32, addressed: &FrameId, payload: &[u8], filled: Option<V8BackingStore>) -> bool {
-    let target = state().stream_data(id, addressed);
+    let target = with_state(|state| state.stream_data(id, addressed));
     let Some((context, callback)) = target else {
         debug!(
             "[Stream Renderer] data for unknown or foreign stream {}",
@@ -84,7 +84,7 @@ fn on_data(id: i32, addressed: &FrameId, payload: &[u8], filled: Option<V8Backin
 /// `STREAM_BROWSER_END` ends an open stream. An END for a stream still
 /// opening is dropped and leaves its open pending.
 fn on_end(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
-    let ended = state().stream_end(id, addressed);
+    let ended = with_state(|state| state.stream_end(id, addressed));
     let Some((context, callback)) = ended else {
         debug!("[Stream Renderer] end for unknown or foreign stream {}", id);
         return true;
@@ -104,7 +104,7 @@ fn on_end(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
 fn on_error(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
     let (code, message) = decode_error_payload(payload);
 
-    let failed = state().stream_open_failed(id, addressed);
+    let failed = with_state(|state| state.stream_open_failed(id, addressed));
     if let Some((context, promise)) = failed {
         if context.enter() == 0 {
             return true;
@@ -115,7 +115,7 @@ fn on_error(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
         return true;
     }
 
-    let errored = state().stream_error(id, addressed);
+    let errored = with_state(|state| state.stream_error(id, addressed));
     let Some((context, callback)) = errored else {
         debug!(
             "[Stream Renderer] error for unknown or foreign stream {}",

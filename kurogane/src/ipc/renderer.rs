@@ -13,7 +13,7 @@ use crate::ipc::transport::message::{receive_from_browser, IPC_MESSAGE};
 use crate::ipc::renderer_delivery;
 use crate::ipc::renderer_outbox;
 use crate::ipc::renderer_registry::StreamSink;
-use crate::ipc::renderer_state::state;
+use crate::ipc::renderer_state::with_state;
 use crate::ipc::utils::rejection;
 use crate::ipc::FrameId;
 use crate::bridge;
@@ -207,7 +207,7 @@ wrap_render_process_handler! {
                 global.value_bykey(Some(&CefString::from("origin"))),
                 Some(origin) if origin.is_string() != 0 && v8_to_string(&origin) != "null"
             );
-            state().context_created(context.clone(), FrameId::of(frame), opaque);
+            with_state(|state| state.context_created(context.clone(), FrameId::of(frame), opaque));
             // The browser sees only URLs, which hide a sandbox: it learns of
             // the document here, for what it reports of a frame
             // (crate::context_menu's target)
@@ -255,8 +255,8 @@ wrap_render_process_handler! {
             }
 
             if let Some(ctx) = context {
-                let opaque = state().is_opaque(ctx);
-                state().context_released(ctx);
+                let opaque = with_state(|state| state.is_opaque(ctx));
+                with_state(|state| state.context_released(ctx));
                 if opaque && let Some(frame) = frame {
                     tell_browser(frame, crate::context_menu::OPAQUE_DOCUMENT_GONE);
                 }
@@ -467,7 +467,7 @@ wrap_v8_handler! {
                 return throw(exception, "invoke: cannot create a promise");
             };
             let promise_for_retval = promise.clone();
-            let registered = state().register_rpc(&context, promise.clone());
+            let registered = with_state(|state| state.register_rpc(&context, promise.clone()));
             let Some((id, flags, frame_id)) = registered else {
                 return throw(exception, "invoke: this context is not connected");
             };
@@ -475,7 +475,7 @@ wrap_v8_handler! {
             // Expose the id on the promise for JS-side cancellation
             let id_key = CefString::from("__kurogane_id");
             let Some(mut id_value) = v8_value_create_int(id) else {
-                state().forget(id);
+                with_state(|state| state.forget(id));
                 return throw(exception, "invoke: cannot create the call id");
             };
             promise_for_retval.set_value_bykey(
@@ -516,7 +516,7 @@ wrap_v8_handler! {
             };
 
             if sent.is_none() {
-                state().forget(id);
+                with_state(|state| state.forget(id));
                 let reject_msg = rejection(ErrorCode::Buffer.wire(), "Failed to build IPC message");
                 promise.reject_promise(Some(&reject_msg));
                 if let Some(ret) = retval { *ret = Some(promise_for_retval); }
@@ -567,10 +567,8 @@ wrap_v8_handler! {
                 return 1;
             };
             // Only the context that made a request can cancel it
-            let (cancelled, sender) = {
-                let mut state = state();
-                (state.cancel(id, &context), state.sender(&context))
-            };
+            let (cancelled, sender) =
+                with_state(|state| (state.cancel(id, &context), state.sender(&context)));
             let (Some((promise, sub)), Some((flags, frame_id))) = (cancelled, sender) else {
                 if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
                 return 1;
@@ -678,11 +676,10 @@ wrap_v8_handler! {
                 return throw(exception, "on: event name exceeds the 65535-byte protocol limit");
             };
 
-            let (id, sender) = {
-                let mut state = state();
+            let (id, sender) = with_state(|state| {
                 let id = state.subscribe(&context, event_name.clone(), callback.clone(), on_error);
                 (id, state.sender(&context))
-            };
+            });
             let (Some(id), Some((flags, frame_id))) = (id, sender) else {
                 return throw(exception, "on: this context is not connected");
             };
@@ -748,10 +745,8 @@ wrap_v8_handler! {
             };
 
             // Only the context that subscribed can unsubscribe
-            let (event_name, sender) = {
-                let mut state = state();
-                (state.unsubscribe(id, &context), state.sender(&context))
-            };
+            let (event_name, sender) =
+                with_state(|state| (state.unsubscribe(id, &context), state.sender(&context)));
             let was_valid = event_name.is_some();
 
             if let Some(event_name) = event_name
@@ -844,11 +839,10 @@ wrap_v8_handler! {
             let Some(promise) = v8_value_create_promise() else {
                 return throw(exception, "openStream: cannot create a promise");
             };
-            let (stream_id, sender) = {
-                let mut state = state();
-                let sink = StreamSink { data, end, error };
+            let sink = StreamSink { data, end, error };
+            let (stream_id, sender) = with_state(|state| {
                 (state.register_stream_open(&context, promise.clone(), sink), state.sender(&context))
-            };
+            });
             let (Some(stream_id), Some((flags, frame_id))) = (stream_id, sender) else {
                 return throw(exception, "openStream: this context is not connected");
             };
@@ -867,7 +861,7 @@ wrap_v8_handler! {
             let sent = encode_cmd_payload(&handler_name, metadata.as_bytes())
                 .and_then(|payload| renderer_outbox::send(&frame, &frame_id, &envelope, &[&payload]));
             if sent.is_none() {
-                state().forget(stream_id);
+                with_state(|state| state.forget(stream_id));
                 let reject_msg = rejection(ErrorCode::Buffer.wire(), "Failed to build IPC message");
                 promise.reject_promise(Some(&reject_msg));
             }
@@ -935,10 +929,9 @@ wrap_v8_handler! {
                 return throw(exception, "writeStream: no frame for current context");
             };
 
-            let sender = {
-                let state = state();
+            let sender = with_state(|state| {
                 state.owns_stream(stream_id, &context).then(|| state.sender(&context)).flatten()
-            };
+            });
             let Some((flags, frame_id)) = sender else {
                 if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
                 return 1;
@@ -1010,10 +1003,9 @@ wrap_v8_handler! {
                 return throw(exception, "endStream: no frame for current context");
             };
 
-            let sender = {
-                let state = state();
+            let sender = with_state(|state| {
                 state.owns_stream(stream_id, &context).then(|| state.sender(&context)).flatten()
-            };
+            });
             let Some((flags, frame_id)) = sender else {
                 if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
                 return 1;

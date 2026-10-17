@@ -4,7 +4,7 @@ use tracing::debug;
 use crate::ipc::browser_state::ErrorCode;
 use crate::ipc::envelope::*;
 use crate::ipc::renderer_outbox;
-use crate::ipc::renderer_state::state;
+use crate::ipc::renderer_state::with_state;
 use crate::ipc::utils::{array_buffer, rejection};
 use crate::ipc::FrameId;
 
@@ -23,7 +23,7 @@ pub fn handle_rpc_renderer(
         return false;
     }
     let id = envelope.correlation_id as i32;
-    let settled = state().settle(id, addressed);
+    let settled = with_state(|state| state.settle(id, addressed));
     renderer_outbox::answered(addressed, envelope.correlation_id);
     // The lock is released before JavaScript runs
     let Some((context, promise)) = settled else {
@@ -49,7 +49,7 @@ pub(crate) fn settle_answers<'p>(
     let mut entered: Option<V8Context> = None;
     for (envelope, data) in answers {
         let id = envelope.correlation_id as i32;
-        let settled = state().settle(id, addressed);
+        let settled = with_state(|state| state.settle(id, addressed));
         renderer_outbox::answered(addressed, envelope.correlation_id);
         let Some((context, promise)) = settled else {
             debug!("[RPC Renderer] answer for unknown or foreign id={}", id);
