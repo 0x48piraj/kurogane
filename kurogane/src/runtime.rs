@@ -1425,13 +1425,14 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
         // application running has handed it its command line and, like a
         // helper process, has nothing left to do
         let notified = sys::cef_resultcode_t::CEF_RESULT_CODE_NORMAL_EXIT_PROCESS_NOTIFIED as i32;
+        let code = get_exit_code();
 
-        if get_exit_code() == notified {
+        if code == notified {
             debug!("Application already running; this launch was handed over to it");
             std::process::exit(0);
         }
 
-        return Err(RuntimeError::CefInitializeFailed);
+        return Err(RuntimeError::CefInitializeFailed { code });
     }
 
     debug!("CEF initialized");

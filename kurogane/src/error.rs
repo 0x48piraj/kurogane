@@ -21,7 +21,12 @@ pub enum RuntimeError {
         source: std::io::Error,
     },
 
-    CefInitializeFailed,
+    /// Chromium refused to start after Kurogane found its runtime; its log
+    /// names the cause.
+    CefInitializeFailed {
+        /// CEF's exit code, a `cef_resultcode_t` value
+        code: i32,
+    },
     /// No Chromium runtime beside the executable, no `CEF_PATH` and nothing
     /// installed at `expected`, which is `None` for a user without a local
     /// data directory.
@@ -216,12 +221,14 @@ impl Display for RuntimeError {
                 path.display(),
             ),
 
-            RuntimeError::CefInitializeFailed => write!(
+            RuntimeError::CefInitializeFailed { code } => write!(
                 f,
                 concat!(
-                    "Chromium failed to initialize.\n\n",
-                    "This usually means required CEF resources are missing next to the executable."
-                )
+                    "Chromium failed to start (exit code {}).\n\n",
+                    "Chromium's log on the application's error output names the cause, ",
+                    "such as no display to open a window on."
+                ),
+                code
             ),
 
             RuntimeError::CefNotInstalled { expected } => {
@@ -410,7 +417,7 @@ impl std::error::Error for RuntimeError {
             RuntimeError::InvalidAssetRoot(_)
             | RuntimeError::AssetRootMissing(_)
             | RuntimeError::EntrypointMissing(_)
-            | RuntimeError::CefInitializeFailed
+            | RuntimeError::CefInitializeFailed { .. }
             | RuntimeError::CefNotInstalled { .. }
             | RuntimeError::CefPathMissing(_)
             | RuntimeError::CefVersionMismatch { .. }
