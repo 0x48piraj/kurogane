@@ -23,6 +23,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use crate::acl::Origin;
 use crate::capability::error::{Denial, FsConfigError, FsError};
@@ -288,7 +289,7 @@ impl Existing {
         drop(file);
         let replaced = written
             .map_err(FsError::from)
-            .and_then(|()| self.dir.entry(&temp)?.rename(&self.dir, &self.leaf));
+            .and_then(|()| rename_over(&self.dir, &temp, &self.leaf));
         if replaced.is_err()
             && let Ok(entry) = self.dir.entry(&temp)
         {
@@ -298,6 +299,46 @@ impl Existing {
         }
         replaced
     }
+}
+
+/// Renames `temp` in `dir` over `leaf`. A sharing violation is retried after
+/// each of [`HELD_PAUSES`], since another program can hold the file for a
+/// moment as it scans a new write.
+fn rename_over(dir: &Dir, temp: &Name, leaf: &Name) -> Result<(), FsError> {
+    let mut pauses = HELD_PAUSES.iter();
+    loop {
+        let renamed = dir.entry(temp)?.rename(dir, leaf);
+        match (&renamed, pauses.next()) {
+            (Err(err), Some(pause)) if held_elsewhere(err) => std::thread::sleep(*pause),
+            _ => return renamed,
+        }
+    }
+}
+
+/// Pauses between renames of a write's new file over a file another program
+/// holds, about half a second in all.
+const HELD_PAUSES: [Duration; 5] = [
+    Duration::from_millis(10),
+    Duration::from_millis(20),
+    Duration::from_millis(50),
+    Duration::from_millis(100),
+    Duration::from_millis(300),
+];
+
+/// Returns whether `err` is a sharing violation, which a program holding the
+/// file without delete sharing (an antivirus scan, the search indexer)
+/// causes on Windows.
+#[cfg(windows)]
+fn held_elsewhere(err: &FsError) -> bool {
+    use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
+    matches!(err, FsError::Io(e) if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32))
+}
+
+/// Returns whether `err` comes from a program holding the file; never off
+/// Windows, where an open file does not stop a rename.
+#[cfg(not(windows))]
+fn held_elsewhere(_err: &FsError) -> bool {
+    false
 }
 
 /// A name for a file that becomes another: `.kurogane-write-<pid>-<n>`,
@@ -1008,6 +1049,52 @@ mod tests {
             ) & 0o777,
             0o640
         );
+    }
+
+    // A program holding the file for a moment (an antivirus scan) only
+    // delays the write; one that keeps holding it fails the write
+    #[cfg(windows)]
+    #[test]
+    fn a_write_waits_out_a_file_held_for_a_moment() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+
+        let (_tmp, notes, fs) = fixture(FsAccess::WRITE);
+        let note = notes.join("note.txt");
+        let auth = fs.authorize(&origin()).unwrap();
+        // No delete sharing, as a scanner may open it
+        let hold = || {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .open(&note)
+                .unwrap()
+        };
+        let no_new_file = || {
+            std::fs::read_dir(&notes).unwrap().all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".kurogane-write-")
+            })
+        };
+
+        let held = hold();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            drop(held);
+        });
+        auth.write_file(&note, b"after").unwrap();
+        release.join().unwrap();
+        assert_eq!(std::fs::read(&note).unwrap(), b"after");
+
+        let held = hold();
+        let err = auth.write_file(&note, b"never").unwrap_err();
+        drop(held);
+        assert!(held_elsewhere(&err), "{err:?}");
+        assert_eq!(std::fs::read(&note).unwrap(), b"after");
+        assert!(no_new_file());
     }
 
     #[test]
