@@ -182,17 +182,20 @@ wrap_life_span_handler! {
             // here, its window still there. The guard ends with this
             // statement, before anything below calls CEF
             let closed = self.app.registry().browser_closed(browser);
-            let Some(closed) = closed else {
+            let Some(mut closed) = closed else {
                 return;
             };
             debug!("Browser {} destroyed", closed.id.as_u32());
 
-            for waiting in closed.waiting_permissions {
+            for waiting in closed.entry.permissions.take_all() {
                 waiting.answer(false);
             }
-            for waiting in closed.waiting_file_dialogs {
+            for waiting in closed.entry.file_dialogs.take_all() {
                 waiting.cancel();
             }
+            // Released outside the lock, since CEF reports a waiting
+            // download's cancel the moment its callback goes
+            drop(closed.entry);
 
             #[cfg(target_os = "macos")]
             crate::platform::embed::forget_view(closed.id);

@@ -203,12 +203,13 @@ impl BrowserRegistry {
         id
     }
 
-    pub fn unregister(&mut self, id: BrowserId) {
-        if let Some(state) = self.browsers.remove(&id) {
-            let cef_id = state.browser.identifier();
-            self.lookup.remove(&cef_id);
-            debug!("[BrowserRegistry] unregistered browser {}", id.0);
-        }
+    /// Removes the browser and returns its entry, for the caller to release
+    /// outside the registry's lock.
+    pub fn unregister(&mut self, id: BrowserId) -> Option<BrowserEntry> {
+        let state = self.browsers.remove(&id)?;
+        self.lookup.remove(&state.browser.identifier());
+        debug!("[BrowserRegistry] unregistered browser {}", id.0);
+        Some(state)
     }
 
     pub fn count(&self) -> usize {
