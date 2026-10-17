@@ -1,5 +1,6 @@
 //! Browser client implementation.
 
+use std::ffi::CStr;
 use std::path::Path;
 
 use tanso::*;
@@ -11,7 +12,8 @@ use crate::context_menu;
 use crate::destination::{Outcome, is_blank, is_chromium_page};
 use crate::downloads::{self, Answer, DownloadRequest, SavePrompt};
 use crate::ipc::FrameId;
-use crate::keys::{self, KeyDecision, KeyPress};
+use crate::keys::{self, KeyPress, Route};
+use crate::shortcuts::{self, Shortcut};
 use crate::navigation::{self, NavigationRequest};
 use crate::drag::{self, DragEnter};
 use crate::file_dialog::{self, FileDialogKind, FileDialogRequest};
@@ -420,6 +422,15 @@ wrap_keyboard_handler! {
         ) -> i32 {
             pre_key_event(&self.app, browser, event, is_keyboard_shortcut)
         }
+
+        fn on_key_event(
+            &self,
+            browser: Option<&mut Browser>,
+            event: Option<&KeyEvent>,
+            _os_event: Option<&mut sys::MSG>,
+        ) -> i32 {
+            key_event(&self.app, browser, event)
+        }
     }
 }
 
@@ -438,6 +449,15 @@ wrap_keyboard_handler! {
             is_keyboard_shortcut: Option<&mut i32>,
         ) -> i32 {
             pre_key_event(&self.app, browser, event, is_keyboard_shortcut)
+        }
+
+        fn on_key_event(
+            &self,
+            browser: Option<&mut Browser>,
+            event: Option<&KeyEvent>,
+            _os_event: Option<&mut sys::XEvent>,
+        ) -> i32 {
+            key_event(&self.app, browser, event)
         }
     }
 }
@@ -458,12 +478,69 @@ wrap_keyboard_handler! {
         ) -> i32 {
             pre_key_event(&self.app, browser, event, is_keyboard_shortcut)
         }
+
+        fn on_key_event(
+            &self,
+            browser: Option<&mut Browser>,
+            event: Option<&KeyEvent>,
+            _os_event: *mut u8,
+        ) -> i32 {
+            key_event(&self.app, browser, event)
+        }
     }
 }
 
-/// A key on its way to a page, before Chromium's own shortcuts see it
-/// (crate::keys). Only its press reaches the application's hook; consuming
-/// the press drops the key's character and release too.
+/// Owner of the browser a key went to.
+enum KeyTarget {
+    /// Chromium's own browser (DevTools, a window it restored). Its keys are
+    /// Chromium's.
+    Chromium,
+    /// Application's browser in a window of Chromium's (Chrome style).
+    /// Kurogane's shortcuts run there.
+    Window(Option<BrowserId>),
+    /// Application's browser embedded in its own window (Alloy style). No
+    /// shortcut runs there.
+    Embedded(Option<BrowserId>),
+}
+
+/// Returns whose `browser` is. No registry guard outlives the call.
+fn key_target(app: &AppHandle, browser: &Browser) -> KeyTarget {
+    let (id, kind) = {
+        let reg = app.registry();
+        let id = reg.browsers.find_id_by_browser(browser);
+        let kind = id
+            .and_then(|id| reg.browsers.get(id))
+            .map(|state| state.metadata.browser_type);
+        (id, kind)
+    };
+    if matches!(kind, Some(BrowserType::DevTools | BrowserType::ChromeUi)) {
+        return KeyTarget::Chromium;
+    }
+    if browser
+        .host()
+        .is_some_and(|host| host.runtime_style() == RuntimeStyle::ALLOY)
+    {
+        KeyTarget::Embedded(id)
+    } else {
+        KeyTarget::Window(id)
+    }
+}
+
+/// Returns the press `event` is in `browser`.
+fn key_press(event: &KeyEvent, browser: Option<BrowserId>) -> KeyPress {
+    KeyPress::new(
+        event.windows_key_code as u32,
+        event.modifiers,
+        event.character,
+        event.focus_on_editable_field != 0,
+        browser,
+    )
+}
+
+/// Answers CEF for a key on its way to a page (crate::keys). Only its press
+/// reaches the application's hook; consuming the press drops the key's
+/// character and release too. Kurogane's shortcut for it runs in Chromium's
+/// place in a window of Chromium's (crate::shortcuts).
 fn pre_key_event(
     app: &AppHandle,
     browser: Option<&mut Browser>,
@@ -476,38 +553,72 @@ fn pre_key_event(
     if event.type_ != KeyEventType::RAWKEYDOWN {
         return 0;
     }
-    // The guard ends with the block, before the hook runs
-    let id = {
-        let reg = app.registry();
-        let id = reg.browsers.find_id_by_browser(browser);
-        let kind = id
-            .and_then(|id| reg.browsers.get(id))
-            .map(|state| state.metadata.browser_type);
-        // Chromium's own browsers, DevTools' included, are not the application's
-        if matches!(kind, Some(BrowserType::DevTools | BrowserType::ChromeUi)) {
-            return 0;
+    let (press, shortcut) = match key_target(app, browser) {
+        KeyTarget::Chromium => return 0,
+        KeyTarget::Window(id) => {
+            let press = key_press(event, id);
+            let shortcut = shortcuts::shortcut_for(press.key(), press.modifiers());
+            (
+                press.with_command(shortcut.and_then(Shortcut::command)),
+                shortcut,
+            )
         }
-        id
+        KeyTarget::Embedded(id) => (key_press(event, id), None),
     };
-    let press = KeyPress::new(
-        event.windows_key_code as u32,
-        event.modifiers,
-        event.character,
-        event.focus_on_editable_field != 0,
-        id,
-    );
-    answer_key(keys::decide(app, &press), is_keyboard_shortcut)
+    let route = keys::before_page(keys::decide(app, &press), shortcut);
+    if let Route::Run(name) = route
+        && !run_shortcut(browser, name)
+    {
+        return 0;
+    }
+    answer_key(route, is_keyboard_shortcut)
 }
 
-/// What `on_pre_key_event` answers CEF for `decision`: whether the key is
-/// handled, and in `is_keyboard_shortcut` whether it is a shortcut, which
-/// CEF holds until the page has seen the key and runs only if the page lets
-/// it through.
-fn answer_key(decision: KeyDecision, is_keyboard_shortcut: Option<&mut i32>) -> i32 {
-    match decision {
-        KeyDecision::Consume => 1,
-        KeyDecision::Default => 0,
-        KeyDecision::PageFirst => {
+/// Runs Kurogane's shortcut in Chromium's place for a key the page let
+/// through in a window of Chromium's (crate::shortcuts).
+fn key_event(app: &AppHandle, browser: Option<&mut Browser>, event: Option<&KeyEvent>) -> i32 {
+    let (Some(browser), Some(event)) = (browser, event) else {
+        return 0;
+    };
+    if event.type_ != KeyEventType::RAWKEYDOWN {
+        return 0;
+    }
+    let KeyTarget::Window(id) = key_target(app, browser) else {
+        return 0;
+    };
+    let press = key_press(event, id);
+    match shortcuts::shortcut_for(press.key(), press.modifiers()).and_then(Shortcut::name) {
+        Some(name) => i32::from(run_shortcut(browser, name)),
+        None => 0,
+    }
+}
+
+/// Runs the Chromium command of name `name` for a key that went to
+/// `browser` as Chromium runs one of its own shortcuts. The command handler
+/// asks the application about it (crate::chrome_commands). Returns false
+/// when this CEF has no such command and the key goes on.
+fn run_shortcut(browser: &Browser, name: &CStr) -> bool {
+    let (Some(host), Some(id)) = (browser.host(), tanso::id_for_command_id_name(name)) else {
+        warn!(
+            "[Keys] no command {} to run for the key",
+            name.to_string_lossy()
+        );
+        return false;
+    };
+    debug!("[Keys] {} runs for the key", name.to_string_lossy());
+    host.execute_chrome_command(id, WindowOpenDisposition::CURRENT_TAB);
+    true
+}
+
+/// Returns what `on_pre_key_event` answers CEF for `route`. The answer says
+/// whether the key is handled. `is_keyboard_shortcut` says whether it is a
+/// shortcut that CEF holds until the page has seen the key. A key whose
+/// shortcut ran is handled.
+fn answer_key(route: Route, is_keyboard_shortcut: Option<&mut i32>) -> i32 {
+    match route {
+        Route::Taken | Route::Run(_) => 1,
+        Route::On => 0,
+        Route::PageFirst => {
             if let Some(shortcut) = is_keyboard_shortcut {
                 *shortcut = 1;
             }
@@ -1256,10 +1367,10 @@ wrap_client! {
             wanted.then(|| KuroganeDragHandler::new(self.app.clone()))
         }
 
-        // Only for an application that asks to see keys
+        // Kurogane's shortcuts run from it in every application
+        // (crate::shortcuts)
         fn keyboard_handler(&self) -> Option<KeyboardHandler> {
-            let wanted = self.app.hooks().is_some_and(|hooks| hooks.key.is_some());
-            wanted.then(|| KuroganeKeyboardHandler::new(self.app.clone()))
+            Some(KuroganeKeyboardHandler::new(self.app.clone()))
         }
 
         // Only OnOpenURLFromTab is answered; every other method keeps CEF's
@@ -1372,20 +1483,21 @@ mod tests {
 
     #[test]
     fn page_first_keys_are_shortcuts_and_the_rest_are_left_as_cef_set_them() {
-        for (decision, handled, shortcut) in [
-            (KeyDecision::Default, 0, 7),
-            (KeyDecision::Consume, 1, 7),
-            (KeyDecision::PageFirst, 0, 1),
+        for (route, handled, shortcut) in [
+            (Route::On, 0, 7),
+            (Route::Taken, 1, 7),
+            (Route::Run(c"IDC_CLOSE_TAB"), 1, 7),
+            (Route::PageFirst, 0, 1),
         ] {
             // 7 stands for whatever CEF passed in
             let mut is_keyboard_shortcut = 7;
             assert_eq!(
-                answer_key(decision, Some(&mut is_keyboard_shortcut)),
+                answer_key(route, Some(&mut is_keyboard_shortcut)),
                 handled,
-                "{decision:?}"
+                "{route:?}"
             );
-            assert_eq!(is_keyboard_shortcut, shortcut, "{decision:?}");
-            assert_eq!(answer_key(decision, None), handled, "{decision:?}");
+            assert_eq!(is_keyboard_shortcut, shortcut, "{route:?}");
+            assert_eq!(answer_key(route, None), handled, "{route:?}");
         }
     }
 }

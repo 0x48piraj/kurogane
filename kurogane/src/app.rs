@@ -966,38 +966,38 @@ impl App {
     }
 
     /// Sees each key the user presses in a window of the application's
-    /// before the page and Chromium's own shortcuts do, and decides where it
-    /// goes.
+    /// before the page and any shortcut do. Decides where the key goes.
     ///
-    /// The hook is asked about key presses only (the key going down, and
-    /// its repeats while held), never about the release or the character
-    /// it types. [`KeyDecision::Default`] lets the key go on in Chromium's
-    /// own order: the shortcuts Chromium reserves (opening, closing and
-    /// switching tabs and windows, such as Ctrl+T and Ctrl+W) take it before
-    /// the page sees it, every other shortcut only after the page, if the
-    /// page does not prevent the key's default. [`KeyDecision::Consume`]
-    /// takes the key from everyone else: Chromium's shortcuts do not run
-    /// (Ctrl+W does not close the window, Ctrl+R does not reload) and the
-    /// page sees neither the key, its character nor its release.
-    /// [`KeyDecision::PageFirst`] gives the page the key first even for a
-    /// reserved shortcut, which then runs only if the page lets it through;
-    /// it is for shortcuts, and lets the page keep one from running (see
-    /// its documentation). Compare keys with
-    /// [`Modifiers::primary`](crate::Modifiers::primary) to match Ctrl on
-    /// Windows and Linux and Cmd on macOS in one test, and mind
+    /// The hook is asked about each key press and its repeats while held. It
+    /// is never asked about a release or the character a key types.
+    /// [`KeyDecision::Default`] lets the key go on in Kurogane's order on
+    /// every OS. The shortcuts that close the window and quit (Ctrl+W, Cmd+Q
+    /// on macOS) take it before the page sees it. Every other shortcut runs
+    /// only after the page and only if the page does not prevent the key's
+    /// default. [`KeyDecision::Consume`] takes the key from everyone else.
+    /// No shortcut runs (Ctrl+W does not close the window, Ctrl+R does not
+    /// reload) and the page sees neither the key, its character nor its
+    /// release. [`KeyDecision::PageFirst`] gives the page the key first even
+    /// for closing and quitting. Those then run only if the page lets the
+    /// key through. It is for shortcuts and lets the page keep one from
+    /// running (see its documentation).
+    /// [`KeyPress::command`](crate::KeyPress::command) names the command a
+    /// shortcut runs by whatever keys the OS gives it. Compare other keys
+    /// with [`Modifiers::primary`](crate::Modifiers::primary) to match Ctrl
+    /// on Windows and Linux and Cmd on macOS in one test. Mind
     /// [`KeyPress::in_editable_field`](crate::KeyPress::in_editable_field)
     /// so as not to take keys the user is typing.
     ///
-    /// Runs on the UI thread for every key press, so it must be quick. A
-    /// hook that panics lets the key through. DevTools' windows are not
-    /// asked about. A later call replaces an earlier one.
+    /// Runs on the UI thread for every key press and must be quick. A hook
+    /// that panics lets the key through. DevTools' windows are not asked
+    /// about. A later call replaces an earlier one.
     ///
     /// ```no_run
-    /// # use kurogane::{App, Key, KeyDecision};
+    /// # use kurogane::{App, ChromeCommand, KeyDecision};
     /// App::new("./dist")
     ///     .on_key(|key, _| {
     ///         // Ctrl+W, Cmd+W on macOS, does not close the window
-    ///         if key.key() == Key::Char('W') && key.modifiers().primary() {
+    ///         if key.command() == Some(ChromeCommand::Close) {
     ///             KeyDecision::Consume
     ///         } else {
     ///             KeyDecision::Default

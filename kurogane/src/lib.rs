@@ -21,6 +21,7 @@ mod destination;
 mod new_window;
 mod navigation;
 mod keys;
+mod shortcuts;
 mod downloads;
 mod permissions;
 mod file_dialog;

@@ -344,15 +344,17 @@ The application's own loads, back and forward navigation and frames never reach 
 
 A Kurogane window runs only Chromium's page-local commands. Those are reload, find, print, zoom, editing, closing the window and DevTools. It refuses the rest (new windows and tabs, history and bookmarks). Two hooks narrow that further.
 
-`App::on_key` sees each key press before Chromium's shortcuts and the page do. It decides where the key goes. `KeyDecision::Default` lets it go on in Chromium's own order (below). `KeyDecision::Consume` takes it. No shortcut runs and the page sees none of the key, its character or its release.
+Kurogane's shortcuts are the same on every OS. Closing the window (Ctrl+W, Ctrl+Shift+W) and quitting on macOS (Cmd+Q) take the key before the page sees it. No page keeps them. Reload (Ctrl+R, F5), find (Ctrl+F, Ctrl+G, F3), print (Ctrl+P), zoom (Ctrl+=, Ctrl+-, Ctrl+0), back and forward (Alt+Left, Alt+Right), fullscreen (F11) and DevTools (Ctrl+Shift+I, F12) reach the page first. They run only when the page does not call `preventDefault()`. macOS takes Cmd for Ctrl, Cmd+[ and Cmd+] for back and forward, Cmd+Ctrl+F for fullscreen and Cmd+Option+I for DevTools. Chromium's keys for what Kurogane refuses (Ctrl+T, Ctrl+N, Ctrl+Shift+T and Ctrl+Tab) are ordinary keys the page gets.
+
+`App::on_key` sees each key press before a shortcut and the page do. It decides where the key goes. `KeyDecision::Default` lets it go on in that order. `KeyDecision::Consume` takes it. No shortcut runs and the page sees none of the key, its character or its release.
 
 ```rust
-use kurogane::{App, Key, KeyDecision};
+use kurogane::{App, ChromeCommand, KeyDecision};
 
 App::new("dist")
     .on_key(|key, _app| {
         // Ctrl+W (Cmd+W on macOS) does not close this window
-        if key.key() == Key::Char('W') && key.modifiers().primary() {
+        if key.command() == Some(ChromeCommand::Close) {
             KeyDecision::Consume
         } else {
             KeyDecision::Default
@@ -361,22 +363,20 @@ App::new("dist")
     .run_or_exit();
 ```
 
-The hook sees only presses. Held keys repeating count too (`repeat()`). It never sees releases. `Key` names a key by its place. Shift+W is still `Key::Char('W')`. `modifiers().primary()` is Ctrl on Windows and Linux and Cmd on macOS. Check `in_editable_field()` before taking keys the user may be typing.
+The hook sees only presses. Held keys repeating count too (`repeat()`). It never sees releases. `command()` names the command a shortcut runs by whatever keys the OS gives it. `Key` names a key by its place. Shift+W is still `Key::Char('W')`. `modifiers().primary()` is Ctrl on Windows and Linux and Cmd on macOS. Check `in_editable_field()` before taking keys the user may be typing.
 
-Chromium's own order depends on the shortcut. Most shortcuts (Ctrl+F, Ctrl+P, Ctrl+1 and F5) reach the page first. They run only when the page does not call `preventDefault()`. A page can bind them already.
+On macOS Chromium still takes its own next-tab keys (Cmd+Option+Left and Right, Cmd+Shift+[ and ], Ctrl+Page Up and Page Down) before `on_key` and the page see them. A fullscreen window is the exception.
 
-Chromium reserves the shortcuts that open, close and switch tabs and windows (Ctrl+T, Ctrl+N, Ctrl+W, Ctrl+Shift+T and Ctrl+Tab). They take the key before the page sees it. A page's own binding for one never fires. A reserved shortcut with nothing to do lets the key through to the page. Ctrl+Tab in a window of one tab does. So does Ctrl+Shift+T while no tab was closed. That changes as the session goes on.
-
-`KeyDecision::PageFirst` gives the page a reserved shortcut first every time. The page gets the key. Chromium's shortcut runs only when the page does not call `preventDefault()`. A shortcut that runs then goes on as any other. Kurogane still refuses new tabs and windows. `on_chrome_command` is still asked about closing the window.
+`KeyDecision::PageFirst` gives the page closing and quitting first too. The page gets the key. The shortcut runs only when the page does not call `preventDefault()`. `on_chrome_command` is still asked about closing the window.
 
 ```rust
-use kurogane::{App, Key, KeyDecision};
+use kurogane::{App, ChromeCommand, KeyDecision};
 
 App::new("dist")
     .on_key(|key, _app| {
-        // The page's own Ctrl+T handler runs; Chromium's runs only if the
-        // page lets the key through
-        if key.key() == Key::Char('T') && key.modifiers().primary() {
+        // The page's own Ctrl+W handler runs; the window closes only if
+        // the page lets the key through
+        if key.command() == Some(ChromeCommand::Close) {
             KeyDecision::PageFirst
         } else {
             KeyDecision::Default
@@ -387,11 +387,11 @@ App::new("dist")
 
 `PageFirst` is for shortcuts:
 
-* Chromium drops the character of a shortcut the page left alone. A typing key answered with `PageFirst` types nothing unless the page handles its keydown. Answer it for chords such as Ctrl+T and not for every key. AltGr arrives as Ctrl+Alt on Windows.
+* Chromium drops the character of a shortcut the page left alone. A typing key answered with `PageFirst` types nothing unless the page handles its keydown. Answer it for chords such as Ctrl+W and not for every key. AltGr arrives as Ctrl+Alt on Windows.
 * It hands the shortcut to the page. A page that prevents Ctrl+W keeps its window open. A page that hangs holds the key.
-* Chromium reserves these shortcuts so no page can keep them. Answer `PageFirst` only for windows that show your own pages (`key.browser()`).
+* Closing and quitting run before the page so no page can keep them. Answer `PageFirst` only for windows that show your own pages (`key.browser()`).
 * The window's own close button and closing it from the application are not affected.
-* A browser embedded in your own window runs no Chromium shortcuts. There `PageFirst` changes nothing but the dropped character.
+* A browser embedded in your own window runs no shortcuts. There `PageFirst` changes nothing but the dropped character.
 
 `App::on_chrome_command` is asked about each command the window would run from a shortcut or the context menu. It may refuse the command. It is never asked about a command Kurogane refuses. It cannot allow one.
 

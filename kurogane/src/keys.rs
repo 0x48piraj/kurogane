@@ -1,19 +1,20 @@
-//! The keys a user presses in a window of the application's, before the page
-//! or Chromium's own shortcuts see them.
+//! Key presses in a window of the application's.
 //!
-//! [`App::on_key`](crate::App::on_key) is asked about each key press (the
-//! key going down, repeats included; never its release or the character it
-//! types) and says where it goes ([`KeyDecision`]): on, in Chromium's own
-//! order; nowhere, so that neither the page nor Chromium's shortcuts
-//! (Ctrl+R, Ctrl+W, F5, Ctrl+Shift+I, ...) see the key, its character or
-//! its release; or to the page first, even when Chromium would take it.
+//! [`App::on_key`](crate::App::on_key) is asked about each key press and its
+//! repeats. It never sees a release or the character a key types. Its
+//! [`KeyDecision`] sends the key on in Kurogane's order, nowhere or to the
+//! page first. Kurogane's shortcuts (crate::shortcuts) are the same on every
+//! OS.
 
+use std::ffi::CStr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use tracing::{debug, error};
 
 use crate::browser_registry::BrowserId;
+use crate::chrome_commands::ChromeCommand;
 use crate::runtime::AppHandle;
+use crate::shortcuts::Shortcut;
 
 /// A key the user pressed, passed to [`App::on_key`](crate::App::on_key).
 #[derive(Debug, Clone)]
@@ -23,6 +24,7 @@ pub struct KeyPress {
     character: Option<char>,
     in_editable_field: bool,
     browser: Option<BrowserId>,
+    command: Option<ChromeCommand>,
 }
 
 impl KeyPress {
@@ -42,7 +44,13 @@ impl KeyPress {
             character: char::from_u32(u32::from(character)).filter(|c| !c.is_control()),
             in_editable_field,
             browser,
+            command: None,
         }
+    }
+
+    /// Returns the press with `command` as its shortcut's command.
+    pub(crate) fn with_command(self, command: Option<ChromeCommand>) -> Self {
+        Self { command, ..self }
     }
 
     /// The key.
@@ -76,6 +84,16 @@ impl KeyPress {
     /// The browser the key went to.
     pub fn browser(&self) -> Option<BrowserId> {
         self.browser
+    }
+
+    /// Returns the command the key runs as one of Kurogane's shortcuts on
+    /// any OS. Ctrl+W (Cmd+W on macOS) is [`Close`](ChromeCommand::Close).
+    /// Ctrl+R and F5 are [`Reload`](ChromeCommand::Reload). Ctrl+Shift+I
+    /// (Cmd+Option+I) and F12 are [`DevTools`](ChromeCommand::DevTools).
+    /// macOS's Cmd+Q quits and names no command. A browser embedded in the
+    /// application's own window runs no shortcut and names none.
+    pub fn command(&self) -> Option<ChromeCommand> {
+        self.command
     }
 }
 
@@ -142,7 +160,7 @@ impl Key {
 /// the `u32` a key event carries them in. cef-rs's own constants wrap a C
 /// `int` on Windows and an `unsigned int` elsewhere; a test holds these to
 /// them on every platform.
-mod flag {
+pub(crate) mod flag {
     pub const SHIFT_DOWN: u32 = 1 << 1;
     pub const CONTROL_DOWN: u32 = 1 << 2;
     pub const ALT_DOWN: u32 = 1 << 3;
@@ -192,40 +210,74 @@ impl Modifiers {
     pub fn none(self) -> bool {
         !(self.shift() || self.ctrl() || self.alt() || self.meta())
     }
+
+    /// Returns CEF's flags of the modifier keys held and no other flag.
+    pub(crate) fn chord(self) -> u32 {
+        self.0 & (flag::SHIFT_DOWN | flag::CONTROL_DOWN | flag::ALT_DOWN | flag::COMMAND_DOWN)
+    }
 }
 
 /// The answer of [`App::on_key`](crate::App::on_key).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum KeyDecision {
-    /// The key goes on in Chromium's own order. Chromium takes the key of a
-    /// shortcut it reserves, one that opens, closes or switches tabs and
-    /// windows (Ctrl+T, Ctrl+N, Ctrl+W), before the page sees it, and the
-    /// page never does. Every other shortcut (Ctrl+F, Ctrl+P, Ctrl+1, F5)
-    /// reaches the page first and runs only if the page does not prevent
-    /// the key's default.
+    /// The key goes on in Kurogane's order on every OS. A shortcut that
+    /// closes the window or quits (Ctrl+W, Cmd+Q on macOS) runs before the
+    /// page sees the key. The page never gets it. Every other shortcut
+    /// (Ctrl+F, Ctrl+P, Ctrl+R, F5) reaches the page first and runs only if
+    /// the page does not prevent the key's default. Kurogane refuses the
+    /// commands of Chromium's keys for new tabs and windows (Ctrl+T,
+    /// Ctrl+N). Those keys reach the page as any key.
     #[default]
     Default,
-    /// The key goes nowhere: neither Chromium's shortcuts nor the page see
-    /// it, its character or its release.
+    /// The key goes nowhere. Neither a shortcut nor the page sees it, its
+    /// character or its release.
     Consume,
-    /// The key goes to the page first, and Chromium's shortcut for it runs
-    /// only if the page does not prevent the key's default: the order a
-    /// shortcut Chromium does not reserve has under
-    /// [`Default`](Self::Default), for one it does. A page binds Ctrl+T or
+    /// The key goes to the page first. Its shortcut runs only if the page
+    /// does not prevent the key's default. Under [`Default`](Self::Default)
+    /// every shortcut but closing and quitting has this order. A page binds
     /// Ctrl+W for itself this way.
     ///
-    /// For shortcuts only: a key that types a character, answered
-    /// `PageFirst`, types nothing unless the page handles its keydown, as
-    /// Chromium drops the character of a shortcut the page left alone. Mind
-    /// AltGr, which arrives as Ctrl+Alt on Windows.
+    /// For shortcuts only. A key that types a character and is answered
+    /// `PageFirst` types nothing unless the page handles its keydown.
+    /// Chromium drops the character of a shortcut the page left alone.
+    /// AltGr arrives as Ctrl+Alt on Windows.
     ///
-    /// The page then decides whether the shortcut runs: one that prevents
-    /// Ctrl+W keeps its window open, and one that hangs holds the key.
-    /// Chromium reserves these shortcuts so that no page can keep them, so
-    /// answer `PageFirst` only for windows that show the application's own
-    /// pages ([`KeyPress::browser`]).
+    /// The page then decides whether the shortcut runs. One that prevents
+    /// Ctrl+W keeps its window open and one that hangs holds the key.
+    /// Closing and quitting run before the page so that no page can keep
+    /// them. Answer `PageFirst` only for windows that show the application's
+    /// own pages ([`KeyPress::browser`]).
     PageFirst,
+}
+
+/// Destination of a key on its way to a page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Route {
+    /// Nowhere. Neither the page nor Chromium sees it.
+    Taken,
+    /// Chromium command Kurogane runs in Chromium's place. The key goes
+    /// nowhere else.
+    Run(&'static CStr),
+    /// Page first. Chromium holds the key as a shortcut until the page lets
+    /// it through.
+    PageFirst,
+    /// Chromium's own order.
+    On,
+}
+
+/// Returns where a key goes before the page sees it for the application's
+/// `decision` and the key's `shortcut`.
+pub(crate) fn before_page(decision: KeyDecision, shortcut: Option<Shortcut>) -> Route {
+    match (decision, shortcut) {
+        (KeyDecision::Consume, _) => Route::Taken,
+        (KeyDecision::PageFirst, _) => Route::PageFirst,
+        (KeyDecision::Default, Some(Shortcut::BeforePage(name))) => Route::Run(name),
+        (KeyDecision::Default, Some(Shortcut::AfterPage(_) | Shortcut::Refused)) => {
+            Route::PageFirst
+        }
+        (KeyDecision::Default, None) => Route::On,
+    }
 }
 
 /// Asks the application's hook about `press`. Runs on CEF's UI thread for
@@ -309,5 +361,35 @@ mod tests {
 
         let held = KeyPress::new(0x28, flag::IS_REPEAT, 0, false, None);
         assert!(held.repeat() && held.modifiers().none());
+        assert_eq!(held.modifiers().chord(), 0);
+        assert_eq!(held.command(), None);
+    }
+
+    #[test]
+    fn closing_runs_before_the_page_unless_the_application_says_otherwise() {
+        let close = Some(Shortcut::BeforePage(c"IDC_CLOSE_TAB"));
+        let find = Some(Shortcut::AfterPage(c"IDC_FIND"));
+        for (decision, shortcut, route) in [
+            (KeyDecision::Default, close, Route::Run(c"IDC_CLOSE_TAB")),
+            (KeyDecision::PageFirst, close, Route::PageFirst),
+            (KeyDecision::Consume, close, Route::Taken),
+            (KeyDecision::Default, find, Route::PageFirst),
+            (KeyDecision::Consume, find, Route::Taken),
+            // The page gets a refused key first as any key
+            (
+                KeyDecision::Default,
+                Some(Shortcut::Refused),
+                Route::PageFirst,
+            ),
+            (KeyDecision::Default, None, Route::On),
+            (KeyDecision::PageFirst, None, Route::PageFirst),
+            (KeyDecision::Consume, None, Route::Taken),
+        ] {
+            assert_eq!(
+                before_page(decision, shortcut),
+                route,
+                "{decision:?} {shortcut:?}"
+            );
+        }
     }
 }

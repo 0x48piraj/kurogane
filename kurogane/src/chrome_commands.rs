@@ -15,6 +15,9 @@
 //! is then asked about each command the allowlist lets run, named by
 //! [`ChromeCommand`], and may refuse it; it never sees, and so never allows,
 //! a command Kurogane refuses.
+//!
+//! Kurogane's own key shortcuts (`crate::shortcuts`) run as these commands.
+//! The hook decides them as it decides the context menu's.
 
 use std::ffi::{CStr, c_int};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -144,6 +147,15 @@ const ALLOWED: &[(&CStr, ChromeCommand)] = &[
         ChromeCommand::DevTools,
     ),
 ];
+
+/// Returns the command the Chromium command of name `name` is to the
+/// application when [`ALLOWED`] lets it run.
+pub(crate) fn command_named(name: &CStr) -> Option<ChromeCommand> {
+    ALLOWED
+        .iter()
+        .find(|&&(allowed, _)| allowed == name)
+        .map(|&(_, command)| command)
+}
 
 /// Translates [`ALLOWED`] command names to runtime IDs.
 /// Cached via [`OnceLock`] because CEF command IDs are unstable across Chromium
