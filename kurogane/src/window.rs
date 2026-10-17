@@ -316,6 +316,12 @@ fn show_in(window: &Window, state: WindowState) {
         WindowState::Normal => window.show(),
         WindowState::Maximized => window.maximize(),
         WindowState::Minimized => window.minimize(),
+        // Chromium's X11 window drops a state set before it maps, so there
+        // the window shows first
+        WindowState::Fullscreen if cfg!(target_os = "linux") => {
+            window.show();
+            window.set_fullscreen(1);
+        }
         WindowState::Fullscreen => {
             window.set_fullscreen(1);
             window.show();
@@ -437,10 +443,16 @@ wrap_window_delegate! {
 
         // A window CEF opens in another state reports that state's bounds as
         // it is created, so where the frame is known an application window
-        // opens normal and on_window_created applies its state
+        // opens normal and on_window_created applies its state. Chromium's
+        // X11 window drops a fullscreen state set before it maps, so a
+        // fullscreen window opens normal there too and takes the state once
+        // it shows
         fn initial_show_state(&self, _window: Option<&mut Window>) -> ShowState {
-            match self.opening {
+            match &self.opening {
                 Opening::Application(_) if FRAME_KNOWN_AT_CREATION => ShowState::NORMAL,
+                Opening::Application(options) if options.initial_state() == WindowState::Fullscreen => {
+                    ShowState::NORMAL
+                }
                 _ => self.opening.show_state(),
             }
         }
@@ -508,7 +520,9 @@ wrap_window_delegate! {
                 window.set_window_app_icon(Some(&mut large));
             }
             match &self.opening {
-                Opening::Application(options) if FRAME_KNOWN_AT_CREATION => {
+                Opening::Application(options)
+                    if FRAME_KNOWN_AT_CREATION || options.initial_state() == WindowState::Fullscreen =>
+                {
                     show_in(window, options.initial_state());
                 }
                 _ if self.opening.show_state() != ShowState::HIDDEN => window.show(),

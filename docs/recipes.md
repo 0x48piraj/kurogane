@@ -129,8 +129,6 @@ A window whose options set no title takes its page's `<title>` and follows it as
 
 The minimum size is the smallest content size the user can drag the window down to. The states are `Normal`, `Minimized`, `Maximized`, `Fullscreen` and `Hidden`. A window opened maximized restores to its size and centered. A hidden window's browser keeps the application running as any open browser does.
 
-Under X11 a window opened `Fullscreen` shows at its size for now; Chromium drops a state set before the window maps. A page that goes fullscreen after its window shows is not affected.
-
 An application started with `App::start_embedded` has no start window. Giving it `App::window` fails at startup. So do options no window can have (a size of 0 or a minimum larger than the size).
 
 ### Opening a window where it was
