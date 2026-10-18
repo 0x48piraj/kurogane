@@ -414,11 +414,13 @@
     });
 
     // A leaving page's messages leave at once since the page may be gone
-    // before the answers that pace them. These listeners run before the
-    // page's own.
-    window.addEventListener('pagehide', function () { window.core.leaving(true); });
+    // before the answers that pace them. A page back from the back-forward
+    // cache has its calls and streams rejected with code -9, since they
+    // ended as it left, and its subscriptions made again. These listeners
+    // run before the page's own.
+    window.addEventListener('pagehide', function () { window.core.leaving(); });
     window.addEventListener('pageshow', function (e) {
-        if (e.persisted) window.core.leaving(false);
+        if (e.persisted) window.core.returned();
     });
 
     window.kurogane = Object.freeze({

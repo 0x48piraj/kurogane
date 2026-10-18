@@ -737,7 +737,7 @@ App::new("dist")
     .run_or_exit();
 ```
 
-A responder dropped unanswered rejects the call with code `-3`. `responder.is_cancelled()` turns true when the page cancels, navigates away or closes. A cancelled responder sends nothing.
+A responder dropped unanswered rejects the call with code `-3`. `responder.is_cancelled()` turns true when the page cancels, navigates away or closes. A cancelled responder sends nothing. A page back from the back-forward cache finds the calls it left open rejected with code `-9`.
 
 ### Binary commands
 
@@ -775,6 +775,7 @@ A handler fails with an `IpcError`. A string converts into one. The page's promi
 | `-6` | The path is outside the granted roots, denied or a link |
 | `-7` | The path is malformed |
 | `-8` | The file exceeds the transfer limit |
+| `-9` | The page left with the call open and came back from the back-forward cache |
 
 `IpcError::with_code` sends a positive code of your own (`ErrorCode::App`).
 
@@ -825,6 +826,8 @@ window.kurogane.off(id);
 ```
 
 Subscriptions follow the same rule as commands. A page of another origin needs `App::permit_event`. A refused subscription calls the third argument with code `-4` and logs a warning without one.
+
+A page back from the back-forward cache keeps its subscriptions. The events sent while it was away do not reach it.
 
 ## Streaming data
 
@@ -880,7 +883,7 @@ stream.write(new TextEncoder().encode("hello"));
 stream.end();
 ```
 
-Handlers and sends fail with an `IpcError` as commands do. A string converts into one. The first `end` or `error` a handler sends closes the stream. Later sends fail with `stream closed`. When the page calls `end()` and `on_end` sends neither, the runtime ends the stream with `""`. The page always hears back.
+Handlers and sends fail with an `IpcError` as commands do. A string converts into one. The first `end` or `error` a handler sends closes the stream. Later sends fail with `stream closed`. When the page calls `end()` and `on_end` sends neither, the runtime ends the stream with `""`. The page always hears back. A stream a page left open fails with `The page left` when the page comes back from the back-forward cache.
 
 Handlers run on the UI thread. A `StreamResponder` can be cloned and used from any thread. Streams follow the same access rule as commands.
 

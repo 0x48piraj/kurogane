@@ -4,8 +4,9 @@
 //! context in one frame. Messages are delivered only to the owning frame.
 //! Cancellation and unsubscription are limited to the owning context.
 //!
-//! Releasing a context removes all state owned by it. Unknown contexts are
-//! opaque and use `FLAG_OPAQUE_CONTEXT`.
+//! Releasing a context removes all state owned by it. A context back from
+//! the back-forward cache hands back its requests and streams and keeps its
+//! subscriptions. Unknown contexts are opaque and use `FLAG_OPAQUE_CONTEXT`.
 //!
 //! Stream callbacks are set when the stream is opened.
 //!
@@ -27,6 +28,16 @@ pub(crate) struct StreamSink<V> {
     pub(crate) data: V,
     pub(crate) end: V,
     pub(crate) error: V,
+}
+
+/// What a context left open when its page left, by id.
+pub(crate) struct Returned<V> {
+    /// Requests in flight with their subsystem and promise, taken.
+    pub(crate) requests: Vec<(i32, u8, V)>,
+    /// Open streams with their error callback, taken.
+    pub(crate) streams: Vec<(i32, V)>,
+    /// Subscriptions with their event name, kept.
+    pub(crate) subscriptions: Vec<(i32, String)>,
 }
 
 struct Owner<C> {
@@ -293,6 +304,38 @@ impl<C: ContextHandle, V: Clone> Registry<C, V> {
             .map(|(owner, sub)| (owner.context, sub.on_error))
     }
 
+    /// Takes the requests and streams `context` left open and lists its
+    /// subscriptions, each in id order, for a page back from the
+    /// back-forward cache.
+    pub(crate) fn returned(&mut self, context: &C) -> Returned<V> {
+        let mut requests: Vec<_> = owned_ids(&self.pending, context)
+            .into_iter()
+            .filter_map(|id| self.pending.remove(&id).map(|(_, pending)| (id, pending)))
+            .map(|(id, pending)| match pending {
+                Pending::Rpc(promise) => (id, SUB_RPC, promise),
+                Pending::StreamOpen { promise, .. } => (id, SUB_STREAM, promise),
+            })
+            .collect();
+        requests.sort_by_key(|(id, ..)| *id);
+        let mut streams: Vec<_> = owned_ids(&self.streams, context)
+            .into_iter()
+            .filter_map(|id| self.streams.remove(&id).map(|(_, sink)| (id, sink.error)))
+            .collect();
+        streams.sort_by_key(|(id, _)| *id);
+        let mut subscriptions: Vec<_> = self
+            .events
+            .iter()
+            .filter(|(_, (owner, _))| owner.context.same(context))
+            .map(|(id, (_, sub))| (*id, sub.event.clone()))
+            .collect();
+        subscriptions.sort_by_key(|(id, _)| *id);
+        Returned {
+            requests,
+            streams,
+            subscriptions,
+        }
+    }
+
     fn known(&self, context: &C) -> Option<&Known<C>> {
         self.contexts
             .iter()
@@ -319,6 +362,15 @@ impl<C: ContextHandle, V: Clone> Registry<C, V> {
             }
         }
     }
+}
+
+/// Returns the ids of `entries` that `context` owns.
+fn owned_ids<C: ContextHandle, T>(entries: &HashMap<i32, (Owner<C>, T)>, context: &C) -> Vec<i32> {
+    entries
+        .iter()
+        .filter(|(_, (owner, _))| owner.context.same(context))
+        .map(|(id, _)| *id)
+        .collect()
 }
 
 /// Returns a process-specific starting ID.
@@ -465,6 +517,43 @@ mod tests {
         assert!(
             r.register_rpc(&Ctx(1), "p").is_none(),
             "a released context registers nothing"
+        );
+    }
+
+    #[test]
+    fn a_returned_context_hands_back_what_it_left_open() {
+        let mut r = two_frames();
+        let call = r.register_rpc(&Ctx(1), "call").unwrap().0;
+        let opening = r.register_stream_open(&Ctx(1), "opening", sink()).unwrap();
+        let open = r.register_stream_open(&Ctx(1), "open", sink()).unwrap();
+        r.stream_opened(open, &frame("A"));
+        let sub = r.subscribe(&Ctx(1), "tick".into(), "cb", None).unwrap();
+        let other = r.register_rpc(&Ctx(2), "b-call").unwrap().0;
+
+        let returned = r.returned(&Ctx(1));
+        let mut requests = vec![(call, SUB_RPC, "call"), (opening, SUB_STREAM, "opening")];
+        requests.sort_by_key(|(id, ..)| *id);
+        assert_eq!(returned.requests, requests);
+        assert_eq!(returned.streams, [(open, "error")]);
+        assert_eq!(returned.subscriptions, [(sub, "tick".to_owned())]);
+
+        assert!(
+            r.settle(call, &frame("A")).is_none(),
+            "a returned call is taken"
+        );
+        assert!(
+            r.stream_data(open, &frame("A")).is_none(),
+            "a returned stream is closed"
+        );
+        assert_eq!(
+            r.event(sub, &frame("A")),
+            Some((Ctx(1), "cb")),
+            "a subscription stays"
+        );
+        assert_eq!(
+            r.settle(other, &frame("B")),
+            Some((Ctx(2), "b-call")),
+            "another context keeps its calls"
         );
     }
 

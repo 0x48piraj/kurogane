@@ -14,7 +14,7 @@ use crate::ipc::document::Document;
 use crate::ipc::envelope::FLAG_OPAQUE_CONTEXT;
 
 /// Classifies an [`IpcError`] by the numeric code exposed to the renderer.
-/// Runtime errors use the fixed codes `0` through `-8`; applications may use
+/// Runtime errors use the fixed codes `0` through `-9`; applications may use
 /// positive codes through [`ErrorCode::App`].
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -37,6 +37,9 @@ pub enum ErrorCode {
     PathInvalid,
     /// The file exceeds the transfer limit (`-8`).
     TooLarge,
+    /// The page left with the request open and came back from the
+    /// back-forward cache (`-9`).
+    Left,
     /// An application-defined code, sent as is.
     App(NonZeroU16),
 }
@@ -54,6 +57,7 @@ impl ErrorCode {
             ErrorCode::PathDenied => -6,
             ErrorCode::PathInvalid => -7,
             ErrorCode::TooLarge => -8,
+            ErrorCode::Left => -9,
             ErrorCode::App(code) => i32::from(code.get()),
         }
     }

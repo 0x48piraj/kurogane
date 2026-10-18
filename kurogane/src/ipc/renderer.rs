@@ -194,6 +194,9 @@ wrap_render_process_handler! {
                 ("endStream", IpcEndStreamHandler::new()),
                 // Unpaces the page's messages while it leaves
                 ("leaving", IpcLeavingHandler::new()),
+                // Settles what a page back from the back-forward cache left
+                // open and subscribes it again
+                ("returned", IpcReturnedHandler::new()),
             ];
             for (name, handler) in functions {
                 if !set_function(&core, name, handler) {
@@ -619,23 +622,82 @@ wrap_v8_handler! {
             &self,
             _name: Option<&CefString>,
             _object: Option<&mut V8Value>,
-            arguments: Option<&[Option<V8Value>]>,
+            _arguments: Option<&[Option<V8Value>]>,
             _retval: Option<&mut Option<V8Value>>,
-            exception: Option<&mut CefString>,
+            _exception: Option<&mut CefString>,
         ) -> i32 {
-            let leaving = match arguments.and_then(|args| args.first()) {
-                Some(Some(v)) if v.is_bool() != 0 => v.bool_value() != 0,
-                _ => {
-                    return throw(exception, "leaving requires a boolean");
-                }
-            };
             let Some(context) = v8_context_get_current_context() else {
                 return 1;
             };
             let sender = with_state(|state| state.sender(&context));
             if let (Some((_, frame_id)), Some(frame)) = (sender, context.frame()) {
-                renderer_outbox::leaving(&frame, &frame_id, leaving);
+                renderer_outbox::leaving(&frame, &frame_id, true);
             }
+            1
+        }
+    }
+}
+
+//
+// Returned handler
+//
+
+wrap_v8_handler! {
+    pub struct IpcReturnedHandler;
+
+    impl V8Handler {
+        fn execute(
+            &self,
+            _name: Option<&CefString>,
+            _object: Option<&mut V8Value>,
+            _arguments: Option<&[Option<V8Value>]>,
+            _retval: Option<&mut Option<V8Value>>,
+            _exception: Option<&mut CefString>,
+        ) -> i32 {
+            let Some(context) = v8_context_get_current_context() else {
+                return 1;
+            };
+            let (returned, sender) =
+                with_state(|state| (state.returned(&context), state.sender(&context)));
+            let (Some((flags, frame_id)), Some(frame)) = (sender, context.frame()) else {
+                return 1;
+            };
+            let send = |subsystem, opcode, id: i32, parts: &[&[u8]]| {
+                let envelope = Envelope {
+                    version: ENVELOPE_VERSION,
+                    subsystem,
+                    opcode,
+                    flags,
+                    correlation_id: id as u32,
+                    payload_kind: PAYLOAD_EMPTY,
+                };
+                renderer_outbox::send(&frame, &frame_id, &envelope, parts);
+            };
+
+            // The browser ended the page's requests and streams as it left;
+            // each is cancelled again in case its document lived on
+            let left = rejection(ErrorCode::Left.wire(), "The page left");
+            for (id, subsystem, promise) in returned.requests {
+                if subsystem == SUB_RPC {
+                    renderer_outbox::answered(&frame_id, id as u32);
+                    send(SUB_RPC, RPC_CANCEL, id, &[]);
+                } else {
+                    send(SUB_STREAM, STREAM_CANCEL, id, &[]);
+                }
+                promise.reject_promise(Some(&left));
+            }
+            for (id, on_error) in returned.streams {
+                send(SUB_STREAM, STREAM_CANCEL, id, &[]);
+                let message = v8_value_create_string(Some(&CefString::from("The page left")));
+                on_error.execute_function(None, Some(&[message]));
+            }
+            // A subscription the browser kept takes the same id again
+            for (id, event) in returned.subscriptions {
+                if let Some(payload) = encode_cmd_payload(&event, &[]) {
+                    send(SUB_EVENT, EVENT_SUBSCRIBE, id, &[&payload]);
+                }
+            }
+            renderer_outbox::leaving(&frame, &frame_id, false);
             1
         }
     }

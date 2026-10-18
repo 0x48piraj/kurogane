@@ -51,13 +51,16 @@ impl EventSubsystem {
         let browser_id = ctx.document.browser();
 
         let mut subs = self.subscriptions.lock().unwrap();
-        subs.entry(event_name.to_string()).or_default().push(
-            crate::ipc::event::EventSubscription {
-                id: envelope.correlation_id,
-                frame: frame.clone(),
-                document: ctx.document,
-            },
-        );
+        let entries = subs.entry(event_name.to_string()).or_default();
+        // A page back from the back-forward cache subscribes again under the
+        // same id; a subscription its document kept is not doubled
+        let key = ctx.document.key();
+        entries.retain(|sub| !(sub.id == envelope.correlation_id && sub.document.key() == key));
+        entries.push(crate::ipc::event::EventSubscription {
+            id: envelope.correlation_id,
+            frame: frame.clone(),
+            document: ctx.document,
+        });
 
         debug!(
             "[Event Browser] subscribed '{}' browser={}",
