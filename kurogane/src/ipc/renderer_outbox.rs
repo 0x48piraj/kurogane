@@ -5,7 +5,9 @@
 //! in flight and asks for no answers. A message that leaves while others are
 //! in flight asks the browser for answers that close it (`FLAG_ANSWERS`). A
 //! message too large for a batch leaves at once outside the pacing, since
-//! copying it costs more than its message.
+//! copying it costs more than its message. A leaving page's messages leave
+//! at once outside the pacing, since the page may be gone before the answers
+//! that pace them.
 
 use std::cell::RefCell;
 
@@ -29,6 +31,8 @@ struct Outbox {
     frame: Frame,
     queue: Batch,
     pacing: Pacing,
+    /// Whether the page is leaving.
+    leaving: bool,
 }
 
 impl Outbox {
@@ -84,6 +88,7 @@ fn with_outbox<R>(frame: &Frame, frame_id: &FrameId, f: impl FnOnce(&mut Outbox)
                     frame: frame.clone(),
                     queue: Batch::default(),
                     pacing: Pacing::default(),
+                    leaving: false,
                 });
                 outboxes.len() - 1
             }
@@ -102,7 +107,7 @@ pub(crate) fn send(
     parts: &[&[u8]],
 ) -> Option<()> {
     with_outbox(frame, frame_id, |outbox| {
-        if !batch::fits(parts) {
+        if outbox.leaving || !batch::fits(parts) {
             outbox.send_queue();
             return outbox.send_alone(envelope, parts, false);
         }
@@ -116,6 +121,14 @@ pub(crate) fn send(
         }
         Some(())
     })
+}
+
+/// Records whether `frame`'s page is leaving and sends its queued messages.
+pub(crate) fn leaving(frame: &Frame, frame_id: &FrameId, leaving: bool) {
+    with_outbox(frame, frame_id, |outbox| {
+        outbox.leaving = leaving;
+        outbox.send_queue();
+    });
 }
 
 /// Sends `msg`, a message outside the IPC protocol, after the frame's queued

@@ -413,6 +413,14 @@
         },
     });
 
+    // A leaving page's messages leave at once since the page may be gone
+    // before the answers that pace them. These listeners run before the
+    // page's own.
+    window.addEventListener('pagehide', function () { window.core.leaving(true); });
+    window.addEventListener('pageshow', function (e) {
+        if (e.persisted) window.core.leaving(false);
+    });
+
     window.kurogane = Object.freeze({
         invoke,
         cancel,

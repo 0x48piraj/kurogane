@@ -192,6 +192,8 @@ wrap_render_process_handler! {
                 ("openStream", IpcOpenStreamHandler::new()),
                 ("writeStream", IpcWriteStreamHandler::new()),
                 ("endStream", IpcEndStreamHandler::new()),
+                // Unpaces the page's messages while it leaves
+                ("leaving", IpcLeavingHandler::new()),
             ];
             for (name, handler) in functions {
                 if !set_function(&core, name, handler) {
@@ -603,6 +605,40 @@ wrap_v8_handler! {
                 *ret = v8_value_create_bool(1);
             }
 
+            1
+        }
+    }
+}
+
+//
+// Leaving handler
+//
+
+wrap_v8_handler! {
+    pub struct IpcLeavingHandler;
+
+    impl V8Handler {
+        fn execute(
+            &self,
+            _name: Option<&CefString>,
+            _object: Option<&mut V8Value>,
+            arguments: Option<&[Option<V8Value>]>,
+            _retval: Option<&mut Option<V8Value>>,
+            exception: Option<&mut CefString>,
+        ) -> i32 {
+            let leaving = match arguments.and_then(|args| args.first()) {
+                Some(Some(v)) if v.is_bool() != 0 => v.bool_value() != 0,
+                _ => {
+                    return throw(exception, "leaving requires a boolean");
+                }
+            };
+            let Some(context) = v8_context_get_current_context() else {
+                return 1;
+            };
+            let sender = with_state(|state| state.sender(&context));
+            if let (Some((_, frame_id)), Some(frame)) = (sender, context.frame()) {
+                renderer_outbox::leaving(&frame, &frame_id, leaving);
+            }
             1
         }
     }
