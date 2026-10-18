@@ -1,8 +1,11 @@
 //! IPC message router
 //!
 //! Central dispatch layer for all IPC messages between browser and renderer.
-//! Owns the per-subsystem handler maps and the ACL, which it applies once,
-//! here, before any subsystem sees a message.
+//! Owns the per-subsystem handler maps, the ACL and the documents messages
+//! come from. Applies the ACL once, here, before any subsystem sees a
+//! message.
+
+use std::sync::Arc;
 
 use std::time::Instant;
 
@@ -13,6 +16,7 @@ use crate::browser_registry::BrowserId;
 use tracing::debug;
 use crate::ipc::batch;
 use crate::ipc::browser_state::{ErrorCode, FrameId, IpcContext, IpcError};
+use crate::ipc::document::{Document, Documents};
 use crate::ipc::envelope::*;
 use crate::ipc::request_response::RequestResponseSubsystem;
 use crate::ipc::event::EventSubsystem;
@@ -25,6 +29,7 @@ pub struct IpcRouter {
     pub event: EventSubsystem,
     pub stream: StreamSubsystem,
     acl: CommandAcl,
+    documents: Documents,
 }
 
 /// The ACL's answer for one incoming message.
@@ -179,6 +184,7 @@ impl IpcRouter {
             event,
             stream,
             acl,
+            documents: Documents::default(),
         }
     }
 
@@ -197,7 +203,7 @@ impl IpcRouter {
         payload: &[u8],
         ctx: IpcContext,
     ) -> bool {
-        if self.refuse(frame, envelope, payload, &ctx.origin) {
+        if self.refuse(frame, envelope, payload, ctx.origin()) {
             return true;
         }
         match envelope.subsystem {
@@ -251,47 +257,53 @@ impl IpcRouter {
         refuse_opening(frame, envelope, IpcError::new("the browser is not open"));
     }
 
-    /// Drops everything opened by the document in `frame`. Pending requests are
-    /// cancelled and their late responses suppressed; subscriptions and streams
-    /// are removed. State never carries into the next document, regardless of
-    /// origin. State belonging to invalid frames is swept at the same time.
-    pub fn clear_for_frame(&self, frame: &FrameId) {
-        let requests = self.request_response.pending.cancel_frame(frame);
-        let events = self.event.clear_frame(frame);
-        let streams = self.stream.clear_frame(frame);
-        if requests + events + streams > 0 {
-            debug!(
-                "[Router] frame started a new document: cancelled {} requests, removed {} event subs, {} streams",
-                requests, events, streams
-            );
-        }
+    /// Returns the document `frame` shows, for a message it sent. A frame
+    /// that has gone shows none.
+    pub(crate) fn document(
+        &self,
+        frame: &Frame,
+        frame_id: &FrameId,
+        browser: BrowserId,
+    ) -> Option<Arc<Document>> {
+        self.documents.current(frame, frame_id, browser)
+    }
 
-        let events = self.event.clear_invalid_frames();
-        let streams = self.stream.clear_invalid_frames();
-        if events + streams > 0 {
-            debug!(
-                "[Router] cleaned up {} event subs, {} streams for invalid frames",
-                events, streams
-            );
+    /// Starts the document `frame` commits, ending the one it replaces.
+    pub(crate) fn document_committed(&self, frame: &Frame, browser: BrowserId) {
+        if let Some(ended) = self.documents.commit(frame, browser) {
+            self.end(&ended, "another document committed in its frame");
         }
     }
 
-    /// Cancel all pending async handlers for a given browser.
-    pub fn cancel_all_for_browser(&self, browser_id: BrowserId) -> usize {
-        let req_count = self
+    /// Ends the document of `frame`, which has gone.
+    pub(crate) fn frame_gone(&self, frame: &Frame) {
+        if let Some(ended) = self.documents.frame_gone(frame) {
+            self.end(&ended, "its frame has gone");
+        }
+    }
+
+    /// Ends every document of `browser`, which has closed.
+    pub(crate) fn browser_closed(&self, browser: BrowserId) {
+        for ended in self.documents.browser_closed(browser) {
+            self.end(&ended, "its browser has closed");
+        }
+    }
+
+    /// Drops everything `document` opened, which has ended. Pending requests
+    /// are cancelled and their late responses suppressed; subscriptions and
+    /// streams are removed. Nothing carries into a later document.
+    fn end(&self, document: &Document, why: &str) {
+        let requests = self
             .request_response
             .pending
-            .cancel_all_for_browser(browser_id);
-        // Clean up event subscriptions and stream state
-        let events = self.event.clear_for_browser(browser_id);
-        let streams = self.stream.clear_for_browser(browser_id);
-        if req_count + events + streams > 0 {
+            .cancel_document(document.key());
+        let events = self.event.remove_document(document.key());
+        let streams = self.stream.close_document(document.key());
+        if requests + events + streams > 0 {
             debug!(
-                "[Router] browser closed: canceled {} pending handlers, removed {} event subs, {} streams",
-                req_count, events, streams
+                "[Router] a document ended, {why}: cancelled {requests} requests, removed {events} event subs, {streams} streams"
             );
         }
-        req_count
     }
 }
 

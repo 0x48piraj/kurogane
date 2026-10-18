@@ -6,13 +6,12 @@ use tanso::*;
 
 use crate::browser_registry::BrowserId;
 use tracing::debug;
-use crate::acl::Origin;
 use crate::ipc::batch;
 use crate::ipc::browser_outbox::{self, Scope};
-use crate::ipc::browser_state::{effective_origin, FrameId, IpcContext};
+use crate::ipc::browser_state::{FrameId, IpcContext};
 use crate::ipc::envelope::{Envelope, BATCH_ITEMS, FLAG_ANSWERS, KNOWN_FLAGS, SUB_BATCH};
 use crate::ipc::router::IpcRouter;
-use crate::ipc::transport::message::{receive_from_renderer, IPC_MESSAGE};
+use crate::ipc::transport::message::{is_ipc_message, receive_from_renderer};
 use crate::runtime::AppHandle;
 
 pub fn handle_ipc_message(
@@ -22,8 +21,7 @@ pub fn handle_ipc_message(
     message: &ProcessMessage,
     browser_id: Option<BrowserId>,
 ) -> bool {
-    let name: CefString = (&message.name()).into();
-    if name.to_string() != IPC_MESSAGE {
+    if !is_ipc_message(message) {
         return false;
     }
 
@@ -63,17 +61,14 @@ pub fn handle_ipc_message(
         return true;
     };
 
-    let frame_url: CefString = (&frame.url()).into();
-    let url_origin = Origin::from_url(&frame_url.to_string());
+    let Some(document) = app.router().document(frame, &frame_id, browser_id) else {
+        debug!("[IPC Browser] message from a frame that has gone");
+        return true;
+    };
 
     let mut routed = true;
     for (item, payload) in messages(&envelope, received.payload()) {
-        let ctx = IpcContext {
-            browser_id,
-            frame: frame_id.clone(),
-            origin: effective_origin(&url_origin, item.flags),
-            url_origin: url_origin.clone(),
-        };
+        let ctx = IpcContext::new(document.clone(), item.flags);
         routed = app.router().route_browser(app, frame, &item, payload, ctx);
     }
     routed

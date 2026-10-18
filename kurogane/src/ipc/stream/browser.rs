@@ -7,9 +7,8 @@
 //! An open is answered before the handler can send: `STREAM_BROWSER_OPENED`
 //! once `on_open` accepts, or `STREAM_BROWSER_ERROR`.
 //!
-//! Streams are scoped to the frame and origin that opened them. Only that
-//! frame may send data, complete, or cancel the stream and only while it
-//! retains the same origin.
+//! Streams are scoped to the document that opened them. Only that document
+//! may send data, complete or cancel the stream, which closes with it.
 //!
 //! Stream responders share stream state, so responses stop once the stream
 //! has ended or failed.
@@ -73,9 +72,8 @@ impl StreamSubsystem {
         let closed = Arc::new(AtomicBool::new(false));
         let responder = StreamResponder::bound(
             frame.clone(),
-            ctx.frame.clone(),
+            ctx.document.clone(),
             stream_id,
-            ctx.url_origin.clone(),
             closed.clone(),
         );
 
@@ -147,10 +145,9 @@ impl StreamSubsystem {
         );
 
         let mut entry = StreamEntry {
-            browser_id: ctx.browser_id,
+            document: ctx.document,
             handler,
             frame: frame.clone(),
-            url_origin: ctx.url_origin,
             closed,
         };
         let opened = catch_unwind(AssertUnwindSafe(|| entry.handler.on_opened(&responder)));

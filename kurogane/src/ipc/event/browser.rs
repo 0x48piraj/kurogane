@@ -3,12 +3,14 @@
 //! Handles subscription management for renderer processes and delivers emitted
 //! events to subscribed frames.
 
+use std::sync::Arc;
+
 use tanso::*;
 
-use crate::acl::Origin;
 use tracing::debug;
 use crate::ipc::browser_outbox;
-use crate::ipc::browser_state::{still_addressed, FrameId, IpcContext, IpcError};
+use crate::ipc::browser_state::{FrameId, IpcContext, IpcError};
+use crate::ipc::document::Document;
 use crate::ipc::envelope::*;
 use crate::ipc::event::EventSubsystem;
 
@@ -46,17 +48,14 @@ impl EventSubsystem {
             }
         };
 
-        let browser_id = ctx.browser_id;
+        let browser_id = ctx.document.browser();
 
         let mut subs = self.subscriptions.lock().unwrap();
         subs.entry(event_name.to_string()).or_default().push(
             crate::ipc::event::EventSubscription {
                 id: envelope.correlation_id,
                 frame: frame.clone(),
-                browser_id,
-                frame_id: ctx.frame,
-                origin: ctx.origin,
-                url_origin: ctx.url_origin,
+                document: ctx.document,
             },
         );
 
@@ -108,9 +107,9 @@ impl EventSubsystem {
     /// Each subscription gets its own message, addressed by its id, so the
     /// renderer runs exactly the callback of that subscription (which the ACL
     /// admitted) and nothing else in the process. A frame's messages may
-    /// travel together ([`browser_outbox`]). A subscription whose frame
-    /// now shows another document receives nothing. `payload_kind` decides
-    /// whether the page receives an `ArrayBuffer` or a string.
+    /// travel together ([`browser_outbox`]). A subscription whose document
+    /// has ended receives nothing. `payload_kind` decides whether the page
+    /// receives an `ArrayBuffer` or a string.
     pub fn broadcast(&self, cmd: &str, data: &[u8], payload_kind: u8) {
         let Some(payload) = encode_cmd_payload(cmd, data) else {
             debug!("[Event Browser] event name exceeds the protocol length limit");
@@ -118,29 +117,18 @@ impl EventSubsystem {
         };
 
         // Copied out, so no CEF call runs under the lock
-        let targets: Vec<(Frame, FrameId, u32, Origin)> = {
+        let targets: Vec<(Frame, Arc<Document>, u32)> = {
             let subs = self.subscriptions.lock().unwrap();
             let Some(entries) = subs.get(cmd) else {
                 return;
             };
             entries
                 .iter()
-                .map(|sub| {
-                    (
-                        sub.frame.clone(),
-                        sub.frame_id.clone(),
-                        sub.id,
-                        sub.url_origin.clone(),
-                    )
-                })
+                .map(|sub| (sub.frame.clone(), sub.document.clone(), sub.id))
                 .collect()
         };
-        for (frame, frame_id, id, url_origin) in targets {
-            if frame.is_valid() == 0 {
-                continue;
-            }
-            let url: CefString = (&frame.url()).into();
-            if !still_addressed(&url_origin, &url.to_string()) {
+        for (frame, document, id) in targets {
+            if !document.is_live() {
                 continue;
             }
             let envelope = Envelope {
@@ -151,7 +139,7 @@ impl EventSubsystem {
                 correlation_id: id,
                 payload_kind,
             };
-            browser_outbox::send(&frame, &frame_id, &envelope, &payload);
+            browser_outbox::send(&frame, document.frame(), &envelope, &payload);
         }
     }
 }

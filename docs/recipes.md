@@ -737,7 +737,7 @@ App::new("dist")
     .run_or_exit();
 ```
 
-A responder dropped unanswered rejects the call with code `-3`. `responder.is_cancelled()` turns true when the page cancels. A cancelled responder sends nothing.
+A responder dropped unanswered rejects the call with code `-3`. `responder.is_cancelled()` turns true when the page cancels, navigates away or closes. A cancelled responder sends nothing.
 
 ### Binary commands
 

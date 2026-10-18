@@ -4,10 +4,10 @@ use std::collections::HashMap;
 
 use tanso::*;
 
-use crate::acl::Origin;
 use tracing::debug;
 use crate::ipc::browser_outbox;
-use crate::ipc::browser_state::{still_addressed, ErrorCode, FrameId, IpcContext, IpcError};
+use crate::ipc::browser_state::{ErrorCode, FrameId, IpcContext, IpcError};
+use crate::ipc::document::Document;
 use crate::ipc::envelope::*;
 use crate::ipc::pending::{PendingEntry, PendingKey, PendingMap};
 use crate::ipc::responder::Responder;
@@ -98,13 +98,12 @@ impl RequestResponseSubsystem {
         let correlation_id = envelope.correlation_id;
         debug!("[RequestResponse Browser] invoke '{}' id={}", cmd, id);
 
-        let url_origin = ctx.url_origin.clone();
+        let document = ctx.document.clone();
         if self.is_async(cmd) {
-            let sender = ctx.frame.clone();
             let aborted = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let key = PendingKey::new(ctx.browser_id, ctx.frame.clone(), ctx.origin.clone(), id);
+            let key = PendingKey::new(document.key(), id);
             self.pending.insert(
-                key.clone(),
+                key,
                 PendingEntry {
                     aborted: aborted.clone(),
                 },
@@ -119,11 +118,11 @@ impl RequestResponseSubsystem {
                         pending.remove(&key);
                         reply(
                             &frame,
-                            &sender,
+                            document.frame(),
                             payload_kind,
                             correlation_id,
                             result,
-                            Some(&url_origin),
+                            Some(&document),
                         );
                     }
                 }),
@@ -132,7 +131,6 @@ impl RequestResponseSubsystem {
 
             self.dispatch_async(app, cmd, data, responder, ctx);
         } else {
-            let sender = ctx.frame.clone();
             let result = catch_unwind(AssertUnwindSafe(|| self.dispatch(app, cmd, data, ctx)));
 
             let response = match result {
@@ -140,11 +138,11 @@ impl RequestResponseSubsystem {
                 Err(_) => Err(IpcError::with_code("handler panicked", ErrorCode::Panic)),
             };
 
-            // Made while the browser handles the message, which the frame's
-            // current document sent
+            // Made while the browser handles the message, which the document
+            // sent
             reply(
                 frame,
-                &sender,
+                document.frame(),
                 envelope.payload_kind,
                 correlation_id,
                 response,
@@ -155,15 +153,10 @@ impl RequestResponseSubsystem {
         true
     }
 
-    /// Only the frame that sent a request, still showing the same origin, can
-    /// cancel it; the pending entry is keyed by both.
+    /// Only the document that sent a request can cancel it; the pending
+    /// entry is keyed by it.
     fn on_cancel(&self, envelope: &Envelope, ctx: IpcContext) -> bool {
-        let key = PendingKey::new(
-            ctx.browser_id,
-            ctx.frame,
-            ctx.origin,
-            envelope.correlation_id as i32,
-        );
+        let key = PendingKey::new(ctx.document.key(), envelope.correlation_id as i32);
         self.pending.cancel(&key);
         true
     }
@@ -202,19 +195,21 @@ impl RequestResponseSubsystem {
     }
 }
 
-/// Answers a call from `frame`. With `url_origin` set the reply is dropped
-/// when the frame has been destroyed or now shows a document of another
-/// origin; a navigation within the origin aborts the request instead
-/// ([`IpcRouter::clear_for_frame`](crate::ipc::router::IpcRouter::clear_for_frame)).
+/// Answers a call from `frame`. With `document` set the reply is dropped
+/// once that document has ended.
 fn reply(
     frame: &Frame,
     frame_id: &FrameId,
     payload_kind: u8,
     correlation_id: u32,
     result: Result<Vec<u8>, IpcError>,
-    url_origin: Option<&Origin>,
+    document: Option<&Document>,
 ) {
-    if !deliverable(frame, correlation_id, url_origin) {
+    if document.is_some_and(|document| !document.is_live()) {
+        debug!(
+            "[RequestResponse Browser] the document has ended, dropping id={}",
+            correlation_id
+        );
         return;
     }
     let (opcode, data) = match result {
@@ -235,28 +230,4 @@ fn reply(
     };
 
     browser_outbox::send_owned(frame, frame_id, &envelope, data);
-}
-
-/// Returns whether a reply to `frame` still goes. It goes while the frame
-/// lives and shows a document of `url_origin`, when that is set.
-fn deliverable(frame: &Frame, correlation_id: u32, url_origin: Option<&Origin>) -> bool {
-    let Some(url_origin) = url_origin else {
-        return true;
-    };
-    if frame.is_valid() == 0 {
-        debug!(
-            "[RequestResponse Browser] frame destroyed, dropping id={}",
-            correlation_id
-        );
-        return false;
-    }
-    let url: CefString = (&frame.url()).into();
-    if !still_addressed(url_origin, &url.to_string()) {
-        debug!(
-            "[RequestResponse Browser] frame shows another document, dropping id={}",
-            correlation_id
-        );
-        return false;
-    }
-    true
 }

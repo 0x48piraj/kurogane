@@ -1,8 +1,8 @@
 //! The `fs.*` IPC command surface.
 //!
 //! Each [`FsCommand`] has an async handler backed by a shared [`Filesystem`].
-//! Authorization uses `IpcContext.origin` and [`Filesystem::authorize`]; the
-//! origin is derived from the frame URL and never accepted from the payload.
+//! Authorization uses `IpcContext::origin` and [`Filesystem::authorize`]; the
+//! origin is the sending document's, never accepted from the payload.
 //!
 //! Operations run on a bounded `kurogane-fs` worker thread, spawned on first
 //! use, so file I/O does not block the CEF UI thread. Requests are processed
@@ -75,14 +75,14 @@ pub(crate) fn handlers(filesystem: Filesystem) -> impl Iterator<Item = (FsComman
 fn handler(worker: Arc<Worker>, command: FsCommand) -> AsyncHandler {
     Box::new(move |data, responder, _app, ctx| {
         // Refused requests are answered here, before anything is copied
-        let permit = match worker.admit(command, data, &ctx.origin) {
+        let permit = match worker.admit(command, data, ctx.origin()) {
             Ok(permit) => permit,
             Err(refusal) => return responder.resolve(Err(refusal)),
         };
         worker.submit(Job {
             command,
             data: data.to_vec(),
-            origin: ctx.origin,
+            origin: ctx.origin().clone(),
             responder,
             _permit: permit,
         });
@@ -440,7 +440,8 @@ mod tests {
         use crate::acl::Origin;
         use crate::capability::policy::FsAccess;
         use crate::capability::test_support::tempdir;
-        use crate::ipc::{BinaryResponder, FrameId, IpcContext};
+        use crate::ipc::document::Document;
+        use crate::ipc::{BinaryResponder, IpcContext};
         use crate::runtime::AppHandle;
 
         fn notes(access: FsAccess) -> (tempfile::TempDir, PathBuf, Vec<(FsCommand, AsyncHandler)>) {
@@ -459,12 +460,7 @@ mod tests {
         }
 
         fn ctx(origin: &str) -> IpcContext {
-            IpcContext {
-                browser_id: crate::browser_registry::BrowserId::new(1),
-                frame: FrameId::new("test-frame"),
-                origin: Origin::from_url(origin),
-                url_origin: Origin::from_url(origin),
-            }
+            IpcContext::new(Document::for_test(Origin::from_url(origin)), 0)
         }
 
         /// Sends `request` to the handler for `command`; returns the answer

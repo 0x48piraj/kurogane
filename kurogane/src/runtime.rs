@@ -1616,7 +1616,7 @@ mod tests {
     };
 
     use crate::acl::Origin;
-    use crate::ipc::FrameId;
+    use crate::ipc::document::Document;
     use crate::ipc::event::EventSubscription;
 
     /// A CEF structure the test made, and the calls made through it.
@@ -1661,12 +1661,6 @@ mod tests {
         // SAFETY: as in called
         unsafe { count(browser) };
         std::ptr::null_mut()
-    }
-
-    unsafe extern "C" fn called_false<T>(object: *mut T) -> c_int {
-        // SAFETY: as in called
-        unsafe { count(object) };
-        0
     }
 
     // Registering a browser reads its id; that is setup, not counted
@@ -1721,8 +1715,6 @@ mod tests {
         raw.base.size = std::mem::size_of::<_cef_frame_t>();
         raw.base.add_ref = Some(add_ref::<_cef_frame_t>);
         raw.base.release = Some(release::<_cef_frame_t>);
-        // Gone, so a broadcast stops at it
-        raw.is_valid = Some(called_false::<_cef_frame_t>);
         leak(raw)
     }
 
@@ -1769,10 +1761,8 @@ mod tests {
                 .push(EventSubscription {
                     id: 1,
                     frame,
-                    browser_id: id,
-                    frame_id: FrameId::new("1"),
-                    origin: origin.clone(),
-                    url_origin: origin,
+                    // Gone, so a broadcast stops at it
+                    document: Document::ended_for_test(origin),
                 });
             drop(browser);
             // Setup is over: from here each count is what the handle did

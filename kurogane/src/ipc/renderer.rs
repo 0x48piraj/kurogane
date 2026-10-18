@@ -9,7 +9,7 @@ use crate::app::ClientAppRendererDelegate;
 use tracing::debug;
 use crate::ipc::browser_state::ErrorCode;
 use crate::ipc::envelope::*;
-use crate::ipc::transport::message::{receive_from_browser, IPC_MESSAGE};
+use crate::ipc::transport::message::{is_ipc_message, receive_from_browser};
 use crate::ipc::renderer_delivery;
 use crate::ipc::renderer_outbox;
 use crate::ipc::renderer_registry::StreamSink;
@@ -339,10 +339,7 @@ wrap_render_process_handler! {
             message: Option<&mut ProcessMessage>,
         ) -> i32 {
             let ipc = source_process == ProcessId::BROWSER
-                && message.as_deref().is_some_and(|msg| {
-                    let name: CefString = (&msg.name()).into();
-                    name.to_string() == IPC_MESSAGE
-                });
+                && message.as_deref().is_some_and(is_ipc_message);
 
             // Kurogane's own messages never reach the delegates. One a
             // delegate kept would hold its frame's later messages for good

@@ -11,7 +11,6 @@ use crate::chrome_commands::KuroganeCommandHandler;
 use crate::context_menu;
 use crate::destination::{Outcome, is_blank, is_chromium_page};
 use crate::downloads::{self, Answer, DownloadRequest, SavePrompt};
-use crate::ipc::FrameId;
 use crate::keys::{self, KeyPress, Route};
 use crate::shortcuts::{self, Shortcut};
 use crate::navigation::{self, NavigationRequest};
@@ -208,8 +207,8 @@ wrap_life_span_handler! {
                 }
             }
 
-            // Cancel any pending async handlers for this browser
-            self.app.router().cancel_all_for_browser(closed.id);
+            // What the browser's documents opened ends with them
+            self.app.router().browser_closed(closed.id);
 
             // Before the last browser ends the application
             if let Some(closing) = closed.closing {
@@ -1032,6 +1031,24 @@ wrap_context_menu_handler! {
 }
 
 //
+// FRAME HANDLER
+//
+wrap_frame_handler! {
+    pub struct KuroganeFrameHandler {
+        app: AppHandle,
+    }
+
+    impl FrameHandler {
+        // A frame's document ends with its last notification
+        fn on_frame_destroyed(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>) {
+            if let Some(frame) = frame {
+                self.app.router().frame_gone(frame);
+            }
+        }
+    }
+}
+
+//
 // LOAD HANDLER
 //
 wrap_load_handler! {
@@ -1042,17 +1059,20 @@ wrap_load_handler! {
     impl LoadHandler {
         fn on_load_start(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             frame: Option<&mut Frame>,
             _transition_type: TransitionType,
         ) {
-            let Some(frame) = frame else {
+            let (Some(browser), Some(frame)) = (browser, frame) else {
                 return;
             };
             let u: CefString = (&frame.url()).into();
             debug!("[LoadHandler] START {}", u.to_string());
-            // Reset state when the frame loads a new document
-            self.app.router().clear_for_frame(&FrameId::of(frame));
+            // A browser the runtime does not know sends nothing it keeps
+            let browser_id = self.app.registry().browsers.find_id_by_browser(browser);
+            if let Some(browser_id) = browser_id {
+                self.app.router().document_committed(frame, browser_id);
+            }
         }
 
         fn on_load_end(
@@ -1337,6 +1357,10 @@ wrap_client! {
 
         fn download_handler(&self) -> Option<DownloadHandler> {
             Some(KuroganeDownloadHandler::new(self.app.clone()))
+        }
+
+        fn frame_handler(&self) -> Option<FrameHandler> {
+            Some(KuroganeFrameHandler::new(self.app.clone()))
         }
 
         fn load_handler(&self) -> Option<LoadHandler> {

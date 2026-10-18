@@ -17,6 +17,13 @@ pub const SHM_THRESHOLD: usize = if cfg!(target_os = "windows") {
 /// Name of every IPC message, either way. The envelope says what it is.
 pub const IPC_MESSAGE: &str = "kurogane_ipc";
 
+/// Returns whether `message` is one of Kurogane's IPC messages.
+pub fn is_ipc_message(message: &ProcessMessage) -> bool {
+    let name = CefString::from(&message.name());
+    name.as_slice()
+        .is_some_and(|units| units.iter().copied().eq(IPC_MESSAGE.encode_utf16()))
+}
+
 /// A message received over CEF: its envelope and its payload.
 ///
 /// An inline payload is read in place, in the message that holds it. Where

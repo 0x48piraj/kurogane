@@ -4,6 +4,7 @@ pub(crate) mod transport {
     pub(crate) mod message;
 }
 pub(crate) mod browser_state;
+pub(crate) mod document;
 pub(crate) mod renderer_registry;
 pub(crate) mod renderer_state;
 pub(crate) mod pending;
