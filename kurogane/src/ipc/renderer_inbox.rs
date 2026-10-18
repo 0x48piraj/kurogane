@@ -200,6 +200,17 @@ impl<F, M, S> Inbox<F, M, S> {
         Some((frame, message, store, was_deferred))
     }
 
+    /// Puts the rest of a message back in front of its frame's queue, for a
+    /// delivery task of its own.
+    pub(crate) fn resume(&mut self, id: FrameId, frame: F, message: M) {
+        self.deferred += 1;
+        self.queues.entry(id).or_default().push_front(Entry {
+            frame,
+            waiting: Waiting::Deferred(message),
+            filling: 0,
+        });
+    }
+
     /// Returns whether a message waits for a delivery task of its own.
     pub(crate) fn has_deferred(&self) -> bool {
         self.deferred > 0
@@ -370,6 +381,25 @@ mod tests {
         assert!(inbox.has_deferred());
         assert_eq!(inbox.next(true), Some(("a", 2, None, true)));
         assert!(!inbox.has_deferred());
+    }
+
+    #[test]
+    fn a_resumed_message_goes_first_in_a_task_of_its_own() {
+        let mut inbox = inbox();
+        assert!(matches!(defer(&mut inbox, "a", 1), Arrival::Defer));
+        assert!(matches!(arrive(&mut inbox, "a", 2, 10), Arrival::Waits));
+        assert_eq!(inbox.next(true), Some(("a", 1, None, true)));
+        inbox.resume(FrameId::new("a"), "a", 10);
+        assert!(inbox.has_deferred());
+        assert!(matches!(arrive(&mut inbox, "a", 3, 10), Arrival::Waits));
+        assert!(inbox.next(false).is_none(), "the rest waits for its task");
+        assert_eq!(inbox.next(true), Some(("a", 10, None, true)));
+        assert!(!inbox.has_deferred());
+        assert_eq!(inbox.next(false), Some(("a", 2, None, false)));
+        assert_eq!(inbox.next(false), Some(("a", 3, None, false)));
+        inbox.resume(FrameId::new("b"), "b", 20);
+        assert!(matches!(arrive(&mut inbox, "b", 4, 10), Arrival::Waits));
+        assert_eq!(inbox.next(true), Some(("b", 20, None, true)));
     }
 
     #[test]

@@ -109,14 +109,45 @@ impl Batch {
 
 /// Returns the messages of a batch's payload in order, up to the first
 /// malformed one.
-pub(crate) fn items(payload: &[u8]) -> impl Iterator<Item = (Envelope, &[u8])> {
-    let mut rest = payload;
-    std::iter::from_fn(move || {
+pub(crate) fn items(payload: &[u8]) -> Items<'_> {
+    Items::at(payload, 0)
+}
+
+/// Messages of a batch's payload from a byte offset in order, up to the first
+/// malformed one.
+#[derive(Clone)]
+pub(crate) struct Items<'p> {
+    payload: &'p [u8],
+    pos: usize,
+}
+
+impl<'p> Items<'p> {
+    /// Messages of `payload` from byte `pos`, where one starts.
+    pub(crate) fn at(payload: &'p [u8], pos: usize) -> Self {
+        Self { payload, pos }
+    }
+
+    /// Returns the offset of the next message.
+    pub(crate) fn pos(&self) -> usize {
+        self.pos
+    }
+
+    /// Returns the next message without taking it.
+    pub(crate) fn peek(&self) -> Option<(Envelope, &'p [u8])> {
+        self.clone().next()
+    }
+}
+
+impl<'p> Iterator for Items<'p> {
+    type Item = (Envelope, &'p [u8]);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let rest = self.payload.get(self.pos..)?;
         let len = u32::from_le_bytes(rest.get(..4)?.try_into().ok()?) as usize;
         let item = rest.get(4..)?.get(..len)?;
-        rest = &rest[4 + len..];
+        self.pos += 4 + len;
         parse_envelope(item)
-    })
+    }
 }
 
 #[cfg(test)]
@@ -209,5 +240,23 @@ mod tests {
         assert_eq!(ids_and_payloads(&version).len(), 1);
 
         assert!(items(&[]).next().is_none());
+    }
+
+    #[test]
+    fn reading_resumes_where_it_stopped() {
+        let mut batch = Batch::default();
+        for id in 1..=4 {
+            batch.push(&envelope(id), &[b"payload"]);
+        }
+        let mut first = items(&batch.bytes);
+        first.next();
+        first.next();
+        assert_eq!(first.peek().map(|(e, _)| e.correlation_id), Some(3));
+        let rest: Vec<u32> = Items::at(&batch.bytes, first.pos())
+            .map(|(e, _)| e.correlation_id)
+            .collect();
+        assert_eq!(rest, [3, 4]);
+        let mut done = Items::at(&batch.bytes, batch.bytes.len());
+        assert!(done.peek().is_none() && done.next().is_none());
     }
 }

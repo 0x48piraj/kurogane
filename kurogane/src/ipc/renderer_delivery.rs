@@ -1,8 +1,9 @@
 //! Delivers the browser's messages to the renderer's frames.
 //!
 //! A large ArrayBuffer for the page is filled on a thread of its own, which
-//! keeps the main thread free during big transfers. A full batch runs in a
-//! task of its own, so the page's own tasks run between a burst's batches.
+//! keeps the main thread free during big transfers. A batch is delivered in
+//! slices, each in a task of its own once the first ran, so the page's own
+//! tasks run between them. A full batch starts in a task of its own.
 //! `renderer_inbox` keeps each frame's order. A batch that closes the page's
 //! messages in flight lets the frame's queued messages leave
 //! (`renderer_outbox`).
@@ -10,6 +11,7 @@
 use std::cell::{Cell, RefCell};
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use tanso::*;
 use tracing::debug;
@@ -18,19 +20,33 @@ use crate::ipc::batch::BATCH_MAX;
 use crate::ipc::envelope::*;
 use crate::ipc::renderer_inbox::{Arrival, FILL_MIN, Inbox, Job, MAX_FILLS};
 use crate::ipc::renderer_outbox;
-use crate::ipc::router::route_renderer;
+use crate::ipc::router::{route_batch, route_renderer};
 use crate::ipc::transport::message::ReceivedMessage;
 use crate::ipc::FrameId;
 
+/// Longest a task delivers one batch's messages before the rest waits for a
+/// task of its own.
+///
+/// The page's longest pause during a burst follows it. A page busy 50 µs per
+/// event paused 80 ms for a whole batch on Windows and Linux, 1.7 ms in
+/// slices.
+const SLICE: Duration = Duration::from_millis(1);
+
+/// Message from the browser delivered from byte `from` of its payload.
+struct Arrived {
+    message: ReceivedMessage,
+    from: usize,
+}
+
 thread_local! {
     /// The inbox of the main thread, which receives every message.
-    static INBOX: RefCell<Inbox<Frame, ReceivedMessage, V8BackingStore>> =
+    static INBOX: RefCell<Inbox<Frame, Arrived, V8BackingStore>> =
         RefCell::new(Inbox::new(post_delivery));
     /// Whether a task that delivers a full batch is posted.
     static DEFERRAL_POSTED: Cell<bool> = const { Cell::new(false) };
 }
 
-fn with_inbox<R>(f: impl FnOnce(&mut Inbox<Frame, ReceivedMessage, V8BackingStore>) -> R) -> R {
+fn with_inbox<R>(f: impl FnOnce(&mut Inbox<Frame, Arrived, V8BackingStore>) -> R) -> R {
     INBOX.with(|inbox| f(&mut inbox.borrow_mut()))
 }
 
@@ -61,14 +77,19 @@ fn arrive(frame: &mut Frame, message: ReceivedMessage) {
     let arrival = with_inbox(|inbox| {
         inbox.arrive(
             || (FrameId::of(frame), frame.clone()),
-            message,
+            Arrived { message, from: 0 },
             len,
             |len| v8_backing_store_create(len).filter(|store| store.is_valid() != 0),
             full,
         )
     });
     match arrival {
-        Arrival::Route(message) => route(frame, &message, None),
+        Arrival::Route(arrived) => {
+            if let Some(rest) = route(frame, arrived, None) {
+                with_inbox(|inbox| inbox.resume(FrameId::of(frame), frame.clone(), rest));
+                post_deferral();
+            }
+        }
         Arrival::Waits => {}
         Arrival::Defer => post_deferral(),
         // A refused job hands its message back to be copied here
@@ -96,19 +117,19 @@ fn array_buffer_bytes(message: &ReceivedMessage) -> Option<&[u8]> {
 }
 
 /// Returns the filler thread's queue, starting the thread on first use.
-fn filler() -> &'static SyncSender<Job<ReceivedMessage, V8BackingStore>> {
-    static FILLER: OnceLock<SyncSender<Job<ReceivedMessage, V8BackingStore>>> = OnceLock::new();
+fn filler() -> &'static SyncSender<Job<Arrived, V8BackingStore>> {
+    static FILLER: OnceLock<SyncSender<Job<Arrived, V8BackingStore>>> = OnceLock::new();
     FILLER.get_or_init(|| {
         // As many jobs as the cap lets wait; a job refused past it is copied
         // on the main thread
-        let (sender, jobs) = sync_channel::<Job<ReceivedMessage, V8BackingStore>>(MAX_FILLS);
+        let (sender, jobs) = sync_channel::<Job<Arrived, V8BackingStore>>(MAX_FILLS);
         // A thread that does not start drops `jobs`, which refuses every fill
         let started = std::thread::Builder::new()
             .name("kurogane-fill".into())
             .spawn(move || {
                 for job in jobs {
-                    job.run(|message, store| {
-                        array_buffer_bytes(message).is_some_and(|data| store.write(data))
+                    job.run(|arrived, store| {
+                        array_buffer_bytes(&arrived.message).is_some_and(|data| store.write(data))
                     });
                 }
             });
@@ -120,10 +141,12 @@ fn filler() -> &'static SyncSender<Job<ReceivedMessage, V8BackingStore>> {
 }
 
 /// Routes every frame's front message while it is ready, then posts the
-/// task for a full batch that may now be in front.
+/// task for a full batch or the rest of one that may now be in front.
 fn deliver_ready() {
-    while let Some((mut frame, message, filled, _)) = with_inbox(|inbox| inbox.next(false)) {
-        route(&mut frame, &message, filled);
+    while let Some((mut frame, arrived, filled, _)) = with_inbox(|inbox| inbox.next(false)) {
+        if let Some(rest) = route(&mut frame, arrived, filled) {
+            with_inbox(|inbox| inbox.resume(FrameId::of(&frame), frame, rest));
+        }
     }
     if with_inbox(|inbox| inbox.has_deferred()) {
         post_deferral();
@@ -134,10 +157,12 @@ fn deliver_ready() {
 /// next full batch's task.
 fn deliver_deferred() {
     let mut deferred = true;
-    while let Some((mut frame, message, filled, was_deferred)) =
+    while let Some((mut frame, arrived, filled, was_deferred)) =
         with_inbox(|inbox| inbox.next(deferred))
     {
-        route(&mut frame, &message, filled);
+        if let Some(rest) = route(&mut frame, arrived, filled) {
+            with_inbox(|inbox| inbox.resume(FrameId::of(&frame), frame, rest));
+        }
         deferred &= !was_deferred;
     }
     // The next full batch's task; one behind a fill waits for the fill's
@@ -147,23 +172,41 @@ fn deliver_deferred() {
     }
 }
 
-fn route(frame: &mut Frame, message: &ReceivedMessage, filled: Option<V8BackingStore>) {
-    // A panic must not unwind across this CEF callback
-    let envelope = message.envelope();
-    // A batch closes the frame's oldest messages, as many as it counts
-    let closes = if envelope.subsystem == SUB_BATCH {
+/// Routes a message. Returns the rest of a batch whose slice ran out.
+fn route(frame: &mut Frame, arrived: Arrived, filled: Option<V8BackingStore>) -> Option<Arrived> {
+    let envelope = arrived.message.envelope();
+    let batch = envelope.subsystem == SUB_BATCH;
+    // A batch closes the frame's oldest messages, as many as it counts, as
+    // its delivery starts
+    let closes = if batch && arrived.from == 0 {
         envelope.correlation_id
     } else {
         0
     };
     let addressed = FrameId::of(frame);
     let routed = renderer_outbox::delivering(&addressed, closes, || {
+        // A panic must not unwind across this CEF callback
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            route_renderer(&addressed, &envelope, message.payload(), filled);
+            let payload = arrived.message.payload();
+            if batch {
+                route_batch(
+                    &addressed,
+                    payload,
+                    arrived.from,
+                    Some(Instant::now() + SLICE),
+                )
+            } else {
+                route_renderer(&addressed, &envelope, payload, filled);
+                None
+            }
         }))
     });
-    if routed.is_err() {
-        debug!("[IPC Renderer] dispatch panicked; message dropped");
+    match routed {
+        Ok(rest) => rest.map(|from| Arrived { from, ..arrived }),
+        Err(_) => {
+            debug!("[IPC Renderer] dispatch panicked; message dropped");
+            None
+        }
     }
 }
 

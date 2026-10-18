@@ -4,6 +4,8 @@
 //! Owns the per-subsystem handler maps and the ACL, which it applies once,
 //! here, before any subsystem sees a message.
 
+use std::time::Instant;
+
 use tanso::*;
 
 use crate::acl::{CommandAcl, Origin};
@@ -116,7 +118,7 @@ pub fn route_renderer(
             addressed, envelope, payload, filled,
         ),
         SUB_BATCH => {
-            route_batch(addressed, payload);
+            route_batch(addressed, payload, 0, None);
             true
         }
         _ => {
@@ -126,16 +128,33 @@ pub fn route_renderer(
     }
 }
 
-/// Routes each message of a batch to `addressed` as if it came alone. A run
-/// of answers to calls settles under one enter of its context
+/// Routes the messages of a batch from byte `from` to `addressed`, each as if
+/// it came alone, until `deadline` passes. Returns where the rest starts
+/// when it passed. At least one message goes each time. A run of answers to
+/// calls settles under one enter of its context
 /// ([`settle_answers`](crate::ipc::rpc::renderer::settle_answers)).
-fn route_batch(addressed: &FrameId, payload: &[u8]) {
+pub(crate) fn route_batch(
+    addressed: &FrameId,
+    payload: &[u8],
+    from: usize,
+    deadline: Option<Instant>,
+) -> Option<usize> {
     let is_answer =
         |e: &Envelope| e.subsystem == SUB_RPC && matches!(e.opcode, RPC_RESOLVE | RPC_REJECT);
-    let mut items = batch::items(payload).peekable();
-    while let Some((envelope, data)) = items.next() {
+    let in_time = || deadline.is_none_or(|deadline| Instant::now() < deadline);
+    let mut items = batch::Items::at(payload, from);
+    let mut first = true;
+    loop {
+        if !first && !in_time() {
+            return items.peek().map(|_| items.pos());
+        }
+        first = false;
+        let (envelope, data) = items.next()?;
         if is_answer(&envelope) {
-            let more = std::iter::from_fn(|| items.next_if(|(e, _)| is_answer(e)));
+            let more = std::iter::from_fn(|| {
+                let answer = in_time() && items.peek().is_some_and(|(e, _)| is_answer(&e));
+                answer.then(|| items.next()).flatten()
+            });
             crate::ipc::rpc::renderer::settle_answers(
                 addressed,
                 std::iter::once((envelope, data)).chain(more),
