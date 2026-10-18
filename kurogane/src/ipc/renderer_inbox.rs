@@ -20,9 +20,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use crate::ipc::FrameId;
 
 /// Smallest ArrayBuffer filled off the main thread. Below it the two thread
-/// hops cost more than the copy they move. Measured on Windows, Linux and
-/// macOS, one awaited 256 KiB result came back 5 to 11 percent slower filled
-/// off the main thread, a 1 MiB one level.
+/// hops cost more than the copy they move.
 pub(crate) const FILL_MIN: usize = 1024 * 1024;
 
 /// Most bytes being filled or waiting for delivery at once. A single larger

@@ -10,22 +10,24 @@ use tanso::*;
 use crate::ipc::envelope::*;
 use crate::ipc::transport::message::{build_message, SHM_THRESHOLD};
 
-/// Size from which a message travels alone and a batch leaves before it
-/// takes more.
-///
-/// 64 KiB keeps batches inline. With 16 calls of 16 KiB in flight on Windows
-/// a call took 40 µs in batches up to 64 KiB, 55 µs in batches up to the
-/// shared-memory threshold and 62 µs alone.
-pub(crate) const BATCH_MAX: usize = if SHM_THRESHOLD < 64 * 1024 {
+/// Smallest message that travels alone, since copying it into a batch costs
+/// more than its own message.
+pub(crate) const ALONE_MIN: usize = if SHM_THRESHOLD < 64 * 1024 {
     SHM_THRESHOLD
 } else {
     64 * 1024
 };
 
+/// Size from which a batch leaves before it takes more.
+///
+/// Batches this long travel in shared memory, which spares a burst the copies
+/// CEF makes of an inline message. The renderer delivers each in slices.
+pub(crate) const BATCH_MAX: usize = 1024 * 1024;
+
 /// Returns whether a message whose payload is `parts` joins a batch rather
 /// than travelling alone.
 pub(crate) fn fits(parts: &[&[u8]]) -> bool {
-    ENVELOPE_SIZE + parts.iter().map(|part| part.len()).sum::<usize>() < BATCH_MAX
+    ENVELOPE_SIZE + parts.iter().map(|part| part.len()).sum::<usize>() < ALONE_MIN
 }
 
 /// Messages in the order they were pushed.
@@ -43,7 +45,7 @@ impl Batch {
             return false;
         }
         let len = ENVELOPE_SIZE + parts.iter().map(|part| part.len()).sum::<usize>();
-        // Lossless; `fits` bounds it by BATCH_MAX
+        // Lossless; `fits` bounds it by ALONE_MIN
         let prefix = len as u32;
         self.bytes.reserve(4 + len);
         self.bytes.extend_from_slice(&prefix.to_le_bytes());
@@ -186,10 +188,10 @@ mod tests {
     }
 
     #[test]
-    fn a_message_of_batch_max_travels_alone() {
+    fn a_message_of_alone_min_travels_alone() {
         let mut batch = Batch::default();
-        let largest = vec![0u8; BATCH_MAX - ENVELOPE_SIZE - 1];
-        let too_long = vec![0u8; BATCH_MAX - ENVELOPE_SIZE];
+        let largest = vec![0u8; ALONE_MIN - ENVELOPE_SIZE - 1];
+        let too_long = vec![0u8; ALONE_MIN - ENVELOPE_SIZE];
         assert!(fits(&[&largest]) && !fits(&[&too_long]));
         assert!(!fits(&[&largest, b"x"]), "parts count together");
         assert!(!batch.push(&envelope(1), &[&too_long]));
@@ -198,7 +200,19 @@ mod tests {
             "a refused message leaves the batch as it was"
         );
         assert!(batch.push(&envelope(2), &[&largest]));
-        assert!(batch.is_full(), "a batch near the limit leaves");
+    }
+
+    #[test]
+    fn a_batch_of_batch_max_leaves() {
+        let mut batch = Batch::default();
+        let payload = vec![0u8; ALONE_MIN / 2];
+        let item = 4 + ENVELOPE_SIZE + payload.len();
+        for id in 1..BATCH_MAX.div_ceil(item) as u32 {
+            batch.push(&envelope(id), &[&payload]);
+            assert!(!batch.is_full(), "a batch short of the limit takes more");
+        }
+        batch.push(&envelope(0), &[&payload]);
+        assert!(batch.is_full(), "a batch at the limit leaves");
     }
 
     #[test]

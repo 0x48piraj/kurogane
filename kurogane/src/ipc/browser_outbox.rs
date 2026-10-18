@@ -436,7 +436,7 @@ wrap_task! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ipc::batch::BATCH_MAX;
+    use crate::ipc::batch::{ALONE_MIN, BATCH_MAX};
     use crate::ipc::envelope::*;
 
     /// What left for a frame, the ids it held with the closes it carried, or
@@ -509,13 +509,14 @@ mod tests {
     fn a_full_batch_leaves_at_once_and_the_rest_at_the_end() {
         let mut left = Vec::new();
         let mut outgoing = Outgoing::new();
-        let half = BATCH_MAX / 2;
-        for id in 1..=3 {
-            push(&mut outgoing, "a", id, half, &mut left);
+        let size = ALONE_MIN / 2;
+        let full = BATCH_MAX.div_ceil(4 + ENVELOPE_SIZE + size) as u32;
+        for id in 1..=full + 1 {
+            push(&mut outgoing, "a", id, size, &mut left);
         }
-        assert_eq!(left, [Left::Together("a", vec![1, 2], 0)]);
+        assert_eq!(left, [Left::Together("a", (1..=full).collect(), 0)]);
         outgoing.finish(&mut recorder(&mut left));
-        assert_eq!(left[1..], [Left::Together("a", vec![3], 0)]);
+        assert_eq!(left[1..], [Left::Together("a", vec![full + 1], 0)]);
     }
 
     #[test]
@@ -524,7 +525,7 @@ mod tests {
         let mut outgoing = Outgoing::new();
         push(&mut outgoing, "a", 1, 10, &mut left);
         push(&mut outgoing, "b", 2, 10, &mut left);
-        push(&mut outgoing, "a", 3, BATCH_MAX, &mut left);
+        push(&mut outgoing, "a", 3, ALONE_MIN, &mut left);
         assert_eq!(
             left,
             [Left::Together("a", vec![1], 0), Left::Alone("a", 3)],

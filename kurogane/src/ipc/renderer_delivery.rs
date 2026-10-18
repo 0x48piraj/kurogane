@@ -25,12 +25,8 @@ use crate::ipc::transport::message::ReceivedMessage;
 use crate::ipc::FrameId;
 
 /// Longest a task delivers one batch's messages before the rest waits for a
-/// task of its own.
-///
-/// The page's longest pause during a burst follows it. A page busy 50 µs per
-/// event paused 80 ms for a whole batch on Windows and Linux, 1.7 ms in
-/// slices.
-const SLICE: Duration = Duration::from_millis(1);
+/// task of its own. It bounds how long a burst holds the page.
+const SLICE: Duration = Duration::from_micros(500);
 
 /// Message from the browser delivered from byte `from` of its payload.
 struct Arrived {
