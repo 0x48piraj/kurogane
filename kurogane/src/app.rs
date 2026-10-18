@@ -37,6 +37,7 @@ use crate::new_window::{NewWindowDecision, NewWindowRequest};
 use crate::page_events::{FullscreenChange, TitleChange};
 use crate::window::WindowIdentity;
 use crate::window_closing::WindowClosing;
+use crate::before_unload::{BeforeUnload, UnloadDecision};
 use crate::window_options::WindowOptions;
 
 mod resolver;
@@ -1260,6 +1261,28 @@ impl App {
         F: Fn(&WindowClosing, &AppHandle) + Send + Sync + 'static,
     {
         self.hooks.window_closing = Some(Box::new(f));
+        self
+    }
+
+    /// Answers a page that cancelled `beforeunload`, in place of the dialog
+    /// Chromium would show: whether it leaves, stays, or Chromium asks.
+    /// [`BeforeUnload::is_reload`](crate::BeforeUnload::is_reload) tells a
+    /// reload apart from the window closing or the page navigating away.
+    ///
+    /// A window closed by the user, the page or the application without
+    /// `force` runs `beforeunload`, so a page that always cancels it with an
+    /// application that answers [`UnloadDecision::Stay`](crate::UnloadDecision::Stay)
+    /// keeps its window until a forced close
+    /// ([`AppHandle::close_all_browsers`] with `force`).
+    ///
+    /// Runs on the UI thread. A hook that panics is logged, and Chromium
+    /// asks. Not asked for DevTools or Chromium's own pages. A later call
+    /// replaces an earlier one.
+    pub fn on_before_unload<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&BeforeUnload, &AppHandle) -> UnloadDecision + Send + Sync + 'static,
+    {
+        self.hooks.before_unload = Some(Box::new(f));
         self
     }
 

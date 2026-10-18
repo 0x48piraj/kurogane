@@ -7,6 +7,7 @@
 //! released. CEF releases the spec when it shuts down, which ends the hooks
 //! and any handle they hold; a hook asked for after that is not there.
 
+use crate::before_unload::{BeforeUnload, UnloadDecision};
 use crate::chrome_commands::{ChromeCommandRequest, CommandDecision};
 use crate::context_menu::{ContextMenu, ContextMenuCommand};
 use crate::downloads::{DownloadDecision, DownloadRequest};
@@ -67,6 +68,10 @@ pub(crate) type TitleChangeHook = Box<dyn Fn(&TitleChange, &AppHandle) + Send + 
 /// stores.
 pub(crate) type FullscreenChangeHook = Box<dyn Fn(&FullscreenChange, &AppHandle) + Send + Sync>;
 
+/// What [`App::on_before_unload`](crate::App::on_before_unload) stores.
+pub(crate) type BeforeUnloadHook =
+    Box<dyn Fn(&BeforeUnload, &AppHandle) -> UnloadDecision + Send + Sync>;
+
 /// The hooks the application registered.
 #[derive(Default)]
 pub(crate) struct Hooks {
@@ -83,4 +88,5 @@ pub(crate) struct Hooks {
     pub drag_enter: Option<DragEnterHook>,
     pub title_change: Option<TitleChangeHook>,
     pub fullscreen_change: Option<FullscreenChangeHook>,
+    pub before_unload: Option<BeforeUnloadHook>,
 }
