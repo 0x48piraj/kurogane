@@ -77,12 +77,18 @@
               libiconv
             ];
 
-          nativeBuildInputs = with pkgs; [
-            rustc
-            cargo
-            pkg-config
-            stdenv.cc
-          ];
+          nativeBuildInputs =
+            with pkgs;
+            [
+              rustc
+              cargo
+              pkg-config
+              stdenv.cc
+            ]
+            # macOS bundles link CEF with otool and install_name_tool
+            ++ lib.optionals stdenv.hostPlatform.isDarwin [
+              cctools
+            ];
         };
 
         cef = pkgs.callPackage ./nix/cef.nix { inherit cefVersion; };
