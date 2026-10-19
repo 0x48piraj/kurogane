@@ -119,6 +119,7 @@
             nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
 
             # Cargo runs outside stdenv; specifically provide its build dependencies
+            # On macOS rustc otherwise targets an older macOS than Nix's Rust standard library
             postInstall = ''
               wrapProgram $out/bin/kurogane \
                 --prefix LIBRARY_PATH : ${pkgs.lib.makeLibraryPath commonArgs.buildInputs} \
@@ -127,7 +128,8 @@
                 --prefix LD_LIBRARY_PATH : ${
                   pkgs.lib.makeLibraryPath (commonArgs.buildInputs ++ [ pkgs.stdenv.cc.cc ])
                 } \
-                --prefix PKG_CONFIG_PATH : ${pkgs.lib.makeSearchPath "lib/pkgconfig" commonArgs.buildInputs}
+                --prefix PKG_CONFIG_PATH : ${pkgs.lib.makeSearchPath "lib/pkgconfig" commonArgs.buildInputs} \
+                ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set-default MACOSX_DEPLOYMENT_TARGET ${pkgs.stdenv.hostPlatform.darwinMinVersion}"}
             '';
 
             meta = {
