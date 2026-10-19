@@ -1,10 +1,10 @@
 //! Renderer-side stream subsystem dispatch.
 //!
-//! Handles the browser's stream messages: opened, data, end and error.
-//! Messages are delivered only to streams opened by the addressed frame,
-//! using the callbacks bound when the stream was opened. The browser
-//! answers an open before it sends anything else of the stream, so a
-//! stream still opening receives nothing but that answer.
+//! Handles the browser's opened, data, end and error stream messages.
+//! Messages reach only streams the addressed frame opened, through the
+//! callbacks bound at the open. The browser answers an open before it sends
+//! anything else of the stream. A stream still opening receives nothing but
+//! that answer.
 
 use tanso::*;
 
@@ -34,8 +34,8 @@ pub fn handle_stream_renderer(
     }
 }
 
-/// `STREAM_BROWSER_OPENED`: the handler accepted the open. The stream's
-/// callbacks become live and `openStream` resolves with its id.
+/// `STREAM_BROWSER_OPENED` reports that the handler accepted the open. The
+/// stream's callbacks become live and `openStream` resolves with its id.
 fn on_opened(id: i32, addressed: &FrameId) -> bool {
     let opened = with_state(|state| state.stream_opened(id, addressed));
     let Some((context, promise)) = opened else {

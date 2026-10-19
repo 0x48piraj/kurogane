@@ -27,8 +27,8 @@ pub fn handle_event_renderer(
     }
 }
 
-/// The browser refused a subscription: remove it and call its `onError`
-/// with `"{code}: {message}"`, the form the bridge's `toError` parses.
+/// Removes a subscription the browser refused and calls its `onError` with
+/// `"{code}: {message}"`, the form the bridge's `toError` parses.
 fn on_refused(addressed: &FrameId, envelope: &Envelope, payload: &[u8]) -> bool {
     let (code, message) = decode_error_payload(payload);
     let removed = with_state(|state| state.refused(envelope.correlation_id as i32, addressed));

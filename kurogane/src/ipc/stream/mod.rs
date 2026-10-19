@@ -1,9 +1,9 @@
 //! Stream IPC subsystem.
 //!
 //! Provides bidirectional streaming data transport. Streams are identified
-//! by a correlation ID. The page opens a stream; the browser answers with
-//! `STREAM_BROWSER_OPENED` or refuses with `STREAM_BROWSER_ERROR`, and data
-//! then flows both ways until the stream ends or fails.
+//! by a correlation ID. The page opens a stream. The browser answers with
+//! `STREAM_BROWSER_OPENED` or refuses with `STREAM_BROWSER_ERROR`. Data then
+//! flows both ways until the stream ends or fails.
 //!
 //! Each stream gets its own handler instance via a factory closure,
 //! giving handlers natural per-stream mutable state.
@@ -37,9 +37,10 @@ pub struct StreamResponder {
 }
 
 impl StreamResponder {
-    /// A responder for an open the runtime refuses as it arrives, before the
-    /// stream exists: the page waiting on `openStream` is the document that
-    /// sent the open, so there is nothing to check. Never handed to a handler.
+    /// Returns a responder for an open the runtime refuses as it arrives,
+    /// before the stream exists. The page waiting on `openStream` is the
+    /// document that sent the open and there is nothing to check. Never
+    /// handed to a handler.
     pub(crate) fn unbound(frame: Frame, stream_id: u32) -> Self {
         Self {
             frame_id: FrameId::of(&frame),
@@ -50,7 +51,7 @@ impl StreamResponder {
         }
     }
 
-    /// A responder bound to a stream's document and lifetime.
+    /// Returns a responder bound to a stream's document and lifetime.
     pub(crate) fn bound(
         frame: Frame,
         document: Arc<Document>,
@@ -94,7 +95,7 @@ impl StreamResponder {
         Ok(())
     }
 
-    /// Ends the stream: the page's `onEnd` receives `result`.
+    /// Ends the stream. The page's `onEnd` receives `result`.
     ///
     /// The first `end` or `error` sent, from any clone, closes the stream.
     ///
@@ -106,7 +107,7 @@ impl StreamResponder {
         self.finish(STREAM_BROWSER_END, PAYLOAD_STRING, result.as_bytes())
     }
 
-    /// Fails the stream: the page's `onError` receives the error's message.
+    /// Fails the stream. The page's `onError` receives the error's message.
     /// A string is an [`IpcError::new`].
     ///
     /// Closes the stream, as [`end`](Self::end) does.
@@ -159,7 +160,7 @@ impl StreamResponder {
 /// handler for each stream. In order:
 ///
 /// 1. [`on_open`](Self::on_open) accepts or refuses the stream. Nothing can
-///    be sent yet: the page does not hold the stream.
+///    be sent yet since the page does not hold the stream.
 /// 2. The runtime tells the page the stream is open, which resolves its
 ///    `openStream`, then calls [`on_opened`](Self::on_opened).
 /// 3. [`on_chunk`](Self::on_chunk) runs for each chunk the page writes.
@@ -172,9 +173,8 @@ impl StreamResponder {
 /// code, as a command's error does; an `Err` from `on_opened`, `on_chunk` or
 /// `on_end` fails the stream, whose `onError` receives the message, unless it
 /// is already closed. A panic in any of them counts as an `Err` with the
-/// message `handler panicked`. The page's end
-/// is always answered: when `on_end` sends neither, the runtime ends the
-/// stream with an empty result.
+/// message `handler panicked`. The page's end is always answered. When
+/// `on_end` sends neither the runtime ends the stream with an empty result.
 ///
 /// The runtime drops the handler once the stream is closed. A stream closed
 /// from another thread is noticed at the next stream open, or when its
@@ -182,8 +182,8 @@ impl StreamResponder {
 ///
 /// # Threads
 ///
-/// Every callback runs on the UI thread, which also runs every window and
-/// receives every message from the page, so return promptly: CEF says not
+/// Every callback runs on the UI thread. That thread also runs every window
+/// and receives every message from the page. Return promptly; CEF says not
 /// to block this thread. The responder may be cloned and used from any
 /// thread.
 ///
@@ -225,8 +225,8 @@ pub trait StreamHandler: Send + 'static {
         Ok(())
     }
 
-    /// Called once the page has been told the stream is open: the place to
-    /// send initial data, end or fail the stream, or hand a clone of
+    /// Called once the page has been told the stream is open. It is the place
+    /// to send initial data, to end or fail the stream or to hand a clone of
     /// `responder` to a thread that produces data. An `Err` fails the stream.
     fn on_opened(&mut self, responder: &StreamResponder) -> Result<(), IpcError> {
         let _ = responder;
@@ -251,7 +251,7 @@ pub trait StreamHandler: Send + 'static {
     }
 }
 
-/// Factory type: creates a new handler instance per stream.
+/// Factory that creates a new handler instance per stream.
 pub type StreamFactory = Box<dyn Fn(&AppHandle) -> Box<dyn StreamHandler> + Send + Sync>;
 
 pub mod browser;

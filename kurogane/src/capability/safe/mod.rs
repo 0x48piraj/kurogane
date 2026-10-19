@@ -8,12 +8,12 @@
 //! - Multi-component lookups are resolved by the kernel beneath the root
 //!   handle, never by re-walking a canonicalized path.
 //! - Links and reparse points below the root are never traversed. Lookups
-//!   through them return [`Denial::ObjectLocation`](crate::capability::error::Denial);
-//!   listings omit them, and link entries cannot be opened, removed or renamed.
+//!   through them return [`Denial::ObjectLocation`](crate::capability::error::Denial).
+//!   Listings omit them and link entries cannot be opened, removed or renamed.
 //! - Mutations operate from a directory handle and one validated [`Name`],
 //!   without re-resolving the authorized path. Windows also holds the leaf
-//!   open across the mutation; Linux and macOS find the leaf again by name,
-//!   so a leaf another local process swaps in meanwhile is acted on as itself
+//!   open across the mutation; Linux and macOS find the leaf again by name.
+//!   A leaf another local process swaps in meanwhile is acted on as itself
 //!   (a link is removed or renamed, never followed).
 //! - Objects expose their kernel-reported location, which the authorization
 //!   layer re-checks against deny rules before use. A file with several

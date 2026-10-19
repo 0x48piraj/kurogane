@@ -11,15 +11,15 @@
 /// `RunConsoleMain` (console). This macro writes both, handing the broker
 /// state to the runtime before running `entry`.
 ///
-/// It expands to nothing but a signature check off Windows, so the same source
+/// Off Windows it expands to nothing but a signature check. The same source
 /// builds everywhere.
 ///
 /// # Layout
 ///
-/// The exports have to come from the application's own crate, because a
-/// `cdylib` does not re-export symbols from its dependencies. So the
-/// application lives in `src/lib.rs` and `src/main.rs` becomes a shim, which
-/// keeps `cargo run` and unsandboxed builds working unchanged:
+/// The exports have to come from the application's own crate. A `cdylib`
+/// does not re-export symbols from its dependencies. The application lives in
+/// `src/lib.rs` and `src/main.rs` is a shim. This layout keeps `cargo run` and
+/// unsandboxed builds working unchanged:
 ///
 /// ```toml
 /// [lib]
@@ -53,8 +53,8 @@
 /// }
 /// ```
 ///
-/// Then set `sandbox = true` under `[app]` in `kurogane.toml`: `kurogane run`
-/// and `kurogane dev` start the application through the bootstrap, and
+/// Then set `sandbox = true` under `[app]` in `kurogane.toml`. `kurogane run`
+/// and `kurogane dev` then start the application through the bootstrap.
 /// `kurogane bundle` ships the bootstrap under the application's name.
 ///
 /// Invoke the macro once, at the crate root. A second invocation is a

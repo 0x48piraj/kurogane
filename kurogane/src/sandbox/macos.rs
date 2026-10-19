@@ -2,7 +2,7 @@
 //!
 //! Chromium sandboxes macOS helpers with seatbelt profiles. Each helper enters
 //! its sandbox through `libcef_sandbox.dylib` before it loads CEF. A bundle's
-//! helper links the framework at launch, so dyld has mapped it and run its
+//! helper links the framework at launch. dyld has mapped it and run its
 //! initializers by then.
 
 use std::error::Error;
@@ -19,8 +19,8 @@ use crate::error::RuntimeError;
 /// The outcome of the helper's one attempt to enter the sandbox, held for
 /// the helper's lifetime.
 ///
-/// A failure is kept too: a partly initialized seatbelt cannot be rolled back,
-/// so the attempt is never repeated.
+/// A failure is kept too. A partly initialized seatbelt cannot be rolled back
+/// and the attempt is never repeated.
 static HELPER_SANDBOX: OnceLock<Result<Sandbox, String>> = OnceLock::new();
 
 pub(super) fn apply_disabled(flags: &mut ChromiumFlags) {

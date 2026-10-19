@@ -42,8 +42,8 @@ enum Verdict<'p> {
     RefuseEvent(&'p str),
 }
 
-/// What a message opens: a command invocation, a stream or an event
-/// subscription, whose sender waits for an answer (the invocation's promise,
+/// What a message opens. The sender of a command invocation, a stream or an
+/// event subscription waits for an answer (the invocation's promise,
 /// `openStream`'s promise, the subscription's `onError`). Follow-ups
 /// (cancel, stream data, end, error and cancel, unsubscribe) open nothing
 /// and wait for nothing.
@@ -221,9 +221,9 @@ impl IpcRouter {
         }
     }
 
-    /// Answers a message the ACL refuses, in the form its caller awaits:
-    /// an RPC rejection, a failed stream open, or a refused subscription.
-    /// All carry [`ErrorCode::Acl`]. Returns true when the message was refused.
+    /// Answers a message the ACL refuses in the form its caller awaits (an
+    /// RPC rejection, a failed stream open or a refused subscription). All
+    /// carry [`ErrorCode::Acl`]. Returns true when the message was refused.
     fn refuse(&self, frame: &Frame, envelope: &Envelope, payload: &[u8], origin: &Origin) -> bool {
         let message = match verdict(&self.acl, envelope, payload, origin) {
             Verdict::Pass => return false,

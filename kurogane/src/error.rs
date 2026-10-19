@@ -92,8 +92,8 @@ pub enum RuntimeError {
 
     /// The window given to
     /// [`AppInstance::create_child_browser`](crate::AppInstance::create_child_browser)
-    /// cannot parent a browser: CEF embeds only in a Win32 window, an AppKit
-    /// view or an X11 window, never, for one, in a Wayland surface.
+    /// cannot parent a browser. CEF embeds only in a Win32 window, an AppKit
+    /// view or an X11 window. A Wayland surface is not one of them.
     UnsupportedParentWindow,
 
     /// The requested sandbox cannot be enforced on this platform or layout.
@@ -396,8 +396,8 @@ impl Display for RuntimeError {
     }
 }
 
-/// `Display` names the failure and `source()` holds its cause, so a report
-/// that walks the chain ([`App::run_or_exit`](crate::App::run_or_exit) does)
+/// `Display` names the failure and `source()` holds its cause. A report that
+/// walks the chain ([`App::run_or_exit`](crate::App::run_or_exit) does)
 /// shows each cause once.
 impl std::error::Error for RuntimeError {
     /// Returns the underlying error that caused this runtime error, when available.

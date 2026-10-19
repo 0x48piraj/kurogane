@@ -118,9 +118,9 @@ pub struct BundleConfig {
 }
 
 /// Additional bundle resource configuration. A key it does not take is
-/// refused, not ignored: a resource bundled otherwise than its entry asks
-/// (a misspelt `destination`, a `preserve-symlinks` no version knows) would
-/// go unnoticed.
+/// refused rather than ignored. A resource bundled otherwise than its entry
+/// asks (a misspelt `destination`, a `preserve-symlinks` no version knows)
+/// would go unnoticed.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ResourceConfig {
@@ -155,26 +155,26 @@ pub struct LinuxPackagingConfig {
     pub terminal: Option<bool>,
 }
 
-/// `[macos]`: what a macOS `.app` declares in its `Info.plist`.
+/// What a macOS `.app` declares in its `Info.plist` (`[macos]`).
 ///
-/// Values are read as written: the macOS bundler checks them when it
-/// builds, so a mistake here never stops `kurogane run` elsewhere. A key the
+/// Values are read as written. The macOS bundler checks them when it
+/// builds. A mistake here never stops `kurogane run` elsewhere. A key the
 /// table does not take is an error naming it.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct MacosPackagingConfig {
-    /// `LSMinimumSystemVersion`, such as `"13.0"`; CEF's own floor when
-    /// unset, and never lower.
+    /// `LSMinimumSystemVersion`, such as `"13.0"`. Unset means CEF's own
+    /// floor. No value goes below that floor.
     pub minimum_system_version: Option<String>,
     /// `LSApplicationCategoryType`, one of Apple's
     /// `public.app-category.*` values.
     pub category: Option<String>,
-    /// `[macos.privacy]`: why the application uses each device.
+    /// Why the application uses each device (`[macos.privacy]`).
     pub privacy: MacosPrivacyConfig,
 }
 
-/// `[macos.privacy]`: what macOS shows when a page asks for a device, in
-/// place of Kurogane's generic wording. Every device a page can ask for is
+/// What macOS shows when a page asks for a device in place of Kurogane's
+/// generic wording (`[macos.privacy]`). Every device a page can ask for is
 /// declared, configured or not.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -202,27 +202,29 @@ impl Default for WindowsPackagingConfig {
     }
 }
 
-/// Code signing, one table per platform that signs: each bundler reads its
-/// own, and `--sign` checks both wherever it runs.
+/// Code signing with one table per platform that signs. Each bundler reads
+/// its own. `--sign` checks both wherever it runs.
 ///
 /// A key a table does not take, such as the older flat `[signing]` keys, is
 /// an error naming it, never ignored.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SigningFileConfig {
-    /// `[signing.windows]`: the PE files of a Windows bundle and installer.
+    /// Signing for the PE files of a Windows bundle and installer
+    /// (`[signing.windows]`).
     pub windows: WindowsSigningConfig,
-    /// `[signing.macos]`: a macOS `.app`.
+    /// Signing for a macOS `.app` (`[signing.macos]`).
     pub macos: MacosSigningConfig,
 }
 
-/// `[signing.windows]`: a certificate, as a file (`certificate`) or a Windows
-/// certificate store thumbprint (`certificate-thumbprint`), or instead a
-/// signing program of the application's own (`custom-command`).
+/// Windows signing (`[signing.windows]`). It names a certificate as a file
+/// (`certificate`) or a Windows certificate store thumbprint
+/// (`certificate-thumbprint`). A signing program of the application's own
+/// (`custom-command`) can take its place.
 ///
-/// Passwords are never stored here: `certificate-password-env` names the
-/// environment variable the password is read from, so CI keeps it in secrets
-/// and it stays out of version control naturally.
+/// Passwords are never stored here. `certificate-password-env` names the
+/// environment variable the password is read from. CI keeps it in secrets
+/// and it stays out of version control.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct WindowsSigningConfig {
@@ -235,8 +237,8 @@ pub struct WindowsSigningConfig {
     pub custom_command: Option<Vec<String>>,
 }
 
-/// `[signing.macos]`: the codesign identity a `.app` is signed with, from the
-/// keychain; `-` signs ad hoc.
+/// macOS signing (`[signing.macos]`). It names the codesign identity from the
+/// keychain a `.app` is signed with; `-` signs ad hoc.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MacosSigningConfig {

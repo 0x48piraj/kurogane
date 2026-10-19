@@ -45,16 +45,17 @@ const RESOLVE_NO_XDEV: u64 = 0x01;
 const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
 const RESOLVE_NO_SYMLINKS: u64 = 0x04;
 const RESOLVE_BENEATH: u64 = 0x08;
-/// Mount points are links too: never crossed, bind mounts included.
+/// Mount points count as links and are never crossed, bind mounts included.
 const RESOLVE: u64 =
     RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV;
 
-/// `STATX_ATTR_MOUNT_ROOT` (Linux 5.8+): the entry is the root of a mount.
+/// `STATX_ATTR_MOUNT_ROOT` (Linux 5.8+), set when the entry is the root of a
+/// mount.
 const STATX_ATTR_MOUNT_ROOT: u64 = 0x2000;
 
 const EAGAIN_RETRIES: usize = 8;
 
-/// An entry held for removal or renaming: its name within the parent fd.
+/// An entry held for removal or renaming by its name within the parent fd.
 pub(crate) struct Entry {
     leaf: Name,
 }
@@ -183,8 +184,8 @@ pub(super) fn create_file(dir: &File, leaf: &Name, mode: Create) -> Result<File,
     }
 }
 
-/// Opens one name in `dir` under the same rules as a lookup, so a mount
-/// point at the leaf (a bind-mounted file) is refused like a link.
+/// Opens one name in `dir` under the same rules as a lookup. A mount point at
+/// the leaf (a bind-mounted file) is refused like a link.
 fn leaf_open(dir: &File, name: &CStr, flags: c_int, mode: mode_t) -> Result<OwnedFd, FsError> {
     if openat2_supported() {
         return openat2(dir.as_raw_fd(), name, flags, mode);
@@ -285,8 +286,9 @@ fn openat2(dirfd: RawFd, path: &CStr, flags: c_int, mode: mode_t) -> Result<Owne
     Err(io::Error::new(io::ErrorKind::TimedOut, "path resolution raced repeatedly").into())
 }
 
-/// The pre-5.6 lookup: one `openat(O_NOFOLLOW)` per component, each on the
-/// root's mount (`st_dev` would misjudge btrfs subvolumes and overlayfs).
+/// Looks up `rel` the pre-5.6 way. Each component is one
+/// `openat(O_NOFOLLOW)` on the root's mount (`st_dev` would misjudge btrfs
+/// subvolumes and overlayfs).
 fn walk(root: &File, rel: &RelPath, flags: c_int) -> Result<OwnedFd, FsError> {
     let Some((last, parents)) = rel.names().split_last() else {
         return openat(root.as_raw_fd(), c".", flags, 0);
@@ -385,8 +387,8 @@ fn openat(dirfd: RawFd, name: &CStr, flags: c_int, mode: mode_t) -> Result<Owned
 
 /// `ELOOP` means a link was met (`RESOLVE_NO_SYMLINKS`, `O_NOFOLLOW`) and
 /// `EXDEV` that resolution tried to leave the root or cross a mount point
-/// (`RESOLVE_BENEATH`, `RESOLVE_NO_XDEV`): confinement verdicts, not I/O
-/// failures.
+/// (`RESOLVE_BENEATH`, `RESOLVE_NO_XDEV`). Both are confinement verdicts, not
+/// I/O failures.
 fn lookup_error(err: io::Error) -> FsError {
     match err.raw_os_error() {
         Some(libc::ELOOP | libc::EXDEV) => FsError::PathDenied(Denial::ObjectLocation),
@@ -514,7 +516,7 @@ fn require_openat2() -> Result<(), FsError> {
 /// byte count, which (unlike `readdir(3)`) never confuses a stale `errno`
 /// with an error.
 fn read_dir_names(dir: &File) -> io::Result<Vec<(CString, u8)>> {
-    /// `struct linux_dirent64`: d_ino u64, d_off i64, d_reclen u16, d_type u8, then the name
+    /// `struct linux_dirent64` holds d_ino u64, d_off i64, d_reclen u16, d_type u8, then the name
     const RECLEN: usize = 16;
     const TYPE: usize = 18;
     const NAME: usize = 19;

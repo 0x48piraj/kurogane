@@ -33,7 +33,7 @@ use crate::capability::policy::FsAccess;
 use crate::capability::safe::{self, Create, Dir, DirEntry, EntryKind};
 use crate::capability::scope::{Residual, Root, Scope, ScopeBuilder};
 
-/// The filesystem capability configuration: named scopes and the grants that
+/// Filesystem capability configuration of named scopes and the grants that
 /// bind origins to them.
 ///
 /// ```no_run
@@ -66,7 +66,7 @@ struct Grant {
 }
 
 /// Handle to a scope declared on a [`FilesystemBuilder`]. Grants name scopes
-/// by handle, so a grant cannot reference a scope that was never declared.
+/// by handle. A grant cannot reference a scope that was never declared.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScopeId {
     builder: u64,
@@ -97,8 +97,8 @@ impl FilesystemBuilder {
 
     /// Permits regular files that have other names (hard links). By default
     /// such a file is refused (`PATH_DENIED`) by every operation that reads,
-    /// writes, copies or measures its contents; its other names may lie
-    /// outside every root or under a deny rule, and no platform can tell the
+    /// writes, copies or measures its contents. Its other names may lie
+    /// outside every root or under a deny rule and no platform can tell the
     /// location re-check which. Enable only when the roots hold multiply
     /// linked files by design (a pnpm store, a local `git clone`) and nobody
     /// untrusted can create links in them. Listing, removing and renaming a
@@ -110,8 +110,8 @@ impl FilesystemBuilder {
 
     /// Caps the bytes `read_file` returns and `write_file` accepts
     /// ([`FsError::TooLarge`] beyond it). A whole file travels in one IPC
-    /// message and is held in memory by both processes, so the cap bounds
-    /// what one renderer call can cost until file transfers stream.
+    /// message and is held in memory by both processes. The cap bounds what
+    /// one renderer call can cost until file transfers stream.
     /// Defaults to [`Filesystem::DEFAULT_MAX_FILE_SIZE`]. `copy_file`
     /// stays in the browser process and is not capped.
     pub fn max_file_size(&mut self, bytes: u64) -> &mut Self {
@@ -192,7 +192,7 @@ impl Default for FilesystemBuilder {
 }
 
 impl Filesystem {
-    /// The default of [`FilesystemBuilder::max_file_size`]: 64 MiB.
+    /// Default of [`FilesystemBuilder::max_file_size`] (64 MiB).
     pub const DEFAULT_MAX_FILE_SIZE: u64 = 64 * 1024 * 1024;
 
     pub fn builder() -> FilesystemBuilder {
@@ -200,8 +200,8 @@ impl Filesystem {
     }
 
     /// Starts building the inverted fold on a thread of its own when a deny
-    /// glob reads it (a `?` or a class), so it is ready before the page can
-    /// send a request. A request that came sooner would wait only for the
+    /// glob reads it (a `?` or a class). The fold is then ready before the
+    /// page can send a request. A request that came sooner would wait only for the
     /// rest; one that needs no such glob never waits.
     pub(crate) fn prepare_matching(&self) {
         if self.scopes.iter().any(Scope::unfolds) {
@@ -341,8 +341,8 @@ fn held_elsewhere(_err: &FsError) -> bool {
     false
 }
 
-/// A name for a file that becomes another: `.kurogane-write-<pid>-<n>`,
-/// unique in this process and valid on every platform.
+/// Returns `.kurogane-write-<pid>-<n>`, a name for a file that becomes
+/// another. It is unique in this process and valid on every platform.
 fn temp_name() -> Name {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -384,9 +384,9 @@ impl<'a> AuthorizedFs<'a> {
     /// new one. The object decides which applies. Contents over the transfer
     /// limit are refused before anything is opened.
     ///
-    /// An existing file is replaced whole: the contents go to a new file
-    /// beside it, which then takes its name and its permissions, so a write
-    /// that fails part-way leaves the old contents. The file is a new object
+    /// An existing file is replaced whole. The contents go to a new file
+    /// beside it which then takes its name and its permissions. A write that
+    /// fails part-way leaves the old contents. The file is a new object
     /// afterwards (its owner is the application's user); on Windows another
     /// program holding it open without delete sharing makes the write fail.
     pub fn write_file(&self, path: &Path, contents: &[u8]) -> Result<(), FsError> {
@@ -443,9 +443,9 @@ impl<'a> AuthorizedFs<'a> {
     /// `fs.rename_file`: RENAME on source and destination, each authorized
     /// independently. An existing destination is replaced.
     ///
-    /// Every rule is a function of where content lives, so a move is also
-    /// judged as a whole: it may not carry content out from under a deny rule
-    /// (`PATH_DENIED`), nor to a place where the origin holds more access over
+    /// Every rule is a function of where content lives. A move is also judged
+    /// as a whole. It may not carry content out from under a deny rule
+    /// (`PATH_DENIED`) nor to a place where the origin holds more access over
     /// it than it held at the source (`PATH_DENIED`).
     pub fn rename_file(&self, from: &Path, to: &Path) -> Result<(), FsError> {
         let source = self.resolve(FsAccess::RENAME, from)?;
@@ -568,7 +568,8 @@ impl<'a> AuthorizedFs<'a> {
         entry.remove()
     }
 
-    /// Rules 1-4: parse, capability, anchor, lexical deny.
+    /// Resolves `path` through rules 1-4 (parse, capability, anchor and
+    /// lexical deny).
     fn resolve(&self, required: FsAccess, path: &Path) -> Result<Target<'a>, FsError> {
         let request = parse_request(path)?;
         let eligible: Vec<&'a Root> = self
@@ -650,12 +651,12 @@ impl<'a> AuthorizedFs<'a> {
         self.grants.iter().flat_map(|(scope, _)| scope.roots())
     }
 
-    /// Moving a directory from `from` to `to` must keep every deny rule over
-    /// what it contains. A `deny_path` below `from` must still be denied at
-    /// its new location (denial is inherited by descendants, so this is
-    /// exact). A glob still live below `from` must be at least as live below
-    /// `to`, compared by value across every root, so a move between roots
-    /// sharing the same glob stays allowed.
+    /// Checks that moving a directory from `from` to `to` keeps every deny
+    /// rule over what it contains. A `deny_path` below `from` must still be
+    /// denied at its new location (denial is inherited by descendants and the
+    /// check is exact). A glob still live below `from` must be at least as
+    /// live below `to`. Globs compare by value across every root. A move
+    /// between roots sharing the same glob stays allowed.
     fn move_keeps_denials(&self, from: &Location, to: &Location) -> Result<(), FsError> {
         let refused = || FsError::PathDenied(Denial::DenyRule);
         for root in self.roots() {
@@ -685,10 +686,11 @@ impl<'a> AuthorizedFs<'a> {
         Ok(())
     }
 
-    /// A move may not grant the origin more over the moved object than it
-    /// held at the source: no capability at `to` it lacked at `from`, and for
-    /// a directory none reaching its contents that did not reach them before
-    /// (a non-recursive root hides grandchildren a recursive one would show).
+    /// Checks that a move grants the origin no more over the moved object
+    /// than it held at the source. It gains no capability at `to` it lacked
+    /// at `from`. For a directory it gains none reaching its contents that
+    /// did not reach them before (a non-recursive root hides grandchildren a
+    /// recursive one would show).
     fn move_keeps_access(&self, from: &Location, to: &Location, tree: bool) -> Result<(), FsError> {
         let mut gained = self.access_at(to).without(self.access_at(from));
         if tree {
@@ -722,9 +724,9 @@ impl<'a> AuthorizedFs<'a> {
             .fold(FsAccess::NONE, |all, (_, access)| all | *access)
     }
 
-    /// Refuses a regular file that has other names, unless the configuration
-    /// allows hard links: its other names may lie outside every root or under
-    /// a deny rule, and the location re-check only sees the name used here.
+    /// Refuses a regular file that has other names unless the configuration
+    /// allows hard links. Its other names may lie outside every root or under
+    /// a deny rule. The location re-check only sees the name used here.
     /// Directories are exempt; their link counts count subdirectories.
     fn single_link(&self, file: &File) -> Result<(), FsError> {
         if self.allow_hard_links || !file.metadata()?.is_file() {

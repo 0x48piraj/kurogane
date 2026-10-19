@@ -35,7 +35,7 @@ pub enum SandboxMode {
     /// Startup fails unless the platform can enforce it:
     /// - Linux: unprivileged user namespaces, or a root-owned setuid
     ///   `chrome-sandbox` helper.
-    /// - macOS: the app runs from a `.app` bundle, so each helper can enter
+    /// - macOS: the app runs from a `.app` bundle, where each helper can enter
     ///   its seatbelt sandbox before CEF initializes.
     /// - Windows: the app is loaded by CEF's bootstrap executable, which
     ///   brokers the sandbox. See [`sandbox_entry!`](crate::sandbox_entry).

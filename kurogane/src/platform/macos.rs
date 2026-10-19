@@ -18,9 +18,9 @@ use crate::error::RuntimeError;
 use crate::platform::macos::application::SimpleApplication;
 use crate::runtime::{AppHandle, RuntimeServices};
 
-/// The application, for the Objective-C `terminate:` override. Held weakly:
-/// the static lasts as long as the process and must not keep the
-/// application's state alive once it has ended.
+/// Application for the Objective-C `terminate:` override, held weakly. The
+/// static lasts as long as the process and must not keep the application's
+/// state alive once it has ended.
 static APP: OnceLock<Weak<RuntimeServices>> = OnceLock::new();
 
 /// Registers the application for the `terminate:` override, once CEF has
@@ -37,9 +37,9 @@ pub fn set_app(app: &AppHandle) {
 /// Loads the CEF the runtime resolves, its bundle's or the one tanso finds.
 ///
 /// CEF's subprocesses (`--type=renderer`, `gpu-process`, `utility`) get the
-/// library alone: an `NSApplication` registers its process with LaunchServices
-/// as an application, and inside a bundle every subprocess would then own a
-/// Dock tile of its own. CEF's helper executables install none.
+/// library alone. An `NSApplication` registers its process with
+/// LaunchServices as an application. Inside a bundle every subprocess would
+/// then own a Dock tile of its own. CEF's helper executables install none.
 ///
 /// Under [`SandboxMode::Chromium`](crate::SandboxMode::Chromium) subprocesses
 /// enter the seatbelt sandbox before CEF is loaded.

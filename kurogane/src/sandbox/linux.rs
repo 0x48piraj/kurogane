@@ -63,8 +63,8 @@ fn sandbox_helper_path(cef_root: &Path) -> PathBuf {
 /// needs.
 ///
 /// Mirrors Chromium's own probe in a forked child so this process's
-/// namespaces never change: unshare, then map the current user, which is the
-/// step AppArmor's user-namespace restriction denies.
+/// namespaces never change. The child unshares, then maps the current user.
+/// Mapping is the step AppArmor's user-namespace restriction denies.
 fn user_namespaces_available() -> bool {
     // SAFETY: `getuid` and `getgid` take no arguments and have no failure mode.
     let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };

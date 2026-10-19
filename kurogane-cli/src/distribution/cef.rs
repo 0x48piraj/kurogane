@@ -6,8 +6,8 @@
 
 use super::bootstrap::Bootstrap;
 
-/// Files only builds against CEF use: headers, CMake files, the C++ wrapper's
-/// sources and the import library.
+/// Headers, CMake files, the C++ wrapper's sources and the import library.
+/// Only builds against CEF use them.
 const DEV_ARTIFACTS: &[&str] = &[
     "include",
     "cmake",

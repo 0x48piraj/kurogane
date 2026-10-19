@@ -1,19 +1,21 @@
-//! What happens when a page downloads a file: a link the server answers with
-//! an attachment, a link with a `download` attribute, a `blob:` or `data:`
+//! Page downloads.
+//!
+//! A page downloads a file through a link the server answers with an
+//! attachment, a link with a `download` attribute or a `blob:` or `data:`
 //! export.
 //!
 //! Chromium would save every download silently into the user's Downloads
 //! folder, with no prompt and nothing on screen (the download bubble lives
 //! in the toolbar Kurogane's windows do not have), whichever page asked. By
-//! default Kurogane asks the user instead, with the system's Save As
-//! dialog: nothing reaches the disk unless the user picked the place. The
+//! default Kurogane asks the user instead with the system's Save As dialog.
+//! Nothing reaches the disk unless the user picked the place. The
 //! application's [`App::on_download`](crate::App::on_download) hook can
 //! choose the place itself, or refuse.
 //!
-//! Chromium's own download UI is kept out of the way: its prompt for a
-//! page's further downloads is granted (`grants_prompt`), since each of
-//! them still comes here, and its bubble of finished downloads is turned
-//! off at startup.
+//! Chromium's own download UI is kept out of the way. Its prompt for a
+//! page's further downloads is granted (`grants_prompt`) because each of
+//! them still comes here. Its bubble of finished downloads is turned off at
+//! startup.
 
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -59,8 +61,8 @@ impl DownloadRequest {
         &self.url
     }
 
-    /// The origin of the page the download comes from: the document the
-    /// window shows, which a frame inside it counts as.
+    /// The origin of the page the download comes from. That is the document
+    /// the window shows, which a frame inside it counts as.
     pub fn origin(&self) -> &Origin {
         &self.origin
     }
@@ -86,19 +88,19 @@ impl DownloadRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum DownloadDecision {
-    /// Kurogane's policy: [`Prompt`](Self::Prompt).
+    /// Kurogane's policy, which is [`Prompt`](Self::Prompt).
     #[default]
     Default,
 
     /// Asks the user with the system's Save As dialog, the suggested name
     /// filled in; cancelling it saves nothing. A window shows one dialog at
-    /// a time, so a download may wait for the one before it.
+    /// a time. A download may wait for the one before it.
     Prompt,
 
     /// Saves the file at this absolute path, which names the file itself,
     /// without asking, replacing a file already there. The folder is
-    /// created when missing; a place whose folder cannot be made, and a
-    /// relative path, save nothing.
+    /// created when missing. A place whose folder cannot be made saves
+    /// nothing and neither does a relative path.
     SaveTo(PathBuf),
 
     /// Saves nothing.
@@ -155,8 +157,8 @@ pub(crate) fn decide(app: &AppHandle, request: &DownloadRequest, ask: bool) -> A
     answer
 }
 
-/// Creates the folder `path` goes into. CEF creates it too, but saves into
-/// the temporary folder when it cannot: a place nobody chose.
+/// Creates the folder `path` goes into. CEF creates it too but saves into
+/// the temporary folder when it cannot. Nobody chose that place.
 fn make_room(path: &Path) -> std::io::Result<()> {
     match path.parent() {
         Some(folder) => std::fs::create_dir_all(folder),
@@ -164,27 +166,28 @@ fn make_room(path: &Path) -> std::io::Result<()> {
     }
 }
 
-/// A download waiting to ask the user where to save it: what continues it,
-/// and the file name to suggest.
+/// A download waiting to ask the user where to save it, with what continues
+/// it and the file name to suggest.
 pub(crate) struct SavePrompt {
     pub proceed: BeforeDownloadCallback,
     pub name: String,
 }
 
-/// One browser's downloads that Kurogane holds: those asking the user where
-/// to save them, one Save As dialog at a time, and those refused, until CEF
-/// reports them cancelled (only an update of a download can cancel it).
+/// One browser's downloads that Kurogane holds until CEF reports them
+/// cancelled (only an update of a download can cancel it). They are those
+/// asking the user where to save them (one Save As dialog at a time) and
+/// those refused.
 ///
 /// CEF shows one file dialog per browser. It cancels a second request at
-/// once, and that also cuts off the dialog already open: the user's answer
-/// to it is lost and its download never goes on. So a download waits until
+/// once. That also cuts off the dialog already open; the user's answer to it
+/// is lost and its download never goes on. A download therefore waits until
 /// the dialog before it is answered. Kurogane opens each dialog itself and
-/// continues the download with the chosen place: CEF's own dialog for a
-/// download reads the page that started it, which is gone once that page
-/// navigated away, and CEF then crashes. A dialog still belongs to the
-/// document it opened over, and Chromium drops its answer once that
-/// document is replaced, so the user is then asked again. `P` is what a
-/// waiting download needs to ask, `K` what cancels a download.
+/// continues the download with the chosen place. CEF's own dialog for a
+/// download reads the page that started it. That page is gone once it
+/// navigated away and CEF then crashes. A dialog still belongs to the
+/// document it opened over. Chromium drops its answer once that document is
+/// replaced and the user is then asked again. `P` is what a waiting download
+/// needs to ask, `K` what cancels a download.
 pub(crate) struct Downloads<P, K> {
     /// The download whose dialog is open
     open: Option<u32>,
@@ -209,14 +212,15 @@ impl<P, K> Default for Downloads<P, K> {
 }
 
 impl<P, K> Downloads<P, K> {
-    /// Whether a download's Save As dialog is open: Kurogane's own, which
-    /// the application's file dialog hook is never asked about.
+    /// Returns whether a download's Save As dialog is open. That dialog is
+    /// Kurogane's own; the application's file dialog hook is never asked
+    /// about it.
     pub(crate) fn is_asking(&self) -> bool {
         self.open.is_some()
     }
 
-    /// The download `id` is to ask the user: returns `prompt` when its
-    /// dialog may show now, or keeps it until the dialog before it is
+    /// Queues download `id` to ask the user. Returns `prompt` when its
+    /// dialog may show now or keeps it until the dialog before it is
     /// answered.
     pub(crate) fn ask(&mut self, id: u32, prompt: P) -> Option<P> {
         if self.open.is_some() {
@@ -227,17 +231,17 @@ impl<P, K> Downloads<P, K> {
         Some(prompt)
     }
 
-    /// The download `id` is refused: its next update cancels it.
+    /// Refuses download `id`. Its next update cancels it.
     pub(crate) fn refuse(&mut self, id: u32) {
         if !self.refused.contains(&id) {
             self.refused.push(id);
         }
     }
 
-    /// The download `id` was updated, `cancel` cancelling it: returns
+    /// Records an update of download `id`, which `cancel` cancels. Returns
     /// `cancel` when the download was refused, to cancel it now. Otherwise
     /// keeps `cancel` while the download asks or waits. A download that
-    /// `ended` is forgotten, a waiting one leaving the queue; an open one
+    /// `ended` is forgotten and a waiting one leaves the queue; an open one
     /// keeps its dialog until that is answered.
     pub(crate) fn update(&mut self, id: u32, cancel: Option<K>, ended: bool) -> Option<K> {
         self.cancels.retain(|(download, _)| *download != id);
@@ -257,10 +261,11 @@ impl<P, K> Downloads<P, K> {
         None
     }
 
-    /// The dialog of download `id` was answered, `saved` with a place:
-    /// returns what cancels the download now when the user dismissed it
-    /// (or refuses it, for its next update, when nothing can yet), and the
-    /// next waiting download, whose dialog may show now.
+    /// Records the answer to download `id`'s dialog, `saved` when it gave a
+    /// place. Returns what cancels the download now when the user dismissed
+    /// it and the next waiting download, whose dialog may show now. A
+    /// dismissed download nothing can cancel yet is refused for its next
+    /// update.
     pub(crate) fn answered(&mut self, id: u32, saved: bool) -> (Option<K>, Option<(u32, P)>) {
         let cancel = self
             .cancels
@@ -285,10 +290,11 @@ impl<P, K> Downloads<P, K> {
 const MULTIPLE_DOWNLOADS: u32 =
     tanso::sys::cef_permission_request_types_t::CEF_PERMISSION_TYPE_MULTIPLE_DOWNLOADS as u32;
 
-/// Whether Kurogane grants a permission prompt itself, without showing it:
-/// one asking for multiple downloads alone. Every download still passes
-/// [`decide`], so Chromium's prompt would only ask a second time. A prompt
-/// that asks for anything else as well keeps CEF's default.
+/// Returns whether Kurogane grants a permission prompt itself without
+/// showing it. It grants a prompt asking for multiple downloads alone. Every
+/// download still passes [`decide`]; Chromium's prompt would only ask a
+/// second time. A prompt that asks for anything else as well keeps CEF's
+/// default.
 pub(crate) fn grants_prompt(requested_permissions: u32) -> bool {
     requested_permissions == MULTIPLE_DOWNLOADS
 }

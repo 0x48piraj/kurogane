@@ -1,25 +1,27 @@
-//! How an application window opens: the start window
+//! How an application window opens.
+//!
+//! [`WindowOptions`] covers the start window
 //! ([`App::window`](crate::App::window)) and every window of
-//! [`AppInstance::create_window`](crate::AppInstance::create_window); and
-//! where one is, to open it there again ([`WindowPlacement`]).
+//! [`AppInstance::create_window`](crate::AppInstance::create_window).
+//! [`WindowPlacement`] holds where one is, to open it there again.
 
 use tanso::Rect;
 use serde::{Deserialize, Serialize};
 
-/// How an application window opens: the name the application knows it by,
-/// its title, size and place, the size it cannot be made smaller than, and
-/// its state.
+/// How an application window opens. It holds the name the application knows
+/// it by, its title, size and place, the size it cannot be made smaller than
+/// and its state.
 ///
-/// Sizes and places are in density-independent pixels (DIP), which the
-/// display's scale turns into pixels: 800 by 600 is 1200 by 900 pixels on a
-/// display at 150%. A place is on the screen, from the top-left corner of
-/// the primary display.
+/// Sizes and places are in density-independent pixels (DIP) which the
+/// display's scale turns into pixels. A size of 800 by 600 is 1200 by 900
+/// pixels on a display at 150%. A place is on the screen, from the top-left
+/// corner of the primary display.
 ///
 /// A size and a place are the window's content, the area its page shows
 /// in, without the frame the system draws around it. Centring a window and
 /// keeping it on a display take the whole window, frame included, on
 /// Windows and macOS. Under X11 the window manager adds the frame once the
-/// window shows, so there the content is centred and kept on the display.
+/// window shows. There the content is centred and kept on the display.
 ///
 /// ```no_run
 /// # use kurogane::{App, WindowOptions};
@@ -46,13 +48,13 @@ impl WindowOptions {
         Self::default()
     }
 
-    /// The application's name for the window, never shown:
+    /// The application's name for the window, never shown.
     /// [`WindowClosing::name`](crate::WindowClosing::name) gives it back as
-    /// the window closes, to keep its placement under, and
+    /// the window closes to keep its placement under.
     /// [`AppHandle::find_window_by_name`](crate::AppHandle::find_window_by_name)
-    /// finds the window by it. One open window has a name at a time:
+    /// finds the window by it. One open window has a name at a time.
     /// [`AppInstance::create_window`](crate::AppInstance::create_window) is
-    /// refused a name an open window has, until that window's close is
+    /// refused a name an open window has until that window's close is
     /// reported.
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
@@ -60,9 +62,9 @@ impl WindowOptions {
     }
 
     /// The window's title, kept whatever title the page gives itself.
-    /// Without one the window takes its page's title, as a browser tab
-    /// does, so a page the window shows names it in the taskbar and the
-    /// window switcher.
+    /// Without one the window takes its page's title as a browser tab does.
+    /// A page the window shows then names it in the taskbar and the window
+    /// switcher.
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
@@ -76,14 +78,14 @@ impl WindowOptions {
         self
     }
 
-    /// Opens the window as `placement` says: where it was the last time
-    /// ([`WindowClosing::placement`](crate::WindowClosing::placement)), at
-    /// its size and in its state. It decides the size over
-    /// [`size`](Self::size), and sets the state as [`state`](Self::state)
-    /// does: of the two, the later call holds. A place no display shows any
-    /// more is moved onto the nearest one, and a window larger than that
+    /// Opens the window as `placement` says. That is where it was the last
+    /// time ([`WindowClosing::placement`](crate::WindowClosing::placement)),
+    /// at its size and in its state. It decides the size over
+    /// [`size`](Self::size) and sets the state as [`state`](Self::state)
+    /// does. Of the two the later call holds. A place no display shows any
+    /// more is moved onto the nearest one. A window larger than that
     /// display's work area is made to fit it. Wayland lets no application
-    /// place its windows: there only the size applies.
+    /// place its windows; there only the size applies.
     pub fn placement(mut self, placement: WindowPlacement) -> Self {
         self.state = placement.state;
         self.placement = Some(placement);
@@ -99,8 +101,7 @@ impl WindowOptions {
 
     /// How the window first shows. Opened maximized, minimized or
     /// fullscreen, it restores to its size and place. Sets the state
-    /// [`placement`](Self::placement) sets: of the two, the later call
-    /// holds.
+    /// [`placement`](Self::placement) sets. Of the two the later call holds.
     pub fn state(mut self, state: WindowState) -> Self {
         self.state = state;
         self
@@ -180,13 +181,13 @@ impl WindowOptions {
     }
 }
 
-/// Where a window's content is on the screen, in density-independent
-/// pixels, and how the window shows. A window maximized, minimized or
-/// fullscreen is placed where it restores to.
+/// Where a window's content is on the screen in density-independent pixels
+/// and how the window shows. A window maximized, minimized or fullscreen is
+/// placed where it restores to.
 ///
 /// [`WindowClosing::placement`](crate::WindowClosing::placement) gives one
-/// as a window closes, and [`WindowOptions::placement`] opens a window as
-/// one says. Serialized with serde it is
+/// as a window closes. [`WindowOptions::placement`] opens a window as one
+/// says. Serialized with serde it is
 /// `{"x":200,"y":150,"width":900,"height":600,"state":"Maximized"}` in JSON,
 /// to keep with the application's settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,7 +204,7 @@ pub struct WindowPlacement {
     pub state: WindowState,
 }
 
-/// How a window shows: first, as its options say, and as it closes.
+/// How a window shows when it opens (as its options say) and as it closes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum WindowState {
@@ -222,8 +223,8 @@ pub enum WindowState {
 }
 
 impl WindowState {
-    /// The state a window in this one shows in once restored: minimized or
-    /// hidden, it comes back normal.
+    /// Returns the state a window in this one shows in once restored. A
+    /// minimized or hidden window comes back normal.
     pub(crate) fn restored(self) -> Self {
         match self {
             Self::Normal | Self::Minimized | Self::Hidden => Self::Normal,

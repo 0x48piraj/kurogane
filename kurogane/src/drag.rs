@@ -1,15 +1,14 @@
-//! A drag from another application entering a browser embedded in the
-//! application's own window: files from a file manager, a link, selected
-//! text.
+//! A drag from another application into a browser embedded in the
+//! application's own window.
 //!
-//! CEF asks as it enters (OnDragEnter), before the page sees a `dragenter`,
-//! and only for an Alloy-style browser, an embedded one: into a Chrome-style
-//! Views window, Kurogane's own, it asks nothing and the page gets the drop
-//! (measured on Windows, CEF 150).
+//! A drag carries files from a file manager, a link or selected text. CEF
+//! asks as it enters (OnDragEnter), before the page sees a `dragenter`. It
+//! asks only for an embedded (Alloy-style) browser. Into a Chrome-style Views
+//! window (Kurogane's own) it asks nothing and the page gets the drop.
 //! The application's [`App::on_drag_enter`](crate::App::on_drag_enter) hook
-//! may refuse it, and sees the paths of the files dragged, which the page
-//! never does: a page gets each dropped file's contents and name only. The
-//! drags of DevTools and of Chromium's own browsers are not asked about.
+//! may refuse it. The hook sees the paths of the files dragged. A page never
+//! does; it gets each dropped file's contents and name only. The drags of
+//! DevTools and of Chromium's own browsers are not asked about.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -64,7 +63,7 @@ impl DragEnter {
         self.text.as_deref()
     }
 
-    /// The origin of the page the drag enters: the window's own page.
+    /// The origin of the page the drag enters. It is the window's own page.
     pub fn origin(&self) -> &Origin {
         &self.origin
     }
@@ -79,21 +78,21 @@ impl DragEnter {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum DragDecision {
-    /// Kurogane's policy: the drag goes on, as [`Allow`](Self::Allow).
+    /// Kurogane's policy. The drag goes on as with [`Allow`](Self::Allow).
     #[default]
     Default,
 
-    /// The drag goes on: the page sees it, and may take its drop.
+    /// The drag goes on. The page sees it and may take its drop.
     Allow,
 
-    /// The drag stops at the window: the page sees nothing of it and the
+    /// The drag stops at the window. The page sees nothing of it and the
     /// pointer shows it cannot drop there.
     Refuse,
 }
 
-/// Asks the application's hook about `drag`: whether it is refused. Runs
-/// on CEF's UI thread with no lock held. A hook that panics refuses the
-/// drag: no file reaches the page an error might have kept out.
+/// Returns whether the application's hook refuses `drag`. Runs on CEF's UI
+/// thread with no lock held. A hook that panics refuses the drag. No file
+/// the hook might have kept out reaches the page.
 pub(crate) fn refused(app: &AppHandle, drag: &DragEnter) -> bool {
     let hooks = app.hooks();
     let Some(hook) = hooks.as_deref().and_then(|hooks| hooks.drag_enter.as_ref()) else {

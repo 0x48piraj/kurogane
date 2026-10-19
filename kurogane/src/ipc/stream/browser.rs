@@ -4,14 +4,15 @@
 //! chunk delivery, completion, cancellation and cleanup of active streams.
 //! Each stream gets its own handler instance from the registered factory.
 //!
-//! An open is answered before the handler can send: `STREAM_BROWSER_OPENED`
-//! once `on_open` accepts, or `STREAM_BROWSER_ERROR`.
+//! An open is answered before the handler can send. The answer is
+//! `STREAM_BROWSER_OPENED` once `on_open` accepts and `STREAM_BROWSER_ERROR`
+//! otherwise.
 //!
 //! Streams are scoped to the document that opened them. Only that document
 //! may send data, complete or cancel the stream, which closes with it.
 //!
-//! Stream responders share stream state, so responses stop once the stream
-//! has ended or failed.
+//! Stream responders share stream state. Responses stop once the stream has
+//! ended or failed.
 
 use tanso::*;
 use std::panic::{catch_unwind, AssertUnwindSafe};

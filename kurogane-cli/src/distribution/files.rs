@@ -4,10 +4,9 @@ use std::path::Path;
 
 /// Mirrors `src` into `dst`, reusing files where possible.
 ///
-/// A staged CEF runtime is hundreds of megabytes of read-only files that are
-/// already on disk, so it is hard linked rather than copied. Linking is
-/// refused across volumes and on filesystems without hard links and each
-/// file falls back to a copy.
+/// A staged CEF runtime is hundreds of megabytes of read-only files already
+/// on disk. It is hard linked rather than copied. Across volumes and on
+/// filesystems without hard links each file falls back to a copy.
 ///
 /// `keep` is called for every entry by name at each directory level.
 pub fn link_dir(src: &Path, dst: &Path, keep: &dyn Fn(&str) -> bool) -> std::io::Result<()> {

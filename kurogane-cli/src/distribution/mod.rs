@@ -68,7 +68,7 @@ pub struct ResolvedDistribution {
     pub extra_resources: Vec<ResolvedResource>,
 }
 
-/// The binary a distribution starts, and what it loads.
+/// Binary a distribution starts and what it loads.
 #[derive(Debug, Clone)]
 pub enum Executable {
     /// The application's own executable.
@@ -77,9 +77,9 @@ pub enum Executable {
     /// CEF's sandbox bootstrap, which loads the application from a library.
     ///
     /// Chromium's Windows sandbox is brokered by whichever process starts the
-    /// browser, and CEF keeps that broker in its bootstrap. The bootstrap is
+    /// browser. CEF keeps that broker in its bootstrap. The bootstrap is
     /// installed under the application's name and finds the library beside
-    /// it under the same name, see [`crate::distribution::client_library_path`].
+    /// it under the same name ([`crate::distribution::client_library_path`]).
     Bootstrap {
         bootstrap: PathBuf,
         library: PathBuf,
@@ -124,8 +124,8 @@ pub enum DistributionError {
     #[error("the application has no executable name to install under")]
     MissingExeName,
 
-    /// A name every package format turns into a file or folder name, and
-    /// some into a script, that cannot be one on every platform.
+    /// A name that cannot be a file or folder name on every platform. Every
+    /// package format turns it into one and some into a script.
     #[error("the {what} {name:?} cannot name a file: {problem}")]
     InvalidName {
         what: &'static str,
@@ -154,9 +154,9 @@ pub enum DistributionError {
     #[error("resource destination must be a relative path without '..' components: {0}")]
     InvalidResourceDestination(PathBuf),
 
-    /// A link under a resource that bundling would follow out of it,
-    /// around in a loop, or to nothing. A bundle copies what a link leads
-    /// to, so a link to a key elsewhere would ship the key.
+    /// A link under a resource that bundling would follow out of it, around
+    /// in a loop or to nothing. A bundle copies what a link leads to. A link
+    /// to a key elsewhere would ship the key.
     #[error("the resource link {link} {problem}")]
     ResourceLink { link: PathBuf, problem: LinkProblem },
 
@@ -298,10 +298,10 @@ const DEVICES: [&str; 22] = [
     "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
-/// Whether `name` names one file or folder on Windows, macOS and Linux
-/// alike, so a project bundles under the same name everywhere.
+/// Checks that `name` names one file or folder on Windows, macOS and Linux
+/// alike. A project then bundles under the same name everywhere.
 ///
-/// Every character else is allowed: `$`, quotes and backticks reach scripts
+/// Every other character is allowed. `$`, quotes and backticks reach scripts
 /// only quoted for them.
 pub fn portable_file_name(name: &str) -> Result<(), NameProblem> {
     if name.is_empty() {
@@ -347,10 +347,10 @@ fn check_name(what: &'static str, name: &str) -> Result<(), DistributionError> {
 }
 
 /// Checks that bundling the resource at `source` copies only what lies
-/// inside it. A bundle copies what each link leads to, so every link under
-/// a directory resource must lead to a file or directory inside it, and
-/// none to a directory the copy is already in. The resource itself is what
-/// its entry names, a link or not.
+/// inside it. A bundle copies what each link leads to. Every link under a
+/// directory resource must lead to a file or directory inside it and none
+/// to a directory the copy is already in. The resource itself is what its
+/// entry names, a link or not.
 fn check_resource_links(source: &Path) -> Result<(), DistributionError> {
     if !source.is_dir() {
         return Ok(());
@@ -813,8 +813,8 @@ mod tests {
         dist.validate().unwrap();
     }
 
-    /// A distribution whose one resource is the directory `assets` in
-    /// `dir`, holding `inside.txt`, and the file `secret.txt` beside it.
+    /// Returns a distribution whose one resource is the directory `assets`
+    /// in `dir` holding `inside.txt`. The file `secret.txt` lies beside it.
     #[cfg(unix)]
     fn with_assets(dir: &Path) -> (ResolvedDistribution, PathBuf) {
         let mut dist = crate::distribution::test_fixtures::sample_distribution(dir);

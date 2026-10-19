@@ -2,8 +2,8 @@
 //!
 //! This module provides a normalized intermediate representation for
 //! Chromium command-line switches. Each switch is keyed as Chromium keys
-//! it, so every spelling of one switch is one entry. The feature lists are
-//! added to, never replaced: CEF's own entries, the launch's and every
+//! it. Every spelling of one switch is one entry. The feature lists are
+//! added to, never replaced. CEF's own entries, the launch's and every
 //! setting's stay.
 
 use tanso::*;
@@ -128,8 +128,8 @@ impl ChromiumFlags {
     }
 
     /// Turns `feature` off unless an `enable-features` entry turns it on.
-    /// Chromium applies `disable-features` over `enable-features`, so a
-    /// default that stayed in the list would win over the application.
+    /// Chromium applies `disable-features` over `enable-features`. A default
+    /// that stayed in the list would win over the application.
     pub(crate) fn disable_by_default(&mut self, feature: &str) {
         add_entries(&mut self.disabled_by_default, feature);
     }

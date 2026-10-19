@@ -88,10 +88,10 @@ impl PendingPopups {
 }
 
 /// What the system shows of every window Kurogane opens, whatever opened
-/// it: the application's identity, plain data given at startup.
+/// it. It is the application's identity, plain data given at startup.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct WindowIdentity {
-    /// The Linux window class: WM_CLASS under X11, the app_id under Wayland
+    /// The Linux window class, WM_CLASS under X11 and the app_id under Wayland
     pub class: Option<String>,
     /// The windows' icon, a PNG, decoded for each window as it is created
     pub icon: Option<Cow<'static, [u8]>>,
@@ -115,16 +115,16 @@ fn executable_class() -> Option<String> {
     (!name.chars().any(char::is_control)).then(|| name.to_owned())
 }
 
-/// The size, in DIP, CEF takes a window icon at: it refuses any other
-/// (CefWindowView::SetWindowIcon), and the app icon at any size.
+/// The size in DIP CEF takes a window icon at. It refuses any other
+/// (CefWindowView::SetWindowIcon) and takes the app icon at any size.
 const WINDOW_ICON_SIDE: f32 = 16.0;
 
-/// A window's two icons from `png`, as CEF images: the window icon (the
-/// title bar), the PNG's pixels at the scale that makes it 16 DIP, and the
-/// app icon (the taskbar, the window switcher) as it is. Made with each
-/// window, on the UI thread: a CEF image may live only between
-/// CefInitialize and CefShutdown, which one kept in the runtime's services
-/// would outlive.
+/// Returns a window's two icons from `png` as CEF images. The window icon
+/// (the title bar) is the PNG's pixels at the scale that makes it 16 DIP.
+/// The app icon (the taskbar, the window switcher) is the PNG as it is. Both
+/// are made with each window on the UI thread. A CEF image may live only
+/// between CefInitialize and CefShutdown, which one kept in the runtime's
+/// services would outlive.
 fn window_icons(png: &[u8]) -> Option<(Image, Image)> {
     let app = image_create()?;
     if app.add_png(1.0, Some(png)) == 0 {
@@ -140,8 +140,8 @@ fn window_icons(png: &[u8]) -> Option<(Image, Image)> {
 /// Where a new top-level window opens and how it first shows.
 #[derive(Clone, Debug)]
 pub(crate) enum Opening {
-    /// A window of the application's own, as its options say: the start
-    /// window, one from create_window, or one a page opened as the
+    /// A window of the application's own, as its options say. It is the
+    /// start window, one from create_window or one a page opened as the
     /// application's.
     Application(WindowOptions),
     /// A popup's window, at the size and position its page asked for;
@@ -161,9 +161,9 @@ impl Opening {
 
     /// Where the window opens, as the application or the page asked
     /// (an application's placement is then brought onto a display, see
-    /// [`on_a_display`]). Empty when nobody placed it: an application window
-    /// is then centred at its size ([`centred`]), and CEF gives a popup the
-    /// size from preferred_size at the origin (0,0) (cef_window_delegate.h,
+    /// [`on_a_display`]). Empty when nobody placed it. An application window
+    /// is then centred at its size ([`centred`]). CEF gives a popup the size
+    /// from preferred_size at the origin (0,0) (cef_window_delegate.h,
     /// GetInitialBounds).
     fn initial_bounds(&self) -> Rect {
         match self {
@@ -183,7 +183,7 @@ impl Opening {
     }
 
     /// The state the window shows in once restored, before it has shown in
-    /// any: opened minimized or hidden, it comes back normal.
+    /// any. A window opened minimized or hidden comes back normal.
     fn restored_state(&self) -> WindowState {
         match self {
             Self::Application(options) => options.initial_state().restored(),
@@ -203,9 +203,9 @@ impl Opening {
         }
     }
 
-    /// Whether the window takes its page's title, as a browser tab does: a
-    /// popup's always does, an application window's unless its options fix
-    /// one.
+    /// Whether the window takes its page's title, as a browser tab does. A
+    /// popup's always does and an application window's does unless its
+    /// options fix one.
     fn follows_title(&self) -> bool {
         match self {
             Self::Application(options) => options.fixed_title().is_none(),
@@ -230,12 +230,12 @@ impl Opening {
 }
 
 /// The least of a window, in DIP each way, that must show on a display for
-/// it to stay where it was put: Chromium's rule for its own windows
+/// it to stay where it was put. It is Chromium's rule for its own windows
 /// (chrome/browser/ui/window_sizer, kMinVisibleWidth and kMinVisibleHeight).
 const MIN_VISIBLE: i32 = 30;
 
-/// An application window's size when its options give none, in DIP: the
-/// size CEF gives a window it is asked to size itself.
+/// An application window's size in DIP when its options give none. CEF gives
+/// a window it is asked to size itself the same size.
 const DEFAULT_SIZE: (i32, i32) = (800, 600);
 
 /// Whether the frame around a window's content is known as CEF creates the
@@ -293,8 +293,8 @@ impl Frame {
     }
 }
 
-/// Where an application window opens as a whole, its frame known: around
-/// its placement and brought onto a display, or centred at its size with
+/// Where an application window opens as a whole, its frame known. It opens
+/// around its placement, brought onto a display, or centred at its size with
 /// the frame. UI thread.
 fn framed_opening_bounds(options: &WindowOptions, frame: &Frame) -> Rect {
     match options.requested_bounds() {
@@ -310,7 +310,7 @@ fn framed_opening_bounds(options: &WindowOptions, frame: &Frame) -> Rect {
 }
 
 /// Shows a window CEF opened normal in `state`. Maximized or minimized it
-/// shows as it takes the state, and hidden it stays unshown. UI thread.
+/// shows as it takes the state. Hidden it stays unshown. UI thread.
 fn show_in(window: &Window, state: WindowState) {
     match state {
         WindowState::Normal => window.show(),
@@ -330,9 +330,9 @@ fn show_in(window: &Window, state: WindowState) {
     }
 }
 
-/// Where a window opens: an application window's content where its
-/// placement says, brought onto a display, or centred at its size; a popup
-/// where its page asked, empty for CEF to choose. UI thread.
+/// Where a window opens. An application window's content opens where its
+/// placement says, brought onto a display, or centred at its size. A popup
+/// opens where its page asked, empty for CEF to choose. UI thread.
 fn opening_bounds(opening: &Opening) -> Rect {
     match opening {
         Opening::Application(options) => match options.requested_bounds() {
@@ -347,8 +347,8 @@ fn opening_bounds(opening: &Opening) -> Rect {
 }
 
 /// A window of `width` by `height` centred on the primary display's work
-/// area, made to fit it. Computed before the window exists, so a window
-/// that opens maximized, minimized or fullscreen restores to it. UI thread.
+/// area, made to fit it. Computed before the window exists. A window that
+/// opens maximized, minimized or fullscreen restores to it. UI thread.
 fn centred(width: i32, height: i32) -> Rect {
     match display_get_primary() {
         Some(display) => centre(width, height, &display.work_area()),
@@ -378,9 +378,9 @@ fn centre(width: i32, height: i32, area: &Rect) -> Rect {
 }
 
 /// `bounds` on the display that shows most of them, or the nearest one when
-/// none does: made to fit its work area (and then inside it), the top edge
-/// not above it, and moved inside it when less than [`MIN_VISIBLE`] of the
-/// window shows there. UI thread.
+/// none does. They are made to fit its work area (and then inside it) with
+/// the top edge not above it. They are moved inside it when less than
+/// [`MIN_VISIBLE`] of the window shows there. UI thread.
 fn on_a_display(bounds: Rect) -> Rect {
     match display_get_matching_bounds(Some(&bounds), 0) {
         Some(display) => fit(bounds, &display.work_area()),
@@ -547,9 +547,8 @@ wrap_window_delegate! {
             let (Some(window), Some(bounds)) = (window, new_bounds) else {
                 return;
             };
-            // CEF reports the new state with the bounds (measured on
-            // Windows): a maximized, minimized or fullscreen window's bounds
-            // are not where it restores to
+            // CEF reports the new state with the bounds; a maximized, minimized
+            // or fullscreen window's bounds are not where it restores to
             let (maximized, minimized, fullscreen) =
                 (window.is_maximized(), window.is_minimized(), window.is_fullscreen());
             let content = window.client_area_bounds_in_screen();
@@ -740,7 +739,7 @@ wrap_browser_view_delegate! {
 /// UI thread, where CEF creates browsers and windows.
 ///
 /// The browser is created when the window adds its view
-/// (cef_browser_view.h:53-54), and is registered and linked to the window
+/// (cef_browser_view.h:53-54). It is registered and linked to the window
 /// then. A window named holds its name from here on, until its browser's
 /// close is reported; refused when an open window holds it.
 pub(crate) fn open_browser_window(

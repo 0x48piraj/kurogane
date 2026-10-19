@@ -1,4 +1,4 @@
-//! Winit + Kurogane: Native embedded browser integration
+//! Winit and Kurogane with an embedded native browser.
 //!
 //! The host application creates and owns the native window.
 //! Kurogane is attached as a child browser.
@@ -6,19 +6,19 @@
 //! This gives complete control over the window hierarchy,
 //! layout, resize handling and application lifecycle.
 //!
-//! Chromium is pumped as in views_scheduler.rs: at the earliest
-//! deadline it asked for, and at least every 33 ms.
+//! Chromium is pumped as in views_scheduler.rs, at the earliest
+//! deadline it asked for and at least every 33 ms.
 //!
 //! Browser shutdown is asynchronous.
 //! After requesting browser closure the host must continue
 //! pumping Chromium until on_before_close has completed and all
-//! browser instances have been destroyed: until should_shutdown().
+//! browser instances have been destroyed (until should_shutdown()).
 //! The host's own close is not the only way there; on macOS, Quit
 //! (Kurogane's menu, or the Dock's) closes every browser too.
 //!
 //! On macOS the event loop keeps Kurogane's App, Edit and Window
-//! menus (with_default_menu(false)): winit's own has no Edit menu,
-//! so Cmd+C, Cmd+V and Cmd+A would reach no web view.
+//! menus (with_default_menu(false)). winit's own has no Edit menu;
+//! Cmd+C, Cmd+V and Cmd+A would reach no web view through it.
 
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -30,7 +30,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::Window;
 
-/// The longest the loop waits between pumps: cefclient's kMaxTimerDelay.
+/// The longest the loop waits between pumps (cefclient's kMaxTimerDelay).
 /// CEF does not promise to ask again after every pump.
 const MAX_PUMP_DELAY: Duration = Duration::from_millis(1000 / 30);
 
@@ -38,8 +38,8 @@ struct EmbeddedDriver {
     handle: kurogane::AppInstance,
     window: Option<Window>,
     browser: Option<kurogane::BrowserHandle>,
-    /// The earliest deadline CEF asked for, and never later than
-    /// MAX_PUMP_DELAY after the last pump
+    /// The earliest deadline CEF asked for, never later than MAX_PUMP_DELAY
+    /// after the last pump
     next_pump: Instant,
 }
 
@@ -117,8 +117,8 @@ impl ApplicationHandler<Instant> for EmbeddedDriver {
     }
 }
 
-/// The window's whole client area, in the units a child browser is placed in:
-/// points on macOS, pixels on Windows and X11
+/// Returns the window's whole client area in the units a child browser is
+/// placed in (points on macOS, pixels on Windows and X11)
 fn client_bounds(window: &Window) -> BrowserBounds {
     let size = window.inner_size();
     #[cfg(target_os = "macos")]

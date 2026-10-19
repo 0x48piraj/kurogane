@@ -54,7 +54,7 @@ pub enum PumpRequest {
 
 impl PumpRequest {
     /// Returns when to call [`AppInstance::pump`] for a request made at
-    /// `now`: `now` itself, or `now` plus the delay.
+    /// `now`. That is `now` itself or `now` plus the delay.
     ///
     /// A delay too long to add to `now` gives `now`; pumping early is safe.
     pub fn deadline(self, now: Instant) -> Instant {
@@ -254,10 +254,10 @@ pub trait ClientAppRendererDelegate: Send + Sync {
 /// # Processes
 ///
 /// Chromium's helper processes (renderer, GPU, utility) run this same binary
-/// again, with a `--type=` argument. In a helper, the call that starts the
+/// again, with a `--type=` argument. In a helper the call that starts the
 /// runtime ([`App::run`], [`App::run_or_exit`], [`App::start`],
 /// [`App::build`] or [`App::start_embedded`]) becomes the helper and never
-/// returns, so code before it runs once per process. Keep side effects
+/// returns. Code before it runs once per process. Keep side effects
 /// (files, output, sockets, spawned processes) out of that code. Guard them
 /// with [`is_browser_process`](crate::is_browser_process), or move them into
 /// [`ClientAppBrowserDelegate::on_context_initialized`] which only the
@@ -363,12 +363,12 @@ impl App {
     /// An origin is `scheme://host[:port]`, as `location.origin` reports it
     /// (`app://app` for the bundled frontend, or the development server's origin);
     /// parse one with [`Origin::parse`]. Calls for the same name accumulate and
-    /// the list replaces the default below, name the application's own origin
+    /// the list replaces the default below. Name the application's own origin
     /// too if its pages call `name`.
     ///
     /// A name without a rule is reachable from the application's own origin
-    /// only: `app://app` for [`App::new`], the start URL's origin for
-    /// [`App::url`]. A page of any other origin, whether it arrived in a popup,
+    /// only (`app://app` for [`App::new`], the start URL's origin for
+    /// [`App::url`]). A page of any other origin, whether it arrived in a popup,
     /// an iframe or a window navigated away, reaches only the names a rule gives
     /// it. An opaque document (`about:blank`, `data:`, a sandboxed frame)
     /// reaches only names made public with [`App::permit_all`]. A refused
@@ -427,7 +427,7 @@ impl App {
         self
     }
 
-    /// Switches to deny-by-default: a name without a rule is refused to every
+    /// Switches to deny-by-default. A name without a rule is refused to every
     /// origin, the application's own included. Only commands, streams and
     /// events with a configured rule ([`App::permit`], [`App::permit_all`],
     /// [`App::permit_event`], [`App::permit_event_all`]) stay reachable, only
@@ -438,8 +438,8 @@ impl App {
         self
     }
 
-    /// Installs the filesystem capability: the `fs.*` commands, each call
-    /// authorized by filesystem grants for the invoking frame's origin.
+    /// Installs the filesystem capability, the `fs.*` commands. Filesystem
+    /// grants for the invoking frame's origin authorize each call.
     ///
     /// Grants are the only authorization for these commands; the ACL never
     /// gates them, `permit` cannot name them and an origin without a grant
@@ -452,8 +452,8 @@ impl App {
     /// Takes the builder rather than a built
     /// [`Filesystem`](crate::capability::Filesystem), because the roots are
     /// opened here in the browser process only. Helper processes run this
-    /// same code but never serve `fs.*`, and a directory handle a helper
-    /// opened before entering Chromium's sandbox would stay usable inside it.
+    /// same code but never serve `fs.*`. A directory handle a helper opened
+    /// before entering Chromium's sandbox would stay usable inside it.
     /// A configuration the builder rejects is reported by [`App::build`] as
     /// [`RuntimeError::InvalidFilesystem`].
     pub fn filesystem(self, fs: FilesystemBuilder) -> Self {
@@ -563,8 +563,8 @@ impl App {
     /// # Threads
     ///
     /// The closure runs on the UI thread, which also runs every window and
-    /// receives every message from the page: they all wait until it returns,
-    /// and CEF says not to block this thread. For slow work use
+    /// receives every message from the page. They all wait until it returns.
+    /// CEF says not to block this thread. For slow work use
     /// [`App::async_command`] and resolve its responder from another thread.
     pub fn command<Req, Res, F>(mut self, name: impl Into<String>, f: F) -> Self
     where
@@ -600,8 +600,8 @@ impl App {
     ///
     /// # Threads
     ///
-    /// The closure runs on the UI thread, as for [`App::command`], so it should
-    /// return promptly; the [`Responder`] may be resolved from any thread.
+    /// The closure runs on the UI thread as for [`App::command`] and should
+    /// return promptly. The [`Responder`] may be resolved from any thread.
     pub fn async_command<Req, Res, F>(mut self, name: impl Into<String>, f: F) -> Self
     where
         Req: serde::de::DeserializeOwned + Send + 'static,
@@ -688,9 +688,9 @@ impl App {
     /// Registers a stream handler whose factory does not need AppHandle.
     ///
     /// The factory is called for each stream a page opens under `name` that
-    /// the ACL lets through, so each stream has a handler, and mutable state,
-    /// of its own. [`StreamHandler`](crate::StreamHandler) describes a
-    /// stream's life: the handler accepts or refuses the open, then sends.
+    /// the ACL lets through. Each stream has a handler and mutable state of
+    /// its own. [`StreamHandler`](crate::StreamHandler) describes a stream's
+    /// life; the handler accepts or refuses the open and then sends.
     ///
     /// A name that is already registered is a configuration error, reported
     /// by [`App::build`].
@@ -698,7 +698,7 @@ impl App {
     /// # Threads
     ///
     /// The factory and every [`StreamHandler`](crate::StreamHandler)
-    /// callback run on the UI thread, as for [`App::command`], so they should
+    /// callback run on the UI thread as for [`App::command`] and should
     /// return promptly. A [`StreamResponder`](crate::StreamResponder)
     /// may be used from any thread.
     pub fn stream<F, H>(self, name: impl Into<String>, factory: F) -> Self
@@ -735,16 +735,16 @@ impl App {
         self
     }
 
-    /// How the start window opens: the name the application knows it by,
-    /// its title, size and place, the size it cannot be made smaller than,
-    /// and its state (see [`WindowOptions`]).
+    /// Sets the start window's [`WindowOptions`]. They hold the name the
+    /// application knows it by, its title, size and place, the size it cannot
+    /// be made smaller than and its state.
     ///
-    /// Without it the start window takes its page's title, 800 by 600
-    /// centred on the primary display. An application started
-    /// with [`App::start_embedded`] has no start window, and options given
-    /// to it are [`ConfigError::WindowWhenEmbedded`]; options no window can
-    /// have are [`ConfigError::InvalidWindowOptions`]. A later call replaces
-    /// an earlier one.
+    /// Without it the start window takes its page's title and opens 800 by
+    /// 600 centered on the primary display. An application started with
+    /// [`App::start_embedded`] has no start window. Options given to it are
+    /// [`ConfigError::WindowWhenEmbedded`]; options no window can have are
+    /// [`ConfigError::InvalidWindowOptions`]. A later call replaces an
+    /// earlier one.
     ///
     /// ```no_run
     /// # use kurogane::{App, WindowOptions, WindowState};
@@ -757,11 +757,11 @@ impl App {
         self
     }
 
-    /// The class of every window Kurogane opens on Linux: WM_CLASS under
-    /// X11, the app_id under Wayland. The desktop and the window manager
-    /// tell an application's windows by it: a launcher's icon attaches to
+    /// Sets the class of every window Kurogane opens on Linux (WM_CLASS under
+    /// X11, the app_id under Wayland). The desktop and the window manager
+    /// tell an application's windows by it. A launcher's icon attaches to
     /// them when its desktop entry names the class (`StartupWMClass` under
-    /// X11; under Wayland the entry's file name is the app_id), and the
+    /// X11; under Wayland the entry's file name is the app_id). The
     /// compositor's rules for the application match it. `kurogane bundle`
     /// writes `[app].identifier` from `kurogane.toml` as the AppImage's
     /// `StartupWMClass`, or the executable's name without one. Give this the
@@ -771,9 +771,9 @@ impl App {
     /// popups and DevTools alike; not a browser embedded in the
     /// application's own window, whose window is the application's. Without
     /// it the class is the executable's file name. Other platforms have no
-    /// window class and ignore it. An empty class, or one with a control character, is
-    /// [`ConfigError::InvalidWindowClass`]. A later call replaces an earlier
-    /// one.
+    /// window class and ignore it. An empty class or one with a control
+    /// character is [`ConfigError::InvalidWindowClass`]. A later call
+    /// replaces an earlier one.
     ///
     /// ```no_run
     /// # use kurogane::App;
@@ -784,14 +784,14 @@ impl App {
         self
     }
 
-    /// The icon of every window Kurogane opens, a PNG.
+    /// Sets the icon of every window Kurogane opens, a PNG.
     ///
     /// On Windows it is the window's icon in its title bar, the taskbar and
     /// the window switcher; under X11 the icon the window manager shows.
-    /// A square image of 256 by 256 is plenty: the system scales it to each
+    /// A square image of 256 by 256 is plenty; the system scales it to each
     /// place. Under Wayland the desktop takes a window's icon from the
-    /// desktop entry its class names ([`App::window_class`]), and on macOS
-    /// windows have none: the Dock shows the application's own icon.
+    /// desktop entry its class names ([`App::window_class`]). On macOS
+    /// windows have none and the Dock shows the application's own icon.
     ///
     /// It is the icon of the start window,
     /// [`AppInstance::create_window`]'s windows, popups and DevTools alike;
@@ -810,16 +810,16 @@ impl App {
         self
     }
 
-    /// Names the application's profile: its cookies, storage and caches.
+    /// Names the application's profile (its cookies, storage and caches).
     ///
-    /// Defaults to the executable's name. CEF runs one instance per profile:
-    /// launching the application while it runs brings the running instance to
+    /// Defaults to the executable's name. CEF runs one instance per profile.
+    /// Launching the application while it runs brings the running instance to
     /// the front (see [`App::on_second_instance`]). Debug builds use a profile
     /// of their own, named with a `-dev` suffix.
     ///
-    /// Profiles live in `kurogane/profiles` in the local data directory;
-    /// `~/.local/share` on Linux, `~/Library/Application Support` on macOS,
-    /// `%LOCALAPPDATA%` on Windows. [`App::profile_dir`] puts the profile
+    /// Profiles live in `kurogane/profiles` in the local data directory
+    /// (`~/.local/share` on Linux, `~/Library/Application Support` on macOS,
+    /// `%LOCALAPPDATA%` on Windows). [`App::profile_dir`] puts the profile
     /// somewhere else.
     pub fn profile_id(mut self, id: impl Into<String>) -> Self {
         self.profile_id = Some(id.into());
@@ -830,9 +830,9 @@ impl App {
     /// of Kurogane's place for it ([`App::profile_id`]).
     ///
     /// The directory is created when missing and used as given, in debug
-    /// builds too: a development run then shares it and, as CEF runs one
-    /// instance per profile, hands its launch to the application already
-    /// running there. A relative path is
+    /// builds too. A development run then shares it and hands its launch to
+    /// the application already running there (CEF runs one instance per
+    /// profile). A relative path is
     /// [`ConfigError::InvalidProfileDir`](crate::ConfigError::InvalidProfileDir),
     /// as is a directory given together with [`App::profile_id`], which
     /// would then name nothing. A later call replaces an earlier one.
@@ -853,12 +853,12 @@ impl App {
     ///
     /// CEF runs one instance per profile ([`App::profile_id`]). A launch that
     /// finds the application running hands it its arguments and exits with
-    /// status 0, and the running application's windows come to the front.
-    /// `f` then receives the launch, for example to open a file or a link it
+    /// status 0. The running application's windows come to the front. `f`
+    /// then receives the launch, for example to open a file or a link it
     /// names.
     ///
-    /// Runs on the UI thread. On macOS, opening the application's bundle while
-    /// it runs activates it without a second launch, so `f` runs only for
+    /// Runs on the UI thread. On macOS opening the application's bundle while
+    /// it runs activates it without a second launch. There `f` runs only for
     /// launches that start a process, such as running the executable directly.
     ///
     /// A later call replaces an earlier one.
@@ -870,31 +870,31 @@ impl App {
         self
     }
 
-    /// Decides what happens when a page asks for a window of its own:
+    /// Decides what happens when a page asks for a window of its own.
     /// `window.open`, a `target=_blank` link, a form that targets a new
-    /// window, a link clicked with Ctrl (Cmd on macOS), the middle button or
-    /// Shift. An allowed modifier click opens in a new application window,
-    /// never in Chromium's tabbed browser window.
+    /// window and a link clicked with Ctrl (Cmd on macOS), the middle button
+    /// or Shift all ask. An allowed modifier click opens in a new application
+    /// window, never in Chromium's tabbed browser window.
     ///
-    /// Without a hook, or when it answers [`NewWindowDecision::Default`],
-    /// Kurogane decides: a page of the application's own origin opens in an
-    /// application window, an `http` or `https` link the user clicked opens
-    /// in the system's default browser, and anything else is refused. That
-    /// keeps a website the application never chose out of its windows, and
-    /// a script alone never starts another program.
+    /// Kurogane decides without a hook or when it answers
+    /// [`NewWindowDecision::Default`]. A page of the application's own origin
+    /// opens in an application window. An `http` or `https` link the user
+    /// clicked opens in the system's default browser. Anything else is
+    /// refused. A website the application never chose stays out of its
+    /// windows and a script alone never starts another program.
     ///
-    /// The hook can widen that, for example
-    /// [`NewWindowDecision::Allow`] for a sign-in page that has to run
-    /// inside the application, or narrow it, with
-    /// [`NewWindowDecision::Deny`] or [`NewWindowDecision::OpenExternal`].
+    /// The hook can widen that, for example with [`NewWindowDecision::Allow`]
+    /// for a sign-in page that has to run inside the application. It narrows
+    /// it with [`NewWindowDecision::Deny`] or
+    /// [`NewWindowDecision::OpenExternal`].
     /// [`NewWindowDecision::OpenExternal`] opens only an `http` or `https`
     /// link the user clicked and refuses anything else. Compare origins, not
-    /// strings: `https://trusted.example.evil.net` starts with
+    /// strings. `https://trusted.example.evil.net` starts with
     /// `https://trusted.example`.
     ///
-    /// Runs on the UI thread, before the window exists, so it must not
-    /// block. A hook that panics refuses the window. A later call replaces an
-    /// earlier one.
+    /// Runs on the UI thread before the window exists and must not block. A
+    /// hook that panics refuses the window. A later call replaces an earlier
+    /// one.
     ///
     /// ```no_run
     /// # use kurogane::{App, NewWindowDecision, Origin};
@@ -917,22 +917,25 @@ impl App {
         self
     }
 
-    /// Decides where a page may take the window it is in: a link, a
-    /// `location` assignment, a form, and every redirect on the way.
+    /// Decides where a page may take the window it is in. Links, `location`
+    /// assignments, forms and every redirect on the way all ask.
     ///
-    /// A window shows only what was let into it: the application's own
-    /// origin, the origins the application loaded there itself (the start
-    /// page, [`AppInstance::create_window`](crate::AppInstance::create_window),
-    /// [`BrowserHandle::navigate`](crate::BrowserHandle::navigate), and the
-    /// redirects they lead to), the origin
-    /// [`on_new_window`](App::on_new_window) opened a popup to, and the
-    /// origins this hook allowed into it before. Without a hook, or when it
-    /// answers [`NavigationDecision::Default`], a navigation to one of those
-    /// proceeds; to any other origin, an `http` or `https` link the user
-    /// clicked opens in the system's default browser and anything else is
-    /// refused, the window staying on its page. The application's own loads,
-    /// going back and forward, and frames inside a page never reach the
-    /// hook.
+    /// A window shows only what was let into it:
+    ///
+    /// - the application's own origin
+    /// - the origins the application loaded there itself (the start page,
+    ///   [`AppInstance::create_window`](crate::AppInstance::create_window),
+    ///   [`BrowserHandle::navigate`](crate::BrowserHandle::navigate) and the
+    ///   redirects they lead to)
+    /// - the origin [`on_new_window`](App::on_new_window) opened a popup to
+    /// - the origins this hook allowed into it before
+    ///
+    /// A navigation to one of those proceeds without a hook or when it
+    /// answers [`NavigationDecision::Default`]. For any other origin an
+    /// `http` or `https` link the user clicked opens in the system's default
+    /// browser. Anything else is refused and the window stays on its page.
+    /// The application's own loads, going back and forward and frames inside
+    /// a page never reach the hook.
     ///
     /// [`NavigationDecision::Allow`] loads the page and lets its origin into
     /// that window from then on, for example a sign-in provider the page
@@ -940,7 +943,7 @@ impl App {
     /// [`NavigationDecision::OpenExternal`] narrow Kurogane's answer.
     /// Compare origins, not strings.
     ///
-    /// Runs on the UI thread before the navigation starts, so it must not
+    /// Runs on the UI thread before the navigation starts and must not
     /// block. A hook that panics refuses the navigation. A later call
     /// replaces an earlier one.
     ///
@@ -1013,15 +1016,16 @@ impl App {
         self
     }
 
-    /// Decides whether one of Chromium's commands runs: one of the page-local
-    /// commands Kurogane lets run, from a key shortcut or the context menu
-    /// (reload, find, print, zoom, editing, closing the window, DevTools).
+    /// Decides whether one of Chromium's commands runs. The hook hears the
+    /// page-local commands Kurogane lets run from a key shortcut or the
+    /// context menu (reload, find, print, zoom, editing, closing the window,
+    /// DevTools).
     ///
-    /// Kurogane refuses every other command first (new windows, new tabs,
-    /// history, bookmarks: Chromium's browser UI), and the hook is never
-    /// asked about those: it can refuse a command, never allow one.
+    /// Kurogane refuses every other command first (Chromium's browser UI such
+    /// as new windows, new tabs, history and bookmarks). The hook is never
+    /// asked about those. It can refuse a command, never allow one.
     /// [`ChromeCommand`](crate::ChromeCommand) folds Chromium's commands by
-    /// what the user asked for, so refusing
+    /// what the user asked for. Refusing
     /// [`ChromeCommand::DevTools`](crate::ChromeCommand::DevTools) refuses
     /// the shortcuts and the context menu's Inspect alike. A key the
     /// [`on_key`](App::on_key) hook consumed never becomes a command.
@@ -1048,24 +1052,24 @@ impl App {
         self
     }
 
-    /// Decides where a file a page downloads is saved: a link the server
-    /// answers with an attachment, a link with a `download` attribute, a
-    /// `blob:` or `data:` export.
+    /// Decides where a file a page downloads is saved. A link the server
+    /// answers with an attachment, a link with a `download` attribute and a
+    /// `blob:` or `data:` export all download.
     ///
-    /// Without a hook, or when it answers [`DownloadDecision::Default`], the
-    /// user is asked with the system's Save As dialog, the suggested name
-    /// filled in, and nothing is saved if they cancel: no page writes to
-    /// the disk unless the user picked the place. A window shows one
-    /// dialog at a time. Chromium's own behaviour, saving silently into the
-    /// Downloads folder with nothing on screen, is never used.
-    /// [`DownloadDecision::SaveTo`] saves at an absolute path the
-    /// application chose, without asking, for example its own exports into
-    /// a folder of its own; [`DownloadDecision::Deny`] saves nothing.
+    /// Without a hook the user picks the place in the system's Save As
+    /// dialog with the suggested name filled in. [`DownloadDecision::Default`]
+    /// does the same. Nothing is saved if they cancel. No page writes to the
+    /// disk unless the user picked the place. A window shows one dialog at a
+    /// time. Chromium's own behavior (saving silently into the Downloads
+    /// folder with nothing on screen) is never used.
+    /// [`DownloadDecision::SaveTo`] saves at an absolute path the application
+    /// chose without asking, for example its own exports into a folder of its
+    /// own. [`DownloadDecision::Deny`] saves nothing.
     ///
     /// Every download a page starts reaches the hook, several at once
-    /// included: Chromium's prompt for multiple downloads never shows.
+    /// included. Chromium's prompt for multiple downloads never shows.
     ///
-    /// Runs on the UI thread before the download starts, so it must not
+    /// Runs on the UI thread before the download starts and must not
     /// block. A hook that panics refuses the download. Downloads from
     /// DevTools are not asked about and always ask the user. A later call
     /// replaces an earlier one.
@@ -1092,38 +1096,38 @@ impl App {
         self
     }
 
-    /// Decides what a page may use only with consent: a camera, a
-    /// microphone, the screen, the location, notifications, reading the
-    /// clipboard and the rest of [`Permission`](crate::Permission).
+    /// Decides what a page may use only with consent (a camera, a microphone,
+    /// the screen, the location, notifications, reading the clipboard and the
+    /// rest of [`Permission`](crate::Permission)).
     ///
-    /// Without a hook, or when it answers [`PermissionDecision::Default`],
-    /// the request is denied: no page gets a device or a permission the
-    /// application did not allow. Chromium's own prompt never shows, in a
+    /// Without a hook the request is denied, as it is when the hook answers
+    /// [`PermissionDecision::Default`]. No page gets a device or a permission
+    /// the application did not allow. Chromium's own prompt never shows, in a
     /// window or an embedded browser. [`PermissionDecision::Allow`] grants
-    /// everything the request asks for and [`PermissionDecision::Deny`]
-    /// none of it: a page asking for a camera and a microphone together
-    /// gets both or neither.
+    /// everything the request asks for and [`PermissionDecision::Deny`] none
+    /// of it. A page asking for a camera and a microphone together gets both
+    /// or neither.
     ///
-    /// To ask the user first, the hook takes a
+    /// The hook asks the user first by taking a
     /// [`PermissionResponder`](crate::PermissionResponder) with
-    /// [`PermissionRequest::responder`] and answers
-    /// [`PermissionDecision::Later`]; the page waits until the responder
-    /// allows or denies, from any thread. A responder dropped unanswered
+    /// [`PermissionRequest::responder`] and answering
+    /// [`PermissionDecision::Later`]. The page waits until the responder
+    /// allows or denies from any thread. A responder dropped unanswered
     /// denies.
     ///
     /// Allowing [`Permission::ScreenVideo`](crate::Permission::ScreenVideo)
-    /// lets the page record the whole screen: there is no picker.
+    /// lets the page record the whole screen. There is no picker.
     ///
     /// Chromium remembers its answer to a web site (http, https), granted or
-    /// denied, in the profile, so the site's later requests get it without
+    /// denied, in the profile. The site's later requests get it without
     /// reaching the hook; [`AppHandle::forget_permissions`] makes them ask
     /// again. A camera, a microphone and the screen are never remembered.
-    /// For the application's own pages nothing is remembered, so a grant
-    /// that must still hold after the request does not: such a page is told
-    /// yes for notifications and the location, but cannot show a
-    /// notification or read the location.
+    /// For the application's own pages nothing is remembered and a grant
+    /// that must still hold after the request does not. Such a page is told
+    /// yes for notifications and the location but cannot show a notification
+    /// or read the location.
     ///
-    /// Runs on the UI thread, so it must not block. A hook that panics
+    /// Runs on the UI thread and must not block. A hook that panics
     /// denies. Requests from DevTools are not asked about and are denied. A
     /// later call replaces an earlier one.
     ///
@@ -1155,28 +1159,33 @@ impl App {
     /// Edits the menu a right-click opens.
     ///
     /// Kurogane builds the same menu in a window and in an embedded
-    /// browser, never Chromium's own: in a text field the editing items
-    /// (Undo, Redo, Cut, Copy, Paste, Paste as plain text, Select all),
-    /// under Chromium's spelling suggestions on a misspelled word; Copy on
-    /// a selection; nothing elsewhere; and Inspect last in a debug build.
-    /// The hook gets that [`ContextMenu`](crate::ContextMenu), with what
-    /// was right-clicked ([`ContextMenu::target`](crate::ContextMenu::target):
-    /// a link, an image, a selection, a text field), and may add, remove or
-    /// reorder its items: Kurogane's own
+    /// browser, never Chromium's own:
+    ///
+    /// - in a text field the editing items (Undo, Redo, Cut, Copy, Paste,
+    ///   Paste as plain text, Select all), under Chromium's spelling
+    ///   suggestions on a misspelled word
+    /// - Copy on a selection
+    /// - nothing elsewhere
+    /// - Inspect last in a debug build
+    ///
+    /// The hook gets that [`ContextMenu`](crate::ContextMenu) with what was
+    /// right-clicked ([`ContextMenu::target`](crate::ContextMenu::target)
+    /// names a link, an image, a selection or a text field). It may add,
+    /// remove or reorder the menu's items. Items are Kurogane's own
     /// ([`StandardItem`](crate::StandardItem)), the application's
     /// ([`MenuItem::new`](crate::MenuItem::new), whose choice goes to
     /// [`on_context_menu_command`](App::on_context_menu_command)),
     /// separators and submenus. A menu left empty does not show.
     ///
     /// A standard item whose command
-    /// [`on_chrome_command`](App::on_chrome_command) refuses is left out,
-    /// and asked about again when chosen. Separators at an edge or next to
-    /// another, and submenus left empty, are not shown. A page that draws
-    /// its own menu calls `preventDefault()` on the `contextmenu` event, and
-    /// no menu of Kurogane's opens.
+    /// [`on_chrome_command`](App::on_chrome_command) refuses is left out and
+    /// asked about again when chosen. Separators at an edge or next to
+    /// another are not shown, nor are submenus left empty. A page that draws
+    /// its own menu calls `preventDefault()` on the `contextmenu` event. No
+    /// menu of Kurogane's opens then.
     ///
-    /// Runs on the UI thread as the menu opens, so it must not block. A
-    /// hook that panics leaves Kurogane's menu. DevTools' menus are not
+    /// Runs on the UI thread as the menu opens and must not block. A hook
+    /// that panics leaves Kurogane's menu. DevTools' menus are not
     /// asked about. A later call replaces an earlier one.
     ///
     /// ```no_run
@@ -1206,10 +1215,10 @@ impl App {
     /// context menu ([`MenuItem::new`](crate::MenuItem::new) in
     /// [`on_context_menu`](App::on_context_menu)), with what the menu was
     /// opened on. An item chosen after the document the menu was opened on
-    /// went away, a page that navigated while its menu stayed open, runs
+    /// went away (a page that navigated while its menu stayed open) runs
     /// nothing.
     ///
-    /// Runs on the UI thread, so it must not block. A hook that panics is
+    /// Runs on the UI thread and must not block. A hook that panics is
     /// logged. A later call replaces an earlier one.
     pub fn on_context_menu_command<F>(mut self, f: F) -> Self
     where
@@ -1222,21 +1231,20 @@ impl App {
     /// Hears each window of the application's close, with which it is and
     /// where it was, to open it there again next time.
     ///
-    /// Asked for the start window, every [`AppInstance::create_window`]
-    /// window and every window a page opened as the application's, once
-    /// each, however it closes: the user, the page, the application, Ctrl+C.
-    /// Not for popups, DevTools or a browser embedded in the application's
-    /// own window. [`WindowClosing::name`](crate::WindowClosing::name) is
-    /// the name the window's options gave it, free for a new window from
-    /// here on, and
-    /// [`WindowClosing::placement`](crate::WindowClosing::placement) where it
-    /// was and how it showed: given back to
-    /// [`WindowOptions::placement`] it opens the window as it was, on a
-    /// display that is still there.
+    /// Asked once each for the start window, every
+    /// [`AppInstance::create_window`] window and every window a page opened
+    /// as the application's. It is asked however the window closes (the
+    /// user, the page, the application, Ctrl+C). Not for popups, DevTools or
+    /// a browser embedded in the application's own window.
+    /// [`WindowClosing::name`](crate::WindowClosing::name) is the name the
+    /// window's options gave it, free for a new window from here on.
+    /// [`WindowClosing::placement`](crate::WindowClosing::placement) is where
+    /// it was and how it showed. Given back to [`WindowOptions::placement`]
+    /// it opens the window as it was on a display that is still there.
     ///
     /// Runs on the UI thread as the window closes, before the application's
-    /// last window ends it: saving a small settings file here is fine,
-    /// anything slow is not. A hook that panics is logged, and the window
+    /// last window ends it. Saving a small settings file here is fine;
+    /// anything slow is not. A hook that panics is logged and the window
     /// closes as it would. A later call replaces an earlier one.
     ///
     /// ```no_run
@@ -1264,27 +1272,28 @@ impl App {
         self
     }
 
-    /// Answers the file choosers pages open: `<input type=file>` and the
-    /// File System Access pickers (`showOpenFilePicker`,
+    /// Answers the file choosers pages open. They are `<input type=file>` and
+    /// the File System Access pickers (`showOpenFilePicker`,
     /// `showSaveFilePicker`, `showDirectoryPicker`).
     ///
-    /// Without a hook, or when it answers
-    /// [`FileDialogDecision::Default`](crate::FileDialogDecision::Default),
-    /// Chromium shows the system's file chooser. The hook can give the page
-    /// files of its choosing instead
-    /// ([`FileDialogDecision::Files`](crate::FileDialogDecision::Files)),
-    /// which the page then reads, or cancel the dialog. To show a picker of
-    /// the application's own, the hook takes a
+    /// Chromium shows the system's file chooser without a hook or when it
+    /// answers
+    /// [`FileDialogDecision::Default`](crate::FileDialogDecision::Default).
+    /// The hook can give the page files of its choosing instead
+    /// ([`FileDialogDecision::Files`](crate::FileDialogDecision::Files)) for
+    /// the page to read, or cancel the dialog. The hook shows a picker of the
+    /// application's own by taking a
     /// [`FileDialogResponder`](crate::FileDialogResponder) with
     /// [`FileDialogRequest::responder`](crate::FileDialogRequest::responder)
-    /// and answers [`FileDialogDecision::Later`](crate::FileDialogDecision::Later);
-    /// the page waits until the responder selects or cancels, from any
-    /// thread. A responder dropped unanswered cancels.
+    /// and answering
+    /// [`FileDialogDecision::Later`](crate::FileDialogDecision::Later). The
+    /// page waits until the responder selects or cancels from any thread. A
+    /// responder dropped unanswered cancels.
     ///
     /// Kurogane's own Save As dialog for a download is not asked about
     /// ([`App::on_download`] decides where a download goes), nor are the
-    /// dialogs of DevTools. Runs on the UI thread, so it must not block. A
-    /// hook that panics cancels the dialog. A later call replaces an
+    /// dialogs of DevTools. Runs on the UI thread and must not block. A hook
+    /// that panics cancels the dialog. A later call replaces an
     /// earlier one.
     ///
     /// ```no_run
@@ -1307,25 +1316,25 @@ impl App {
     }
 
     /// Decides the drags that enter a browser embedded in the application's
-    /// own window from another application: files from a file manager, a
-    /// link, selected text.
+    /// own window from another application (files from a file manager, a
+    /// link, selected text).
     ///
-    /// CEF asks only such a browser (Alloy style): a drag into one of
+    /// CEF asks only such a browser (Alloy style). A drag into one of
     /// Kurogane's own windows ([`App::window`],
-    /// [`AppInstance::create_window`], popups) is not asked about, and its
-    /// page gets the drop as a browser's would. Asked as the drag enters,
-    /// before the page sees it. The hook sees the
-    /// paths of the files dragged ([`DragEnter::files`](crate::DragEnter::files)),
-    /// which the page never does: a page gets a dropped file's name and
-    /// contents only. [`DragDecision::Refuse`](crate::DragDecision::Refuse)
-    /// keeps the drag from the page altogether, and the pointer shows it
-    /// cannot drop there; without a hook, or with
-    /// [`DragDecision::Default`](crate::DragDecision::Default), the drag
-    /// goes on to the page.
+    /// [`AppInstance::create_window`], popups) is not asked about; its page
+    /// gets the drop as a browser's would. Asked as the drag enters, before
+    /// the page sees it. The hook sees the paths of the files dragged
+    /// ([`DragEnter::files`](crate::DragEnter::files)), which the page never
+    /// does. A page gets a dropped file's name and contents only.
+    /// [`DragDecision::Refuse`](crate::DragDecision::Refuse) keeps the drag
+    /// from the page altogether and the pointer shows it cannot drop there.
+    /// Without a hook or with
+    /// [`DragDecision::Default`](crate::DragDecision::Default) the drag goes
+    /// on to the page.
     ///
     /// Drags of DevTools and of a page's own content within the window are
-    /// not asked about. Runs on the UI thread, so it must not block. A hook
-    /// that panics refuses the drag. A later call replaces an earlier one.
+    /// not asked about. Runs on the UI thread and must not block. A hook that
+    /// panics refuses the drag. A later call replaces an earlier one.
     ///
     /// ```no_run
     /// # use kurogane::{App, DragDecision};
@@ -1347,15 +1356,14 @@ impl App {
         self
     }
 
-    /// Hears a page's title change: its `<title>` as it loads, or
+    /// Hears a page's title change, its `<title>` as it loads or
     /// `document.title` set by a script.
     ///
-    /// Kurogane titles a window after its page itself, unless the window's
-    /// options fixed a title ([`WindowOptions::title`]); the hook hears of
+    /// Kurogane titles a window after its page itself unless the window's
+    /// options fixed a title ([`WindowOptions::title`]). The hook hears of
     /// every change either way, a popup's and an embedded browser's
-    /// included, DevTools' not. Runs on the UI thread, so it must not
-    /// block. A hook that panics is logged. A later call replaces an
-    /// earlier one.
+    /// included, DevTools' not. Runs on the UI thread and must not block. A
+    /// hook that panics is logged. A later call replaces an earlier one.
     ///
     /// ```no_run
     /// # use kurogane::App;
@@ -1371,14 +1379,14 @@ impl App {
         self
     }
 
-    /// Hears a page enter or leave fullscreen: `requestFullscreen()`, then
-    /// `exitFullscreen()` or the user's Escape.
+    /// Hears a page enter or leave fullscreen through `requestFullscreen()`
+    /// and then `exitFullscreen()` or the user's Escape.
     ///
-    /// A window enters and leaves fullscreen with its page by itself; the
+    /// A window enters and leaves fullscreen with its page by itself. The
     /// hook hears of it, to hide the application's own controls for
-    /// example. Not for DevTools. A browser embedded in the application's
-    /// own window is not resized by Kurogane: the application sizes it.
-    /// Runs on the UI thread, so it must not block. A hook that panics is
+    /// example. Not for DevTools. Kurogane does not resize a browser
+    /// embedded in the application's own window; the application sizes it.
+    /// Runs on the UI thread and must not block. A hook that panics is
     /// logged. A later call replaces an earlier one.
     ///
     /// ```no_run
@@ -1440,12 +1448,12 @@ impl App {
         self
     }
 
-    /// Add a Chromium flag with a value.
+    /// Adds a Chromium flag with a value.
     ///
     /// The name is read as [`App::chromium_flag`] reads it. The last value
-    /// given for a switch wins, over the runtime's own value too, except
-    /// for `disable-features` and `enable-features`: their value adds its
-    /// features to the list, after CEF's own, the ones the application was
+    /// given for a switch wins, over the runtime's own value too.
+    /// `disable-features` and `enable-features` differ. Their value adds its
+    /// features to the list after CEF's own, the ones the application was
     /// launched with and those given before, each feature once. An
     /// `enable-features` entry in any form Chromium reads (`Name`,
     /// `Name:param/value`, `Name<Study` or `*Name`) turns back on a feature

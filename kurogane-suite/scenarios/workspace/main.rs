@@ -71,8 +71,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Opens the granted root in the system file manager, so the files in the
-/// tree can be seen outside the app for transparency.
+/// Opens the granted root in the system file manager. The files in the tree
+/// can then be seen outside the app for transparency.
 fn reveal(root: &Path) -> io::Result<()> {
     #[cfg(windows)]
     let opener = "explorer";
@@ -157,12 +157,12 @@ fn keep(path: PathBuf, body: &str) -> io::Result<()> {
     std::fs::write(path, body)
 }
 
-/// The policy panel needs three host-side facts that `fs.*` never exposes;
-/// the granted root, the denied subtree and this origin's capabilities. The
-/// page cannot query its own authority; it either holds a capability or it
-/// does not. The denied subtree is likewise undiscoverable: `readDir` omits it.
-/// These values are passed to the UI explicitly for transparency in the demo,
-/// not as part of the filesystem API.
+/// The policy panel needs three host-side facts that `fs.*` never exposes
+/// (the granted root, the denied subtree and this origin's capabilities).
+/// The page cannot query its own authority; it either holds a capability or
+/// it does not. The denied subtree is likewise undiscoverable; `readDir`
+/// omits it. These values reach the UI on purpose for transparency in the
+/// demo, not as part of the filesystem API.
 ///
 /// The panel reflects the capabilities held by the origin's [`FsAccess`] grant.
 fn grant_js(root: &Path, access: FsAccess) -> String {

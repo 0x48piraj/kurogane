@@ -188,7 +188,8 @@ impl<C: ContextHandle, V: Clone> Registry<C, V> {
         }
     }
 
-    /// A stream opened: its callbacks become live; returns the open promise.
+    /// Marks stream `id` opened, which makes its callbacks live. Returns the
+    /// open promise.
     pub(crate) fn stream_opened(&mut self, id: i32, addressed: &FrameId) -> Option<(C, V)> {
         let (owner, promise, sink) = self.take_stream_open(id, addressed)?;
         let context = owner.context.clone();
@@ -218,7 +219,7 @@ impl<C: ContextHandle, V: Clone> Registry<C, V> {
     }
 
     /// The data callback of an open stream of `addressed`. A stream still
-    /// opening receives nothing: the browser acknowledges an open first.
+    /// opening receives nothing. The browser acknowledges an open first.
     pub(crate) fn stream_data(&self, id: i32, addressed: &FrameId) -> Option<(C, V)> {
         let (owner, sink) = self.streams.get(&id)?;
         (owner.frame == *addressed).then(|| (owner.context.clone(), sink.data.clone()))

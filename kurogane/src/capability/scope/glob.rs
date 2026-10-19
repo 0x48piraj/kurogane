@@ -2,16 +2,16 @@
 //!
 //! Matching uses literal separators and leading-dot components with `**`
 //! matching zero or more components including hidden ones. Thus `*`, `?` and
-//! `[...]` cannot cross a component boundary, never match a leading `.`
-//! unless the pattern component starts with a literal `.` (`\.env` is one),
-//! and `**/.git` can exclude `.git` from a recursive allow.
+//! `[...]` cannot cross a component boundary and never match a leading `.`
+//! unless the pattern component starts with a literal `.` (`\.env` is one).
+//! `**/.git` can exclude `.git` from a recursive allow.
 //!
 //! `?` and `[...]` consume one whole character, even one whose fold spans
 //! several (`ß` folds to `ss` on macOS and Linux). Names are decoded
-//! strictly: a byte that does not start a valid character is one unit of its
+//! strictly. A byte that does not start a valid character is one unit of its
 //! own, which `?`, `*` and negated classes match and no literal does.
 //!
-//! Case follows the platform: literals are compared through the same fold as
+//! Case follows the platform. Literals are compared through the same fold as
 //! [`NameKey`] values (case-insensitive on Windows, macOS and Linux); class
 //! ranges keep the characters the pattern names and match a folded name
 //! character through every character that folds to it. Patterns are relative
@@ -19,9 +19,9 @@
 //! to escape the next character. A pattern matching a directory denies its
 //! entire subtree ([`Glob::covers`]).
 //!
-//! Globs only ever deny, so wherever matching cannot be exact it errs toward
+//! Globs only ever deny. Wherever matching cannot be exact it errs toward
 //! matching more. Matching is a state-set simulation, linear in the path and
-//! pattern lengths: a hostile path cannot make it backtrack.
+//! pattern lengths. A hostile path cannot make it backtrack.
 //!
 //! These matching rules preserve the behavior required to avoid the
 //! traversal issue addressed by CVE-2022-46171.
@@ -32,14 +32,14 @@ use std::ffi::OsStr;
 use crate::capability::fold::{is_starter, Inverse, Rules, MAX_FOLD_STARTERS};
 use crate::capability::path::{fold, NameKey};
 
-/// The most parts (components and `**`) a pattern may have: a `u64` holds
+/// The most parts (components and `**`) a pattern may have. A `u64` holds
 /// one bit per part plus the accepting position.
 const MAX_PARTS: usize = 63;
 /// The most tokens one pattern component may have; bounds matching cost.
 const MAX_TOKENS: usize = 1024;
 
-/// Unit of a decoded name: a code point, or `INVALID + byte` for a byte that
-/// does not start a valid (WTF-8) character.
+/// Units of a decoded name are code points, or `INVALID + byte` for a byte
+/// that does not start a valid (WTF-8) character.
 const INVALID: u32 = 0x11_0000;
 const DOT: u32 = '.' as u32;
 
@@ -69,11 +69,11 @@ struct ComponentGlob {
 enum Token {
     /// One folded unit.
     Lit(u32),
-    /// `*`: any run of units within one component.
+    /// Any run of units within one component (`*`).
     Any,
-    /// `?`: exactly one unit.
+    /// Exactly one unit (`?`).
     One,
-    /// `[...]` / `[!...]`: exactly one unit.
+    /// Exactly one unit of a class (`[...]` or `[!...]`).
     Class(Class),
 }
 
@@ -84,9 +84,10 @@ struct Class {
     ranges: Vec<(char, char)>,
 }
 
-/// What a glob still requires after part of a path: nothing (the path or an
-/// ancestor matched, so everything beneath is denied), or the set of pattern
-/// positions still live (`Live(0)`: nothing beneath can ever match).
+/// What a glob still requires after part of a path. `Covered` requires
+/// nothing; the path or an ancestor matched and everything beneath is denied.
+/// `Live` holds the pattern positions still live. `Live(0)` means nothing
+/// beneath can ever match.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Residual {
     Covered,
@@ -98,8 +99,9 @@ impl Glob {
         Glob::parse_under(Rules::NATIVE, pattern)
     }
 
-    /// Parses `pattern` to match keys folded as `rules` fold them: another
-    /// platform's for tests, which run every platform's rules on every host.
+    /// Parses `pattern` to match keys folded as `rules` fold them. Tests pass
+    /// another platform's rules; they run every platform's rules on every
+    /// host.
     pub(crate) fn parse_under(rules: Rules, pattern: &str) -> Result<Glob, &'static str> {
         if pattern.starts_with('/') {
             return Err("patterns are relative to the scope's allow roots");
@@ -127,8 +129,8 @@ impl Glob {
         Ok(Glob { parts, rules })
     }
 
-    /// Whether matching reads the inverted fold: the pattern has a `?` or a
-    /// class.
+    /// Returns whether matching reads the inverted fold. It does when the
+    /// pattern has a `?` or a class.
     pub(crate) fn unfolds(&self) -> bool {
         self.parts.iter().any(|part| {
             matches!(part, GlobPart::Component(c)
@@ -165,8 +167,8 @@ impl Glob {
         1 << self.parts.len()
     }
 
-    /// Adds the positions reachable without consuming a component: past each
-    /// `**`, which may match zero components.
+    /// Adds the positions reachable without consuming a component. They lie
+    /// past each `**`, which may match zero components.
     fn close(&self, mut live: u64) -> u64 {
         for (i, part) in self.parts.iter().enumerate() {
             if live & (1 << i) != 0 && *part == GlobPart::AnyDepth {
@@ -262,9 +264,9 @@ impl ComponentGlob {
     }
 }
 
-/// The inverted fold of a glob's rules for one name's match: looked up on
-/// the first lookup that needs it, so a pattern without `?` or a class never
-/// builds it, and once per name rather than once per lookup.
+/// Inverted fold of a glob's rules for one name's match. It is looked up
+/// once per name, on the first lookup that needs it. A pattern without `?` or
+/// a class never builds it.
 struct Unfolder {
     rules: Rules,
     inverse: OnceCell<&'static Inverse>,
@@ -284,10 +286,11 @@ impl Unfolder {
 }
 
 /// Queues where the `?` or class `token`, live at unit `at`, lands by
-/// consuming one character whose fold spans several base characters, as
-/// macOS and Linux fold `ß` to `ss` and a Hangul syllable to its jamo: past
-/// each run of two or three base characters from `at` (the combining marks
-/// between them skipped) that is the fold of a character `token` admits.
+/// consuming one character whose fold spans several base characters (macOS
+/// and Linux fold `ß` to `ss` and a Hangul syllable to its jamo). It lands
+/// past each run of two or three base characters from `at` (the combining
+/// marks between them skipped) that is the fold of a character `token`
+/// admits.
 fn reach_spanning(
     inverse: &Unfolder,
     token: &Token,
@@ -333,9 +336,9 @@ impl Token {
 }
 
 impl Class {
-    /// Whether the folded unit `unit` may stand for a character this class
-    /// admits. Over-matches where folding is ambiguous: some character that
-    /// folds to `unit` is enough.
+    /// Returns whether the folded unit `unit` may stand for a character this
+    /// class admits. It over-matches where folding is ambiguous; some character
+    /// that folds to `unit` is enough.
     fn matches(&self, unit: u32, inverse: &Unfolder) -> bool {
         let Some(folded) = char::from_u32(unit) else {
             // An invalid byte is no character the pattern can name
@@ -435,8 +438,9 @@ fn push_literal(rules: Rules, tokens: &mut Vec<Token>, c: char) {
     tokens.extend(decode(&folded).into_iter().map(Token::Lit));
 }
 
-/// Decodes a key into units: code points of a strict (WTF-8) decoding, with
-/// every byte that does not start a valid character as a unit of its own.
+/// Decodes a key into units. Units are the code points of a strict (WTF-8)
+/// decoding. Every byte that does not start a valid character is a unit of
+/// its own.
 fn decode(bytes: &[u8]) -> Vec<u32> {
     let continuation = |b: Option<&u8>| {
         b.filter(|&&b| b & 0xC0 == 0x80)

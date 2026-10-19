@@ -22,8 +22,8 @@ use crate::permissions::{self, Answer as PermissionAnswer, Pending, PermissionRe
 use crate::window::{Opening, PopupGeometry, open_browser_window};
 use crate::window_closing;
 
-/// A load the application made itself, through CreateBrowser, LoadURL or
-/// LoadRequest, and the redirects it leads to (cef_types.h)
+/// A load the application made itself (CreateBrowser, LoadURL or
+/// LoadRequest) and the redirects it leads to (cef_types.h)
 const DIRECT_LOAD: TransitionType = TransitionType::DIRECT_LOAD_FLAG;
 /// Back or forward through the browser's history (cef_types.h)
 const FORWARD_BACK: TransitionType = TransitionType::FORWARD_BACK_FLAG;
@@ -243,9 +243,9 @@ fn new_window_request(
     .with_kind(new_window_kind(disposition))
 }
 
-/// The kind of window a page asked for with `disposition`. Chromium's other
-/// ways to a tab (a singleton tab, switching to one) are tabs, and an
-/// off-the-record window a window.
+/// Returns the kind of window a page asked for with `disposition`. Chromium's
+/// other ways to a tab (a singleton tab, switching to one) are tabs. An
+/// off-the-record window is a window.
 fn new_window_kind(disposition: WindowOpenDisposition) -> NewWindowKind {
     if disposition == WindowOpenDisposition::NEW_POPUP {
         NewWindowKind::Popup
@@ -262,10 +262,10 @@ fn new_window_kind(disposition: WindowOpenDisposition) -> NewWindowKind {
     }
 }
 
-/// Whether a navigation of `disposition` asks for a window of its own: a
-/// new tab or window, as a link clicked with Ctrl (Cmd on macOS), the middle
-/// button or Shift asks. The current tab, a download (Alt) and an ignored
-/// action are not.
+/// Returns whether a navigation of `disposition` asks for a window of its
+/// own. A link clicked with Ctrl (Cmd on macOS), the middle button or Shift
+/// asks for a new tab or window. The current tab, a download (Alt) and an
+/// ignored action do not.
 fn opens_new_window(disposition: WindowOpenDisposition) -> bool {
     ![
         WindowOpenDisposition::UNKNOWN,
@@ -791,9 +791,10 @@ fn page_of(browser: &Browser) -> String {
         .unwrap_or_default()
 }
 
-/// The dialog of download `id` was answered, `saved` with a place: a
-/// dismissal cancels the download, and the browser's next waiting download
-/// asks. The guard ends with the statement, before CEF is called.
+/// Acts on the answer to the dialog of download `id`, `saved` when it named
+/// a place. A dismissal cancels the download. The browser's next waiting
+/// download then asks. The guard ends with the statement, before CEF is
+/// called.
 fn answered(app: &AppHandle, browser_id: Option<BrowserId>, id: u32, saved: bool) {
     let (cancel, next) = browser_id
         .and_then(|browser_id| {
@@ -967,9 +968,9 @@ wrap_permission_handler! {
     }
 }
 
-/// The id of `browser` and whether it is the application's: Chromium's own
-/// browsers, DevTools' included, are not, and their requests never reach
-/// the application's hooks.
+/// Returns the id of `browser` and whether it is the application's.
+/// Chromium's own browsers (DevTools' included) are not. Their requests
+/// never reach the application's hooks.
 fn app_browser(app: &AppHandle, browser: Option<&Browser>) -> (Option<BrowserId>, bool) {
     let reg = app.registry();
     let id = browser.and_then(|browser| reg.browsers.find_id_by_browser(browser));
@@ -1288,8 +1289,8 @@ wrap_drag_handler! {
     }
 }
 
-/// `browser` and its window, if it is a browser of the application's:
-/// registered, and neither DevTools nor one of Chromium's own.
+/// Returns the id and window of `browser` when it is a registered browser
+/// of the application's, neither DevTools nor one of Chromium's own.
 fn application_browser(
     reg: &crate::registry::Registry,
     browser: &Browser,

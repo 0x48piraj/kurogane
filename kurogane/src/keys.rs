@@ -63,9 +63,9 @@ impl KeyPress {
         self.modifiers
     }
 
-    /// The character the press types, if any: none with a modifier that
-    /// turns it into a control character (Ctrl+W), none for keys that type
-    /// nothing (F5, the arrows).
+    /// Returns the character the press types. There is none with a modifier
+    /// that turns it into a control character (Ctrl+W) and none for keys
+    /// that type nothing (F5, the arrows).
     pub fn character(&self) -> Option<char> {
         self.character
     }
@@ -97,7 +97,7 @@ impl KeyPress {
     }
 }
 
-/// A key, by where it is on the keyboard rather than what it types: Shift+W
+/// A key by its place on the keyboard rather than what it types. Shift+W
 /// and W are both `Key::Char('W')`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -123,9 +123,9 @@ pub enum Key {
     ArrowDown,
     ArrowLeft,
     ArrowRight,
-    /// Any other key, by its Windows virtual-key code, which CEF uses on
-    /// every platform: punctuation, whose code depends on the keyboard
-    /// layout, the keypad, the modifier keys themselves.
+    /// Any other key by its Windows virtual-key code, which CEF uses on
+    /// every platform. Such keys are punctuation (whose code depends on the
+    /// keyboard layout), the keypad and the modifier keys themselves.
     Other(u32),
 }
 
@@ -195,9 +195,9 @@ impl Modifiers {
         self.has(flag::COMMAND_DOWN)
     }
 
-    /// The modifier of the platform's shortcuts: Cmd on macOS, Ctrl
-    /// elsewhere. Ctrl+W on Windows and Linux and Cmd+W on macOS both have
-    /// it.
+    /// Returns whether the modifier of the platform's shortcuts is held (Cmd
+    /// on macOS, Ctrl elsewhere). Ctrl+W on Windows and Linux and Cmd+W on
+    /// macOS both have it.
     pub fn primary(self) -> bool {
         if cfg!(target_os = "macos") {
             self.meta()
@@ -281,8 +281,8 @@ pub(crate) fn before_page(decision: KeyDecision, shortcut: Option<Shortcut>) -> 
 }
 
 /// Asks the application's hook about `press`. Runs on CEF's UI thread for
-/// every key press, so the hook must be quick. A hook that panics lets the
-/// key through: swallowing keys would take the keyboard from the user.
+/// every key press; the hook must be quick. A hook that panics lets the key
+/// through. Swallowing keys would take the keyboard from the user.
 pub(crate) fn decide(app: &AppHandle, press: &KeyPress) -> KeyDecision {
     let Some(hooks) = app.hooks() else {
         return KeyDecision::Default;

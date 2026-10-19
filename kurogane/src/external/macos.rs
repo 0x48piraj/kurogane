@@ -1,5 +1,7 @@
-//! macOS: `NSWorkspace`, which hands the URL to Launch Services as an Apple
-//! Event, never through a command line.
+//! Opens links on macOS through `NSWorkspace`.
+//!
+//! `NSWorkspace` hands the URL to Launch Services as an Apple Event, never
+//! through a command line.
 
 use objc2_app_kit::NSWorkspace;
 use objc2_foundation::{NSString, NSURL};

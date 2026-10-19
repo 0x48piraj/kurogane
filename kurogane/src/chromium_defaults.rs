@@ -62,8 +62,8 @@ fn default_preferences() -> [(&'static str, Json); 4] {
     ]
 }
 
-/// Turns Kurogane's features off in `flags`, each unless an
-/// `enable-features` entry turns it on, and sets its switches.
+/// Turns each of Kurogane's features off in `flags` unless an
+/// `enable-features` entry turns it on. Also sets Kurogane's switches.
 pub(crate) fn apply_flag_defaults(flags: &mut ChromiumFlags) {
     for feature in DISABLED_FEATURES {
         flags.disable_by_default(feature);

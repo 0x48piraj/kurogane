@@ -40,7 +40,7 @@ pub fn handle_rpc_renderer(
 }
 
 /// Settles a run of answers to calls. Answers to one context settle inside
-/// one enter and exit, so the page's continuations run together when it
+/// one enter and exit. The page's continuations then run together when it
 /// exits.
 pub(crate) fn settle_answers<'p>(
     addressed: &FrameId,

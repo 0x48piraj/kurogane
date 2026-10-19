@@ -4,10 +4,10 @@
 //!   re-validates strings.
 //! - [`RelPath`]: a validated path beneath an allow root (empty = the root).
 //! - [`NameKey`]: the comparison form of a component, folded as the platform's
-//!   filesystems compare names ([`Rules`]): case-folded on Windows; case-,
-//!   normalization- and ignorable-folded on macOS and Linux. Each fold
-//!   identifies at least the names the platform's filesystems treat as one,
-//!   so folding can only make a deny rule match more, never less.
+//!   filesystems compare names ([`Rules`]). It is case-folded on Windows and
+//!   case-, normalization- and ignorable-folded on macOS and Linux. Each fold
+//!   identifies at least the names the platform's filesystems treat as one.
+//!   Folding can only make a deny rule match more, never less.
 //!   Kernel paths are always built from raw names, never from keys.
 //! - [`Location`]: an absolute path as keys, used to compare roots, requests
 //!   and kernel-reported object locations.
@@ -29,8 +29,9 @@ impl NameKey {
         NameKey::under(Rules::NATIVE, component)
     }
 
-    /// The key of `component` as `rules` compare names: another platform's
-    /// for tests, which run every platform's rules on every host.
+    /// Returns the key of `component` as `rules` compare names. Tests pass
+    /// another platform's rules; they run every platform's rules on every
+    /// host.
     pub(crate) fn under(rules: Rules, component: &OsStr) -> NameKey {
         NameKey(fold(rules, component).into_boxed_slice())
     }
@@ -89,10 +90,10 @@ impl Extend<char> for Utf8<'_> {
     }
 }
 
-/// One validated path component: not empty, not `.`/`..`, no separator, no
-/// NUL. On Windows it is also a name Win32 neither rewrites nor reserves; no
-/// `<>:"|?*` or control characters (`:` would address an alternate data
-/// stream), no trailing dot or space, no device name.
+/// One validated path component. It is not empty, not `.`/`..` and holds no
+/// separator or NUL. On Windows it is also a name Win32 neither rewrites nor
+/// reserves. It has no `<>:"|?*` or control characters (`:` would address an
+/// alternate data stream), no trailing dot or space and no device name.
 #[derive(Clone, Debug)]
 pub(crate) struct Name {
     raw: OsString,
@@ -158,11 +159,12 @@ fn windows_name_rules(raw: &OsStr) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// `SETTIN~1.JSO`, `PROGRA~1`, `AB12~10.TXT`: a base of 1 to 8 characters
-/// ending in `~` and digits, and an optional extension of 1 to 3. NTFS
-/// generates such aliases for long names; opening one reaches the long name,
-/// so whether a denied file stands behind an alias would show in the answer.
-/// Refusing the shape outright answers the same whatever is on disk.
+/// Returns whether `name` has the shape of an 8.3 short name (`SETTIN~1.JSO`,
+/// `PROGRA~1`, `AB12~10.TXT`). That is a base of 1 to 8 characters ending in
+/// `~` and digits with an optional extension of 1 to 3. NTFS generates such
+/// aliases for long names and opening one reaches the long name. Whether a
+/// denied file stands behind an alias would show in the answer. Refusing the
+/// shape outright answers the same whatever is on disk.
 #[cfg(windows)]
 fn has_short_name_shape(name: &str) -> bool {
     let (base, extension) = match name.rsplit_once('.') {
@@ -179,8 +181,9 @@ fn has_short_name_shape(name: &str) -> bool {
         .is_some_and(|(_, digits)| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// `CON`, `nul.txt`, `COM1 .log`: the part before the first dot, trailing
-/// spaces removed, compared case-insensitively.
+/// Returns whether `raw` names a Windows device (`CON`, `nul.txt`,
+/// `COM1 .log`). It compares the part before the first dot without its
+/// trailing spaces and ignores case.
 #[cfg(windows)]
 fn is_device_name(raw: &OsStr) -> bool {
     const DEVICES: &[&str] = &["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
@@ -230,9 +233,9 @@ pub(crate) struct Location {
 }
 
 impl Location {
-    /// Parses a trusted absolute path: configuration or a kernel-reported
-    /// object location. Verbatim `\\?\` forms are accepted and simplified;
-    /// `None` for relative or device paths.
+    /// Parses a trusted absolute path from configuration or a kernel-reported
+    /// object location. Verbatim `\\?\` forms are accepted and simplified.
+    /// Returns `None` for relative or device paths.
     pub(crate) fn parse(path: &Path) -> Option<Location> {
         let mut volume = None;
         let mut rooted = false;

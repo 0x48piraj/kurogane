@@ -1,8 +1,8 @@
-//! Windows: `ShellExecuteExW` on a worker thread of its own.
+//! Opens links on Windows through `ShellExecuteExW`.
 //!
-//! The registered handler can take its time (a DDE conversation, an
-//! "Open with" prompt) and pump messages meanwhile, which must not happen on
-//! CEF's UI thread. The worker initializes COM for the shell and waits for
+//! The call runs on a worker thread of its own. The registered handler can
+//! take its time (a DDE conversation, an "Open with" prompt) and pump
+//! messages meanwhile, which must not happen on CEF's UI thread. The worker initializes COM for the shell and waits for
 //! the launch to finish before it ends (`SEE_MASK_NOASYNC`).
 
 use std::ptr;

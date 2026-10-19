@@ -1,17 +1,17 @@
 //! Per-application runtime profile paths.
 //!
 //! An application's profile holds what its user would miss (cookies,
-//! storage, permissions), so it lives in the local data directory, not in
-//! the cache that cleaners empty. Its name is derived from the application's
+//! storage, permissions). It lives in the local data directory, not in the
+//! cache that cleaners empty. Its name is derived from the application's
 //! identity and remains stable across executable moves and updates.
 
 use std::path::PathBuf;
 
 use crate::platform;
 
-/// Where every application's profile lives: `kurogane/profiles` in the
-/// local data directory (`~/.local/share` on Linux, `~/Library/Application
-/// Support` on macOS, `%LOCALAPPDATA%` on Windows).
+/// Returns the directory of every application's profile, `kurogane/profiles`
+/// in the local data directory (`~/.local/share` on Linux,
+/// `~/Library/Application Support` on macOS, `%LOCALAPPDATA%` on Windows).
 pub fn profiles_root() -> PathBuf {
     platform::data_local_dir().join("kurogane").join("profiles")
 }

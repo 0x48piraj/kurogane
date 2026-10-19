@@ -82,11 +82,11 @@ pub enum PackageFormat {
     AppBundle,
 }
 
-/// Default `--format`: the platform's native distributable.
+/// Default `--format` (the platform's native distributable).
 #[cfg(target_os = "macos")]
 pub(crate) const DEFAULT_FORMAT: &str = "app";
 
-/// Default `--format`: the platform's native distributable.
+/// Default `--format` (the platform's native distributable).
 #[cfg(not(target_os = "macos"))]
 pub(crate) const DEFAULT_FORMAT: &str = "dir";
 
@@ -168,8 +168,8 @@ pub(crate) fn sign_and_verify_tree(root: &std::path::Path, config: &SignConfig) 
     Ok(())
 }
 
-/// The signing `--sign` asks for: every `[signing]` table checked, then
-/// `[signing.windows]` resolved.
+/// Returns the signing `--sign` asks for. Every `[signing]` table is checked
+/// before `[signing.windows]` resolves.
 #[cfg(target_os = "windows")]
 fn resolve_sign_config(
     sign_requested: bool,
@@ -200,8 +200,8 @@ fn resolve_sign_config(
     Ok(Some(resolved))
 }
 
-/// The signing `--sign` asks for: every `[signing]` table checked, then
-/// `[signing.macos]` resolved.
+/// Returns the signing `--sign` asks for. Every `[signing]` table is checked
+/// before `[signing.macos]` resolves.
 #[cfg(target_os = "macos")]
 fn resolve_sign_config(
     sign_requested: bool,
@@ -221,8 +221,8 @@ fn resolve_sign_config(
     Ok(Some(resolved))
 }
 
-/// `--sign` on Linux: the `[signing]` tables are checked, as everywhere,
-/// but a Linux bundle has no binary Kurogane signs.
+/// Refuses `--sign` on Linux. The `[signing]` tables are checked as
+/// everywhere, but a Linux bundle has no binary Kurogane signs.
 #[cfg(target_os = "linux")]
 fn refuse_sign(sign_requested: bool, config: &PackagingConfig) -> Result<()> {
     if !sign_requested {

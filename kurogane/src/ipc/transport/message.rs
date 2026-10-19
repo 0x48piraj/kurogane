@@ -24,7 +24,7 @@ pub fn is_ipc_message(message: &ProcessMessage) -> bool {
         .is_some_and(|units| units.iter().copied().eq(IPC_MESSAGE.encode_utf16()))
 }
 
-/// A message received over CEF: its envelope and its payload.
+/// A message received over CEF with its envelope and its payload.
 ///
 /// An inline payload is read in place, in the message that holds it. Where
 /// a shared-memory payload lives depends on who sent it. A sandboxed
@@ -35,8 +35,8 @@ pub struct ReceivedMessage {
     bytes: Bytes,
 }
 
-/// Private, so that only the receive functions decide which region stays in
-/// place: one the browser sent, or an unsandboxed renderer's.
+/// Private to this module. Only the receive functions decide which region
+/// stays in place (one the browser sent or an unsandboxed renderer's).
 enum Bytes {
     /// A region copied out of shared memory.
     Owned(Vec<u8>),
@@ -57,15 +57,15 @@ enum Bytes {
 /// the browser copies their shared memory ([`receive_from_renderer`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RendererSandbox {
-    /// A renderer is a security boundary: its shared memory is copied.
+    /// A renderer is a security boundary. Its shared memory is copied.
     Sandboxed,
-    /// A compromised renderer already runs with the user's rights: its
+    /// A compromised renderer already runs with the user's rights. Its
     /// shared memory is read in place, as the browser's is.
     Unsandboxed,
 }
 
 impl RendererSandbox {
-    /// Exhaustive, so a new sandbox mode decides whether it copies.
+    /// Exhaustive; a new sandbox mode decides whether it copies.
     pub(crate) fn of(mode: SandboxMode) -> Self {
         match mode {
             SandboxMode::Chromium => Self::Sandboxed,
@@ -95,16 +95,16 @@ impl ReceivedMessage {
     }
 }
 
-/// The renderer's side: a message from the browser. A shared region is read
-/// in place, which saves a copy of every large response and stream chunk the
-/// page receives.
+/// Receives a message from the browser on the renderer's side. A shared
+/// region is read in place, which saves a copy of every large response and
+/// stream chunk the page receives.
 ///
 /// # Safety
 ///
 /// `message` must come from the browser, as every message a renderer
-/// receives does. The browser is the only process that wrote the region,
-/// and CEF's shared message builder gives up its view when it sends the
-/// message, so nothing writes the region while this process reads it.
+/// receives does. The browser is the only process that wrote the region.
+/// CEF's shared message builder gives up its view when it sends the
+/// message. Nothing writes the region while this process reads it.
 pub unsafe fn receive_from_browser(message: &ProcessMessage) -> Option<ReceivedMessage> {
     let Some(region) = shared_region(message) else {
         return receive_inline(message);
@@ -113,18 +113,18 @@ pub unsafe fn receive_from_browser(message: &ProcessMessage) -> Option<ReceivedM
     unsafe { shared_message(region) }
 }
 
-/// The browser's side: a message from a renderer.
+/// Receives a message from a renderer on the browser's side.
 ///
 /// A sandboxed renderer's shared region is copied once, here. The renderer
-/// is a security boundary then, and a compromised one could keep writing its
-/// side of the region (CEF maps it writable in both processes): the copy
+/// is a security boundary then. A compromised one could keep writing its
+/// side of the region (CEF maps it writable in both processes). The copy
 /// lets the ACL and the subsystem that runs the message read the same
-/// bytes, and nothing in the browser borrows memory another process writes.
+/// bytes. Nothing in the browser borrows memory another process writes.
 ///
 /// An unsandboxed renderer's region is read in place, as a renderer reads
-/// the browser's. An honest renderer gave up its view when it sent it, and a
+/// the browser's. An honest renderer gave up its view when it sent it. A
 /// compromised one already runs with the user's rights and could write this
-/// process's memory directly: the copy would protect nothing and cost every
+/// process's memory directly. The copy would protect nothing and cost every
 /// large upload.
 pub fn receive_from_renderer(
     message: &ProcessMessage,
@@ -155,7 +155,7 @@ pub fn receive_from_renderer(
 ///
 /// # Safety
 ///
-/// As for [`in_place`]: no other process may write the region while the
+/// As for [`in_place`]. No other process may write the region while the
 /// message lives.
 unsafe fn shared_message(region: SharedMemoryRegion) -> Option<ReceivedMessage> {
     // SAFETY: the caller's guarantee
@@ -178,8 +178,8 @@ fn shared_region(message: &ProcessMessage) -> Option<SharedMemoryRegion> {
 ///
 /// # Safety
 ///
-/// No other process may write the region while the returned slice lives:
-/// it must be one the browser sent (see [`receive_from_browser`]). A
+/// No other process may write the region while the returned slice lives.
+/// It must be one the browser sent (see [`receive_from_browser`]). A
 /// sandboxed renderer's region is copied instead ([`copy_shared`]).
 unsafe fn in_place(region: &SharedMemoryRegion) -> &[u8] {
     let base = region.memory() as *const u8;
@@ -191,14 +191,14 @@ unsafe fn in_place(region: &SharedMemoryRegion) -> &[u8] {
     unsafe { std::slice::from_raw_parts(base, region.size()) }
 }
 
-/// Copies a shared-memory message out of its region: the envelope, then the
-/// payload.
+/// Copies a shared-memory message (its envelope, then its payload) out of
+/// its region.
 ///
 /// # Safety
 ///
 /// `base` must be readable for `len` bytes for the duration of the call.
-/// Another process may write them meanwhile: they are only copied, by raw
-/// pointer, and never borrowed as a slice.
+/// Another process may write them meanwhile. They are only copied by raw
+/// pointer and never borrowed as a slice.
 unsafe fn copy_shared(base: *const u8, len: usize) -> Option<(Envelope, Vec<u8>)> {
     if base.is_null() || len < ENVELOPE_SIZE {
         return None;
@@ -247,7 +247,7 @@ pub fn build_message_parts(envelope: &Envelope, parts: &[&[u8]]) -> Option<Proce
 
 /// Builds an inline ProcessMessage with the envelope's bytes in one binary
 /// value, the payload in a second. CEF converts every ListValue entry on
-/// both sides, so two entries cost less than an int per envelope field.
+/// both sides. Two entries cost less than an int per envelope field.
 fn build_inline_parts(envelope: &Envelope, parts: &[&[u8]]) -> Option<ProcessMessage> {
     let msg = process_message_create(Some(&CefString::from(IPC_MESSAGE)))?;
     let args = msg.argument_list()?;

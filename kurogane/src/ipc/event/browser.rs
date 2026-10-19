@@ -88,7 +88,7 @@ impl EventSubsystem {
     }
 
     /// Tells the renderer that the subscription carried by `envelope` was
-    /// refused with `error`, so its `onError` fires instead of silence.
+    /// refused with `error`. Its `onError` fires instead of silence.
     pub(crate) fn refuse(frame: &Frame, envelope: &Envelope, error: &IpcError) {
         if frame.is_valid() == 0 {
             return;
@@ -105,9 +105,9 @@ impl EventSubsystem {
         browser_outbox::send_owned(frame, &FrameId::of(frame), &reply, payload);
     }
 
-    /// Broadcast an event to all subscribers of a given event name.
+    /// Broadcasts an event to all subscribers of a given event name.
     ///
-    /// Each subscription gets its own message, addressed by its id, so the
+    /// Each subscription gets its own message addressed by its id. The
     /// renderer runs exactly the callback of that subscription (which the ACL
     /// admitted) and nothing else in the process. A frame's messages may
     /// travel together ([`browser_outbox`]). A subscription whose document

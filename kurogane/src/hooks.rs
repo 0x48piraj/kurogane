@@ -1,11 +1,11 @@
-//! The application's hooks: closures Kurogane calls from CEF's callbacks to
-//! let the application decide.
+//! Application hooks Kurogane calls from CEF's callbacks.
 //!
-//! The startup spec holds them; the running application's services only
-//! point to them. A hook may keep an [`AppHandle`], and the services every
-//! handle shares must not keep the hook in turn, or neither would ever be
-//! released. CEF releases the spec when it shuts down, which ends the hooks
-//! and any handle they hold; a hook asked for after that is not there.
+//! Each hook is a closure that lets the application decide. The startup spec
+//! holds them; the running application's services only point to them. A hook
+//! may keep an [`AppHandle`]. The services every handle shares must not keep
+//! the hook in turn; neither would ever be released otherwise. CEF releases
+//! the spec when it shuts down, which ends the hooks and any handle they
+//! hold; a hook asked for after that is not there.
 
 use crate::chrome_commands::{ChromeCommandRequest, CommandDecision};
 use crate::context_menu::{ContextMenu, ContextMenuCommand};

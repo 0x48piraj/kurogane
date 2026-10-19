@@ -1,8 +1,10 @@
-//! Right-click menus, checked by hand: Kurogane's own menu (the editing
-//! items in a text field, Copy on a selection, nothing elsewhere, Inspect in
-//! a debug build) and what an application adds to it. The hooks add items
-//! by what was right-clicked and print every menu and choice; the page does
-//! what each choice asks, from an event the application sends it.
+//! Right-click menus checked by hand.
+//!
+//! Covers Kurogane's own menu (the editing items in a text field, Copy on a
+//! selection, nothing elsewhere, Inspect in a debug build) and what an
+//! application adds to it. The hooks add items by what was right-clicked and
+//! print every menu and choice. The page does what each choice asks from an
+//! event the application sends it.
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
@@ -11,7 +13,7 @@ use serde_json::json;
 
 /// The page's theme, which the "Dark theme" check item shows and flips.
 static DARK: AtomicBool = AtomicBool::new(false);
-/// The page's text size: 0 small, 1 normal, 2 large.
+/// The page's text size (0 small, 1 normal, 2 large).
 static SIZE: AtomicU8 = AtomicU8::new(1);
 
 fn main() {

@@ -1,15 +1,15 @@
 //! Per-frame order for the browser's messages to a renderer.
 //!
 //! A large ArrayBuffer for the page is filled on another thread. A full
-//! batch, the sign of a burst, is delivered in a task of its own, so the
-//! page's own tasks run between a burst's batches. The frame's later
-//! messages wait behind either, so each frame receives its messages in the
-//! order the browser sent them. The bytes being filled have a cap, past which
-//! a message is copied on the main thread instead.
+//! batch (the sign of a burst) is delivered in a task of its own. The page's
+//! own tasks run between a burst's batches. The frame's later messages wait
+//! behind either. Each frame receives its messages in the order the browser
+//! sent them. The bytes being filled have a cap. Past it a message is copied
+//! on the main thread instead.
 //!
 //! A fill moves its message to the filler thread and back on one long-lived
-//! channel, so no state is shared between the threads and no hand-off
-//! allocates one of its own.
+//! channel. No state is shared between the threads and no hand-off allocates
+//! a channel of its own.
 //!
 //! Generic over the frame, message and store so the rules can be tested
 //! without CEF. `renderer_delivery` supplies CEF's types.
@@ -55,7 +55,7 @@ struct Entry<F, M, S> {
 
 /// What becomes of a message from the browser.
 pub(crate) enum Arrival<M, S> {
-    /// Nothing waits before it, so it is routed now.
+    /// Nothing waits before it. It is routed now.
     Route(M),
     /// It waits behind its frame's earlier messages.
     Waits,

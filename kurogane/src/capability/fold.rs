@@ -1,13 +1,13 @@
 //! How each platform's filesystems compare names, as a value.
 //!
-//! [`Rules`] folds characters the way one platform's volumes compare names,
-//! and inverts that fold so a glob class written against raw characters can
-//! match folded names. [`Rules::NATIVE`] is this platform's, chosen at
-//! compile time, so the others cost nothing at runtime; every rule set still
-//! runs on every host, so each platform's fold is tested everywhere.
+//! [`Rules`] folds characters the way one platform's volumes compare names.
+//! It inverts that fold so a glob class written against raw characters can
+//! match folded names. [`Rules::NATIVE`] is this platform's and is chosen at
+//! compile time. The others cost nothing at runtime. Every rule set still
+//! runs on every host and each platform's fold is tested everywhere.
 //!
 //! Each fold identifies at least the names the platform's filesystems treat
-//! as one, so folding can only make a deny rule match more, never less.
+//! as one. Folding can only make a deny rule match more, never less.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -17,16 +17,17 @@ use unicode_normalization::UnicodeNormalization;
 /// One platform's way of comparing names, character by character.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Rules {
-    /// Windows, as NTFS compares names: a character's simple uppercase when
-    /// that is one character, else the character (`ß` stays `ß`).
+    /// Windows rules, as NTFS compares names. A character folds to its simple
+    /// uppercase when that is one character and to itself otherwise (`ß`
+    /// stays `ß`).
     Uppercase,
-    /// macOS and Linux: APFS and HFS+ are case- and normalization-insensitive
-    /// by default, as are Linux casefolded directories. NFD, case lowered,
-    /// raised and lowered again, default-ignorable code points dropped, NFD
-    /// again. In a case-sensitive directory, names differing only in case
-    /// fold alike too.
+    /// macOS and Linux rules. APFS and HFS+ are case- and
+    /// normalization-insensitive by default, as are Linux casefolded
+    /// directories. NFD, case lowered, raised and lowered again,
+    /// default-ignorable code points dropped, NFD again. In a case-sensitive
+    /// directory names differing only in case fold alike too.
     Normalized,
-    /// Elsewhere: names compare as they are.
+    /// Rules elsewhere. Names compare as they are.
     Exact,
 }
 
@@ -44,8 +45,8 @@ impl Rules {
         }
     }
 
-    /// Appends the fold of `chars` to `out`. A name goes through whole: the
-    /// last NFD reorders combining marks across characters.
+    /// Appends the fold of `chars` to `out`. A name goes through whole since
+    /// the last NFD reorders combining marks across characters.
     pub(crate) fn fold_into(self, chars: impl Iterator<Item = char>, out: &mut impl Extend<char>) {
         match self {
             Rules::Uppercase => out.extend(chars.map(|c| {
@@ -136,8 +137,9 @@ impl Inverse {
     /// Yields `folded` and every character whose fold is `folded`, alone or
     /// followed by combining marks.
     ///
-    /// Inverts the fold of one character: Windows' simple uppercase,
-    /// elsewhere the lead of a normalized fold (e.g., `É` to `e` + U+0301).
+    /// It inverts the fold of one character. That is Windows' simple
+    /// uppercase and elsewhere the lead of a normalized fold (for example `É`
+    /// to `e` + U+0301).
     /// Matching the lead whatever marks follow it is conservative;
     /// over-matching only denies more. A character whose fold has several
     /// base characters is found through [`unfold_starters`](Self::unfold_starters)
@@ -147,9 +149,10 @@ impl Inverse {
         std::iter::once(folded).chain(unfolded)
     }
 
-    /// The characters whose fold has the base characters `starters`,
-    /// combining marks aside: with the macOS and Linux rules `ss` for `ß`,
-    /// the jamo of a Hangul syllable. Windows folds no character to several.
+    /// Returns the characters whose fold has the base characters `starters`
+    /// (combining marks aside). Examples with the macOS and Linux rules are
+    /// `ss` for `ß` and the jamo of a Hangul syllable. Windows folds no
+    /// character to several.
     pub(crate) fn unfold_starters(&self, starters: &[char]) -> &[char] {
         self.starters.get(starters).map_or(&[], Vec::as_slice)
     }
@@ -176,9 +179,9 @@ impl Inverse {
     }
 }
 
-/// What the inverse needs of one character's fold, taken as it is folded:
-/// its lead, whether more follows, and its base characters when it has
-/// several (allocated only then).
+/// What the inverse needs of one character's fold, taken as it is folded.
+/// That is its lead, whether more follows and its base characters when it
+/// has several (allocated only then).
 #[derive(Default)]
 struct Shape {
     lead: Option<char>,
@@ -235,10 +238,10 @@ mod tests {
     }
 
     /// Glob classes and `?` match folded names through `unfold` and
-    /// `unfold_starters`: a character missing from them lets a name a deny
-    /// rule covers through, an extra one only denies more. Both directions,
-    /// for every character: a fold with one base character is found by its
-    /// lead alone, one with several by its base characters alone, and the
+    /// `unfold_starters`. A character missing from them lets a name a deny
+    /// rule covers through; an extra one only denies more. Both directions
+    /// hold for every character. A fold with one base character is found by
+    /// its lead alone and one with several by its base characters alone. The
     /// tables yield nothing else.
     fn unfold_inverts_fold(rules: Rules) {
         let inverse = rules.inverse();
@@ -307,8 +310,8 @@ mod tests {
         unfold_inverts_fold(Rules::Exact);
     }
 
-    /// A filesystem folds a name to a fixed point, so a name and its fold
-    /// are one name there: folding a fold must change nothing, or the two
+    /// A filesystem folds a name to a fixed point. A name and its fold are
+    /// one name there. Folding a fold must change nothing. Otherwise the two
     /// get different keys and a deny on one misses the other.
     fn the_fold_is_stable(rules: Rules) {
         for c in (0..=0x10_FFFF).filter_map(char::from_u32) {

@@ -323,7 +323,7 @@ flowchart LR
 
 `AppHandle` and `BrowserHandle` calls that would reach CEF do nothing once `AppInstance::shutdown` has begun. CEF takes no call after `CefShutdown`. A call on another thread at that very moment can still reach CEF. An application stops using its handles on other threads before it shuts CEF down.
 
-CEF calls into Kurogane through the `extern "C"` trampolines tanso generates. They do not catch panics. A panic that reaches one aborts the process it runs in. In the browser process that ends the application. In a renderer it ends that renderer. Kurogane's own callbacks never unwrap a value CEF may leave out.
+CEF calls into Kurogane through the `extern "C"` trampolines tanso generates. Each catches a panic and aborts the process it runs in, which is defined where unwinding across the C ABI is not. In the browser process that ends the application. In a renderer it ends that renderer. Kurogane's own callbacks never unwrap a value CEF may leave out.
 
 Kurogane catches a panic in the application code it runs to answer a page's request:
 

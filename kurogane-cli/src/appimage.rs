@@ -209,7 +209,7 @@ fn patch_linuxdeploy(path: &Path) -> Result<()> {
 
 /// Generates the AppRun entrypoint for the canonical Kurogane bundle.
 ///
-/// The bundle's path is one quoted word: no character of a name expands or
+/// The bundle's path is one quoted word. No character of a name expands or
 /// ends it.
 fn generate_apprun(name: &str, exe_name: &str) -> String {
     let target = sh_quote(&format!("usr/lib/{name}/{exe_name}"));
@@ -222,9 +222,9 @@ exec "$APPDIR"/{target} "$@"
 }
 
 /// Generates the desktop entry consumed by AppImage tooling. Every value is
-/// escaped as the Desktop Entry Specification asks, so none adds a line.
-/// `class` is the window class the application's windows carry, which a
-/// launcher attaches the entry to running windows by (`StartupWMClass`).
+/// escaped as the Desktop Entry Specification asks. No value adds a line.
+/// `class` is the window class the application's windows carry. A launcher
+/// attaches the entry to running windows by it (`StartupWMClass`).
 fn generate_desktop(
     name: &str,
     exe_name: &str,
@@ -263,9 +263,9 @@ StartupWMClass={class}
     )
 }
 
-/// A desktop entry string value: a backslash and the characters a line
-/// cannot hold are written as escapes, and a leading space as `\s`, which
-/// would otherwise be dropped.
+/// Returns `value` as a desktop entry string value. A backslash and the
+/// characters a line cannot hold become escapes. A leading space becomes
+/// `\s` since a plain one would be dropped.
 fn desktop_string(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for c in value.chars() {
@@ -294,9 +294,10 @@ const EXEC_RESERVED: &[char] = &[
     '`',
 ];
 
-/// The program of an `Exec=` key: `%` doubled, since a single one starts a
-/// field code; double-quoted with `"`, `` ` ``, `$` and `\` escaped when it
-/// holds a reserved character; then escaped as any string value.
+/// Returns `program` as the program of an `Exec=` key. A `%` is doubled
+/// since a single one starts a field code. A program holding a reserved
+/// character is double-quoted with `"`, `` ` ``, `$` and `\` escaped. The
+/// result is then escaped as any string value.
 fn desktop_exec(program: &str) -> String {
     let program = program.replace('%', "%%");
     if !program.contains(EXEC_RESERVED) {
@@ -512,8 +513,8 @@ mod tests {
         assert!(content.contains("exec \"$APPDIR\"/'usr/lib/custom-name/custom-bin' \"$@\""));
     }
 
-    /// AppRun reaches the bundled executable with the user's arguments
-    /// intact, whatever the name holds, and runs nothing the name says.
+    /// AppRun passes the user's arguments intact to a bundled executable of
+    /// any name and runs nothing the name says.
     #[test]
     fn apprun_starts_the_bundle_whatever_the_name_holds() {
         let dir = tmp();

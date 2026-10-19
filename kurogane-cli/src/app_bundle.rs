@@ -47,8 +47,9 @@ fn bundle_identifier(meta: &AppMetadata) -> String {
         .unwrap_or_else(|| default_identifier(&meta.name))
 }
 
-/// The keys every `Info.plist` of the bundle carries, the application's and
-/// each helper's: its identity, and what `[macos]` declares.
+/// Returns the keys every `Info.plist` of the bundle carries (the
+/// application's and each helper's). They hold its identity and what
+/// `[macos]` declares.
 fn bundle_plist(
     name: &str,
     identifier: &str,

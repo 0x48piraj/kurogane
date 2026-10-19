@@ -24,7 +24,7 @@ pub fn run(target: Option<Target>) -> Result<()> {
     }
 }
 
-/// Default: show everything
+/// Lists everything, the default with no target.
 fn list_all() -> Result<()> {
     list_version()?;
     tui::blank();

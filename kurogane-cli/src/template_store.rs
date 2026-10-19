@@ -1,7 +1,7 @@
 //! Snapshots of git templates.
 //!
 //! Each generation run clones a git template afresh and swaps the clone in
-//! by renames, so no run reads a half-written snapshot. A run that cannot
+//! by renames. No run reads a half-written snapshot. A run that cannot
 //! fetch generates from the last snapshot.
 
 use std::fs;

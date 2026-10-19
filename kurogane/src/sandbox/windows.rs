@@ -22,10 +22,10 @@ const HASH_LEN: usize = 17;
 
 /// CEF's `cef_version_info_t`, transcribed from `cef_version_info.h`.
 ///
-/// Declared here rather than taken from the generated bindings because it
-/// crosses the bootstrap's boundary, not `libcef.dll`'s API, so nothing
-/// generates it. Only the offsets and the leading `size` are read; the fields
-/// are named so the layout can be checked against the header by eye.
+/// Declared here rather than taken from the generated bindings. It crosses
+/// the bootstrap's boundary rather than `libcef.dll`'s API. Nothing generates
+/// it. Only the offsets and the leading `size` are read. The fields are named
+/// to let the layout be checked against the header by eye.
 #[repr(C)]
 struct VersionInfo {
     size: usize,
@@ -37,15 +37,15 @@ struct VersionInfo {
     chrome_version_minor: c_int,
     chrome_version_build: c_int,
     chrome_version_patch: c_int,
-    /// Added in CEF API 14600, so present only when `size` covers it.
+    /// Added in CEF API 14600. Present only when `size` covers it.
     sandbox_compat_hash: [c_char; HASH_LEN],
 }
 
 /// Byte offset of `sandbox_compat_hash` within [`VersionInfo`].
 const HASH_OFFSET: usize = std::mem::offset_of!(VersionInfo, sandbox_compat_hash);
 
-/// CEF's `CEF_VERSION_INFO_SIZE_WITH_SANDBOX_HASH`: the smallest reported
-/// `size` that still contains `sandbox_compat_hash`.
+/// Smallest reported `size` that still contains `sandbox_compat_hash`
+/// (CEF's `CEF_VERSION_INFO_SIZE_WITH_SANDBOX_HASH`).
 ///
 /// Smaller than the padded `size_of` a current bootstrap reports and larger
 /// than what a bootstrap older than CEF API 14600 reports.
@@ -88,8 +88,8 @@ pub(super) fn apply_disabled(flags: &mut ChromiumFlags) {
 /// `kurogane::__private`.
 ///
 /// Returns the process exit code, 1 if `entry` panics or the process was
-/// already entered. Kurogane's helper processes exit from inside `entry`, so
-/// in practice only the browser process returns through here.
+/// already entered. Kurogane's helper processes exit from inside `entry`.
+/// Only the browser process returns through here in practice.
 ///
 /// # Safety
 ///
@@ -120,9 +120,9 @@ pub unsafe fn enter(sandbox_info: *mut c_void, version_info: *mut c_void, entry:
 
 /// Reads `sandbox_compat_hash` out of the bootstrap's `cef_version_info_t`.
 ///
-/// Only the leading `size` field is guaranteed to be there: a bootstrap built
-/// before CEF API 14600 reports a shorter structure and reading the hash from
-/// it would run past the end.
+/// Only the leading `size` field is guaranteed to be there. A bootstrap built
+/// before CEF API 14600 reports a shorter structure; reading the hash from it
+/// would run past the end.
 ///
 /// # Safety
 ///
@@ -175,7 +175,7 @@ pub(super) fn sandbox_info() -> *mut u8 {
 /// Confirms the application can enter Chromium's sandbox.
 ///
 /// Requires the bootstrap and requires it to agree with `libcef.dll` about
-/// the sandbox ABI: the two are separate binaries and a mismatched pair would
+/// the sandbox ABI. The two are separate binaries. A mismatched pair would
 /// leave the broker and its targets talking past each other.
 pub(super) fn preflight(_cef_root: &Path) -> Result<(), RuntimeError> {
     let Some(bootstrap) = BOOTSTRAP.get() else {
@@ -226,8 +226,8 @@ pub(super) fn preflight(_cef_root: &Path) -> Result<(), RuntimeError> {
 
 /// Returns the sandbox ABI tag `libcef.dll` was built with.
 ///
-/// The API version is fixed by the first `cef_api_hash` call, which loading
-/// libcef makes before this one, so the argument here only has to match it.
+/// The first `cef_api_hash` call fixes the API version. Loading libcef makes
+/// that call before this one. The argument here only has to match it.
 fn runtime_sandbox_hash() -> Option<&'static str> {
     let hash = tanso::api_hash(tanso::sys::CEF_API_VERSION_LAST, API_HASH_SANDBOX_COMPAT);
 
@@ -254,9 +254,9 @@ mod tests {
     /// A `cef_version_info_t` the bootstrap could have passed, allocated to
     /// exactly the length it reports.
     ///
-    /// The exact length is the point: an older bootstrap's structure really
-    /// does end early, so reading the hash out of one is a real out-of-bounds
-    /// access and Miri sees it.
+    /// The exact length is the point. An older bootstrap's structure really
+    /// does end early. Reading the hash out of one is a real out-of-bounds
+    /// access that Miri sees.
     fn version_info(size: usize, hash: &[u8]) -> Vec<u8> {
         let mut bytes = vec![0u8; size];
 

@@ -27,10 +27,10 @@ pub(crate) struct WindowEntry {
     /// Whether the window takes its page's title (crate::window)
     pub follows_title: bool,
     pub kind: WindowKind,
-    /// Where the window is when neither maximized, minimized nor fullscreen:
-    /// what it restores to (crate::window)
+    /// Where the window is in its normal state (neither maximized, minimized
+    /// nor fullscreen) and restores to (crate::window)
     pub restored: Option<Rect>,
-    /// The state it showed in when last not minimized: what it comes back
+    /// The state the window last showed in while not minimized and comes back
     /// as once restored (crate::window_closing)
     pub shown: WindowState,
 }
@@ -38,8 +38,8 @@ pub(crate) struct WindowEntry {
 /// What opened a window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WindowKind {
-    /// The application's: the start window, create_window's, or one a page
-    /// opened as the application's. The application hears of its close
+    /// The application's window (the start window, create_window's or one a
+    /// page opened as the application's). The application hears of its close
     /// (crate::window_closing)
     Application,
     /// A page's popup, or DevTools
@@ -82,7 +82,7 @@ impl WindowRegistry {
         Ok(id)
     }
 
-    /// Lets go of the name window `id` holds, and returns it.
+    /// Lets go of the name window `id` holds and returns it.
     pub fn release_name(&mut self, id: WindowId) -> Option<String> {
         let name = self
             .names
@@ -172,8 +172,9 @@ impl WindowRegistry {
     }
 
     /// Records that window `id`, not minimized, shows in `state` at
-    /// `bounds` (crate::window): where it restores to when it shows normally;
-    /// a maximized or fullscreen window's bounds are its display's.
+    /// `bounds` (crate::window). Bounds it shows normally at are where it
+    /// restores to. A maximized or fullscreen window's bounds are its
+    /// display's.
     pub fn shown(&mut self, id: WindowId, state: WindowState, bounds: &Rect) {
         if let Some(entry) = self.windows.get_mut(&id) {
             entry.shown = state;
@@ -183,9 +184,9 @@ impl WindowRegistry {
         }
     }
 
-    /// The application window `id`, whose browser has closed, as its close
-    /// is reported (crate::window_closing): it lets go of its name. None for
-    /// a popup's window.
+    /// Returns the close report of application window `id`, whose browser
+    /// has closed (crate::window_closing). The window lets go of its name.
+    /// None for a popup's window.
     pub fn closing(&mut self, id: WindowId) -> Option<Closing> {
         let entry = self.windows.get(&id)?;
         let (window, restored, shown) = match entry.kind {

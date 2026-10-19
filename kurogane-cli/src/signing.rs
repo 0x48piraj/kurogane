@@ -1,11 +1,12 @@
 //! Code signing operations for packaged artifacts.
 //!
 //! `[signing]` has a table per platform that signs. `--sign` checks both
-//! wherever it runs ([`SigningFileConfig::check`]), then resolves this
-//! platform's into a `SignConfig`: a custom command or a certificate for the
-//! PE files of a Windows bundle, signed through signtool or osslsigncode, or
-//! a codesign identity for a macOS `.app`, signed inside-out. A Linux bundle
-//! has nothing Kurogane signs, so Linux compiles the check alone.
+//! wherever it runs ([`SigningFileConfig::check`]). It then resolves this
+//! platform's table into a `SignConfig`. On Windows that is a custom command
+//! or a certificate for a bundle's PE files, signed through signtool or
+//! osslsigncode. On macOS it is a codesign identity for a `.app`, signed
+//! inside-out. A Linux bundle has nothing Kurogane signs. Linux compiles the
+//! check alone.
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::ffi::OsString;
@@ -25,8 +26,8 @@ use kurogane_layout::MACOS_FRAMEWORK;
 const TARGET: &str = "%1";
 
 impl SigningFileConfig {
-    /// Checks every table, whichever platform reads it, so a table that
-    /// would fail where it is used fails wherever `--sign` runs.
+    /// Checks every table whichever platform reads it. A table that would
+    /// fail where it is used fails wherever `--sign` runs.
     pub fn check(&self) -> Result<(), SigningError> {
         self.windows.check()?;
         self.macos.check()
@@ -69,8 +70,8 @@ impl MacosSigningConfig {
     }
 }
 
-/// How a Windows bundle's PE files are signed: by a command of the
-/// application's own, or with a certificate through signtool or
+/// How a Windows bundle's PE files are signed. A command of the
+/// application's own signs them or a certificate does through signtool or
 /// osslsigncode.
 #[cfg(target_os = "windows")]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,7 +84,7 @@ pub enum SignConfig {
     Certificate(CertificateConfig),
 }
 
-/// How a macOS `.app` is signed: with a codesign identity from the keychain.
+/// How a macOS `.app` is signed, with a codesign identity from the keychain.
 #[cfg(target_os = "macos")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignConfig {
@@ -133,8 +134,8 @@ impl SignConfig {
     }
 }
 
-/// Signing with a certificate: where it comes from, and how signtool or
-/// osslsigncode stamp the signature.
+/// Signing with a certificate. It holds where the certificate comes from and
+/// how signtool or osslsigncode stamp the signature.
 #[cfg(target_os = "windows")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CertificateConfig {
@@ -249,7 +250,8 @@ pub enum SigningError {
         source: std::io::Error,
     },
 
-    /// A file operation failed: what was being done, and to which path.
+    /// A file operation failed. It names what was being done and to which
+    /// path.
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     #[error("failed to {action} {}", .path.display())]
     Io {
@@ -281,8 +283,8 @@ impl SigningError {
 
 /// Resolves the certificate password from its configured environment variable.
 ///
-/// Returns `Ok(None)` when no password is needed: a store thumbprint, or a
-/// file with no password variable.
+/// Returns `Ok(None)` when no password is needed (a store thumbprint or a
+/// file with no password variable).
 #[cfg(target_os = "windows")]
 fn resolve_password(certificate: &CertificateSource) -> Result<Option<String>, SigningError> {
     let CertificateSource::File {
@@ -415,7 +417,8 @@ pub fn osslsigncode_verify_args(path: &Path) -> Vec<OsString> {
     ]
 }
 
-/// A custom command's arguments for one file: each `%1` becomes its path.
+/// Returns a custom command's arguments for one file. Each `%1` becomes its
+/// path.
 #[cfg(target_os = "windows")]
 fn expand_custom_args(args: &[String], path: &Path) -> Vec<OsString> {
     let path = path.as_os_str();
@@ -550,9 +553,9 @@ pub const AD_HOC_IDENTITY: &str = "-";
 
 /// Builds `codesign --sign` arguments for a single target (binary or bundle).
 ///
-/// Never includes `--deep`: Apple deprecated it for signing because it applies
-/// one set of options to every nested item. [`sign_app_bundle`] signs
-/// inside-out instead.
+/// Never includes `--deep`. Apple deprecated it for signing because it
+/// applies one set of options to every nested item. [`sign_app_bundle`]
+/// signs inside-out instead.
 #[cfg(target_os = "macos")]
 pub fn codesign_sign_args(identity: &str, entitlements: Option<&Path>) -> Vec<OsString> {
     let mut args = vec![OsString::from("--sign"), OsString::from(identity)];
@@ -586,8 +589,8 @@ pub fn codesign_verify_args(path: &Path) -> Vec<OsString> {
     ]
 }
 
-/// Builds `codesign --sign` arguments for a disk image: the image is sealed
-/// as one file, with no runtime option or entitlements, which apply to code.
+/// Builds `codesign --sign` arguments for a disk image. The image is sealed
+/// as one file with no runtime option or entitlements, which apply to code.
 #[cfg(target_os = "macos")]
 pub fn codesign_image_args(identity: &str) -> Vec<OsString> {
     let timestamp = if identity == AD_HOC_IDENTITY {

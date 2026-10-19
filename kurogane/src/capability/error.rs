@@ -1,9 +1,9 @@
 //! Typed errors of the capability layer.
 //!
 //! The security class of a failure is a variant, never an `io::ErrorKind`
-//! inferred after the fact: an OS `EACCES` inside the grant is [`FsError::Io`],
-//! not a scope denial. Denials carry no path data at all; each renders one
-//! fixed, class-level message, so it cannot echo the request.
+//! inferred after the fact. An OS `EACCES` inside the grant is
+//! [`FsError::Io`], not a scope denial. Denials carry no path data at all.
+//! Each renders one fixed class-level message that cannot echo the request.
 
 use std::fmt;
 use std::io;
@@ -51,7 +51,7 @@ pub enum FsError {
     /// ([`FilesystemBuilder::max_file_size`](crate::capability::FilesystemBuilder::max_file_size)).
     TooLarge { limit: u64 },
     /// The authorized operation failed in the OS. The caller is inside the
-    /// grant for this object, so the OS detail may be shown.
+    /// grant for this object. The OS detail may be shown.
     Io(io::Error),
 }
 

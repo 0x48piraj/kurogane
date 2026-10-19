@@ -1,10 +1,9 @@
 //! Backend for platforms with no safe-open implementation.
 //!
 //! Linux, Windows and macOS each have a real backend; this fallback covers
-//! every other target. Every operation fails closed, and building a
-//! `Filesystem` with any root returns `FsConfigError::Root` (the root cannot
-//! be opened), so no `fs.*` access is ever granted where the boundary cannot
-//! be enforced.
+//! every other target. Every operation fails closed. Building a `Filesystem`
+//! with any root returns `FsConfigError::Root` (the root cannot be opened).
+//! No `fs.*` access is ever granted where the boundary cannot hold.
 
 use std::fs::File;
 use std::io;
@@ -14,7 +13,7 @@ use super::{Create, DirEntry, EntryKind};
 use crate::capability::error::FsError;
 use crate::capability::path::{Name, RelPath};
 
-/// Cannot exist on this platform: no entry can be opened.
+/// Entry that cannot exist; no entry opens on this platform.
 pub(crate) enum Entry {}
 
 fn unsupported() -> io::Error {

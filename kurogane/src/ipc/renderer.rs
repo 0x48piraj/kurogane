@@ -69,8 +69,8 @@ fn parse_view(rest: &[Option<V8Value>]) -> Result<Option<(usize, usize)>, ()> {
 /// view lies outside the buffer or the message cannot be built.
 ///
 /// The only reader of an ArrayBuffer's memory. The outbox only copies the
-/// bytes, so no JavaScript, which could detach or resize the buffer, runs
-/// while they are borrowed. Any page script can pass a view, so it is
+/// bytes. No JavaScript runs while they are borrowed (a script could detach
+/// or resize the buffer). Any page script can pass a view. The view is
 /// checked against the buffer's length.
 fn send_buffer(
     frame: &Frame,

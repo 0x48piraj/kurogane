@@ -1,11 +1,11 @@
 //! Hands a web link to the system's default browser.
 //!
-//! Only `http` and `https` URLs go, at most 2048 characters long, and with
-//! every character a command line could misread percent-encoded, as Chromium
-//! passes URLs to the system: the system substitutes the URL into the
-//! browser's registered command line, and a quote or a space there could add
-//! arguments. Opening is fire-and-forget: a failure is logged, since the
-//! page that asked has already been answered.
+//! Only `http` and `https` URLs go, at most 2048 characters long. Every
+//! character a command line could misread is percent-encoded, as Chromium
+//! does for the URLs it passes to the system. The system substitutes the URL
+//! into the browser's registered command line, where a quote or a space
+//! could add arguments. Opening is fire-and-forget. A failure is only
+//! logged; the page that asked has already been answered.
 
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use tracing::debug;
@@ -25,7 +25,7 @@ mod windows;
 #[cfg(target_os = "windows")]
 use windows as platform;
 
-/// The longest URL handed over: Windows' INTERNET_MAX_URL_LENGTH, which
+/// Longest URL handed over. It is Windows' INTERNET_MAX_URL_LENGTH, which
 /// Chromium applies on every platform.
 const MAX_URL_LENGTH: usize = 2048;
 

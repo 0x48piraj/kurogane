@@ -1,12 +1,12 @@
-//! Access control: which origins may reach which IPC endpoints.
+//! Access control over which origins may reach which IPC endpoints.
 //!
 //! The renderer installs `window.kurogane` in every V8 context, sub-frames
 //! included. The router consults this table before a command is invoked or a
 //! stream is opened and before an event subscription is accepted.
 //!
-//! - Policy is data: name to rule, for commands (commands and streams share a
-//!   namespace) and, separately, for events. Unlisted names follow one
-//!   default.
+//! - Policy is data. It maps a name to a rule for commands (commands and
+//!   streams share a namespace) and separately for events. Unlisted names
+//!   follow one default.
 //! - By default an unlisted name is reachable only from the application's own
 //!   origin, the origin of its start page. A page of any other origin, in a
 //!   popup, an iframe or a window navigated away, reaches only what a rule
@@ -16,8 +16,8 @@
 //! - Commands owned by a native capability (the `fs.*` family) are
 //!   authorized by that capability's grants, never by this table.
 //!
-//! Threat model: this is a "which origins are trusted" boundary. It does not
-//! defend against compromised content inside a trusted origin (XSS).
+//! The table is a "which origins are trusted" boundary. It does not defend
+//! against compromised content inside a trusted origin (XSS).
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -26,11 +26,11 @@ use std::str::FromStr;
 
 use crate::error::ConfigError;
 
-/// The security origin of a frame: `scheme://host[:port]`, or opaque.
+/// Security origin of a frame as `scheme://host[:port]` or opaque.
 ///
-/// Serialized like `location.origin`: lowercase scheme and host, default
-/// ports elided. Frames without a host (`file:`, `data:`, `about:`) and
-/// unparseable URLs are opaque and an opaque origin matches no rule and no
+/// Serialized like `location.origin` with a lowercase scheme and host and
+/// default ports elided. Frames without a host (`file:`, `data:`, `about:`)
+/// and unparseable URLs are opaque. An opaque origin matches no rule and no
 /// grant.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Origin(Repr);
@@ -258,8 +258,9 @@ impl CommandAcl {
         self.default = DefaultPolicy::Deny;
     }
 
-    /// Whether `origin` may invoke the command or open the stream `name`.
-    /// Capability-owned commands always pass here: their grants decide.
+    /// Returns whether `origin` may invoke the command or open the stream
+    /// `name`. Capability-owned commands always pass here; their grants
+    /// decide.
     pub(crate) fn allows(&self, name: &str, origin: &Origin) -> bool {
         self.decide(self.commands.get(name), origin)
     }

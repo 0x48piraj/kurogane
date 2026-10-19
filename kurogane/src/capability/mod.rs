@@ -10,8 +10,8 @@
 //!    and outside every deny rule held by the origin. The opened object's real
 //!    location is checked again before use.
 //!
-//! Nothing is reachable without a grant. Links are never traversed, and
-//! denials never disclose request contents.
+//! Nothing is reachable without a grant. Links are never traversed.
+//! Denials never disclose request contents.
 //!
 //! The public surface is [`Filesystem`], which defines scopes and grants and
 //! is passed to [`App::filesystem`](crate::App::filesystem) to install the
@@ -20,7 +20,7 @@
 //!
 //! Modules:
 //! - `policy`: capability bits and the `fs.*` command set.
-//! - `fold`: how each platform's filesystems compare names, and the inverse
+//! - `fold`: how each platform's filesystems compare names and the inverse
 //!   glob classes match through.
 //! - `path`: validated names, request parsing and comparison keys.
 //! - `scope`: allow roots and deny rules.

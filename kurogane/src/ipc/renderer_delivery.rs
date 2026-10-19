@@ -2,7 +2,7 @@
 //!
 //! A large ArrayBuffer for the page is filled on a thread of its own, which
 //! keeps the main thread free during big transfers. A batch is delivered in
-//! slices, each in a task of its own once the first ran, so the page's own
+//! slices, each in a task of its own once the first ran. The page's own
 //! tasks run between them. A full batch starts in a task of its own.
 //! `renderer_inbox` keeps each frame's order. A batch that closes the page's
 //! messages in flight lets the frame's queued messages leave
@@ -207,7 +207,7 @@ fn route(frame: &mut Frame, arrived: Arrived, filled: Option<V8BackingStore>) ->
 }
 
 /// Posts the task that delivers the next full batch, unless one is posted.
-/// One at a time, so the page's tasks queued meanwhile run first.
+/// One is posted at a time. The page's tasks queued meanwhile run first.
 fn post_deferral() {
     if !DEFERRAL_POSTED.replace(true) {
         let mut task = DeferralTask::new();

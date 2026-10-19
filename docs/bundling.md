@@ -529,7 +529,7 @@ A helper carries neither resources nor the framework. Both belong to the applica
 
 Every executable of a `.app` links the CEF framework at launch. The application finds it at `@executable_path/../Frameworks`. The helpers find it at `@executable_path/../../..`, the same `Contents/Frameworks` seen from a helper bundle. That path is the one difference between a helper's binary and the application's. There is no RPATH, so each executable reaches only the framework of its own bundle. A bundle finds its own framework wherever it is moved.
 
-macOS applies the fixups of a framework linked at launch as it pages them in. Those pages stay clean and shared between processes. A framework opened later is fixed up in every process, about 12 MB more each. The link is weak. A bundle missing its framework still starts far enough to say so.
+macOS applies the fixups of a framework linked at launch as it pages them in. Those pages stay clean and shared between processes. A framework opened later is fixed up again in every process. The link is weak. A bundle missing its framework still starts far enough to say so.
 
 The runtime then loads CEF from the `Contents/Frameworks` of the bundle the running executable belongs to. It takes the image macOS mapped at launch and checks that it is the CEF build Kurogane was built for. Another CEF already mapped is an error. A helper maps the framework before it enters its seatbelt sandbox, as Electron's helpers do. CEF itself starts inside the sandbox.
 

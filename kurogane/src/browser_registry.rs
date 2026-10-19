@@ -53,16 +53,16 @@ pub(crate) struct BrowserEntry {
     pub request_context: Option<RequestContext>,
     /// Popups this browser opened that are not shown yet; they go with it
     pub pending_popups: PendingPopups,
-    /// Origins let into this browser besides the application's own: by the
-    /// application's loads, by the popup it is, and by the navigation hook
-    /// (see [`crate::navigation`])
+    /// Origins let into this browser besides the application's own. The
+    /// application's loads, the popup it is and the navigation hook let them
+    /// in (see [`crate::navigation`])
     admitted: Vec<Origin>,
     /// Popups this browser's page was allowed, by popup id, with the origin
-    /// each was opened to: the popup's own navigation there takes the entry
+    /// each was opened to. The popup's own navigation there takes the entry
     /// and lets that origin into the popup
     popup_origins: Vec<(i32, Origin)>,
-    /// This browser's downloads Kurogane holds: asking the user, one Save
-    /// As dialog at a time, or refused; they go with the browser
+    /// This browser's downloads Kurogane holds, those asking the user (one
+    /// Save As dialog at a time) and those refused; they go with the browser
     pub downloads: Downloads<SavePrompt, DownloadItemCallback>,
     /// This browser's permission requests waiting for the application's
     /// answer (see [`crate::permissions`]); its close denies them
@@ -70,7 +70,7 @@ pub(crate) struct BrowserEntry {
     /// This browser's file dialogs waiting for the application's answer
     /// (see [`crate::file_dialog`]); its close cancels them
     pub file_dialogs: PendingFileDialogs,
-    /// The last context menu this browser showed: what its items run
+    /// Last context menu this browser showed and what its items run
     /// (see [`crate::context_menu`])
     pub context_menu: Option<OpenMenu>,
     /// The frames whose document's own origin is opaque (a sandboxed
@@ -137,8 +137,8 @@ impl BrowserRegistry {
     /// Registers `browser`, or returns its id if it is registered already.
     ///
     /// CEF reports a browser to more than one handler and does not promise
-    /// their order, so each registers it and the first one wins. The popup
-    /// path then refines it with [`Self::classify`].
+    /// their order. Each handler registers it and the first one wins. The
+    /// popup path then refines it with [`Self::classify`].
     pub fn ensure_registered(
         &mut self,
         browser: &Browser,

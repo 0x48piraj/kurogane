@@ -1,13 +1,13 @@
 //! CEF's framework linked into a macOS bundle's executables at launch.
 //!
-//! dyld fixes up an image it maps at launch through page-in linking, so the
-//! framework's `__DATA_CONST` stays clean and shared between processes. A
-//! framework opened later with dlopen is fixed up in every process, about
-//! 12 MB each. The application's binary weakly links the framework at the path
-//! the main executable finds it at. The helpers run a copy that finds it from
-//! their own bundles. Each executable reaches only its bundle's framework.
-//! The runtime still loads CEF through tanso, which takes the image dyld
-//! mapped and checks it is the CEF the bindings were generated for.
+//! dyld fixes up an image it maps at launch through page-in linking. The
+//! framework's `__DATA_CONST` then stays clean and shared between processes.
+//! A framework opened later with dlopen is fixed up in every process. The
+//! application's binary weakly links the framework at the path the main
+//! executable finds it at. The helpers run a copy that finds it from their
+//! own bundles. Each executable reaches only its bundle's framework. The
+//! runtime still loads CEF through tanso. tanso takes the image dyld mapped
+//! and checks it is the CEF the bindings were generated for.
 
 use std::ffi::OsString;
 use std::fs;

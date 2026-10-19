@@ -6,8 +6,8 @@
 //! closes the page's message when it asked for one, with the closes that wait.
 //! Those sent off the UI thread wait for a task on the UI thread, which sends
 //! each frame's together. Other threads' messages queued before a handling
-//! leave before its messages, those queued during it after them, so a thread
-//! a handler starts never overtakes what the handler sent first.
+//! leave before its messages and those queued during it leave after them. A
+//! thread a handler starts never overtakes what the handler sent first.
 
 use std::cell::RefCell;
 use std::sync::mpsc::{channel, Receiver, Sender};
