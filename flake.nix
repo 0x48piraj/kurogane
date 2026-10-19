@@ -110,7 +110,7 @@
                 --prefix PATH : ${pkgs.lib.makeBinPath commonArgs.nativeBuildInputs} \
                 --prefix LD_LIBRARY_PATH : ${
                   pkgs.lib.makeLibraryPath (commonArgs.buildInputs ++ [ pkgs.stdenv.cc.cc ])
-                }:${cef} \
+                } \
                 --prefix PKG_CONFIG_PATH : ${pkgs.lib.makeSearchPath "lib/pkgconfig" commonArgs.buildInputs}
             '';
 
