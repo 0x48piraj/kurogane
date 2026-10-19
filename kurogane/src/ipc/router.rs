@@ -20,7 +20,7 @@ use crate::ipc::document::{Document, Documents};
 use crate::ipc::envelope::*;
 use crate::ipc::request_response::RequestResponseSubsystem;
 use crate::ipc::event::EventSubsystem;
-use crate::ipc::stream::{StreamResponder, StreamSubsystem};
+use crate::ipc::stream::{StreamKey, StreamResponder, StreamSubsystem};
 use crate::runtime::AppHandle;
 
 /// Top-level IPC router that owns all subsystems.
@@ -255,6 +255,19 @@ impl IpcRouter {
     /// so its sender does not wait forever.
     pub(crate) fn refuse_unregistered(frame: &Frame, envelope: &Envelope) {
         refuse_opening(frame, envelope, IpcError::new("the browser is not open"));
+    }
+
+    /// Answers a message past the page's limit, refused unread, with
+    /// [`ErrorCode::TooLarge`]. What it opens is refused; a stream chunk
+    /// fails its stream; any other follow-up is dropped.
+    pub(crate) fn refuse_oversized(&self, frame: &Frame, envelope: &Envelope, ctx: IpcContext) {
+        let error = IpcError::with_code(MESSAGE_TOO_LARGE, ErrorCode::TooLarge);
+        if (envelope.subsystem, envelope.opcode) == (SUB_STREAM, STREAM_DATA) {
+            self.stream
+                .fail(StreamKey::new(&ctx, envelope.correlation_id), error);
+        } else {
+            refuse_opening(frame, envelope, error);
+        }
     }
 
     /// Returns the document `frame` shows, for a message it sent. A frame

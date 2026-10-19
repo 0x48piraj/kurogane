@@ -11,7 +11,7 @@ use crate::ipc::browser_outbox::{self, Scope};
 use crate::ipc::browser_state::{FrameId, IpcContext};
 use crate::ipc::envelope::{Envelope, BATCH_ITEMS, FLAG_ANSWERS, KNOWN_FLAGS, SUB_BATCH};
 use crate::ipc::router::IpcRouter;
-use crate::ipc::transport::message::{is_ipc_message, receive_from_renderer};
+use crate::ipc::transport::message::{FromRenderer, is_ipc_message, receive_from_renderer};
 use crate::runtime::AppHandle;
 
 pub fn handle_ipc_message(
@@ -55,8 +55,13 @@ pub fn handle_ipc_message(
             "[IPC Browser] message from unregistered browser cef_id={}",
             browser.identifier()
         );
-        for (item, _) in messages(&envelope, received.payload()) {
-            IpcRouter::refuse_unregistered(frame, &item);
+        match &received {
+            FromRenderer::Message(received) => {
+                for (item, _) in messages(&envelope, received.payload()) {
+                    IpcRouter::refuse_unregistered(frame, &item);
+                }
+            }
+            FromRenderer::Oversized(_) => IpcRouter::refuse_unregistered(frame, &envelope),
         }
         return true;
     };
@@ -66,6 +71,18 @@ pub fn handle_ipc_message(
         return true;
     };
 
+    let received = match received {
+        FromRenderer::Message(received) => received,
+        FromRenderer::Oversized(_) => {
+            debug!(
+                "[IPC Browser] message {}:{} past the page limit refused unread",
+                envelope.subsystem, envelope.opcode
+            );
+            let ctx = IpcContext::new(document, envelope.flags);
+            app.router().refuse_oversized(frame, &envelope, ctx);
+            return true;
+        }
+    };
     let mut routed = true;
     for (item, payload) in messages(&envelope, received.payload()) {
         let ctx = IpcContext::new(document.clone(), item.flags);

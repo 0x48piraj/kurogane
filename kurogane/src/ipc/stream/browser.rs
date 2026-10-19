@@ -51,6 +51,20 @@ impl StreamSubsystem {
         }
     }
 
+    /// Fails `key`'s stream with `error`, as a failing handler does. Its
+    /// handler is dropped without `on_error`, which reports only the page's
+    /// own failures.
+    pub(crate) fn fail(&self, key: StreamKey, error: IpcError) {
+        let Some(entry) = self.streams.lock().unwrap().remove(&key) else {
+            debug!("[Stream Browser] failure for unknown stream {}", key.id);
+            return;
+        };
+        if !entry.is_closed() {
+            let _ = entry.responder(&key).error(error);
+        }
+        entry.close();
+    }
+
     fn on_cancel(&self, key: &StreamKey) -> bool {
         if let Some(entry) = self.streams.lock().unwrap().remove(key) {
             entry.close();

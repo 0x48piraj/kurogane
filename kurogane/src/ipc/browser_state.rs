@@ -35,7 +35,7 @@ pub enum ErrorCode {
     PathDenied,
     /// The path is malformed (`-7`).
     PathInvalid,
-    /// The file exceeds the transfer limit (`-8`).
+    /// The file or message exceeds its transfer limit (`-8`).
     TooLarge,
     /// The page left with the request open and came back from the
     /// back-forward cache (`-9`).

@@ -63,6 +63,30 @@ fn parse_view(rest: &[Option<V8Value>]) -> Result<Option<(usize, usize)>, ()> {
     }
 }
 
+/// Returns how many bytes of `buffer` a message sends, those `view` names or
+/// the whole buffer's.
+fn data_len(buffer: &V8Value, view: Option<(usize, usize)>) -> usize {
+    view.map_or_else(|| buffer.array_buffer_byte_length(), |(_, len)| len)
+}
+
+/// Why a page's call or stream open was not sent.
+enum Unsent {
+    /// Its data exceeds [`MESSAGE_MAX`].
+    TooLarge,
+    /// The message could not be built.
+    Unbuilt,
+}
+
+impl Unsent {
+    /// Returns the rejection the page's promise gets.
+    fn rejection(&self) -> CefString {
+        match self {
+            Self::TooLarge => rejection(ErrorCode::TooLarge.wire(), MESSAGE_TOO_LARGE),
+            Self::Unbuilt => rejection(ErrorCode::Buffer.wire(), "Failed to build IPC message"),
+        }
+    }
+}
+
 /// Sends a message of `frame`'s page whose payload is `header` then the
 /// bytes of `buffer` that `view` names as an offset and length, or every
 /// byte without a view. `None` when a non-empty buffer has no memory, the
@@ -498,7 +522,12 @@ wrap_v8_handler! {
                     payload_kind: PAYLOAD_BINARY,
                 };
 
-                send_buffer(&frame, &frame_id, &envelope, &cmd_header, buffer, view)
+                if data_len(buffer, view) > MESSAGE_MAX {
+                    Err(Unsent::TooLarge)
+                } else {
+                    send_buffer(&frame, &frame_id, &envelope, &cmd_header, buffer, view)
+                        .ok_or(Unsent::Unbuilt)
+                }
             } else {
                 let payload = match args.get(1) {
                     Some(Some(v)) if v.is_string() != 0 => v8_to_string(v),
@@ -514,13 +543,17 @@ wrap_v8_handler! {
                     payload_kind: PAYLOAD_STRING,
                 };
 
-                renderer_outbox::send(&frame, &frame_id, &envelope, &[&cmd_header, payload.as_bytes()])
+                if payload.len() > MESSAGE_MAX {
+                    Err(Unsent::TooLarge)
+                } else {
+                    renderer_outbox::send(&frame, &frame_id, &envelope, &[&cmd_header, payload.as_bytes()])
+                        .ok_or(Unsent::Unbuilt)
+                }
             };
 
-            if sent.is_none() {
+            if let Err(unsent) = sent {
                 with_state(|state| state.forget(id));
-                let reject_msg = rejection(ErrorCode::Buffer.wire(), "Failed to build IPC message");
-                promise.reject_promise(Some(&reject_msg));
+                promise.reject_promise(Some(&unsent.rejection()));
                 if let Some(ret) = retval { *ret = Some(promise_for_retval); }
                 return 1;
             }
@@ -953,12 +986,16 @@ wrap_v8_handler! {
                 payload_kind: PAYLOAD_STRING,
             };
 
-            let sent = encode_cmd_payload(&handler_name, metadata.as_bytes())
-                .and_then(|payload| renderer_outbox::send(&frame, &frame_id, &envelope, &[&payload]));
-            if sent.is_none() {
+            let sent = if metadata.len() > MESSAGE_MAX {
+                Err(Unsent::TooLarge)
+            } else {
+                encode_cmd_payload(&handler_name, metadata.as_bytes())
+                    .and_then(|payload| renderer_outbox::send(&frame, &frame_id, &envelope, &[&payload]))
+                    .ok_or(Unsent::Unbuilt)
+            };
+            if let Err(unsent) = sent {
                 with_state(|state| state.forget(stream_id));
-                let reject_msg = rejection(ErrorCode::Buffer.wire(), "Failed to build IPC message");
-                promise.reject_promise(Some(&reject_msg));
+                promise.reject_promise(Some(&unsent.rejection()));
             }
 
             // The promise settles when the browser answers the open:
@@ -1012,6 +1049,9 @@ wrap_v8_handler! {
             let Ok(view) = parse_view(args.get(2..).unwrap_or_default()) else {
                 return throw(exception, "writeStream: byteOffset and byteLength must be whole numbers");
             };
+            if data_len(buffer, view) > MESSAGE_MAX {
+                return throw(exception, "writeStream: a chunk carries at most 64 MiB; write smaller chunks");
+            }
 
             let context = match v8_context_get_current_context() {
                 Some(ctx) => ctx,
@@ -1086,6 +1126,9 @@ wrap_v8_handler! {
                 Some(Some(v)) if v.is_string() != 0 => v8_to_string(v),
                 _ => String::new(),
             };
+            if result.len() > MESSAGE_MAX {
+                return throw(exception, "endStream: a result carries at most 64 MiB");
+            }
 
             let context = match v8_context_get_current_context() {
                 Some(ctx) => ctx,

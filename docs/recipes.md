@@ -760,6 +760,12 @@ const reply = await window.kurogane.invoke("checksum", new TextEncoder().encode(
 
 `App::async_binary_command` is its async form. Its handler gets a `BinaryResponder`.
 
+### Large data
+
+One message from a page carries at most 64 MiB of data. A call with more rejects with code `-8` before anything is sent. A stream's `write` throws for a larger chunk.
+
+One call is fastest up to about 16 MiB. A larger call moves no faster and holds up the page while its bytes are copied. Stream larger data in chunks of 1 to 4 MiB to the page and about 4 MiB from it. The page stays responsive between chunks.
+
 ### Errors
 
 A handler fails with an `IpcError`. A string converts into one. The page's promise rejects with an `Error` whose `code` says what failed:
@@ -774,7 +780,7 @@ A handler fails with an `IpcError`. A string converts into one. The page's promi
 | `-5` | No filesystem grant of the origin covers the operation |
 | `-6` | The path is outside the granted roots, denied or a link |
 | `-7` | The path is malformed |
-| `-8` | The file exceeds the transfer limit |
+| `-8` | A file or message exceeds its transfer limit |
 | `-9` | The page left with the call open and came back from the back-forward cache |
 
 `IpcError::with_code` sends a positive code of your own (`ErrorCode::App`).
@@ -885,7 +891,7 @@ stream.end();
 
 Handlers and sends fail with an `IpcError` as commands do. A string converts into one. The first `end` or `error` a handler sends closes the stream. Later sends fail with `stream closed`. When the page calls `end()` and `on_end` sends neither, the runtime ends the stream with `""`. The page always hears back. A stream a page left open fails with `The page left` when the page comes back from the back-forward cache.
 
-Handlers run on the UI thread. A `StreamResponder` can be cloned and used from any thread. Streams follow the same access rule as commands.
+Handlers run on the UI thread. A `StreamResponder` can be cloned and used from any thread. Streams follow the same access rule as commands. A chunk carries at most 64 MiB. See [Large data](#large-data) for chunk sizes.
 
 ## The filesystem capability
 

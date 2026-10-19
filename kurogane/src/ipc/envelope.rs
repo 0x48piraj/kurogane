@@ -127,6 +127,18 @@ pub fn parse_envelope(data: &[u8]) -> Option<(Envelope, &[u8])> {
 /// wire-format length limit.
 pub const MAX_CMD_LEN: usize = u16::MAX as usize;
 
+/// Most bytes of data one message from a page carries. A larger argument,
+/// stream chunk or result is refused before it is read; a stream carries
+/// more. One message moves no faster past a few dozen MiB.
+pub const MESSAGE_MAX: usize = 64 << 20;
+
+/// Why a page's message past [`MESSAGE_MAX`] is refused, as the page reads it.
+pub const MESSAGE_TOO_LARGE: &str = "one message carries at most 64 MiB; send more as a stream";
+
+/// Most payload bytes the browser reads of a page's message, its data within
+/// [`MESSAGE_MAX`] behind the longest command header.
+pub const PAGE_PAYLOAD_MAX: usize = MESSAGE_MAX + 2 + MAX_CMD_LEN;
+
 /// Encodes a command payload.
 ///
 /// The wire format is `[command_len: u16 LE][command UTF-8][data]`.
@@ -204,6 +216,17 @@ mod tests {
         let (decoded, rest) = parse_envelope(&buf).expect("parse must succeed");
         assert_eq!(decoded, env);
         assert!(rest.is_empty(), "no trailing data expected");
+    }
+
+    // The refusal the page reads names the limit the runtime holds to
+    #[test]
+    fn the_refusal_names_the_message_limit() {
+        let limit = format!("{} MiB", MESSAGE_MAX >> 20);
+        assert!(
+            MESSAGE_TOO_LARGE.contains(&limit),
+            "{MESSAGE_TOO_LARGE} against {limit}"
+        );
+        assert_eq!(PAGE_PAYLOAD_MAX, MESSAGE_MAX + 2 + MAX_CMD_LEN);
     }
 
     // Trailing bytes after the 9-byte header are returned as the remaining slice.

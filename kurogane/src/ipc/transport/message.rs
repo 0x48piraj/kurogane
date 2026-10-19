@@ -53,6 +53,24 @@ enum Bytes {
     Empty,
 }
 
+/// What the browser receives from a renderer.
+pub enum FromRenderer {
+    /// A message within [`PAGE_PAYLOAD_MAX`].
+    Message(ReceivedMessage),
+    /// A message past [`PAGE_PAYLOAD_MAX`], refused unread. Only its
+    /// envelope was read.
+    Oversized(Envelope),
+}
+
+impl FromRenderer {
+    pub fn envelope(&self) -> Envelope {
+        match self {
+            Self::Message(message) => message.envelope,
+            Self::Oversized(envelope) => *envelope,
+        }
+    }
+}
+
 /// Whether the renderers run in Chromium's sandbox, which decides whether
 /// the browser copies their shared memory ([`receive_from_renderer`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,29 +144,50 @@ pub unsafe fn receive_from_browser(message: &ProcessMessage) -> Option<ReceivedM
 /// compromised one already runs with the user's rights and could write this
 /// process's memory directly. The copy would protect nothing and cost every
 /// large upload.
+///
+/// A message past [`PAGE_PAYLOAD_MAX`] is refused in either mode before its
+/// payload is read or copied. The renderer picks a region's size, so a page
+/// with no rights cannot make the browser allocate it.
 pub fn receive_from_renderer(
     message: &ProcessMessage,
     sandbox: RendererSandbox,
-) -> Option<ReceivedMessage> {
+) -> Option<FromRenderer> {
     let Some(region) = shared_region(message) else {
-        return receive_inline(message);
+        let received = receive_inline(message)?;
+        if received.payload().len() > PAGE_PAYLOAD_MAX {
+            return Some(FromRenderer::Oversized(received.envelope));
+        }
+        return Some(FromRenderer::Message(received));
     };
-    match sandbox {
+    if exceeds_page_limit(region.size()) {
+        // SAFETY: `shared_region` keeps only regions of at least an envelope
+        // that CEF maps while `region` lives
+        let envelope = unsafe { copy_envelope(region.memory() as *const u8) }?;
+        return Some(FromRenderer::Oversized(envelope));
+    }
+    let received = match sandbox {
         RendererSandbox::Sandboxed => {
             // SAFETY: CEF keeps the region mapped for `size()` bytes while
             // `region` lives, past this call
             let (envelope, payload) =
                 unsafe { copy_shared(region.memory() as *const u8, region.size()) }?;
-            Some(ReceivedMessage {
+            ReceivedMessage {
                 envelope,
                 bytes: Bytes::Owned(payload),
-            })
+            }
         }
         // SAFETY: deliberately weaker than shared_message asks. Only a
         // compromised renderer could still write the region, and unsandboxed
         // it could already write this process's memory directly
-        RendererSandbox::Unsandboxed => unsafe { shared_message(region) },
-    }
+        RendererSandbox::Unsandboxed => unsafe { shared_message(region) }?,
+    };
+    Some(FromRenderer::Message(received))
+}
+
+/// Returns whether a renderer's region of `size` bytes holds more payload
+/// than [`PAGE_PAYLOAD_MAX`].
+fn exceeds_page_limit(size: usize) -> bool {
+    size.saturating_sub(ENVELOPE_SIZE) > PAGE_PAYLOAD_MAX
 }
 
 /// A message left in its shared region, to be read in place.
@@ -191,6 +230,27 @@ unsafe fn in_place(region: &SharedMemoryRegion) -> &[u8] {
     unsafe { std::slice::from_raw_parts(base, region.size()) }
 }
 
+/// Copies a shared-memory message's envelope out of its region and decodes
+/// it.
+///
+/// # Safety
+///
+/// `base` must be readable for [`ENVELOPE_SIZE`] bytes for the duration of
+/// the call. Another process may write them meanwhile. They are only copied
+/// by raw pointer and never borrowed as a slice.
+unsafe fn copy_envelope(base: *const u8) -> Option<Envelope> {
+    if base.is_null() {
+        return None;
+    }
+    let mut header = [0u8; ENVELOPE_SIZE];
+    // SAFETY: the caller guarantees ENVELOPE_SIZE readable bytes at `base`,
+    // and `header` is a buffer of its own. A sender still writing makes this
+    // a racy read of plain bytes. Chromium accepts that for shared memory;
+    // copy first, then validate the copy
+    unsafe { std::ptr::copy_nonoverlapping(base, header.as_mut_ptr(), ENVELOPE_SIZE) };
+    parse_envelope(&header).map(|(envelope, _)| envelope)
+}
+
 /// Copies a shared-memory message (its envelope, then its payload) out of
 /// its region.
 ///
@@ -203,14 +263,10 @@ unsafe fn copy_shared(base: *const u8, len: usize) -> Option<(Envelope, Vec<u8>)
     if base.is_null() || len < ENVELOPE_SIZE {
         return None;
     }
-    let mut header = [0u8; ENVELOPE_SIZE];
-    // SAFETY: the caller guarantees `len` readable bytes at `base`, and
-    // `header` is a buffer of its own. A sender still writing makes this a
-    // racy read of plain bytes, which Chromium also accepts for shared
-    // memory: copy first, then validate the copy
-    unsafe { std::ptr::copy_nonoverlapping(base, header.as_mut_ptr(), ENVELOPE_SIZE) };
-    // Validated before the payload is copied: a malformed message costs no copy
-    let (envelope, _) = parse_envelope(&header)?;
+    // SAFETY: the caller guarantees `len` readable bytes at `base`, at least
+    // an envelope's. A malformed message costs no copy; the envelope is
+    // validated before the payload is copied
+    let envelope = unsafe { copy_envelope(base) }?;
     let size = len - ENVELOPE_SIZE;
     let mut payload = Vec::with_capacity(size);
     // SAFETY: as above for the source; `payload` has room for `size` bytes,
@@ -366,5 +422,31 @@ mod tests {
         assert!(copied(&[]).is_none());
         // SAFETY: a null pointer is refused before it is read.
         assert!(unsafe { copy_shared(std::ptr::null(), 64) }.is_none());
+    }
+
+    #[test]
+    fn a_page_region_past_the_limit_is_refused() {
+        let at_limit = ENVELOPE_SIZE + PAGE_PAYLOAD_MAX;
+        assert!(!exceeds_page_limit(at_limit));
+        assert!(exceeds_page_limit(at_limit + 1));
+        assert!(!exceeds_page_limit(ENVELOPE_SIZE));
+        assert!(!exceeds_page_limit(0));
+        // The whole of MESSAGE_MAX fits behind the longest command header
+        assert!(!exceeds_page_limit(
+            ENVELOPE_SIZE + 2 + MAX_CMD_LEN + MESSAGE_MAX
+        ));
+    }
+
+    #[test]
+    fn an_oversized_message_is_known_by_its_envelope_alone() {
+        let header = encode_envelope_bytes(&envelope());
+        // SAFETY: `header` is readable for an envelope's bytes during the call
+        let decoded = unsafe { copy_envelope(header.as_ptr()) };
+        assert_eq!(
+            decoded.map(|e| (e.subsystem, e.opcode, e.correlation_id)),
+            Some((1, 2, 7))
+        );
+        // SAFETY: a null pointer is refused before it is read.
+        assert!(unsafe { copy_envelope(std::ptr::null()) }.is_none());
     }
 }
