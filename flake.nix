@@ -46,6 +46,7 @@
               dbus
               at-spi2-core
               libGL
+              vulkan-loader
               libxkbcommon
               wayland
               libX11
