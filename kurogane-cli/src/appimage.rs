@@ -538,7 +538,9 @@ mod tests {
             fs::write(&apprun, generate_apprun(name, "my app")).unwrap();
             fs::set_permissions(&apprun, fs::Permissions::from_mode(0o755)).unwrap();
 
-            let output = Command::new(&apprun)
+            // Run via sh; the shebang is tested separately
+            let output = Command::new("sh")
+                .arg(&apprun)
                 .args(["one two", "$HOME", "x'y"])
                 .current_dir(dir.path())
                 .output()
