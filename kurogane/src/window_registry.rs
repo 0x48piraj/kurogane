@@ -30,9 +30,25 @@ pub(crate) struct WindowEntry {
     /// Where the window is in its normal state (neither maximized, minimized
     /// nor fullscreen) and restores to (crate::window)
     pub restored: Option<Rect>,
+    /// A normal size the window last showed at, waiting to settle before it
+    /// becomes `restored` (`SIZES_SETTLE`)
+    settling: Option<Settling>,
     /// The state the window last showed in while not minimized and comes back
     /// as once restored (crate::window_closing)
     pub shown: WindowState,
+}
+
+/// Whether a window's normal size waits to settle before it counts as where
+/// the window restores to. On macOS each frame of a zoom's animation shows a
+/// normal size; only a size the window holds counts. Elsewhere a maximize is
+/// one report that carries its state.
+const SIZES_SETTLE: bool = cfg!(target_os = "macos");
+
+/// A normal size a window showed at, waiting to settle.
+struct Settling {
+    bounds: Rect,
+    /// The report it came from; a later report replaces it
+    generation: u64,
 }
 
 /// What opened a window.
@@ -53,6 +69,8 @@ pub(crate) struct WindowRegistry {
     /// each held by its window from its ID on until its close is reported
     names: HashMap<String, WindowId>,
     next_id: u32,
+    /// The last bounds report's number, which a settling size waits under
+    generation: u64,
 }
 
 impl WindowRegistry {
@@ -62,6 +80,7 @@ impl WindowRegistry {
             lookup: HashMap::new(),
             names: HashMap::new(),
             next_id: 1,
+            generation: 0,
         }
     }
 
@@ -116,6 +135,7 @@ impl WindowRegistry {
             follows_title,
             kind,
             restored: None,
+            settling: None,
             shown,
         };
 
@@ -173,14 +193,49 @@ impl WindowRegistry {
 
     /// Records that window `id`, not minimized, shows in `state` at
     /// `bounds` (crate::window). Bounds it shows normally at are where it
-    /// restores to. A maximized or fullscreen window's bounds are its
-    /// display's.
-    pub fn shown(&mut self, id: WindowId, state: WindowState, bounds: &Rect) {
-        if let Some(entry) = self.windows.get_mut(&id) {
-            entry.shown = state;
-            if state == WindowState::Normal {
-                entry.restored = Some(bounds.clone());
+    /// restores to, at once or once they settle (`SIZES_SETTLE`). A maximized
+    /// or fullscreen window's bounds are its display's. Returns the
+    /// generation [`WindowRegistry::settle`] takes when the bounds settle.
+    pub fn shown(&mut self, id: WindowId, state: WindowState, bounds: &Rect) -> Option<u64> {
+        self.generation += 1;
+        let generation = self.generation;
+        let entry = self.windows.get_mut(&id)?;
+        entry.shown = state;
+        entry.settling = None;
+        match state {
+            WindowState::Normal if SIZES_SETTLE => {
+                entry.settling = Some(Settling {
+                    bounds: bounds.clone(),
+                    generation,
+                });
+                Some(generation)
             }
+            WindowState::Normal => {
+                entry.restored = Some(bounds.clone());
+                None
+            }
+            WindowState::Minimized
+            | WindowState::Maximized
+            | WindowState::Fullscreen
+            | WindowState::Hidden => None,
+        }
+    }
+
+    /// Makes the normal size window `id` showed at in report `generation`
+    /// where it restores to. It counts when no later report replaced it and
+    /// `normal` says the window still shows normally; otherwise it drops.
+    pub fn settle(&mut self, id: WindowId, generation: u64, normal: bool) {
+        let Some(entry) = self.windows.get_mut(&id) else {
+            return;
+        };
+        let Some(settled) = entry
+            .settling
+            .take_if(|settling| settling.generation == generation)
+        else {
+            return;
+        };
+        if normal {
+            entry.restored = Some(settled.bounds);
         }
     }
 

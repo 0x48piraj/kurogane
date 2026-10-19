@@ -9,6 +9,7 @@ use tanso::{ImplView, ImplWindow, Rect, Window};
 use tracing::{debug, error};
 
 use crate::runtime::AppHandle;
+use crate::window::shown_state;
 use crate::window_options::{WindowPlacement, WindowState};
 use crate::window_registry::WindowId;
 
@@ -80,25 +81,41 @@ pub(crate) fn report(app: &AppHandle, closing: Closing) {
         return;
     };
     let window = &closing.window;
-    // A minimized window comes back as it showed before. One CEF opened
-    // hidden is minimized too (Windows), and comes back as it opened
-    let state = if window.is_minimized() != 0 {
-        closing.shown
-    } else if window.is_fullscreen() != 0 {
-        WindowState::Fullscreen
-    } else if window.is_maximized() != 0 {
-        WindowState::Maximized
-    } else {
+    let now = shown_state(window);
+    let state = match now {
+        // A minimized window comes back as it showed before. One CEF opened
+        // hidden is minimized too (Windows) and comes back as it opened
+        WindowState::Minimized => closing.shown,
+        // On macOS a zoomed window on another Space reads normal. It keeps
+        // the state it showed in at its last frame
         WindowState::Normal
+            if cfg!(target_os = "macos") && closing.shown == WindowState::Maximized =>
+        {
+            WindowState::Maximized
+        }
+        WindowState::Normal
+        | WindowState::Maximized
+        | WindowState::Fullscreen
+        | WindowState::Hidden => now,
+    };
+    // A window closing in its normal state restores to where it is, a size
+    // still settling included (crate::window_registry)
+    let restored = match state {
+        WindowState::Normal if now == WindowState::Normal => {
+            Some(window.client_area_bounds_in_screen())
+        }
+        WindowState::Normal
+        | WindowState::Minimized
+        | WindowState::Maximized
+        | WindowState::Fullscreen
+        | WindowState::Hidden => closing.restored,
     };
     let Rect {
         x,
         y,
         width,
         height,
-    } = closing
-        .restored
-        .unwrap_or_else(|| window.bounds_in_screen());
+    } = restored.unwrap_or_else(|| window.bounds_in_screen());
     // A window's sides are positive; at least 1 keeps the placement one a
     // window can open at
     let placement = WindowPlacement {

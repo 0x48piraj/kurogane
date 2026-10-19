@@ -238,6 +238,55 @@ const MIN_VISIBLE: i32 = 30;
 /// a window it is asked to size itself the same size.
 const DEFAULT_SIZE: (i32, i32) = (800, 600);
 
+/// How long a window holds a normal size, in milliseconds, before it counts
+/// as where the window restores to, where sizes settle (crate::window_registry).
+/// A zoom's frames come far closer together.
+const SETTLE_MS: i64 = 300;
+
+/// How far a zoomed window's edges may lie from its display's work area, in
+/// DIP. macOS's own zoom can end a point past it.
+const ZOOM_SLACK: i32 = 2;
+
+/// Returns the state `window` shows in now, never Hidden. On macOS a window
+/// neither minimized nor fullscreen is maximized when it fills its display's
+/// work area, as a zoomed window does. CEF's `IsMaximized` there lags a
+/// zoom's animation, misses a window zoomed before it showed and stays true
+/// after a fullscreen exit. A zoomed window on another Space reads normal;
+/// its display's work area follows the active Space. UI thread.
+pub(crate) fn shown_state(window: &Window) -> WindowState {
+    if window.is_minimized() != 0 {
+        WindowState::Minimized
+    } else if window.is_fullscreen() != 0 {
+        WindowState::Fullscreen
+    } else if cfg!(target_os = "macos") {
+        if fills_work_area(window) {
+            WindowState::Maximized
+        } else {
+            WindowState::Normal
+        }
+    } else if window.is_maximized() != 0 {
+        WindowState::Maximized
+    } else {
+        WindowState::Normal
+    }
+}
+
+/// Returns whether `window` fills its display's work area. UI thread.
+fn fills_work_area(window: &Window) -> bool {
+    let bounds = window.bounds_in_screen();
+    display_get_matching_bounds(Some(&bounds), 0)
+        .is_some_and(|display| covers(&bounds, &display.work_area()))
+}
+
+/// Returns whether `bounds` covers `area`, each edge within [`ZOOM_SLACK`].
+fn covers(bounds: &Rect, area: &Rect) -> bool {
+    let near = |a: i32, b: i32| (a - b).abs() <= ZOOM_SLACK;
+    near(bounds.x, area.x)
+        && near(bounds.y, area.y)
+        && near(bounds.x + bounds.width, area.x + area.width)
+        && near(bounds.y + bounds.height, area.y + area.height)
+}
+
 /// Whether the frame around a window's content is known as CEF creates the
 /// window, before it shows. Under X11 the window manager adds the frame once
 /// the window maps.
@@ -314,6 +363,12 @@ fn framed_opening_bounds(options: &WindowOptions, frame: &Frame) -> Rect {
 fn show_in(window: &Window, state: WindowState) {
     match state {
         WindowState::Normal => window.show(),
+        // CEF on macOS zooms a window it has not shown without showing it.
+        // A show after the zoom drops the zoomed state
+        WindowState::Maximized if cfg!(target_os = "macos") => {
+            window.show();
+            window.maximize();
+        }
         WindowState::Maximized => window.maximize(),
         WindowState::Minimized => window.minimize(),
         // Chromium's X11 window drops a state set before it maps, so there
@@ -327,6 +382,28 @@ fn show_in(window: &Window, state: WindowState) {
             window.show();
         }
         WindowState::Hidden => {}
+    }
+}
+
+// Settles a window's normal size once the window has held it
+// (WindowRegistry::settle); its state is read outside the registry's guard
+wrap_task! {
+    struct SettleTask {
+        app: AppHandle,
+        window: WindowId,
+        generation: u64,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            // The guard ends with the statement
+            let window = self.app.registry().windows.get(self.window).map(|entry| entry.window.clone());
+            let Some(window) = window else {
+                return;
+            };
+            let normal = shown_state(&window) == WindowState::Normal;
+            self.app.registry().windows.settle(self.window, self.generation, normal);
+        }
     }
 }
 
@@ -459,8 +536,7 @@ wrap_window_delegate! {
 
         // Linux only. Sets the class the window manager knows the window by,
         // the application's or the executable's name. The strings are CEF's
-        // own, which cef-rs's write of this struct back to CEF keeps
-        // (crate::cef_string)
+        // own which tanso's write of this struct back to CEF keeps (crate::cef_string)
         fn linux_window_properties(
             &self,
             _window: Option<&mut Window>,
@@ -547,13 +623,12 @@ wrap_window_delegate! {
             let (Some(window), Some(bounds)) = (window, new_bounds) else {
                 return;
             };
-            // CEF reports the new state with the bounds; a maximized, minimized
-            // or fullscreen window's bounds are not where it restores to
-            let (maximized, minimized, fullscreen) =
-                (window.is_maximized(), window.is_minimized(), window.is_fullscreen());
+            // A maximized, minimized or fullscreen window's bounds are not where
+            // it restores to
+            let state = shown_state(window);
             let content = window.client_area_bounds_in_screen();
             debug!(
-                "[Window] {} bounds {},{} {}x{} content {},{} {}x{} maximized={maximized} minimized={minimized} fullscreen={fullscreen}",
+                "[Window] {} bounds {},{} {}x{} content {},{} {}x{} {state:?}",
                 self.window_id.as_u32(),
                 bounds.x,
                 bounds.y,
@@ -566,16 +641,13 @@ wrap_window_delegate! {
             );
             // A minimized window comes back as it last showed, so only a
             // window not minimized says how that is
-            if minimized == 0 {
-                let state = if fullscreen != 0 {
-                    WindowState::Fullscreen
-                } else if maximized != 0 {
-                    WindowState::Maximized
-                } else {
-                    WindowState::Normal
-                };
+            if state != WindowState::Minimized {
                 // The guard ends with the statement
-                self.app.registry().windows.shown(self.window_id, state, &content);
+                let settling = self.app.registry().windows.shown(self.window_id, state, &content);
+                if let Some(generation) = settling {
+                    let mut task = SettleTask::new(self.app.clone(), self.window_id, generation);
+                    post_delayed_task(ThreadId::UI, Some(&mut task), SETTLE_MS);
+                }
             }
         }
 
@@ -584,7 +656,7 @@ wrap_window_delegate! {
             self.app.registry().windows.unregister(self.window_id);
         }
 
-        // cef-rs answers 0 for a callback left out, where CEF's C++ defaults
+        // tanso answers 0 for a callback left out, where CEF's C++ defaults
         // answer true; these restore them
         fn with_standard_window_buttons(
             &self,
@@ -656,7 +728,7 @@ wrap_browser_view_delegate! {
             }
         }
 
-        // cef-rs answers None here where CEF's C++ default answers this
+        // tanso answers None here where CEF's C++ default answers this
         // delegate. Without one, a popup's own popups and DevTools opened for
         // it get CEF's window, which the runtime neither tracks nor sizes
         fn delegate_for_popup_browser_view(
@@ -1004,6 +1076,16 @@ mod tests {
         assert_eq!(parts(centre(916, 679, &area)), (502, 176, 916, 679));
         // Too large for the work area: the whole window fits it
         assert_eq!(parts(centre(1916, 1071, &area)), (2, 0, 1916, 1032));
+    }
+
+    #[test]
+    fn a_window_covers_its_work_area_within_a_point_or_two() {
+        let area = rect(0, 25, 1440, 875);
+        assert!(covers(&rect(0, 25, 1440, 875), &area));
+        // macOS's zoom can end a point past the work area
+        assert!(covers(&rect(0, 25, 1440, 876), &area));
+        assert!(!covers(&rect(0, 25, 1440, 840), &area));
+        assert!(!covers(&rect(320, 136, 800, 628), &area));
     }
 
     #[test]
