@@ -25,6 +25,12 @@
         pkgs = import nixpkgs { inherit system; };
         craneLib = inputs.crane.mkLib pkgs;
 
+        # nixpkgs packages glxinfo inside mesa-demos beside its demo programs.
+        # A copy of the one binary keeps mesa-demos out of the closure.
+        glxinfo = pkgs.runCommand "glxinfo" { } ''
+          install -Dm755 ${pkgs.mesa-demos}/bin/glxinfo $out/bin/glxinfo
+        '';
+
         commonArgs = {
           src = craneLib.cleanCargoSource ./.;
 
@@ -84,6 +90,10 @@
               cargo
               pkg-config
               stdenv.cc
+            ]
+            # kurogane doctor reads the GPU through glxinfo
+            ++ lib.optionals stdenv.hostPlatform.isLinux [
+              glxinfo
             ]
             # macOS bundles link CEF with otool and install_name_tool
             ++ lib.optionals stdenv.hostPlatform.isDarwin [

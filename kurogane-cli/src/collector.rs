@@ -51,11 +51,40 @@ pub struct CefInfo {
 
 #[derive(Serialize)]
 pub struct GpuInfo {
-    pub gl_vendor: Option<String>,
-    pub gl_renderer: Option<String>,
-    pub gl_version: Option<String>,
-    pub adapter_name: Option<String>,
-    pub source: String,
+    /// Tool the probe ran.
+    pub source: &'static str,
+    pub probe: GpuProbe,
+}
+
+/// Outcome of the GPU probe.
+#[derive(Serialize)]
+#[serde(rename_all = "kebab-case", tag = "status")]
+pub enum GpuProbe {
+    /// Linux OpenGL renderer named by `glxinfo`.
+    #[cfg(target_os = "linux")]
+    Renderer(GlRenderer),
+    /// macOS or Windows display adapter.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    Adapter { name: String },
+    /// Linux `glxinfo` not installed.
+    #[cfg(target_os = "linux")]
+    Missing,
+    /// Linux session without an X display to query.
+    #[cfg(target_os = "linux")]
+    NoDisplay,
+    /// Probe ran without naming a GPU; what it printed.
+    Failed { output: String },
+}
+
+/// OpenGL renderer as `glxinfo` names it.
+#[cfg(target_os = "linux")]
+#[derive(Serialize)]
+pub struct GlRenderer {
+    pub name: String,
+    pub vendor: Option<String>,
+    pub version: Option<String>,
+    /// Whether OpenGL renders on the GPU rather than in software
+    pub accelerated: Option<bool>,
 }
 
 /// System and desktop-session information.
@@ -238,7 +267,7 @@ mod cef {
     }
 }
 
-mod gpu {
+pub(crate) mod gpu {
     //! Best-effort GPU and graphics-stack diagnostics.
     use super::*;
 
@@ -250,104 +279,82 @@ mod gpu {
 
         #[cfg(target_os = "macos")]
         {
-            collect_macos()
+            adapter_info(probe_macos_adapter_name(), "system_profiler")
         }
 
         #[cfg(target_os = "windows")]
         {
-            collect_windows()
+            adapter_info(probe_windows_adapter_name(), "windows-adapter")
         }
 
         #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         {
             return GpuInfo {
-                gl_vendor: None,
-                gl_renderer: None,
-                gl_version: None,
-                adapter_name: None,
-                source: "unsupported".into(),
+                source: "unsupported",
+                probe: GpuProbe::Failed {
+                    output: "no GPU probe for this platform".into(),
+                },
             };
         }
     }
 
-    #[cfg(target_os = "macos")]
-    fn collect_macos() -> GpuInfo {
-        let adapter_name = probe_macos_adapter_name();
+    /// Returns what a probe naming the display adapter found.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn adapter_info(name: Option<String>, source: &'static str) -> GpuInfo {
+        let probe = match name {
+            Some(name) => GpuProbe::Adapter { name },
+            None => GpuProbe::Failed {
+                output: format!("{source} named no display adapter"),
+            },
+        };
 
-        GpuInfo {
-            gl_vendor: None,
-            gl_renderer: None,
-            gl_version: None,
-            adapter_name,
-            source: "system_profiler".into(),
-        }
+        GpuInfo { source, probe }
     }
 
     #[cfg(target_os = "linux")]
     fn collect_linux() -> GpuInfo {
-        if let Some(info) = probe_glxinfo() {
-            return info;
-        }
-
-        if let Some(info) = probe_eglinfo() {
-            return info;
-        }
-
-        GpuInfo {
-            gl_vendor: None,
-            gl_renderer: None,
-            gl_version: None,
-            adapter_name: None,
-            source: "unknown".into(),
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    fn collect_windows() -> GpuInfo {
-        let adapter_name = probe_windows_adapter_name();
+        let probe = if std::env::var_os("DISPLAY").is_none() {
+            GpuProbe::NoDisplay
+        } else {
+            match Command::new("glxinfo").arg("-B").output() {
+                Ok(output) => read_glxinfo(
+                    &String::from_utf8_lossy(&output.stdout),
+                    &String::from_utf8_lossy(&output.stderr),
+                ),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => GpuProbe::Missing,
+                Err(e) => GpuProbe::Failed {
+                    output: format!("glxinfo could not run: {e}"),
+                },
+            }
+        };
 
         GpuInfo {
-            gl_vendor: None,
-            gl_renderer: None,
-            gl_version: None,
-            adapter_name,
-            source: "windows-adapter".into(),
+            source: "glxinfo -B",
+            probe,
         }
     }
 
+    /// Returns what `glxinfo -B` printed about the GPU.
+    ///
+    /// glxinfo can exit successfully without a usable OpenGL. A missing
+    /// renderer is the failure.
     #[cfg(target_os = "linux")]
-    fn probe_glxinfo() -> Option<GpuInfo> {
-        let out = Command::new("glxinfo").arg("-B").output().ok()?;
-        if !out.status.success() {
-            return None;
-        }
+    fn read_glxinfo(stdout: &str, stderr: &str) -> GpuProbe {
+        let Some(name) = find(stdout, "OpenGL renderer string:") else {
+            let printed = [stderr.trim(), stdout.trim()]
+                .into_iter()
+                .find(|text| !text.is_empty())
+                .unwrap_or("glxinfo printed nothing");
+            return GpuProbe::Failed {
+                output: printed.to_owned(),
+            };
+        };
 
-        let text = String::from_utf8_lossy(&out.stdout);
-
-        Some(GpuInfo {
-            gl_vendor: find(&text, "OpenGL vendor string:"),
-            gl_renderer: find(&text, "OpenGL renderer string:"),
-            gl_version: find(&text, "OpenGL version string:"),
-            adapter_name: None,
-            source: "glxinfo -B".into(),
-        })
-    }
-
-    #[cfg(target_os = "linux")]
-    fn probe_eglinfo() -> Option<GpuInfo> {
-        let out = Command::new("eglinfo").arg("--client").output().ok()?;
-        if !out.status.success() {
-            return None;
-        }
-
-        let text = String::from_utf8_lossy(&out.stdout);
-
-        Some(GpuInfo {
-            gl_vendor: find(&text, "Vendor:"),
-            gl_renderer: find(&text, "Device:"),
-            gl_version: find(&text, "OpenGL version string:"),
-            adapter_name: None,
-            source: "eglinfo --client".into(),
+        GpuProbe::Renderer(GlRenderer {
+            name,
+            vendor: find(stdout, "OpenGL vendor string:"),
+            version: find(stdout, "OpenGL version string:"),
+            accelerated: find(stdout, "Accelerated:").map(|value| value == "yes"),
         })
     }
 
@@ -400,5 +407,83 @@ mod gpu {
             .and_then(|l| l.split_once(':'))
             .map(|(_, v)| v.trim().to_string())
             .filter(|s| !s.is_empty())
+    }
+
+    #[cfg(all(test, target_os = "linux"))]
+    mod tests {
+        use super::*;
+
+        const WORKING: &str = "\
+name of display: :0
+display: :0  screen: 0
+direct rendering: Yes
+Extended renderer info (GLX_MESA_query_renderer):
+    Vendor: AMD (0x1002)
+    Device: AMD Radeon RX 6500 XT (radeonsi, navi24, ACO, DRM 3.64, 7.2.8) (0x743f)
+    Version: 26.2.3
+    Accelerated: yes
+OpenGL vendor string: AMD
+OpenGL renderer string: AMD Radeon RX 6500 XT (radeonsi, navi24, ACO, DRM 3.64, 7.2.8)
+OpenGL core profile version string: 4.6 (Core Profile) Mesa 26.2.3
+OpenGL version string: 4.6 (Compatibility Profile) Mesa 26.2.3
+OpenGL ES profile version string: OpenGL ES 3.2 Mesa 26.2.3
+";
+
+        /// Returns the renderer `probe` names, failing the test otherwise.
+        #[track_caller]
+        fn renderer(probe: GpuProbe) -> GlRenderer {
+            let GpuProbe::Renderer(renderer) = probe else {
+                panic!("glxinfo naming a renderer finds the GPU");
+            };
+            renderer
+        }
+
+        /// Returns what a failed `probe` printed, failing the test otherwise.
+        #[track_caller]
+        fn failure(probe: GpuProbe) -> String {
+            let GpuProbe::Failed { output } = probe else {
+                panic!("glxinfo without a renderer fails");
+            };
+            output
+        }
+
+        #[test]
+        fn glxinfo_naming_a_renderer_finds_the_gpu() {
+            let gl = renderer(read_glxinfo(WORKING, ""));
+
+            assert_eq!(
+                gl.name,
+                "AMD Radeon RX 6500 XT (radeonsi, navi24, ACO, DRM 3.64, 7.2.8)"
+            );
+            assert_eq!(gl.vendor.as_deref(), Some("AMD"));
+            assert_eq!(
+                gl.version.as_deref(),
+                Some("4.6 (Compatibility Profile) Mesa 26.2.3")
+            );
+            assert_eq!(gl.accelerated, Some(true));
+        }
+
+        #[test]
+        fn a_software_renderer_is_not_accelerated() {
+            let software = WORKING.replace("Accelerated: yes", "Accelerated: no");
+            assert_eq!(
+                renderer(read_glxinfo(&software, "")).accelerated,
+                Some(false)
+            );
+        }
+
+        #[test]
+        fn glxinfo_without_a_renderer_failed_whatever_its_exit() {
+            let output = failure(read_glxinfo(
+                "name of display: :0\n",
+                "Error: couldn't find RGB GLX visual or fbconfig\n",
+            ));
+            assert_eq!(output, "Error: couldn't find RGB GLX visual or fbconfig");
+        }
+
+        #[test]
+        fn a_silent_glxinfo_failure_says_so() {
+            assert_eq!(failure(read_glxinfo("", "")), "glxinfo printed nothing");
+        }
     }
 }

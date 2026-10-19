@@ -1,28 +1,29 @@
 //! Environment and installation diagnostics.
 //!
 //! This module validates the local CEF installation, runtime discovery,
-//! build toolchain and project structure and presents the resulting health
-//! report to the user.
+//! build toolchain, GPU and project structure and presents the resulting
+//! health report to the user.
+
+use std::path::Path;
 
 use anyhow::Result;
 use cargo_metadata::MetadataCommand;
-use crate::install::{CefError, ProjectCef, cef_version_of, find_cef, packaged_archive};
 
-use crate::collector;
+use crate::collector::{self, GpuInfo, GpuProbe};
+use crate::install::{CefError, ProjectCef, cef_version_of, find_cef, packaged_archive};
 use crate::tui;
 
+/// Build tool the host needs and whether it was found.
 struct ToolCheck {
     name: &'static str,
     found: bool,
     hint: &'static str,
 }
 
-/// What a build needs on the running host, the linker rustc runs; nothing
-/// is compiled from C++.
+/// Returns the build tools this host needs. A build runs only the linker
+/// rustc calls; nothing is compiled from C++.
 ///
-/// MSVC's linker is found as rustc and the `cc` crate find it, a developer
-/// prompt's `PATH` or else the newest Visual Studio installation, so no
-/// developer prompt is needed.
+/// Rustc locates MSVC's linker; no developer prompt is required.
 #[cfg(windows)]
 fn required_tools() -> Vec<ToolCheck> {
     vec![ToolCheck {
@@ -32,8 +33,8 @@ fn required_tools() -> Vec<ToolCheck> {
     }]
 }
 
-/// What a build needs on the running host, the linker rustc runs; nothing
-/// is compiled from C++.
+/// Returns the build tools this host needs. A build runs only the linker
+/// rustc calls; nothing is compiled from C++.
 #[cfg(target_os = "macos")]
 fn required_tools() -> Vec<ToolCheck> {
     vec![ToolCheck {
@@ -43,8 +44,8 @@ fn required_tools() -> Vec<ToolCheck> {
     }]
 }
 
-/// What a build needs on the running host, the linker rustc runs; nothing
-/// is compiled from C++.
+/// Returns the build tools this host needs. A build runs only the linker
+/// rustc calls; nothing is compiled from C++.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn required_tools() -> Vec<ToolCheck> {
     vec![ToolCheck {
@@ -54,6 +55,7 @@ fn required_tools() -> Vec<ToolCheck> {
     }]
 }
 
+/// Returns whether `cmd` starts.
 #[cfg(unix)]
 fn probe(cmd: &str) -> bool {
     std::process::Command::new(cmd)
@@ -62,8 +64,63 @@ fn probe(cmd: &str) -> bool {
         .is_ok()
 }
 
+/// Prints what the GPU probe found and returns whether it is a warning.
+fn report_gpu(gpu: &GpuInfo) -> bool {
+    let warned = match &gpu.probe {
+        #[cfg(target_os = "linux")]
+        GpuProbe::Renderer(renderer) => {
+            let software = renderer.accelerated == Some(false);
+            if software {
+                tui::warn("GPU found without hardware acceleration");
+            } else {
+                tui::success("GPU found");
+            }
+
+            if let Some(vendor) = &renderer.vendor {
+                tui::field("vendor", vendor);
+            }
+            tui::field("renderer", &renderer.name);
+            if let Some(version) = &renderer.version {
+                tui::field("version", version);
+            }
+            software
+        }
+
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        GpuProbe::Adapter { name } => {
+            tui::success("GPU found");
+            tui::field("adapter", name);
+            false
+        }
+
+        #[cfg(target_os = "linux")]
+        GpuProbe::Missing => {
+            tui::info("GPU not checked; glxinfo is not installed");
+            tui::field("install", "mesa-utils");
+            false
+        }
+
+        #[cfg(target_os = "linux")]
+        GpuProbe::NoDisplay => {
+            tui::info("GPU not checked; DISPLAY names no X display");
+            false
+        }
+
+        GpuProbe::Failed { output } => {
+            tui::warn("No usable GPU found");
+            for line in output.lines() {
+                tui::field("output", line);
+            }
+            true
+        }
+    };
+
+    tui::field("source", gpu.source);
+
+    warned
+}
+
 pub fn run(json: bool) -> Result<()> {
-    // JSON mode
     if json {
         let report = collector::collect_all();
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -114,15 +171,17 @@ pub fn run(json: bool) -> Result<()> {
             fail += 1;
         }
 
-        Err(e) if e.concerns_cef_path() => {
-            tui::error("CEF_PATH names no usable Chromium runtime");
-            tui::error_fields(e);
-
-            fail += 1;
-        }
-
-        Err(e) => {
-            tui::error("Installed Chromium runtime invalid");
+        Err(
+            e @ (CefError::CefPathMissing(_)
+            | CefError::InvalidRuntime { .. }
+            | CefError::Unverified { .. }
+            | CefError::MissingNotice { .. }),
+        ) => {
+            tui::error(if e.concerns_cef_path() {
+                "CEF_PATH names no usable Chromium runtime"
+            } else {
+                "Installed Chromium runtime invalid"
+            });
             tui::error_fields(e);
 
             fail += 1;
@@ -198,15 +257,19 @@ pub fn run(json: bool) -> Result<()> {
 
         tui::info("Missing components");
 
-        // Structured details
         for tool in &missing {
             tui::field(tool.name, tool.hint);
         }
     }
 
+    tui::section("Graphics");
+
+    if report_gpu(&collector::gpu::collect()) {
+        warn += 1;
+    }
+
     tui::section("Project");
 
-    // Resolve workspace root
     let workspace_root = match metadata {
         Ok(metadata) => {
             let root = metadata.workspace_root.into_std_path_buf();
@@ -222,8 +285,7 @@ pub fn run(json: bool) -> Result<()> {
         }
     };
 
-    // Check configured frontend from the resolved workspace root. A missing
-    // kurogane.toml loads as the defaults
+    // A missing kurogane.toml loads as the defaults
     let packaging_config = match workspace_root.as_deref() {
         None => None,
         Some(root) => match crate::config::PackagingConfig::load(root) {
@@ -237,7 +299,7 @@ pub fn run(json: bool) -> Result<()> {
         },
     };
 
-    let check_frontend = |root: &std::path::Path, label: &str, path: &std::path::Path| -> bool {
+    let check_frontend = |root: &Path, label: &str, path: &Path| -> bool {
         let anchored = crate::config::anchor_path(root, path);
         if anchored.exists() {
             tui::success(label);
