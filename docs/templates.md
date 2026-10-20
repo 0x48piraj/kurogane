@@ -128,7 +128,7 @@ fn main() {
 
 ```toml
 [build-dependencies]
-kurogane-build = { git = "https://github.com/0x48piraj/kurogane" }
+kurogane-build = "=0.0.6-beta.1"
 ```
 
 On Windows it embeds the application manifest CEF's own executables carry. Without it Windows tells the application and the Chromium inside it that they run on Windows 8. `kurogane bundle` also writes the manifest beside a Windows bundle's executable for an application built without it.
@@ -204,14 +204,14 @@ Push the template to a git host. Users generate from it by its shorthand:
 kurogane new --template gh:you/kurogane-template
 ```
 
-Pin Kurogane by tag so generated projects build the same way every time. Pin `kurogane-build` to the same tag:
+Pin Kurogane to a release so generated projects build the same way every time. Pin `kurogane-build` to the same release.
 
 ```toml
 [dependencies]
-kurogane = { git = "https://github.com/0x48piraj/kurogane", tag = "v0.0.6-alpha.2" }
+kurogane = "=0.0.6-beta.1"
 
 [build-dependencies]
-kurogane-build = { git = "https://github.com/0x48piraj/kurogane", tag = "v0.0.6-alpha.2" }
+kurogane-build = "=0.0.6-beta.1"
 ```
 
 ### Kurogane application manifest

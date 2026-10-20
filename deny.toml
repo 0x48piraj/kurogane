@@ -31,9 +31,3 @@ wildcards = "warn"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-
-# tanso, Kurogane's CEF bindings, is pinned to the Git revision Kurogane was
-# tested with. Changes to the pinned revision can affect Kurogane's API.
-allow-git = [
-    "https://github.com/kurogane-rs/tanso",
-]

@@ -223,7 +223,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "kurogane"
-version = "0.0.6-alpha.2"
+version = "0.0.6-beta.1"
 dependencies = [
  "ctrlc",
  "kurogane-layout",
@@ -246,14 +246,14 @@ dependencies = [
 
 [[package]]
 name = "kurogane-build"
-version = "0.0.6-alpha.2"
+version = "0.0.6-beta.1"
 dependencies = [
  "tanso-build",
 ]
 
 [[package]]
 name = "kurogane-layout"
-version = "0.0.6-alpha.2"
+version = "0.0.6-beta.1"
 dependencies = [
  "dirs",
  "thiserror",
@@ -525,8 +525,9 @@ dependencies = [
 
 [[package]]
 name = "tanso"
-version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tanso?rev=d09152184b48fecbe60fddcae74f61b5b6b1a03c#d09152184b48fecbe60fddcae74f61b5b6b1a03c"
+version = "154.5.0+154.0.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7155579453d057d2d1355cc229c854ad12875b80f3943772ff9c61ee0830953d"
 dependencies = [
  "libloading",
  "objc2",
@@ -536,13 +537,15 @@ dependencies = [
 
 [[package]]
 name = "tanso-build"
-version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tanso?rev=d09152184b48fecbe60fddcae74f61b5b6b1a03c#d09152184b48fecbe60fddcae74f61b5b6b1a03c"
+version = "154.5.0+154.0.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7141e36c724f782d7f39997c28ac2bd86845acce2a354114aa91ee12d768907"
 
 [[package]]
 name = "tanso-sys"
-version = "154.4.0+154.0.33"
-source = "git+https://github.com/kurogane-rs/tanso?rev=d09152184b48fecbe60fddcae74f61b5b6b1a03c#d09152184b48fecbe60fddcae74f61b5b6b1a03c"
+version = "154.5.0+154.0.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8663e447e40a796f549e99e10e5f7ba556a2c9500009c59e6128e461eb965a07"
 dependencies = [
  "dirs",
  "libloading",

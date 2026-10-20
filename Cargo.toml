@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.6-alpha.2"
+version = "0.0.6-beta.1"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT"
@@ -19,14 +19,14 @@ authors = [
 repository = "https://github.com/0x48piraj/kurogane"
 
 [workspace.dependencies]
-tanso = { version = "=154.4.0", git = "https://github.com/kurogane-rs/tanso", rev = "d09152184b48fecbe60fddcae74f61b5b6b1a03c", default-features = false }
-tanso-sys = { version = "=154.4.0", git = "https://github.com/kurogane-rs/tanso", rev = "d09152184b48fecbe60fddcae74f61b5b6b1a03c" }
-tanso-download = { version = "3.0.0", git = "https://github.com/kurogane-rs/tanso", rev = "d09152184b48fecbe60fddcae74f61b5b6b1a03c" }
-tanso-build = { version = "=154.4.0", git = "https://github.com/kurogane-rs/tanso", rev = "d09152184b48fecbe60fddcae74f61b5b6b1a03c" }
-kurogane = { version = "=0.0.6-alpha.2", path = "kurogane" }
-kurogane-build = { version = "=0.0.6-alpha.2", path = "kurogane-build" }
+tanso = { version = "=154.5.0", default-features = false }
+tanso-sys = { version = "=154.5.0" }
+tanso-download = { version = "4.0.0" }
+tanso-build = { version = "=154.5.0" }
+kurogane = { version = "=0.0.6-beta.1", path = "kurogane" }
+kurogane-build = { version = "=0.0.6-beta.1", path = "kurogane-build" }
 kurogane-cli = { path = "kurogane-cli" }
-kurogane-layout = { version = "=0.0.6-alpha.2", path = "kurogane-layout" }
+kurogane-layout = { version = "=0.0.6-beta.1", path = "kurogane-layout" }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

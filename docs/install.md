@@ -48,7 +48,7 @@ Running the installer again upgrades in place. The existing binary is replaced o
 `install.sh` takes options after `sh -s --`:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://kurogane-rs.org/install.sh | sh -s -- --version 0.0.6-alpha.2
+curl --proto '=https' --tlsv1.2 -LsSf https://kurogane-rs.org/install.sh | sh -s -- --version 0.0.6-beta.1
 ```
 
 | `install.sh` | `install.ps1` | Environment | Effect |
@@ -66,8 +66,8 @@ curl --proto '=https' --tlsv1.2 -LsSf https://kurogane-rs.org/install.sh | sh -s
 `irm | iex` cannot pass arguments. On Windows set the variables first or run the script as a script block:
 
 ```powershell
-$env:KUROGANE_VERSION = '0.0.6-alpha.2'; irm https://kurogane-rs.org/install.ps1 | iex
-& ([scriptblock]::Create((irm https://kurogane-rs.org/install.ps1))) -Version 0.0.6-alpha.2
+$env:KUROGANE_VERSION = '0.0.6-beta.1'; irm https://kurogane-rs.org/install.ps1 | iex
+& ([scriptblock]::Create((irm https://kurogane-rs.org/install.ps1))) -Version 0.0.6-beta.1
 ```
 
 The installers never prompt. They behave the same from a pipe, a terminal or CI. In GitHub Actions they also append the install directory to `$GITHUB_PATH`.
@@ -79,7 +79,7 @@ The installers check every download against the SHA-256 published in the same re
 Every release artifact also carries a [GitHub artifact attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations). `install.sh` and `install.ps1` carry one too. It proves the release workflow in [kurogane-rs/kurogane-install](https://github.com/kurogane-rs/kurogane-install) built the artifact. Check one with the GitHub CLI:
 
 ```bash
-gh release download v0.0.6-alpha.2 --repo 0x48piraj/kurogane --pattern 'kurogane-cli-x86_64-unknown-linux-musl.tar.gz'
+gh release download v0.0.6-beta.1 --repo 0x48piraj/kurogane --pattern 'kurogane-cli-x86_64-unknown-linux-musl.tar.gz'
 gh attestation verify kurogane-cli-x86_64-unknown-linux-musl.tar.gz --repo kurogane-rs/kurogane-install
 ```
 
@@ -141,7 +141,7 @@ The Home Manager module adds Kurogane to `home.packages`. `nixos-rebuild switch`
 
 ```bash
 nix profile add github:0x48piraj/kurogane                 # latest
-nix profile add github:0x48piraj/kurogane/v0.0.6-alpha.2  # a release
+nix profile add github:0x48piraj/kurogane/v0.0.6-beta.1   # a release
 nix run github:0x48piraj/kurogane -- --help               # without installing
 ```
 

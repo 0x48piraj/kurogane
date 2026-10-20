@@ -160,12 +160,8 @@ jobs:
       - name: Build on this checkout's Kurogane
         working-directory: ${{ runner.temp }}/app
         run: |
-          cat >> Cargo.toml <<EOF
-
-          [patch."https://github.com/0x48piraj/kurogane"]
-          kurogane = { path = "$GITHUB_WORKSPACE/kurogane" }
-          kurogane-build = { path = "$GITHUB_WORKSPACE/kurogane-build" }
-          EOF
+          cargo add kurogane --path "$GITHUB_WORKSPACE/kurogane"
+          cargo add --build kurogane-build --path "$GITHUB_WORKSPACE/kurogane-build"
 
       - name: Install the frontend
         working-directory: ${{ runner.temp }}/app
