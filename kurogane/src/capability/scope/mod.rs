@@ -8,8 +8,8 @@
 //!
 //! Deny rules are relative to the scope's roots. `deny_path` defines a literal
 //! subtree and must lie beneath a root; `deny_glob` is evaluated beneath every
-//! root. Both are matched against [`Location`]s, so the same rules apply to
-//! the requested path and the location reported for the opened object.
+//! root. Both are matched against [`Location`]s. The same rules apply to the
+//! requested path and the location reported for the opened object.
 //!
 //! [`Scope`] does not open objects and has no knowledge of origins.
 
@@ -66,7 +66,7 @@ impl ScopeBuilder {
     }
 
     /// Denies a literal path and everything beneath it. The path is never a
-    /// pattern, whatever characters it contains, and must lie under one of
+    /// pattern, whatever characters it contains. It must lie under one of
     /// this scope's allow roots.
     pub fn deny_path(&mut self, path: impl AsRef<Path>) -> &mut Self {
         self.deny_paths.push(path.as_ref().to_path_buf());
@@ -238,8 +238,8 @@ impl Root {
         self.extent == Extent::Subtree && location.strip(&self.canonical).is_some()
     }
 
-    /// The deny subtrees lying strictly beneath `location`, each as the
-    /// suffix that remains below it: what a move of `location` carries.
+    /// Returns the deny subtrees lying strictly beneath `location`, each as
+    /// the suffix that remains below it. A move of `location` carries them.
     pub(crate) fn enclosed_denies<'a>(&'a self, location: &Location) -> Vec<&'a [NameKey]> {
         let Some(rel) = location.strip(&self.canonical) else {
             return Vec::new();

@@ -1,9 +1,11 @@
-//! Linux: `xdg-open`, which picks the desktop's browser. It gets the URL as
-//! one argument, no input and no output of the application's, and no
-//! `LD_LIBRARY_PATH`: a bundle launcher's `KUROGANE_LD_LIBRARY_PATH` may
-//! point it at CEF's directory, whose libraries
-//! (`libEGL`, `libvulkan`) the browser must not load. A worker thread waits
-//! for it, so no finished `xdg-open` is left unreaped.
+//! Opens links on Linux through `xdg-open`.
+//!
+//! `xdg-open` picks the desktop's browser. It gets the URL as one argument,
+//! none of the application's input or output and no `LD_LIBRARY_PATH`. A
+//! bundle launcher's `KUROGANE_LD_LIBRARY_PATH` may point it at CEF's
+//! directory, whose libraries (`libEGL`, `libvulkan`) the browser must not
+//! load. A worker thread waits for it and leaves no finished `xdg-open`
+//! unreaped.
 
 use std::process::{Command, Stdio};
 

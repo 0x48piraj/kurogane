@@ -1,14 +1,16 @@
-//! What happens when a page navigates the window it is in: a link, a
-//! `location` assignment, a form, a redirect on the way.
+//! What happens when a page navigates the window it is in.
 //!
-//! A window shows only what was let into it: the application's own origin,
-//! the origins the application loaded there itself (the start page,
-//! `create_window`, `BrowserHandle::navigate`, and the redirects they lead
+//! A navigation is a link, a `location` assignment, a form or a redirect on
+//! the way.
+//!
+//! A window shows only what was let into it. That is the application's own
+//! origin, the origins the application loaded there itself (the start page,
+//! `create_window`, `BrowserHandle::navigate` and the redirects they lead
 //! to), the origin [`App::on_new_window`](crate::App::on_new_window) opened a
-//! popup to, and the origins [`App::on_navigation`](crate::App::on_navigation)
-//! let in. A page's navigation anywhere else goes, as a new window's request
-//! does, to the system browser if it is a web link the user clicked, and
-//! nowhere otherwise: the window stays on its page. Frames inside a page are
+//! popup to and the origins [`App::on_navigation`](crate::App::on_navigation)
+//! let in. A page's navigation anywhere else goes to the system browser if it
+//! is a web link the user clicked (as a new window's request does) and
+//! nowhere otherwise. The window stays on its page. Frames inside a page are
 //! not guarded; the ACL keeps another origin's frame from the bridge.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -76,13 +78,13 @@ impl NavigationRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum NavigationDecision {
-    /// Kurogane's policy decides: an origin the window may show is loaded,
-    /// an `http` or `https` link the user clicked to any other goes to the
-    /// system browser, and anything else is refused.
+    /// Kurogane's policy decides. An origin the window may show is loaded. An
+    /// `http` or `https` link the user clicked to any other origin goes to
+    /// the system browser. Anything else is refused.
     #[default]
     Default,
 
-    /// Loads the page, and lets its origin into this window from now on.
+    /// Loads the page and lets its origin into this window from now on.
     /// The page reaches only the commands and events that
     /// [`App::permit`](crate::App::permit) and its kin grant its origin.
     Allow,
@@ -90,9 +92,9 @@ pub enum NavigationDecision {
     /// Refuses the navigation; the window stays on its page.
     Deny,
 
-    /// Opens the URL in the system's default browser instead, and the
-    /// window stays on its page. Only an `http` or `https` link the user
-    /// clicked goes there; any other navigation is refused.
+    /// Opens the URL in the system's default browser instead. The window
+    /// stays on its page. Only an `http` or `https` link the user clicked
+    /// goes there; any other navigation is refused.
     OpenExternal,
 }
 

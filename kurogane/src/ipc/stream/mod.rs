@@ -1,9 +1,9 @@
 //! Stream IPC subsystem.
 //!
 //! Provides bidirectional streaming data transport. Streams are identified
-//! by a correlation ID. The page opens a stream; the browser answers with
-//! `STREAM_BROWSER_OPENED` or refuses with `STREAM_BROWSER_ERROR`, and data
-//! then flows both ways until the stream ends or fails.
+//! by a correlation ID. The page opens a stream. The browser answers with
+//! `STREAM_BROWSER_OPENED` or refuses with `STREAM_BROWSER_ERROR`. Data then
+//! flows both ways until the stream ends or fails.
 //!
 //! Each stream gets its own handler instance via a factory closure,
 //! giving handlers natural per-stream mutable state.
@@ -13,71 +13,71 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tanso::*;
 
-use crate::acl::Origin;
-use crate::browser_registry::BrowserId;
-use crate::ipc::browser_state::still_addressed;
+use crate::ipc::browser_outbox;
+use crate::ipc::document::{Document, DocumentKey};
 use crate::ipc::envelope::*;
 use crate::ipc::{FrameId, IpcContext, IpcError};
-use crate::ipc::transport::message::build_message;
 use crate::runtime::AppHandle;
 
 /// Responder for sending data from a browser-side stream handler to the renderer.
 ///
 /// A responder the runtime hands a handler is bound to its stream and its
 /// document. Once any clone has sent the stream's end or error, or the
-/// stream is closed or its document replaced, every send returns `Err`.
+/// stream is closed or its document has ended, every send returns `Err`.
 #[derive(Clone)]
 pub struct StreamResponder {
     frame: Frame,
+    frame_id: FrameId,
     stream_id: u32,
-    /// URL origin of the document that opened the stream. Responses are sent only
-    /// while the frame still shows that origin.
-    url_origin: Option<Origin>,
+    /// Document that opened the stream. Responses are sent only while it
+    /// lives.
+    document: Option<Arc<Document>>,
     /// Shared stream state.
     closed: Arc<AtomicBool>,
 }
 
 impl StreamResponder {
-    /// A responder for an open the runtime refuses as it arrives, before the
-    /// stream exists: the page waiting on `openStream` is the document that
-    /// sent the open, so there is nothing to check. Never handed to a handler.
+    /// Returns a responder for an open the runtime refuses as it arrives,
+    /// before the stream exists. The page waiting on `openStream` is the
+    /// document that sent the open and there is nothing to check. Never
+    /// handed to a handler.
     pub(crate) fn unbound(frame: Frame, stream_id: u32) -> Self {
         Self {
+            frame_id: FrameId::of(&frame),
             frame,
             stream_id,
-            url_origin: None,
+            document: None,
             closed: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// A responder bound to a stream's document and lifetime.
+    /// Returns a responder bound to a stream's document and lifetime.
     pub(crate) fn bound(
         frame: Frame,
+        document: Arc<Document>,
         stream_id: u32,
-        url_origin: Origin,
         closed: Arc<AtomicBool>,
     ) -> Self {
         Self {
             frame,
+            frame_id: document.frame().clone(),
             stream_id,
-            url_origin: Some(url_origin),
+            document: Some(document),
             closed,
         }
     }
 
     /// Whether anything may still be sent to the stream's document.
     fn deliverable(&self) -> Result<(), IpcError> {
-        if self.frame.is_valid() == 0 {
-            return Err(IpcError::new("frame destroyed"));
-        }
         if self.closed.load(Ordering::SeqCst) {
             return Err(IpcError::new("stream closed"));
         }
-        if let Some(url_origin) = &self.url_origin {
-            let url: CefString = (&self.frame.url()).into();
-            if !still_addressed(url_origin, &url.to_string()) {
-                return Err(IpcError::new("the frame shows another document"));
-            }
+        if self
+            .document
+            .as_ref()
+            .is_some_and(|document| !document.is_live())
+        {
+            return Err(IpcError::new("the document has ended"));
         }
         Ok(())
     }
@@ -87,17 +87,15 @@ impl StreamResponder {
     /// # Errors
     ///
     /// Returns `Err` and sends nothing when the stream has ended or failed,
-    /// its frame is gone or shows another document, or the message cannot
-    /// be built.
+    /// or the document that opened it has gone (its frame navigated or
+    /// closed).
     pub fn send_data(&self, data: &[u8]) -> Result<(), IpcError> {
         self.deliverable()?;
-        let mut msg = self.message(STREAM_BROWSER_DATA, PAYLOAD_BINARY, data)?;
-        self.frame
-            .send_process_message(ProcessId::RENDERER, Some(&mut msg));
+        self.send(STREAM_BROWSER_DATA, PAYLOAD_BINARY, data);
         Ok(())
     }
 
-    /// Ends the stream: the page's `onEnd` receives `result`.
+    /// Ends the stream. The page's `onEnd` receives `result`.
     ///
     /// The first `end` or `error` sent, from any clone, closes the stream.
     ///
@@ -109,7 +107,7 @@ impl StreamResponder {
         self.finish(STREAM_BROWSER_END, PAYLOAD_STRING, result.as_bytes())
     }
 
-    /// Fails the stream: the page's `onError` receives the error's message.
+    /// Fails the stream. The page's `onError` receives the error's message.
     /// A string is an [`IpcError::new`].
     ///
     /// Closes the stream, as [`end`](Self::end) does.
@@ -127,33 +125,23 @@ impl StreamResponder {
     /// `openStream`. Sent before anything else of the stream.
     pub(crate) fn opened(&self) -> Result<(), IpcError> {
         self.deliverable()?;
-        let mut msg = self.message(STREAM_BROWSER_OPENED, PAYLOAD_EMPTY, &[])?;
-        self.frame
-            .send_process_message(ProcessId::RENDERER, Some(&mut msg));
+        self.send(STREAM_BROWSER_OPENED, PAYLOAD_EMPTY, &[]);
         Ok(())
     }
 
-    /// Sends the stream's last message. It is built first, so only a message
-    /// that is sent closes the stream, and the swap lets exactly one end or
+    /// Sends the stream's last message. The swap lets exactly one end or
     /// error through, whichever thread sends it.
     fn finish(&self, opcode: u8, payload_kind: u8, payload: &[u8]) -> Result<(), IpcError> {
         self.deliverable()?;
-        let mut msg = self.message(opcode, payload_kind, payload)?;
         if self.closed.swap(true, Ordering::SeqCst) {
             return Err(IpcError::new("stream closed"));
         }
-        self.frame
-            .send_process_message(ProcessId::RENDERER, Some(&mut msg));
+        self.send(opcode, payload_kind, payload);
         Ok(())
     }
 
-    /// Builds a message of this stream.
-    fn message(
-        &self,
-        opcode: u8,
-        payload_kind: u8,
-        payload: &[u8],
-    ) -> Result<ProcessMessage, IpcError> {
+    /// Sends a message of this stream.
+    fn send(&self, opcode: u8, payload_kind: u8, payload: &[u8]) {
         let envelope = Envelope {
             version: ENVELOPE_VERSION,
             subsystem: SUB_STREAM,
@@ -162,8 +150,7 @@ impl StreamResponder {
             correlation_id: self.stream_id,
             payload_kind,
         };
-        build_message("kurogane_stream", &envelope, payload)
-            .ok_or_else(|| IpcError::new(format!("failed to build stream message {opcode}")))
+        browser_outbox::send(&self.frame, &self.frame_id, &envelope, payload);
     }
 }
 
@@ -173,7 +160,7 @@ impl StreamResponder {
 /// handler for each stream. In order:
 ///
 /// 1. [`on_open`](Self::on_open) accepts or refuses the stream. Nothing can
-///    be sent yet: the page does not hold the stream.
+///    be sent yet since the page does not hold the stream.
 /// 2. The runtime tells the page the stream is open, which resolves its
 ///    `openStream`, then calls [`on_opened`](Self::on_opened).
 /// 3. [`on_chunk`](Self::on_chunk) runs for each chunk the page writes.
@@ -186,9 +173,8 @@ impl StreamResponder {
 /// code, as a command's error does; an `Err` from `on_opened`, `on_chunk` or
 /// `on_end` fails the stream, whose `onError` receives the message, unless it
 /// is already closed. A panic in any of them counts as an `Err` with the
-/// message `handler panicked`. The page's end
-/// is always answered: when `on_end` sends neither, the runtime ends the
-/// stream with an empty result.
+/// message `handler panicked`. The page's end is always answered. When
+/// `on_end` sends neither the runtime ends the stream with an empty result.
 ///
 /// The runtime drops the handler once the stream is closed. A stream closed
 /// from another thread is noticed at the next stream open, or when its
@@ -196,8 +182,8 @@ impl StreamResponder {
 ///
 /// # Threads
 ///
-/// Every callback runs on the UI thread, which also runs every window and
-/// receives every message from the page, so return promptly: CEF says not
+/// Every callback runs on the UI thread. That thread also runs every window
+/// and receives every message from the page. Return promptly; CEF says not
 /// to block this thread. The responder may be cloned and used from any
 /// thread.
 ///
@@ -239,8 +225,8 @@ pub trait StreamHandler: Send + 'static {
         Ok(())
     }
 
-    /// Called once the page has been told the stream is open: the place to
-    /// send initial data, end or fail the stream, or hand a clone of
+    /// Called once the page has been told the stream is open. It is the place
+    /// to send initial data, to end or fail the stream or to hand a clone of
     /// `responder` to a thread that produces data. An `Err` fails the stream.
     fn on_opened(&mut self, responder: &StreamResponder) -> Result<(), IpcError> {
         let _ = responder;
@@ -265,7 +251,7 @@ pub trait StreamHandler: Send + 'static {
     }
 }
 
-/// Factory type: creates a new handler instance per stream.
+/// Factory that creates a new handler instance per stream.
 pub type StreamFactory = Box<dyn Fn(&AppHandle) -> Box<dyn StreamHandler> + Send + Sync>;
 
 pub mod browser;
@@ -273,20 +259,19 @@ pub mod renderer;
 
 /// An open stream and the document that owns it.
 pub(crate) struct StreamEntry {
-    browser_id: BrowserId,
+    document: Arc<Document>,
     handler: Box<dyn StreamHandler>,
     frame: Frame,
-    url_origin: Origin,
     closed: Arc<AtomicBool>,
 }
 
 impl StreamEntry {
-    /// Returns a responder for this stream.
-    fn responder(&self, stream_id: u32) -> StreamResponder {
+    /// Returns a responder for the stream `key` names.
+    fn responder(&self, key: &StreamKey) -> StreamResponder {
         StreamResponder::bound(
             self.frame.clone(),
-            stream_id,
-            self.url_origin.clone(),
+            self.document.clone(),
+            key.id,
             self.closed.clone(),
         )
     }
@@ -302,21 +287,19 @@ impl StreamEntry {
     }
 }
 
-/// Identifies a stream by its opening frame, origin and id.
+/// Identifies a stream by its opening document and id.
 ///
-/// Only the opening frame, while showing the same origin, may use the stream.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// Only the opening document may use the stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StreamKey {
-    frame: FrameId,
-    origin: Origin,
+    document: DocumentKey,
     id: u32,
 }
 
 impl StreamKey {
     pub(crate) fn new(ctx: &IpcContext, id: u32) -> Self {
         Self {
-            frame: ctx.frame.clone(),
-            origin: ctx.origin.clone(),
+            document: ctx.document.key(),
             id,
         }
     }
@@ -325,7 +308,7 @@ impl StreamKey {
 /// Browser-side stream manager.
 pub struct StreamSubsystem {
     pub factories: HashMap<String, StreamFactory>,
-    /// Per-stream handler instances, keyed by opening frame and stream id.
+    /// Per-stream handler instances, keyed by opening document and stream id.
     pub(crate) streams: Mutex<HashMap<StreamKey, StreamEntry>>,
 }
 
@@ -351,18 +334,8 @@ impl StreamSubsystem {
         before - streams.len()
     }
 
-    /// Remove the streams of `frame`, which is starting a new document.
-    pub fn clear_frame(&self, frame: &FrameId) -> usize {
-        self.close_where(|key, _| key.frame == *frame)
-    }
-
-    /// Remove all streams whose frame is no longer valid.
-    pub fn clear_invalid_frames(&self) -> usize {
-        self.close_where(|_, entry| entry.frame.is_valid() == 0)
-    }
-
-    /// Remove all streams for a given browser.
-    pub fn clear_for_browser(&self, browser_id: BrowserId) -> usize {
-        self.close_where(|_, entry| entry.browser_id == browser_id)
+    /// Removes and closes the streams of `document`, which has ended.
+    pub(crate) fn close_document(&self, document: DocumentKey) -> usize {
+        self.close_where(|key, _| key.document == document)
     }
 }

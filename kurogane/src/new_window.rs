@@ -1,13 +1,15 @@
-//! What happens when a page asks for a window of its own: `window.open`, a
-//! `target=_blank` link, a form that targets a new window, a link clicked
-//! into a new tab or window (Ctrl or Cmd, the middle button, Shift).
+//! What happens when a page asks for a window of its own.
+//!
+//! A page asks with `window.open`, a `target=_blank` link, a form that targets
+//! a new window or a link clicked into a new tab or window (Ctrl or Cmd, the
+//! middle button, Shift).
 //!
 //! CEF asks before it creates the window. The application's
 //! [`App::on_new_window`](crate::App::on_new_window) hook answers first;
 //! Kurogane's policy answers whatever the hook leaves to it. A page of the
-//! application's own origin gets an application window, a web link the user
-//! clicked goes to the system browser, and every other request is refused,
-//! so a page the application never chose cannot get a window of its own.
+//! application's own origin gets an application window. A web link the user
+//! clicked goes to the system browser. Every other request is refused. A page
+//! the application never chose cannot get a window of its own.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -41,8 +43,9 @@ pub struct NewWindowRequest {
 }
 
 impl NewWindowRequest {
-    /// The request of a page at `opener_url` for a window showing `url`: a
-    /// tab, asked for by a script, until [`with_kind`](Self::with_kind) and
+    /// Creates the request of a page at `opener_url` for a window showing
+    /// `url`. It is a tab a script asked for until
+    /// [`with_kind`](Self::with_kind) and
     /// [`with_user_gesture`](Self::with_user_gesture) say otherwise. The
     /// origins are worked out as Kurogane works them out for a page's
     /// request.
@@ -78,8 +81,8 @@ impl NewWindowRequest {
     }
 
     /// The origin of the document the window would show. A window the page
-    /// fills in itself has the page's origin, and a `blob:` URL the origin
-    /// of the page that made it.
+    /// fills in itself has the page's origin. A `blob:` URL has the origin of
+    /// the page that made it.
     pub fn origin(&self) -> &Origin {
         &self.origin
     }
@@ -95,7 +98,7 @@ impl NewWindowRequest {
         self.user_gesture
     }
 
-    /// What the page asked for: a tab, a popup, a window. Kurogane opens
+    /// What the page asked for (a tab, a popup or a window). Kurogane opens
     /// each as an application window alike; the kind says how the page
     /// asked.
     pub fn kind(&self) -> NewWindowKind {
@@ -107,15 +110,16 @@ impl NewWindowRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum NewWindowKind {
-    /// A tab in front: a `target=_blank` link, `window.open` without
-    /// features, a link clicked with Ctrl (Cmd on macOS).
+    /// A tab in front. A `target=_blank` link, `window.open` without
+    /// features and a link clicked with Ctrl (Cmd on macOS) ask for one.
     Tab,
-    /// A tab behind the current one: a link clicked with the middle button,
-    /// or with Ctrl and Shift.
+    /// A tab behind the current one. A link clicked with the middle button or
+    /// with Ctrl and Shift asks for one.
     BackgroundTab,
-    /// A popup: `window.open` with features such as a size or position.
+    /// A popup. `window.open` with features such as a size or position asks
+    /// for one.
     Popup,
-    /// A window: a link clicked with Shift.
+    /// A window. A link clicked with Shift asks for one.
     Window,
     /// A picture-in-picture window (`documentPictureInPicture`).
     PictureInPicture,
@@ -125,9 +129,9 @@ pub enum NewWindowKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum NewWindowDecision {
-    /// Kurogane's policy decides: a page of the application's own origin
-    /// gets a window, an `http` or `https` link the user clicked goes to
-    /// the system browser, and anything else is refused.
+    /// Kurogane's policy decides. A page of the application's own origin
+    /// gets a window, an `http` or `https` link the user clicked goes to the
+    /// system browser and anything else is refused.
     #[default]
     Default,
 
@@ -147,7 +151,7 @@ pub enum NewWindowDecision {
 
 /// Asks the application's hook, then applies its answer. Runs on CEF's UI
 /// thread inside `OnBeforePopup` or `OnOpenURLFromTab`, with no lock held. A
-/// hook that panics refuses the window: an error in the application's policy
+/// hook that panics refuses the window; an error in the application's policy
 /// must not open what the policy might have kept out. An ending application
 /// opens nothing and asks no hook; that is checked again after the hook,
 /// which may have begun the end itself.

@@ -4,8 +4,9 @@
 //! context in one frame. Messages are delivered only to the owning frame.
 //! Cancellation and unsubscription are limited to the owning context.
 //!
-//! Releasing a context removes all state owned by it. Unknown contexts are
-//! opaque and use `FLAG_OPAQUE_CONTEXT`.
+//! Releasing a context removes all state owned by it. A context back from
+//! the back-forward cache hands back its requests and streams and keeps its
+//! subscriptions. Unknown contexts are opaque and use `FLAG_OPAQUE_CONTEXT`.
 //!
 //! Stream callbacks are set when the stream is opened.
 //!
@@ -29,6 +30,16 @@ pub(crate) struct StreamSink<V> {
     pub(crate) error: V,
 }
 
+/// What a context left open when its page left, by id.
+pub(crate) struct Returned<V> {
+    /// Requests in flight with their subsystem and promise, taken.
+    pub(crate) requests: Vec<(i32, u8, V)>,
+    /// Open streams with their error callback, taken.
+    pub(crate) streams: Vec<(i32, V)>,
+    /// Subscriptions with their event name, kept.
+    pub(crate) subscriptions: Vec<(i32, String)>,
+}
+
 struct Owner<C> {
     context: C,
     frame: FrameId,
@@ -49,6 +60,13 @@ struct Known<C> {
     context: C,
     frame: FrameId,
     opaque: bool,
+}
+
+impl<C> Known<C> {
+    /// Returns the envelope flags of the context's messages.
+    fn flags(&self) -> u8 {
+        if self.opaque { FLAG_OPAQUE_CONTEXT } else { 0 }
+    }
 }
 
 pub(crate) struct Registry<C, V> {
@@ -104,19 +122,26 @@ impl<C: ContextHandle, V: Clone> Registry<C, V> {
         self.known(context).is_some_and(|known| known.opaque)
     }
 
-    /// Returns the envelope flags for `context`, treating unknown contexts as opaque.
-    pub(crate) fn flags_for(&self, context: &C) -> u8 {
-        match self.known(context) {
-            Some(known) if !known.opaque => 0,
-            _ => FLAG_OPAQUE_CONTEXT,
-        }
+    /// Returns the envelope flags and the frame of a context's messages, from
+    /// one lookup. An unknown context sends nothing.
+    pub(crate) fn sender(&self, context: &C) -> Option<(u8, FrameId)> {
+        let known = self.known(context)?;
+        Some((known.flags(), known.frame.clone()))
     }
 
-    pub(crate) fn register_rpc(&mut self, context: &C, promise: V) -> Option<i32> {
-        let owner = self.owner(context)?;
+    /// Registers a call's promise and returns its id, its envelope flags and
+    /// its frame, from one lookup of the context.
+    pub(crate) fn register_rpc(&mut self, context: &C, promise: V) -> Option<(i32, u8, FrameId)> {
+        let known = self.known(context)?;
+        let flags = known.flags();
+        let frame = known.frame.clone();
+        let owner = Owner {
+            context: known.context.clone(),
+            frame: frame.clone(),
+        };
         let id = self.allocate();
         self.pending.insert(id, (owner, Pending::Rpc(promise)));
-        Some(id)
+        Some((id, flags, frame))
     }
 
     pub(crate) fn register_stream_open(
@@ -138,16 +163,16 @@ impl<C: ContextHandle, V: Clone> Registry<C, V> {
     }
 
     /// Cancels a pending request, only for the context that made it. Returns
-    /// its context, promise and subsystem.
-    pub(crate) fn cancel(&mut self, id: i32, current: &C) -> Option<(C, V, u8)> {
+    /// its promise and subsystem.
+    pub(crate) fn cancel(&mut self, id: i32, current: &C) -> Option<(V, u8)> {
         let (owner, _) = self.pending.get(&id)?;
         if !owner.context.same(current) {
             return None;
         }
-        let (owner, pending) = self.pending.remove(&id)?;
+        let (_, pending) = self.pending.remove(&id)?;
         Some(match pending {
-            Pending::Rpc(promise) => (owner.context, promise, SUB_RPC),
-            Pending::StreamOpen { promise, .. } => (owner.context, promise, SUB_STREAM),
+            Pending::Rpc(promise) => (promise, SUB_RPC),
+            Pending::StreamOpen { promise, .. } => (promise, SUB_STREAM),
         })
     }
 
@@ -163,7 +188,8 @@ impl<C: ContextHandle, V: Clone> Registry<C, V> {
         }
     }
 
-    /// A stream opened: its callbacks become live; returns the open promise.
+    /// Marks stream `id` opened, which makes its callbacks live. Returns the
+    /// open promise.
     pub(crate) fn stream_opened(&mut self, id: i32, addressed: &FrameId) -> Option<(C, V)> {
         let (owner, promise, sink) = self.take_stream_open(id, addressed)?;
         let context = owner.context.clone();
@@ -193,7 +219,7 @@ impl<C: ContextHandle, V: Clone> Registry<C, V> {
     }
 
     /// The data callback of an open stream of `addressed`. A stream still
-    /// opening receives nothing: the browser acknowledges an open first.
+    /// opening receives nothing. The browser acknowledges an open first.
     pub(crate) fn stream_data(&self, id: i32, addressed: &FrameId) -> Option<(C, V)> {
         let (owner, sink) = self.streams.get(&id)?;
         (owner.frame == *addressed).then(|| (owner.context.clone(), sink.data.clone()))
@@ -279,6 +305,38 @@ impl<C: ContextHandle, V: Clone> Registry<C, V> {
             .map(|(owner, sub)| (owner.context, sub.on_error))
     }
 
+    /// Takes the requests and streams `context` left open and lists its
+    /// subscriptions, each in id order, for a page back from the
+    /// back-forward cache.
+    pub(crate) fn returned(&mut self, context: &C) -> Returned<V> {
+        let mut requests: Vec<_> = owned_ids(&self.pending, context)
+            .into_iter()
+            .filter_map(|id| self.pending.remove(&id).map(|(_, pending)| (id, pending)))
+            .map(|(id, pending)| match pending {
+                Pending::Rpc(promise) => (id, SUB_RPC, promise),
+                Pending::StreamOpen { promise, .. } => (id, SUB_STREAM, promise),
+            })
+            .collect();
+        requests.sort_by_key(|(id, ..)| *id);
+        let mut streams: Vec<_> = owned_ids(&self.streams, context)
+            .into_iter()
+            .filter_map(|id| self.streams.remove(&id).map(|(_, sink)| (id, sink.error)))
+            .collect();
+        streams.sort_by_key(|(id, _)| *id);
+        let mut subscriptions: Vec<_> = self
+            .events
+            .iter()
+            .filter(|(_, (owner, _))| owner.context.same(context))
+            .map(|(id, (_, sub))| (*id, sub.event.clone()))
+            .collect();
+        subscriptions.sort_by_key(|(id, _)| *id);
+        Returned {
+            requests,
+            streams,
+            subscriptions,
+        }
+    }
+
     fn known(&self, context: &C) -> Option<&Known<C>> {
         self.contexts
             .iter()
@@ -305,6 +363,15 @@ impl<C: ContextHandle, V: Clone> Registry<C, V> {
             }
         }
     }
+}
+
+/// Returns the ids of `entries` that `context` owns.
+fn owned_ids<C: ContextHandle, T>(entries: &HashMap<i32, (Owner<C>, T)>, context: &C) -> Vec<i32> {
+    entries
+        .iter()
+        .filter(|(_, (owner, _))| owner.context.same(context))
+        .map(|(id, _)| *id)
+        .collect()
 }
 
 /// Returns a process-specific starting ID.
@@ -355,15 +422,15 @@ mod tests {
     #[test]
     fn only_the_requesting_context_can_cancel() {
         let mut r = two_frames();
-        let id = r.register_rpc(&Ctx(1), "promise").unwrap();
+        let id = r.register_rpc(&Ctx(1), "promise").unwrap().0;
         assert!(r.cancel(id, &Ctx(2)).is_none(), "B cancelled A's request");
-        assert_eq!(r.cancel(id, &Ctx(1)), Some((Ctx(1), "promise", SUB_RPC)));
+        assert_eq!(r.cancel(id, &Ctx(1)), Some(("promise", SUB_RPC)));
     }
 
     #[test]
     fn answers_reach_only_the_addressed_frame() {
         let mut r = two_frames();
-        let id = r.register_rpc(&Ctx(1), "promise").unwrap();
+        let id = r.register_rpc(&Ctx(1), "promise").unwrap().0;
         assert!(
             r.settle(id, &frame("B")).is_none(),
             "an answer addressed to B took A's promise"
@@ -441,7 +508,7 @@ mod tests {
     #[test]
     fn a_released_context_takes_everything_with_it() {
         let mut r = two_frames();
-        let rpc = r.register_rpc(&Ctx(1), "p").unwrap();
+        let rpc = r.register_rpc(&Ctx(1), "p").unwrap().0;
         let open = r.register_stream_open(&Ctx(1), "o", sink()).unwrap();
         let sub = r.subscribe(&Ctx(1), "tick".into(), "cb", None).unwrap();
         r.context_released(&Ctx(1));
@@ -455,19 +522,56 @@ mod tests {
     }
 
     #[test]
-    fn unknown_and_opaque_contexts_act_for_no_origin() {
+    fn a_returned_context_hands_back_what_it_left_open() {
+        let mut r = two_frames();
+        let call = r.register_rpc(&Ctx(1), "call").unwrap().0;
+        let opening = r.register_stream_open(&Ctx(1), "opening", sink()).unwrap();
+        let open = r.register_stream_open(&Ctx(1), "open", sink()).unwrap();
+        r.stream_opened(open, &frame("A"));
+        let sub = r.subscribe(&Ctx(1), "tick".into(), "cb", None).unwrap();
+        let other = r.register_rpc(&Ctx(2), "b-call").unwrap().0;
+
+        let returned = r.returned(&Ctx(1));
+        let mut requests = vec![(call, SUB_RPC, "call"), (opening, SUB_STREAM, "opening")];
+        requests.sort_by_key(|(id, ..)| *id);
+        assert_eq!(returned.requests, requests);
+        assert_eq!(returned.streams, [(open, "error")]);
+        assert_eq!(returned.subscriptions, [(sub, "tick".to_owned())]);
+
+        assert!(
+            r.settle(call, &frame("A")).is_none(),
+            "a returned call is taken"
+        );
+        assert!(
+            r.stream_data(open, &frame("A")).is_none(),
+            "a returned stream is closed"
+        );
+        assert_eq!(
+            r.event(sub, &frame("A")),
+            Some((Ctx(1), "cb")),
+            "a subscription stays"
+        );
+        assert_eq!(
+            r.settle(other, &frame("B")),
+            Some((Ctx(2), "b-call")),
+            "another context keeps its calls"
+        );
+    }
+
+    #[test]
+    fn opaque_contexts_act_for_no_origin_and_unknown_ones_send_nothing() {
         let mut r: Registry<Ctx, Values> = two_frames();
         r.context_created(Ctx(3), frame("C"), true);
-        assert_eq!(r.flags_for(&Ctx(1)), 0);
-        assert_eq!(r.flags_for(&Ctx(3)), FLAG_OPAQUE_CONTEXT);
-        assert_eq!(r.flags_for(&Ctx(9)), FLAG_OPAQUE_CONTEXT);
+        assert_eq!(r.sender(&Ctx(1)), Some((0, frame("A"))));
+        assert_eq!(r.sender(&Ctx(3)), Some((FLAG_OPAQUE_CONTEXT, frame("C"))));
+        assert_eq!(r.sender(&Ctx(9)), None);
     }
 
     #[test]
     fn ids_are_unique_across_kinds() {
         let mut r = two_frames();
         r.next_id = i32::MAX;
-        let first = r.register_rpc(&Ctx(1), "p").unwrap();
+        let first = r.register_rpc(&Ctx(1), "p").unwrap().0;
         let second = r.subscribe(&Ctx(1), "e".into(), "cb", None).unwrap();
         let third = r.register_stream_open(&Ctx(2), "o", sink()).unwrap();
         assert_eq!(first, i32::MAX);

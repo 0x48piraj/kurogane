@@ -35,8 +35,8 @@ pub enum SandboxMode {
     /// Startup fails unless the platform can enforce it:
     /// - Linux: unprivileged user namespaces, or a root-owned setuid
     ///   `chrome-sandbox` helper.
-    /// - macOS: the app runs from a `.app` bundle, so each helper can enter
-    ///   its seatbelt sandbox before loading CEF.
+    /// - macOS: the app runs from a `.app` bundle, where each helper can enter
+    ///   its seatbelt sandbox before CEF initializes.
     /// - Windows: the app is loaded by CEF's bootstrap executable, which
     ///   brokers the sandbox. See [`sandbox_entry!`](crate::sandbox_entry).
     Chromium,
@@ -56,10 +56,11 @@ pub(crate) struct RuntimeSpec {
     pub profile_id: Option<String>,
     /// Where the profile is, when the application chose (App::profile_dir)
     pub profile_dir: Option<std::path::PathBuf>,
-    pub persist_session_cookies: bool,
     pub gpu_mode: GpuMode,
     pub credential_storage: CredentialStorage,
     pub chromium_flags: Vec<ChromiumFlag>,
+    /// Chromium preferences the application sets, in place of Kurogane's own
+    pub chromium_prefs: Vec<(String, serde_json::Value)>,
     pub scheduler: Option<PumpScheduler>,
     pub on_second_instance: Option<SecondInstanceHandler>,
     /// The only strong reference to the hooks; see [`crate::hooks`]

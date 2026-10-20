@@ -1,23 +1,25 @@
-//! What a page may use only with consent: a camera, a microphone, the
-//! screen, the location, notifications, the clipboard and the rest of the
-//! web's permissions.
+//! What a page may use only with consent.
+//!
+//! Consent covers a camera, a microphone, the screen, the location,
+//! notifications, the clipboard and the rest of the web's permissions.
 //!
 //! CEF asks in two ways. A camera, a microphone or the screen
 //! (`getUserMedia`, `getDisplayMedia`) comes to
-//! OnRequestMediaAccessPermission, whose answer is for that one request:
-//! nothing is remembered. Everything else comes to OnShowPermissionPrompt,
-//! the answer to Chromium's prompt, which Chromium remembers in the profile
-//! for a web site (http, https), so that site's later requests never come
-//! back. For the application's own scheme it remembers nothing, which also
-//! means a grant that must still hold later, to show a notification or read
-//! the location, is not there.
+//! OnRequestMediaAccessPermission, whose answer is for that one request.
+//! Nothing is remembered. Everything else comes to OnShowPermissionPrompt,
+//! the answer to Chromium's prompt. Chromium remembers it in the profile for a
+//! web site (http, https). That site's later requests never come back. For
+//! the application's own scheme it remembers nothing. A grant that must still
+//! hold later (to show a notification or read the location) is then not
+//! there.
 //!
-//! Left unanswered, a window shows Chromium's own prompt, which every later
-//! request waits behind, and an embedded browser denies devices and leaves
-//! every other request pending forever. Kurogane answers each request in
-//! both: the application's [`App::on_permission`](crate::App::on_permission)
-//! hook decides, now or later through a [`PermissionResponder`], and
-//! anything it does not allow is denied.
+//! A window left unanswered shows Chromium's own prompt, which every later
+//! request waits behind. An embedded browser left unanswered denies devices
+//! and leaves every other request pending forever. Kurogane answers each
+//! request in both. The application's
+//! [`App::on_permission`](crate::App::on_permission) hook decides, now or
+//! later through a [`PermissionResponder`]. Anything it does not allow is
+//! denied.
 
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -42,8 +44,8 @@ pub enum Permission {
     Camera,
     /// A microphone (`getUserMedia` with audio).
     Microphone,
-    /// A picture of the screen (`getDisplayMedia`). There is no picker:
-    /// allowed, the page records the whole screen.
+    /// A picture of the screen (`getDisplayMedia`). There is no picker; once
+    /// allowed the page records the whole screen.
     ScreenVideo,
     /// The sound the system plays, with a picture of the screen.
     ScreenAudio,
@@ -56,7 +58,7 @@ pub enum Permission {
     /// MIDI devices with system-exclusive messages
     /// (`requestMIDIAccess({ sysex: true })`).
     MidiSysex,
-    /// Turning a camera: pan, tilt and zoom.
+    /// Turning a camera (pan, tilt and zoom).
     CameraPanTiltZoom,
     /// An augmented-reality session (WebXR).
     ArSession,
@@ -91,7 +93,7 @@ pub enum Permission {
     RegisterProtocolHandler,
     /// Installing the site as an app.
     WebAppInstallation,
-    /// The screens' layout, and placing windows on them
+    /// The screens' layout and placing windows on them
     /// (`getScreenDetails`).
     WindowManagement,
     /// Writing to files and folders the user picked (File System Access).
@@ -105,11 +107,11 @@ pub enum Permission {
 }
 
 impl Permission {
-    /// Where Chromium remembers its answer to a prompt about it, as its
-    /// permissions code maps each request type to a setting
+    /// Returns where Chromium remembers its answer to a prompt about it, as
+    /// its permissions code maps each request type to a setting
     /// (`RequestTypeToContentSettingsType`), geolocation in either of its
     /// two settings. Every one is registered on every desktop platform but
-    /// the one listed for Windows alone: CEF hands a setting Chromium does
+    /// the one listed for Windows alone. CEF hands a setting Chromium does
     /// not register to a CHECK, which ends the browser process. A camera, a
     /// microphone and the screen asked for by a page's call are never
     /// remembered; the first two are listed for their prompts.
@@ -345,8 +347,8 @@ const PROMPT: [(u32, Permission); 28] = [
 /// The prompt for multiple downloads, which the download policy answers.
 const MULTIPLE_DOWNLOADS: u32 = Prompt::CEF_PERMISSION_TYPE_MULTIPLE_DOWNLOADS as u32;
 
-/// The kinds `bits` names by `table`, each once, in the table's order, and
-/// the bits the table does not know.
+/// Returns the kinds `bits` names by `table` (each once, in the table's
+/// order) and the bits the table does not know.
 fn read(bits: u32, table: &[(u32, Permission)]) -> (Vec<Permission>, u32) {
     let mut kinds = Vec::new();
     let mut known = 0;
@@ -371,7 +373,7 @@ pub struct PermissionRequest {
     origin: Origin,
     permissions: Vec<Permission>,
     browser: Option<BrowserId>,
-    /// Bits CEF set that Kurogane does not know: a kind a newer CEF added
+    /// Bits CEF set that Kurogane does not know (a kind a newer CEF added)
     unknown: u32,
     ticket: Arc<Ticket>,
 }
@@ -422,13 +424,13 @@ impl PermissionRequest {
         }
     }
 
-    /// The origin that asks: the page's, or a frame's inside it when the
-    /// frame asks.
+    /// The origin that asks. It is the page's, or a frame's inside it when
+    /// the frame asks.
     pub fn origin(&self) -> &Origin {
         &self.origin
     }
 
-    /// What the request asks for, all of it together: a page asking for a
+    /// What the request asks for, all of it together. A page asking for a
     /// camera and a microphone at once is granted both or neither.
     pub fn permissions(&self) -> &[Permission] {
         &self.permissions
@@ -440,9 +442,9 @@ impl PermissionRequest {
     }
 
     /// A responder that answers this request later, from any thread, once
-    /// the hook returns [`PermissionDecision::Later`]: after asking the
-    /// user, for example. With any other answer from the hook, the
-    /// responder does nothing.
+    /// the hook returns [`PermissionDecision::Later`] (after asking the
+    /// user, for example). The responder does nothing after any other
+    /// answer from the hook.
     pub fn responder(&self) -> PermissionResponder {
         PermissionResponder {
             ticket: Arc::clone(&self.ticket),
@@ -462,9 +464,9 @@ impl PermissionRequest {
 /// Answers a [`PermissionRequest`] the hook left for later
 /// ([`PermissionDecision::Later`]), from any thread.
 ///
-/// A request is answered once: the first answer counts. Dropping every
-/// responder of a request without answering denies it, and an answer that
-/// comes after the page went away grants nothing.
+/// A request is answered once; the first answer counts. Dropping every
+/// responder of a request without answering denies it. An answer that comes
+/// after the page went away grants nothing.
 ///
 /// ```no_run
 /// # use kurogane::{App, PermissionDecision};
@@ -501,10 +503,10 @@ impl PermissionResponder {
     }
 }
 
-/// What a request's deferred answer needs: the request's id, the browser
-/// that holds its callback, and the runtime, held weakly so a responder an
-/// application keeps does not keep the runtime alive. The last holder to
-/// go without an answer denies the request.
+/// What a request's deferred answer needs. It holds the request's id, the
+/// browser that holds its callback and the runtime. The runtime is held
+/// weakly; a responder an application keeps does not keep the runtime
+/// alive. The last holder to go without an answer denies the request.
 #[derive(Debug)]
 struct Ticket {
     id: u64,
@@ -514,7 +516,7 @@ struct Ticket {
 }
 
 impl Ticket {
-    /// Takes the request's one answer: true the first time only.
+    /// Takes the request's one answer. Returns true the first time only.
     fn claim(&self) -> bool {
         !self.answered.swap(true, Ordering::AcqRel)
     }
@@ -567,7 +569,7 @@ wrap_task! {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum PermissionDecision {
-    /// Kurogane's policy: [`Deny`](Self::Deny).
+    /// Kurogane's policy ([`Deny`](Self::Deny)).
     #[default]
     Default,
 
@@ -592,8 +594,8 @@ pub(crate) enum Answer {
     Later,
 }
 
-/// Asks the application's hook about `request`, if `ask` (not for
-/// Chromium's own browsers, DevTools' included), and settles what Kurogane
+/// Asks the application's hook about `request` when `ask` holds (not for
+/// Chromium's own browsers, DevTools' included) and settles what Kurogane
 /// does. Runs on CEF's UI thread with no lock held. A hook that panics
 /// denies the request, as does a kind Kurogane does not know.
 pub(crate) fn decide(app: &AppHandle, request: &PermissionRequest, ask: bool) -> Answer {
@@ -678,8 +680,8 @@ pub(crate) enum Pending {
 }
 
 impl Pending {
-    /// Answers the request. Not under the registry's lock: CEF answers a
-    /// prompt at once, and calls back into Kurogane as it does.
+    /// Answers the request outside the registry's lock. CEF answers a prompt
+    /// at once and calls back into Kurogane as it does.
     pub(crate) fn answer(self, allow: bool) {
         match self {
             Pending::Media {
@@ -695,8 +697,8 @@ impl Pending {
     }
 }
 
-/// The answer to Chromium's prompt: Chromium remembers either one for a web
-/// site.
+/// Returns the answer to Chromium's prompt. Chromium remembers either one
+/// for a web site.
 pub(crate) fn prompt_result(allow: bool) -> PermissionRequestResult {
     use tanso::sys::cef_permission_request_result_t as Outcome;
     PermissionRequestResult::from(if allow {
@@ -727,7 +729,7 @@ impl PendingPermissions {
     }
 
     /// Takes the request of Chromium's prompt `prompt`, which Chromium took
-    /// down: answered, or gone with its page.
+    /// down (answered or gone with its page).
     pub(crate) fn prompt_ended(&mut self, prompt: u64) -> Option<Pending> {
         let index = self
             .waiting
@@ -795,8 +797,8 @@ wrap_task! {
     }
 }
 
-/// Forgets what Chromium remembers about `origin`'s permissions, on the UI
-/// thread: at once when called there, posted there otherwise.
+/// Forgets what Chromium remembers about `origin`'s permissions on the UI
+/// thread. It runs at once when called there and is posted there otherwise.
 pub(crate) fn forget_on_ui(app: &AppHandle, origin: &Origin) {
     if app.is_ending() || origin.is_opaque() {
         return;
@@ -811,9 +813,9 @@ pub(crate) fn forget_on_ui(app: &AppHandle, origin: &Origin) {
     }
 }
 
-/// Clears every answer Chromium remembers for `origin`, in the profile of
-/// every browser, and its record of prompts dismissed or ignored, from
-/// which it would block the site on its own. UI thread.
+/// Clears every answer Chromium remembers for `origin` in the profile of
+/// every browser. It also clears its record of prompts dismissed or ignored,
+/// from which it would block the site on its own. UI thread.
 fn forget(app: &AppHandle, origin: &Origin) {
     let url = CefString::from(origin.to_string().as_str());
     // The guard ends with the statement, before CEF is called

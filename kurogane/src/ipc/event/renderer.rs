@@ -6,21 +6,20 @@ use tanso::*;
 
 use tracing::debug;
 use crate::ipc::envelope::*;
-use crate::ipc::renderer_state::state;
+use crate::ipc::renderer_state::with_state;
 use crate::ipc::utils::{array_buffer, rejection};
 use crate::ipc::FrameId;
 
 /// Handle an event message arriving from the browser (renderer-side dispatch).
 pub fn handle_event_renderer(
-    frame: &mut Frame,
+    addressed: &FrameId,
     envelope: &Envelope,
     payload: &[u8],
     filled: Option<V8BackingStore>,
 ) -> bool {
-    let addressed = FrameId::of(frame);
     match envelope.opcode {
-        EVENT_EMIT => on_emit(&addressed, envelope, payload, filled),
-        EVENT_REFUSED => on_refused(&addressed, envelope, payload),
+        EVENT_EMIT => on_emit(addressed, envelope, payload, filled),
+        EVENT_REFUSED => on_refused(addressed, envelope, payload),
         _ => {
             debug!("[Event Renderer] unknown opcode {}", envelope.opcode);
             false
@@ -28,11 +27,11 @@ pub fn handle_event_renderer(
     }
 }
 
-/// The browser refused a subscription: remove it and call its `onError`
-/// with `"{code}: {message}"`, the form the bridge's `toError` parses.
+/// Removes a subscription the browser refused and calls its `onError` with
+/// `"{code}: {message}"`, the form the bridge's `toError` parses.
 fn on_refused(addressed: &FrameId, envelope: &Envelope, payload: &[u8]) -> bool {
     let (code, message) = decode_error_payload(payload);
-    let removed = state().refused(envelope.correlation_id as i32, addressed);
+    let removed = with_state(|state| state.refused(envelope.correlation_id as i32, addressed));
     debug!(
         "[Event Renderer] subscription {} refused: {}",
         envelope.correlation_id, message
@@ -62,7 +61,7 @@ fn on_emit(
         return false;
     };
 
-    let target = state().event(envelope.correlation_id as i32, addressed);
+    let target = with_state(|state| state.event(envelope.correlation_id as i32, addressed));
     // The lock is released before JavaScript runs: the callback may re-enter
     let Some((context, callback)) = target else {
         debug!(

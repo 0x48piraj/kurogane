@@ -1,4 +1,4 @@
-//! Winit + Kurogane: Views mode (fixed interval pumping)
+//! Winit and Kurogane in Views mode, pumped at a fixed interval.
 //!
 //! Chromium owns the native window via the Views framework.
 //! The host application owns the outer winit event loop.

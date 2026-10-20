@@ -1,22 +1,22 @@
 //! The `fs.*` IPC command surface.
 //!
 //! Each [`FsCommand`] has an async handler backed by a shared [`Filesystem`].
-//! Authorization uses `IpcContext.origin` and [`Filesystem::authorize`]; the
-//! origin is derived from the frame URL and never accepted from the payload.
+//! Authorization uses `IpcContext::origin` and [`Filesystem::authorize`]; the
+//! origin is the sending document's, never accepted from the payload.
 //!
-//! Operations run on a bounded `kurogane-fs` worker thread, spawned on first
-//! use, so file I/O does not block the CEF UI thread. Requests are processed
+//! Operations run on a bounded `kurogane-fs` worker thread spawned on first
+//! use. File I/O never blocks the CEF UI thread. Requests are processed
 //! in submission order; a full queue is rejected with "filesystem is busy".
 //! If the thread cannot start, requests are rejected with "filesystem worker
 //! unavailable", never run where they arrived and the next one tries again.
 //!
-//! A request is admitted before its payload is copied or queued: an origin
-//! whose grants cannot perform the command gets [`ErrorCode::Capability`],
-//! a `write_file` over the transfer limit gets [`ErrorCode::TooLarge`] from
-//! its header alone and an oversized path or request gets
+//! A request is admitted before its payload is copied or queued. An origin
+//! whose grants cannot perform the command gets [`ErrorCode::Capability`].
+//! A `write_file` over the transfer limit gets [`ErrorCode::TooLarge`] from
+//! its header alone. An oversized path or request gets
 //! [`ErrorCode::Buffer`]. Admitted requests hold a share of a queued-bytes
-//! budget and one origin may have at most [`ORIGIN_IN_FLIGHT`] operations
-//! queued or running, so no origin can occupy the worker for the others.
+//! budget. One origin may have at most [`ORIGIN_IN_FLIGHT`] operations
+//! queued or running; no origin can occupy the worker for the others.
 //!
 //! File contents use the binary channel; all other data uses the string
 //! channel. `fs.read_file` takes a UTF-8 path and returns its contents.
@@ -75,22 +75,22 @@ pub(crate) fn handlers(filesystem: Filesystem) -> impl Iterator<Item = (FsComman
 fn handler(worker: Arc<Worker>, command: FsCommand) -> AsyncHandler {
     Box::new(move |data, responder, _app, ctx| {
         // Refused requests are answered here, before anything is copied
-        let permit = match worker.admit(command, data, &ctx.origin) {
+        let permit = match worker.admit(command, data, ctx.origin()) {
             Ok(permit) => permit,
             Err(refusal) => return responder.resolve(Err(refusal)),
         };
         worker.submit(Job {
             command,
             data: data.to_vec(),
-            origin: ctx.origin,
+            origin: ctx.origin().clone(),
             responder,
             _permit: permit,
         });
     })
 }
 
-/// One queued operation. Plain data, so a refused job still reaches its
-/// responder; its permit returns its share of the budget when dropped.
+/// One queued operation, plain data. A refused job still reaches its
+/// responder. Its permit returns its share of the budget when dropped.
 struct Job {
     command: FsCommand,
     data: Vec<u8>,
@@ -202,8 +202,8 @@ impl Worker {
     }
 }
 
-/// Bounds what queued requests may hold: their payload bytes in total and
-/// how many one origin may have queued or running.
+/// Bounds on queued requests (their payload bytes in total and how many one
+/// origin may have queued or running).
 struct Budget {
     capacity: usize,
     state: Mutex<BudgetState>,
@@ -330,14 +330,15 @@ fn run(auth: &AuthorizedFs<'_>, command: FsCommand, data: &[u8]) -> Result<Vec<u
     serde_json::to_vec(&response).map_err(IpcError::from)
 }
 
-/// The path of a binary request: its UTF-8 bytes.
+/// Reads the path of a binary request from its UTF-8 bytes.
 fn binary_path(bytes: &[u8]) -> Result<PathBuf, IpcError> {
     std::str::from_utf8(bytes)
         .map(PathBuf::from)
         .map_err(|_| IpcError::with_code("the path is not UTF-8", ErrorCode::Buffer))
 }
 
-/// Splits a `write_file` frame: `[path length: u32 LE][path: UTF-8][contents]`.
+/// Splits a `write_file` frame laid out as
+/// `[path length: u32 LE][path: UTF-8][contents]`.
 fn write_frame(frame: &[u8]) -> Result<(PathBuf, &[u8]), IpcError> {
     let malformed = || IpcError::with_code("malformed write_file frame", ErrorCode::Buffer);
     let (length, rest) = frame.split_first_chunk::<4>().ok_or_else(malformed)?;
@@ -440,7 +441,8 @@ mod tests {
         use crate::acl::Origin;
         use crate::capability::policy::FsAccess;
         use crate::capability::test_support::tempdir;
-        use crate::ipc::{BinaryResponder, FrameId, IpcContext};
+        use crate::ipc::document::Document;
+        use crate::ipc::{BinaryResponder, IpcContext};
         use crate::runtime::AppHandle;
 
         fn notes(access: FsAccess) -> (tempfile::TempDir, PathBuf, Vec<(FsCommand, AsyncHandler)>) {
@@ -459,12 +461,7 @@ mod tests {
         }
 
         fn ctx(origin: &str) -> IpcContext {
-            IpcContext {
-                browser_id: crate::browser_registry::BrowserId::new(1),
-                frame: FrameId::new("test-frame"),
-                origin: Origin::from_url(origin),
-                url_origin: Origin::from_url(origin),
-            }
+            IpcContext::new(Document::for_test(Origin::from_url(origin)), 0)
         }
 
         /// Sends `request` to the handler for `command`; returns the answer

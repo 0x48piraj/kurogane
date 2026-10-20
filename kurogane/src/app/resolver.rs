@@ -36,8 +36,8 @@ fn resolve_asset_root(dir: &Path) -> PathBuf {
     dir.to_path_buf()
 }
 
-/// The origin of the start page `source` names, without touching the
-/// filesystem: `app://app` for a directory, the URL's own origin otherwise
+/// Returns the origin of the start page `source` names without touching the
+/// filesystem. A directory gives `app://app`; a URL gives its own origin
 /// (opaque for a `file:` or hostless URL).
 pub(crate) fn app_origin(source: &Source) -> Origin {
     match source {

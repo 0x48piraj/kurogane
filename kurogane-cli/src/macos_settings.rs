@@ -1,6 +1,8 @@
-//! What a macOS bundle declares, resolved from `[macos]` once, when bundling
-//! starts: the oldest macOS it runs on, its category, and why it uses each
-//! device a page can ask for.
+//! macOS bundle declarations.
+//!
+//! What a bundle declares is resolved from `[macos]` once when bundling
+//! starts. It names the oldest macOS the bundle runs on, its category and why
+//! it uses each device a page can ask for.
 
 use std::fmt;
 use std::str::FromStr;
@@ -10,8 +12,9 @@ use thiserror::Error;
 use crate::config::{CONFIG_FILE_NAME, MacosPackagingConfig, MacosPrivacyConfig};
 use crate::plist::Dict;
 
-/// The oldest macOS CEF runs on: `CEF_TARGET_SDK` in CEF's
-/// `cmake/cef_variables.cmake`. Raise it with a CEF update that raises CEF's.
+/// Oldest macOS CEF runs on, as `CEF_TARGET_SDK` in CEF's
+/// `cmake/cef_variables.cmake` names it. Raise it with a CEF update that
+/// raises CEF's.
 pub const CEF_MINIMUM_MACOS: MacosVersion = MacosVersion([12, 0, 0]);
 
 /// The CEF whose `CEF_TARGET_SDK` [`CEF_MINIMUM_MACOS`] was read from; a
@@ -66,9 +69,9 @@ const CATEGORIES: [&str; 40] = [
     "public.app-category.word-games",
 ];
 
-/// A device a page can ask for, which macOS gives only to an application
-/// that says why, and under the hardened runtime only with an entitlement.
-/// A device more is one entry here and one key in `[macos.privacy]`.
+/// A device a page can ask for. macOS gives it only to an application that
+/// says why and under the hardened runtime only with an entitlement. A device
+/// more is one entry here and one key in `[macos.privacy]`.
 pub struct PrivacyUse {
     /// Its key in `[macos.privacy]`.
     pub key: &'static str,
@@ -80,7 +83,7 @@ pub struct PrivacyUse {
     pub default_reason: &'static str,
 }
 
-/// Every device Kurogane declares. A page's `getUserMedia` reaches them, and
+/// Every device Kurogane declares. A page's `getUserMedia` reaches them.
 /// macOS is reported to end an application that asks without the reason.
 pub const PRIVACY_USES: [PrivacyUse; 2] = [
     PrivacyUse {
@@ -97,17 +100,17 @@ pub const PRIVACY_USES: [PrivacyUse; 2] = [
     },
 ];
 
-/// Code-signing entitlements CEF needs under the hardened runtime: V8's JIT,
-/// executable memory for generated code, and loading the ANGLE and
-/// SwiftShader libraries, which Apple did not sign.
+/// Code-signing entitlements CEF needs under the hardened runtime. They allow
+/// V8's JIT, executable memory for generated code and loading the ANGLE and
+/// SwiftShader libraries Apple did not sign.
 const CEF_ENTITLEMENTS: [&str; 3] = [
     "com.apple.security.cs.allow-jit",
     "com.apple.security.cs.allow-unsigned-executable-memory",
     "com.apple.security.cs.disable-library-validation",
 ];
 
-/// A macOS version, as `LSMinimumSystemVersion` writes it: one to three
-/// numbers, missing ones zero.
+/// A macOS version as `LSMinimumSystemVersion` writes it. It has one to three
+/// numbers; missing ones are zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MacosVersion([u32; 3]);
 
@@ -232,8 +235,8 @@ impl MacosSettings {
     }
 
     /// Sets the keys the application's `Info.plist` and every helper's
-    /// share: the macOS it needs and why it uses each device. A device is
-    /// charged to whichever process asks for it, a helper too.
+    /// share. They name the macOS it needs and why it uses each device. A
+    /// device is charged to whichever process asks for it, a helper too.
     pub fn declare(&self, plist: &mut Dict) {
         plist.set(
             "LSMinimumSystemVersion",
@@ -244,8 +247,9 @@ impl MacosSettings {
         }
     }
 
-    /// The entitlements a hardened-runtime signature of the application and
-    /// its helpers carries: CEF's, and every declared device's.
+    /// Returns the entitlements a hardened-runtime signature of the
+    /// application and its helpers carries. They are CEF's and every declared
+    /// device's.
     pub fn entitlements(&self) -> Dict {
         let mut entitlements = Dict::new();
         for entitlement in CEF_ENTITLEMENTS {

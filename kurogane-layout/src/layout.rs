@@ -73,28 +73,71 @@ fn bundled_resource_root_for(exe: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Returns the running application's bundled helper executable, if present.
-#[cfg(target_os = "macos")]
-pub fn bundled_helper_path() -> Result<Option<PathBuf>, std::io::Error> {
-    Ok(bundled_helper_path_for(&std::env::current_exe()?))
+/// A macOS application bundle without one helper app the runtime can start.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, thiserror::Error)]
+#[error("{} in {}", helpers_found(.found), .frameworks.display())]
+pub struct NoSingleHelper {
+    /// The bundle's `Contents/Frameworks`.
+    pub frameworks: PathBuf,
+
+    /// Helper executables found there, none or several.
+    pub found: Vec<PathBuf>,
 }
 
-/// Returns the bundled helper executable for the application containing `exe`.
+/// Says what `found` holds for [`NoSingleHelper`]'s message.
 #[cfg(any(target_os = "macos", test))]
-pub fn bundled_helper_path_for(exe: &Path) -> Option<PathBuf> {
-    let contents = app_bundle_contents(exe)?;
-    let name = contents.parent()?.file_stem()?.to_str()?;
+fn helpers_found(found: &[PathBuf]) -> String {
+    if found.is_empty() {
+        return "no helper app".to_owned();
+    }
+    let names: Vec<String> = found
+        .iter()
+        .map(|exe| {
+            exe.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    format!("more than one helper app ({})", names.join(", "))
+}
 
-    let helper = format!("{name} Helper");
+/// Returns the helper executable of the macOS application bundle `exe`
+/// belongs to, the one `<name> Helper.app` in its `Contents/Frameworks`
+/// whatever the bundle is named. `None` outside an application bundle.
+#[cfg(any(target_os = "macos", test))]
+pub fn bundled_helper_path_for(exe: &Path) -> Result<Option<PathBuf>, NoSingleHelper> {
+    let Some(contents) = app_bundle_contents(exe) else {
+        return Ok(None);
+    };
+    let frameworks = contents.join("Frameworks");
 
-    let path = contents
-        .join("Frameworks")
-        .join(format!("{helper}.app"))
-        .join("Contents")
-        .join("MacOS")
-        .join(&helper);
+    let mut found: Vec<PathBuf> = std::fs::read_dir(&frameworks)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| helper_executable(&entry.path()))
+        .collect();
+    found.sort();
 
-    path.is_file().then_some(path)
+    match <[PathBuf; 1]>::try_from(found) {
+        Ok([helper]) => Ok(Some(helper)),
+        Err(found) => Err(NoSingleHelper { frameworks, found }),
+    }
+}
+
+/// Returns the executable of `app` when it is a bundle's main helper,
+/// `<name> Helper.app/Contents/MacOS/<name> Helper`. Chromium derives the
+/// other helpers (`<name> Helper (GPU).app` and the rest) from its path.
+#[cfg(any(target_os = "macos", test))]
+fn helper_executable(app: &Path) -> Option<PathBuf> {
+    let name = app.file_name()?.to_str()?.strip_suffix(".app")?;
+    if !name.ends_with(" Helper") {
+        return None;
+    }
+    let exe = app.join("Contents").join("MacOS").join(name);
+    exe.is_file().then_some(exe)
 }
 
 /// The file `kurogane bundle` and the sandbox's staged run leave beside a
@@ -256,33 +299,77 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_bundle_without_helpers_has_no_helper_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let macos = dir.path().join("MyApp.app").join("Contents").join("MacOS");
-        std::fs::create_dir_all(&macos).unwrap();
-
-        assert_eq!(bundled_helper_path_for(&macos.join("myapp")), None);
+    /// Writes a helper app `<name>.app` into `frameworks` and returns its
+    /// executable.
+    fn write_helper(frameworks: &Path, name: &str) -> PathBuf {
+        let exe = frameworks
+            .join(format!("{name}.app"))
+            .join("Contents")
+            .join("MacOS")
+            .join(name);
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"mach-o").unwrap();
+        exe
     }
 
     #[test]
-    fn the_helper_is_named_after_the_bundle() {
+    fn a_bundle_without_helpers_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let contents = dir.path().join("MyApp.app").join("Contents");
-        let helper_exe = contents
-            .join("Frameworks")
-            .join("MyApp Helper.app")
-            .join("Contents")
-            .join("MacOS")
-            .join("MyApp Helper");
-
-        std::fs::create_dir_all(helper_exe.parent().unwrap()).unwrap();
-        std::fs::write(&helper_exe, b"mach-o").unwrap();
         std::fs::create_dir_all(contents.join("MacOS")).unwrap();
 
+        let refused = bundled_helper_path_for(&contents.join("MacOS").join("myapp")).unwrap_err();
+        assert!(refused.found.is_empty());
+        assert_eq!(refused.frameworks, contents.join("Frameworks"));
+    }
+
+    #[test]
+    fn the_helper_is_found_whatever_the_bundle_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let contents = dir.path().join("MyApp 2.app").join("Contents");
+        let frameworks = contents.join("Frameworks");
+        let helper = write_helper(&frameworks, "MyApp Helper");
+        for variant in [
+            "MyApp Helper (GPU)",
+            "MyApp Helper (Renderer)",
+            "MyApp Helper (Plugin)",
+        ] {
+            write_helper(&frameworks, variant);
+        }
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+
+        let exe = contents.join("MacOS").join("myapp");
+        assert_eq!(bundled_helper_path_for(&exe).unwrap(), Some(helper.clone()));
         assert_eq!(
-            bundled_helper_path_for(&contents.join("MacOS").join("myapp")),
-            Some(helper_exe)
+            bundled_helper_path_for(&helper).unwrap(),
+            Some(helper.clone()),
+            "a helper finds it through the bundle it belongs to"
+        );
+    }
+
+    #[test]
+    fn several_helpers_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let contents = dir.path().join("MyApp.app").join("Contents");
+        let frameworks = contents.join("Frameworks");
+        let first = write_helper(&frameworks, "MyApp Helper");
+        let second = write_helper(&frameworks, "Other Helper");
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+
+        let refused = bundled_helper_path_for(&contents.join("MacOS").join("myapp")).unwrap_err();
+        assert_eq!(refused.found, [first, second]);
+        assert!(
+            refused
+                .to_string()
+                .starts_with("more than one helper app (MyApp Helper, Other Helper)")
+        );
+    }
+
+    #[test]
+    fn an_unbundled_executable_has_no_helper() {
+        assert_eq!(
+            bundled_helper_path_for(Path::new("/proj/target/release/myapp")).unwrap(),
+            None
         );
     }
 

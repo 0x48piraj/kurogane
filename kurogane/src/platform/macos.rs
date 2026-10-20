@@ -18,9 +18,9 @@ use crate::error::RuntimeError;
 use crate::platform::macos::application::SimpleApplication;
 use crate::runtime::{AppHandle, RuntimeServices};
 
-/// The application, for the Objective-C `terminate:` override. Held weakly:
-/// the static lasts as long as the process and must not keep the
-/// application's state alive once it has ended.
+/// Application for the Objective-C `terminate:` override, held weakly. The
+/// static lasts as long as the process and must not keep the application's
+/// state alive once it has ended.
 static APP: OnceLock<Weak<RuntimeServices>> = OnceLock::new();
 
 /// Registers the application for the `terminate:` override, once CEF has
@@ -37,12 +37,12 @@ pub fn set_app(app: &AppHandle) {
 /// Loads the CEF the runtime resolves, its bundle's or the one tanso finds.
 ///
 /// CEF's subprocesses (`--type=renderer`, `gpu-process`, `utility`) get the
-/// library alone: an `NSApplication` registers its process with LaunchServices
-/// as an application, and inside a bundle every subprocess would then own a
-/// Dock tile of its own. CEF's helper executables install none.
+/// library alone. An `NSApplication` registers its process with
+/// LaunchServices as an application. Inside a bundle every subprocess would
+/// then own a Dock tile of its own. CEF's helper executables install none.
 ///
 /// Under [`SandboxMode::Chromium`](crate::SandboxMode::Chromium) subprocesses
-/// enter the seatbelt sandbox before the framework is loaded.
+/// enter the seatbelt sandbox before CEF is loaded.
 ///
 /// Must run on the main thread before CEF initialization. Returns the
 /// directory of the CEF it loaded.
@@ -113,6 +113,10 @@ pub fn setup_app_delegate() {
 /// Installs the standard App, Edit and Window menus when no menu exists.
 /// Existing menus are preserved.
 ///
+/// Close and Quit send Kurogane's own actions. Chromium runs `performClose:`
+/// and `terminate:` items before the page and before `App::on_key` is asked.
+/// Their keys are Kurogane's shortcuts (crate::shortcuts).
+///
 /// Must run on the main thread after CEF initialization.
 pub fn install_default_menu() {
     let mtm = MainThreadMarker::new().expect("install_default_menu must run on the main thread");
@@ -126,6 +130,7 @@ pub fn install_default_menu() {
     let shift = command | NSEventModifierFlags::Shift;
     let option = command | NSEventModifierFlags::Option;
     let bar = NSMenu::new(mtm);
+    let actions = KuroganeMenuActions::new(mtm);
 
     let app_menu = submenu(mtm, &bar, &name);
     let about = format!("About {name}");
@@ -159,13 +164,15 @@ pub fn install_default_menu() {
         command,
     );
     app_menu.addItem(&NSMenuItem::separatorItem(mtm));
-    add_item(
+    let quit = add_item(
         &app_menu,
         &format!("Quit {name}"),
-        sel!(terminate:),
+        sel!(quit:),
         "q",
         command,
     );
+    // SAFETY: the target lives as long as the process (forgotten below)
+    unsafe { quit.setTarget(Some(&actions)) };
 
     let edit = submenu(mtm, &bar, "Edit");
     add_item(&edit, "Undo", sel!(undo:), "z", command);
@@ -189,7 +196,9 @@ pub fn install_default_menu() {
     add_item(&window, "Minimize", sel!(performMiniaturize:), "m", command);
     add_item(&window, "Zoom", sel!(performZoom:), "", command);
     window.addItem(&NSMenuItem::separatorItem(mtm));
-    add_item(&window, "Close", sel!(performClose:), "w", command);
+    let close = add_item(&window, "Close", sel!(closeWindow:), "w", command);
+    // SAFETY: the target lives as long as the process (forgotten below)
+    unsafe { close.setTarget(Some(&actions)) };
     add_item(
         &window,
         "Bring All to Front",
@@ -201,6 +210,9 @@ pub fn install_default_menu() {
     app.setWindowsMenu(Some(&window));
 
     app.setMainMenu(Some(&bar));
+
+    // A menu item does not retain its target
+    std::mem::forget(actions);
 }
 
 /// Quits as the application menu's Quit does.
@@ -257,8 +269,15 @@ fn submenu(mtm: MainThreadMarker, bar: &NSMenu, title: &str) -> Retained<NSMenu>
     menu
 }
 
-/// Adds an untargeted menu item with the given action and key equivalent.
-fn add_item(menu: &NSMenu, title: &str, action: Sel, key: &str, modifiers: NSEventModifierFlags) {
+/// Adds an untargeted menu item with the given action and key equivalent
+/// and returns it.
+fn add_item(
+    menu: &NSMenu,
+    title: &str,
+    action: Sel,
+    key: &str,
+    modifiers: NSEventModifierFlags,
+) -> Retained<NSMenuItem> {
     // SAFETY: Standard AppKit actions are dispatched through the responder chain.
     let item = unsafe {
         menu.addItemWithTitle_action_keyEquivalent(
@@ -268,6 +287,57 @@ fn add_item(menu: &NSMenu, title: &str, action: Sel, key: &str, modifiers: NSEve
         )
     };
     item.setKeyEquivalentModifierMask(modifiers);
+    item
+}
+
+define_class! {
+    /// Target of the default menu's Close and Quit. Its actions do what
+    /// `performClose:` and `terminate:` do under names Chromium does not
+    /// know.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    struct KuroganeMenuActions;
+
+    unsafe impl NSObjectProtocol for KuroganeMenuActions {}
+
+    impl KuroganeMenuActions {
+        /// Closes the key window as `performClose:` sent down the responder
+        /// chain does.
+        #[unsafe(method(closeWindow:))]
+        fn close_window(&self, sender: Option<&AnyObject>) {
+            // SAFETY: `performClose:` takes the sender as its one object
+            unsafe {
+                NSApp(self.mtm()).sendAction_to_from(sel!(performClose:), None, sender);
+            }
+        }
+
+        /// Quits as `terminate:` does.
+        #[unsafe(method(quit:))]
+        fn quit(&self, sender: Option<&AnyObject>) {
+            NSApp(self.mtm()).terminate(sender);
+        }
+
+        /// Returns whether an item is enabled. Close is while a window would
+        /// take `performClose:`.
+        #[unsafe(method(validateMenuItem:))]
+        fn validate_menu_item(&self, item: &NSMenuItem) -> Bool {
+            if item.action() != Some(sel!(closeWindow:)) {
+                return Bool::YES;
+            }
+            // SAFETY: `targetForAction:` takes a selector and returns an
+            // optional responder
+            Bool::new(unsafe { NSApp(self.mtm()).targetForAction(sel!(performClose:)) }.is_some())
+        }
+    }
+}
+
+impl KuroganeMenuActions {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = KuroganeMenuActions::alloc(mtm).set_ivars(());
+        // SAFETY: `this` is freshly allocated and `-init` is NSObject's
+        // designated initializer
+        unsafe { msg_send![super(this), init] }
+    }
 }
 
 define_class! {

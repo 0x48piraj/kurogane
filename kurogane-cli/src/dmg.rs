@@ -1,8 +1,8 @@
 //! Creates macOS disk images.
 //!
 //! The image holds the signed `.app` beside an `Applications` link, the
-//! usual drag-to-install pair. It is staged in a temporary folder, removed
-//! on every path, and with `--sign` sealed by the same identity as the app.
+//! usual drag-to-install pair. It is staged in a temporary folder that every
+//! path removes. With `--sign` it is sealed by the same identity as the app.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,9 +13,9 @@ use anyhow::{Context, Result, bail};
 use crate::signing::{SignConfig, sign_disk_image};
 use crate::tui;
 
-/// Apple's tool for copying bundles: it keeps symbolic links, modes and
-/// extended attributes, so the staged app is the one codesign sealed. Never
-/// a `ditto` from `PATH`.
+/// Apple's tool for copying bundles. It keeps symbolic links, modes and
+/// extended attributes; the staged app is the one codesign sealed. Never a
+/// `ditto` from `PATH`.
 const DITTO: &str = "/usr/bin/ditto";
 
 /// The disk image tool, which ships with macOS.
@@ -29,7 +29,7 @@ fn dmg_path(output_dir: &Path, name: &str) -> PathBuf {
     output_dir.join(format!("{name}.dmg"))
 }
 
-/// Stages the image's contents in `staging`: a copy of `app_dir` and an
+/// Stages the image's contents in `staging`, a copy of `app_dir` beside an
 /// `Applications` link.
 fn stage(app_dir: &Path, staging: &Path) -> Result<()> {
     let app_name = app_dir

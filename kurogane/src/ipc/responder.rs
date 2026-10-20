@@ -8,9 +8,9 @@ type Callback<T> = Box<dyn FnOnce(Result<T, IpcError>) + Send>;
 
 /// The answer to one async request.
 ///
-/// Resolving it takes it, so a request is answered once. If dropped without
-/// calling [`resolve`](Responder::resolve), the promise is automatically
-/// rejected ensuring every pending request eventually settles.
+/// Resolving it takes it; a request is answered once. A responder dropped
+/// without [`resolve`](Responder::resolve) rejects its promise. Every pending
+/// request settles.
 pub struct Responder<T> {
     /// Taken by `resolve` or `map`; whatever `Drop` still finds, it rejects.
     callback: Option<Callback<T>>,
@@ -18,8 +18,8 @@ pub struct Responder<T> {
 }
 
 impl<T: 'static> Responder<T> {
-    /// A responder that hands its result to `callback`: what the runtime
-    /// gives an async handler, and what a test of one can give it.
+    /// Creates a responder that hands its result to `callback`. The runtime
+    /// gives one to an async handler; a test of the handler can do the same.
     pub fn new(callback: Callback<T>) -> Self {
         Self {
             callback: Some(callback),

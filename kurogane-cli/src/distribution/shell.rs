@@ -1,7 +1,7 @@
 //! Quoting for the shell scripts a bundle starts through.
 
-/// Quotes `value` as one `sh` word that expands nothing: inside single
-/// quotes only a `'` is special, and it is written as `'\''`.
+/// Quotes `value` as one `sh` word that expands nothing. Inside single
+/// quotes only a `'` is special; it is written as `'\''`.
 pub fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r"'\''"))
 }
@@ -17,7 +17,7 @@ mod tests {
         assert_eq!(sh_quote(""), "''");
     }
 
-    /// What `sh` makes of the quoted word: the value itself, and nothing run.
+    /// `sh` reads the quoted word back as the value itself and runs nothing.
     #[cfg(unix)]
     #[test]
     fn sh_reads_the_word_back_as_written() {

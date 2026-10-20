@@ -129,8 +129,6 @@ A window whose options set no title takes its page's `<title>` and follows it as
 
 The minimum size is the smallest content size the user can drag the window down to. The states are `Normal`, `Minimized`, `Maximized`, `Fullscreen` and `Hidden`. A window opened maximized restores to its size and centered. A hidden window's browser keeps the application running as any open browser does.
 
-Under X11 a window opened `Fullscreen` shows at its size for now; Chromium drops a state set before the window maps. A page that goes fullscreen after its window shows is not affected.
-
 An application started with `App::start_embedded` has no start window. Giving it `App::window` fails at startup. So do options no window can have (a size of 0 or a minimum larger than the size).
 
 ### Opening a window where it was
@@ -346,15 +344,17 @@ The application's own loads, back and forward navigation and frames never reach 
 
 A Kurogane window runs only Chromium's page-local commands. Those are reload, find, print, zoom, editing, closing the window and DevTools. It refuses the rest (new windows and tabs, history and bookmarks). Two hooks narrow that further.
 
-`App::on_key` sees each key press before Chromium's shortcuts and the page do. It decides where the key goes. `KeyDecision::Default` lets it go on in Chromium's own order (below). `KeyDecision::Consume` takes it. No shortcut runs and the page sees none of the key, its character or its release.
+Kurogane's shortcuts are the same on every OS. Closing the window (Ctrl+W, Ctrl+Shift+W) and quitting on macOS (Cmd+Q) take the key before the page sees it. No page keeps them. Reload (Ctrl+R, F5), find (Ctrl+F, Ctrl+G, F3), print (Ctrl+P), zoom (Ctrl+=, Ctrl+-, Ctrl+0), back and forward (Alt+Left, Alt+Right), fullscreen (F11) and DevTools (Ctrl+Shift+I, F12) reach the page first. They run only when the page does not call `preventDefault()`. macOS takes Cmd for Ctrl, Cmd+[ and Cmd+] for back and forward, Cmd+Ctrl+F for fullscreen and Cmd+Option+I for DevTools. Chromium's keys for what Kurogane refuses (Ctrl+T, Ctrl+N, Ctrl+Shift+T and Ctrl+Tab) are ordinary keys the page gets.
+
+`App::on_key` sees each key press before a shortcut and the page do. It decides where the key goes. `KeyDecision::Default` lets it go on in that order. `KeyDecision::Consume` takes it. No shortcut runs and the page sees none of the key, its character or its release.
 
 ```rust
-use kurogane::{App, Key, KeyDecision};
+use kurogane::{App, ChromeCommand, KeyDecision};
 
 App::new("dist")
     .on_key(|key, _app| {
         // Ctrl+W (Cmd+W on macOS) does not close this window
-        if key.key() == Key::Char('W') && key.modifiers().primary() {
+        if key.command() == Some(ChromeCommand::Close) {
             KeyDecision::Consume
         } else {
             KeyDecision::Default
@@ -363,22 +363,20 @@ App::new("dist")
     .run_or_exit();
 ```
 
-The hook sees only presses. Held keys repeating count too (`repeat()`). It never sees releases. `Key` names a key by its place. Shift+W is still `Key::Char('W')`. `modifiers().primary()` is Ctrl on Windows and Linux and Cmd on macOS. Check `in_editable_field()` before taking keys the user may be typing.
+The hook sees only presses. Held keys repeating count too (`repeat()`). It never sees releases. `command()` names the command a shortcut runs by whatever keys the OS gives it. `Key` names a key by its place. Shift+W is still `Key::Char('W')`. `modifiers().primary()` is Ctrl on Windows and Linux and Cmd on macOS. Check `in_editable_field()` before taking keys the user may be typing.
 
-Chromium's own order depends on the shortcut. Most shortcuts (Ctrl+F, Ctrl+P, Ctrl+1 and F5) reach the page first. They run only when the page does not call `preventDefault()`. A page can bind them already.
+On macOS Chromium still takes its own next-tab keys (Cmd+Option+Left and Right, Cmd+Shift+[ and ], Ctrl+Page Up and Page Down) before `on_key` and the page see them. A fullscreen window is the exception.
 
-Chromium reserves the shortcuts that open, close and switch tabs and windows (Ctrl+T, Ctrl+N, Ctrl+W, Ctrl+Shift+T and Ctrl+Tab). They take the key before the page sees it. A page's own binding for one never fires. A reserved shortcut with nothing to do lets the key through to the page. Ctrl+Tab in a window of one tab does. So does Ctrl+Shift+T while no tab was closed. That changes as the session goes on.
-
-`KeyDecision::PageFirst` gives the page a reserved shortcut first every time. The page gets the key. Chromium's shortcut runs only when the page does not call `preventDefault()`. A shortcut that runs then goes on as any other. Kurogane still refuses new tabs and windows. `on_chrome_command` is still asked about closing the window.
+`KeyDecision::PageFirst` gives the page closing and quitting first too. The page gets the key. The shortcut runs only when the page does not call `preventDefault()`. `on_chrome_command` is still asked about closing the window.
 
 ```rust
-use kurogane::{App, Key, KeyDecision};
+use kurogane::{App, ChromeCommand, KeyDecision};
 
 App::new("dist")
     .on_key(|key, _app| {
-        // The page's own Ctrl+T handler runs; Chromium's runs only if the
-        // page lets the key through
-        if key.key() == Key::Char('T') && key.modifiers().primary() {
+        // The page's own Ctrl+W handler runs; the window closes only if
+        // the page lets the key through
+        if key.command() == Some(ChromeCommand::Close) {
             KeyDecision::PageFirst
         } else {
             KeyDecision::Default
@@ -389,11 +387,11 @@ App::new("dist")
 
 `PageFirst` is for shortcuts:
 
-* Chromium drops the character of a shortcut the page left alone. A typing key answered with `PageFirst` types nothing unless the page handles its keydown. Answer it for chords such as Ctrl+T and not for every key. AltGr arrives as Ctrl+Alt on Windows.
+* Chromium drops the character of a shortcut the page left alone. A typing key answered with `PageFirst` types nothing unless the page handles its keydown. Answer it for chords such as Ctrl+W and not for every key. AltGr arrives as Ctrl+Alt on Windows.
 * It hands the shortcut to the page. A page that prevents Ctrl+W keeps its window open. A page that hangs holds the key.
-* Chromium reserves these shortcuts so no page can keep them. Answer `PageFirst` only for windows that show your own pages (`key.browser()`).
+* Closing and quitting run before the page so no page can keep them. Answer `PageFirst` only for windows that show your own pages (`key.browser()`).
 * The window's own close button and closing it from the application are not affected.
-* A browser embedded in your own window runs no Chromium shortcuts. There `PageFirst` changes nothing but the dropped character.
+* A browser embedded in your own window runs no shortcuts. There `PageFirst` changes nothing but the dropped character.
 
 `App::on_chrome_command` is asked about each command the window would run from a shortcut or the context menu. It may refuse the command. It is never asked about a command Kurogane refuses. It cannot allow one.
 
@@ -686,7 +684,19 @@ App::new("dist").profile_dir(profile).run_or_exit();
 
 The directory is created when missing. It is used as given in debug builds too. A development run then shares it and hands its launch over to a copy already running there. A relative path fails at startup. So does a directory given together with `App::profile_id`.
 
-Session cookies (those without an expiry date) persist across restarts. `App::persist_session_cookies(false)` keeps them for one session only.
+### What lasts from one run to the next
+
+Cookies with an expiry, local storage and everything else the profile holds last from one run to the next.
+
+Session cookies end with each run as in a browser. They are the cookies a server sets without `Expires` or `Max-Age`. Chromium keeps them only while it reopens the last session's windows. Those would come back stale beside the application's own after an unclean exit. Every run starts with the application's windows alone.
+
+A login meant to outlast a run uses a cookie with an expiry:
+
+```http
+Set-Cookie: session=...; Max-Age=2592000; Path=/; Secure; HttpOnly; SameSite=Lax
+```
+
+A page can keep its token in local storage instead.
 
 ## Exposing Rust commands to JavaScript
 
@@ -727,7 +737,7 @@ App::new("dist")
     .run_or_exit();
 ```
 
-A responder dropped unanswered rejects the call with code `-3`. `responder.is_cancelled()` turns true when the page cancels. A cancelled responder sends nothing.
+A responder dropped unanswered rejects the call with code `-3`. `responder.is_cancelled()` turns true when the page cancels, navigates away or closes. A cancelled responder sends nothing. A page back from the back-forward cache finds the calls it left open rejected with code `-9`.
 
 ### Binary commands
 
@@ -750,6 +760,12 @@ const reply = await window.kurogane.invoke("checksum", new TextEncoder().encode(
 
 `App::async_binary_command` is its async form. Its handler gets a `BinaryResponder`.
 
+### Large data
+
+One message from a page carries at most 64 MiB of data. A call with more rejects with code `-8` before anything is sent. A stream's `write` throws for a larger chunk.
+
+One call is fastest up to about 16 MiB. A larger call moves no faster and holds up the page while its bytes are copied. Stream larger data in chunks of 1 to 4 MiB to the page and about 4 MiB from it. The page stays responsive between chunks.
+
 ### Errors
 
 A handler fails with an `IpcError`. A string converts into one. The page's promise rejects with an `Error` whose `code` says what failed:
@@ -764,7 +780,8 @@ A handler fails with an `IpcError`. A string converts into one. The page's promi
 | `-5` | No filesystem grant of the origin covers the operation |
 | `-6` | The path is outside the granted roots, denied or a link |
 | `-7` | The path is malformed |
-| `-8` | The file exceeds the transfer limit |
+| `-8` | A file or message exceeds its transfer limit |
+| `-9` | The page left with the call open and came back from the back-forward cache |
 
 `IpcError::with_code` sends a positive code of your own (`ErrorCode::App`).
 
@@ -815,6 +832,8 @@ window.kurogane.off(id);
 ```
 
 Subscriptions follow the same rule as commands. A page of another origin needs `App::permit_event`. A refused subscription calls the third argument with code `-4` and logs a warning without one.
+
+A page back from the back-forward cache keeps its subscriptions. The events sent while it was away do not reach it.
 
 ## Streaming data
 
@@ -870,9 +889,9 @@ stream.write(new TextEncoder().encode("hello"));
 stream.end();
 ```
 
-Handlers and sends fail with an `IpcError` as commands do. A string converts into one. The first `end` or `error` a handler sends closes the stream. Later sends fail with `stream closed`. When the page calls `end()` and `on_end` sends neither, the runtime ends the stream with `""`. The page always hears back.
+Handlers and sends fail with an `IpcError` as commands do. A string converts into one. The first `end` or `error` a handler sends closes the stream. Later sends fail with `stream closed`. When the page calls `end()` and `on_end` sends neither, the runtime ends the stream with `""`. The page always hears back. A stream a page left open fails with `The page left` when the page comes back from the back-forward cache.
 
-Handlers run on the UI thread. A `StreamResponder` can be cloned and used from any thread. Streams follow the same access rule as commands.
+Handlers run on the UI thread. A `StreamResponder` can be cloned and used from any thread. Streams follow the same access rule as commands. A chunk carries at most 64 MiB. See [Large data](#large-data) for chunk sizes.
 
 ## The filesystem capability
 
@@ -1023,7 +1042,21 @@ fn main() {
 }
 ```
 
-A flag's name may be written with or without its leading `--`. A flag you pass overrides Kurogane's own value for the same switch. `enable-features` and `disable-features` are lists instead; a value adds its features to them.
+Remove a flag Kurogane would pass:
+
+```rust
+use kurogane::App;
+
+fn main() {
+    App::new("frontend")
+        .without_chromium_flag("disable-stack-profiler")
+        .run_or_exit();
+}
+```
+
+A flag's name may be written with or without its leading `--`. A name holding `=` is logged and skipped; its value goes in `chromium_flag_with_value`. Your flags apply after Kurogane's own and in the order given. A flag you pass overrides Kurogane's own value for the same switch. `without_chromium_flag` removes one, whether a default of Kurogane's or one a setting such as `gpu_mode` sets. A switch the application was launched with stays.
+
+`enable-features` and `disable-features` are lists instead; a value adds its features to them. An `enable-features` entry also turns back on a feature Kurogane turns off (see [Chromium defaults](#chromium-defaults)).
 
 Flags enable Chromium features, diagnostics and experimental functionality.
 
@@ -1031,6 +1064,63 @@ Examples:
 
 * [kurogane-suite/scenarios/popups/main.rs](../kurogane-suite/scenarios/popups/main.rs)
 * [kurogane-suite/scenarios/css-to-shader/main.rs](../kurogane-suite/scenarios/css-to-shader/main.rs)
+
+## Chromium defaults
+
+Kurogane turns off what Chromium would run for every application and an application rarely needs. One line turns each back on.
+
+| What | Turned off by | Turned back on with |
+|---|---|---|
+| Extensions other programs register for Google Chrome | preference `extensions.block_external_extensions` | `.chromium_pref("extensions.block_external_extensions", false)` |
+| Component updates, Widevine among them | preference `component_updates.component_updates_enabled` | `.chromium_pref("component_updates.component_updates_enabled", true)` |
+| Queries to Google's time server | preference `network_time.network_time_queries_enabled` | `.chromium_pref("network_time.network_time_queries_enabled", true)` |
+| The omnibox's AI Mode check | feature `AimEnabled` | `.chromium_flag_with_value("enable-features", "AimEnabled")` |
+| Cast | feature `MediaRouter` | `.chromium_flag_with_value("enable-features", "MediaRouter")` |
+| A renderer kept ready for the next site | feature `SpareRendererForSitePerProcess` | `.chromium_flag_with_value("enable-features", "SpareRendererForSitePerProcess")` |
+| A copy of the whole bundle at every macOS start | feature `MacAppCodeSignClone` | `.chromium_flag_with_value("enable-features", "MacAppCodeSignClone")` |
+| Chrome's stack-sampling profiler, busy in three processes at rest | switch `disable-stack-profiler` | `.without_chromium_flag("disable-stack-profiler")` |
+
+An `enable-features` entry turns a feature back on in any form Chromium reads (`Name`, `Name:param/value`, `Name<Study` or `*Name`).
+
+On macOS Chromium copies the application bundle into the user's temporary folder at every start, so the running application's code signature stays valid when an updater replaces the bundle in place. A killed application leaves its copy behind. An application whose updater replaces the bundle while it runs turns `MacAppCodeSignClone` back on.
+
+### Chromium preferences
+
+Set any Chromium preference with `chromium_pref`. Its value takes the place of Kurogane's own.
+
+```rust
+use kurogane::App;
+
+fn main() {
+    App::new("frontend")
+        .chromium_pref("component_updates.component_updates_enabled", true)
+        .run_or_exit();
+}
+```
+
+A null value returns a preference to Chromium's default.
+
+```rust
+use kurogane::App;
+use serde_json::Value;
+
+fn main() {
+    App::new("frontend")
+        .chromium_pref("network_time.network_time_queries_enabled", Value::Null)
+        .run_or_exit();
+}
+```
+
+Preferences are declarative. One set at an earlier start and set no more returns to Chromium's default. A preference applies once the runtime has started. Chromium reads some only as the profile starts; those take effect at the next start. A name Chromium does not have is logged and skipped.
+
+### Limits
+
+* `without_chromium_flag` removes only what Kurogane would pass. A switch CEF passes or the application was launched with stays and is logged.
+* Chromium ignores a switch or feature name it does not know and says nothing. Kurogane reads every switch back once Chromium holds it and logs one held otherwise than passed.
+* The final command line is logged at debug level.
+
+> [!NOTE]
+> Cast and component updates including Widevine are disabled by default. Re-enable Cast with `enable-features=MediaRouter` and component updates with `chromium_pref("component_updates.component_updates_enabled", true)`.
 
 ## GPU mode selection
 

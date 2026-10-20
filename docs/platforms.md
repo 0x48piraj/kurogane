@@ -167,6 +167,12 @@ cargo run -p kurogane-cli
 
 `nix develop` is **not an installation command**. It does not put the packaged `kurogane` CLI on your `PATH`. It gives you the environment to develop and build the source tree. Its `CEF_PATH` names the Nix store's CEF. An application started from the shell loads it.
 
+On nixos-unstable open the shell on your system's nixpkgs. Applications built in it then load your GPU drivers (see [GPU drivers on NixOS](install.md#gpu-drivers-on-nixos)):
+
+```bash
+nix develop github:0x48piraj/kurogane --override-input nixpkgs nixpkgs
+```
+
 `nix flake check` builds the package and runs its tests. It checks the pinned CEF archive against CEF's published SHA-1. It also bundles `nix/fixture` with the packaged CLI inside the sandbox and offline. `nix/fixture` is a small application on the checkout's Kurogane.
 
 > [!NOTE]
@@ -189,11 +195,13 @@ To try the packaged Kurogane CLI without installing it into your user environmen
 nix run github:0x48piraj/kurogane
 ```
 
-Nix builds the package when needed and runs it. The packaged CLI's `CEF_PATH` names the Nix store's CEF. That CEF carries its license, credits and an `archive.json` naming its build. `kurogane run` and `kurogane bundle` use it.
+Nix builds the package when needed and runs it. The packaged CLI's `CEF_PATH` names the Nix store's CEF. That CEF carries its license, credits and an `archive.json` naming its build. `kurogane run` and `kurogane bundle` use it. On nixos-unstable add `--override-input nixpkgs nixpkgs` as for an installation.
 
 ### Installing the CLI
 
-Install the packaged CLI into your Nix user profile to **use Kurogane normally**:
+Install Kurogane through your system flake to **use Kurogane normally**. [Installing Kurogane](install.md#in-your-system-flake) shows the input, the module and which nixpkgs to follow.
+
+Without a system flake install the packaged CLI into your Nix user profile. On nixos-unstable it needs `--override-input nixpkgs nixpkgs` (see [Installing Kurogane](install.md#with-your-nix-profile)):
 
 ```bash
 nix profile add github:0x48piraj/kurogane
@@ -218,12 +226,13 @@ nix profile remove kurogane
 
 ### The mental model
 
-The three commands serve different purposes:
+Each way serves a different purpose:
 
-| Command               | Purpose                                                 |
-| --------------------- | ------------------------------------------------------- |
-| `nix develop`         | Develop **Kurogane itself** from source                 |
-| `nix run`             | Run the packaged Kurogane CLI **without installing it** |
-| `nix profile add`     | **Install** the packaged Kurogane CLI for normal use    |
+| Way                                 | Purpose                                                            |
+| ----------------------------------- | ------------------------------------------------------------------ |
+| `inputs.kurogane` in a system flake | **Install** Kurogane with your NixOS or Home Manager configuration |
+| `nix profile add`                   | **Install** the packaged Kurogane CLI into your user profile       |
+| `nix run`                           | Run the packaged Kurogane CLI **without installing it**            |
+| `nix develop`                       | Develop **Kurogane itself** from source                            |
 
 Nix provides the packaging and runtime dependencies. Kurogane stays a normal Rust and Cargo project. Your application and workflow need not be Nix-native because you use Nix to install or develop Kurogane.

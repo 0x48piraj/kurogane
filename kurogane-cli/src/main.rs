@@ -38,6 +38,9 @@ mod app_bundle;
 mod dmg;
 
 #[cfg(target_os = "macos")]
+mod framework_link;
+
+#[cfg(target_os = "macos")]
 mod macos_settings;
 
 #[cfg(target_os = "macos")]
@@ -92,8 +95,8 @@ enum Commands {
         /// Build with Cargo's dev profile instead of release.
         #[arg(long)]
         debug: bool,
-        /// Package format: dir or appimage on Linux, dir or nsis on Windows,
-        /// app on macOS.
+        /// Package format (dir or appimage on Linux, dir or nsis on Windows,
+        /// app on macOS).
         #[arg(long, default_value = crate::bundle::DEFAULT_FORMAT)]
         format: String,
         /// Sign the bundle's Windows binaries ([signing.windows]) or macOS app
@@ -103,7 +106,7 @@ enum Commands {
     },
     /// Create a project from a starter or template.
     New {
-        /// Official starter: minimal, react, svelte or vue.
+        /// Official starter (minimal, react, svelte or vue).
         starter: Option<String>,
 
         /// Project name.
@@ -114,8 +117,8 @@ enum Commands {
         #[arg(long)]
         language: Option<String>,
 
-        /// Use a template: a local path, git URL or cargo-generate shorthand
-        /// such as gh:owner/repository.
+        /// Use a template from a local path, git URL or cargo-generate
+        /// shorthand such as gh:owner/repository.
         #[arg(long, conflicts_with = "starter")]
         template: Option<String>,
 

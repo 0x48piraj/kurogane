@@ -82,11 +82,11 @@ pub enum PackageFormat {
     AppBundle,
 }
 
-/// Default `--format`: the platform's native distributable.
+/// Default `--format` (the platform's native distributable).
 #[cfg(target_os = "macos")]
 pub(crate) const DEFAULT_FORMAT: &str = "app";
 
-/// Default `--format`: the platform's native distributable.
+/// Default `--format` (the platform's native distributable).
 #[cfg(not(target_os = "macos"))]
 pub(crate) const DEFAULT_FORMAT: &str = "dir";
 
@@ -168,8 +168,8 @@ pub(crate) fn sign_and_verify_tree(root: &std::path::Path, config: &SignConfig) 
     Ok(())
 }
 
-/// The signing `--sign` asks for: every `[signing]` table checked, then
-/// `[signing.windows]` resolved.
+/// Returns the signing `--sign` asks for. Every `[signing]` table is checked
+/// before `[signing.windows]` resolves.
 #[cfg(target_os = "windows")]
 fn resolve_sign_config(
     sign_requested: bool,
@@ -200,8 +200,8 @@ fn resolve_sign_config(
     Ok(Some(resolved))
 }
 
-/// The signing `--sign` asks for: every `[signing]` table checked, then
-/// `[signing.macos]` resolved.
+/// Returns the signing `--sign` asks for. Every `[signing]` table is checked
+/// before `[signing.macos]` resolves.
 #[cfg(target_os = "macos")]
 fn resolve_sign_config(
     sign_requested: bool,
@@ -221,8 +221,8 @@ fn resolve_sign_config(
     Ok(Some(resolved))
 }
 
-/// `--sign` on Linux: the `[signing]` tables are checked, as everywhere,
-/// but a Linux bundle has no binary Kurogane signs.
+/// Refuses `--sign` on Linux. The `[signing]` tables are checked as
+/// everywhere, but a Linux bundle has no binary Kurogane signs.
 #[cfg(target_os = "linux")]
 fn refuse_sign(sign_requested: bool, config: &PackagingConfig) -> Result<()> {
     if !sign_requested {
@@ -235,6 +235,28 @@ fn refuse_sign(sign_requested: bool, config: &PackagingConfig) -> Result<()> {
         "--sign: Kurogane signs the binaries of a Windows bundle ([signing.windows]) and \
          a macOS app ([signing.macos]); a Linux bundle has nothing it signs"
     )
+}
+
+/// The cargo command that builds the application's binaries.
+#[cfg(not(target_os = "macos"))]
+fn build_command(profile: &[&str], _bin: &str, _cef: &std::path::Path) -> Command {
+    let mut cargo = Command::new("cargo");
+    cargo.arg("build").args(profile);
+    cargo
+}
+
+/// The cargo command that builds the application's binary `bin`, its final
+/// link weakly linking the framework of the CEF installation at `cef` (see
+/// [`crate::framework_link`]).
+#[cfg(target_os = "macos")]
+fn build_command(profile: &[&str], bin: &str, cef: &std::path::Path) -> Command {
+    let mut cargo = Command::new("cargo");
+    cargo
+        .arg("rustc")
+        .args(profile)
+        .args(["--bin", bin, "--"])
+        .args(crate::framework_link::link_args(cef));
+    cargo
 }
 
 /// Builds the application in the requested profile.
@@ -259,14 +281,14 @@ fn build_executable(
         return Ok((crate::sandbox::bundled(cef, library)?, exe_name));
     }
 
-    let status = Command::new("cargo").arg("build").args(profile).status()?;
+    let target = find_target(pkg, TargetKind::Bin)
+        .ok_or_else(|| anyhow::anyhow!("No binary target found"))?;
+
+    let status = build_command(profile, &target.name, cef).status()?;
 
     if !status.success() {
         bail!("Build failed");
     }
-
-    let target = find_target(pkg, TargetKind::Bin)
-        .ok_or_else(|| anyhow::anyhow!("No binary target found"))?;
 
     let exe_name = format!("{}{EXE_SUFFIX}", target.name);
     let executable = target_dir.join(&exe_name);
@@ -413,8 +435,14 @@ pub fn run(debug: bool, format: PackageFormat, sign: bool) -> Result<()> {
 
         #[cfg(target_os = "macos")]
         PackageFormat::AppBundle => {
-            let app_dir =
-                crate::app_bundle::build(&dist, &output_dir, &macos, sign_config.as_ref())?;
+            let helper = crate::framework_link::helper_executable(dist.executable.binary())?;
+            let app_dir = crate::app_bundle::build(
+                &dist,
+                helper.path(),
+                &output_dir,
+                &macos,
+                sign_config.as_ref(),
+            )?;
             crate::dmg::build(
                 &app_dir,
                 &output_dir,

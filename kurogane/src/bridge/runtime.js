@@ -50,6 +50,9 @@
      * The returned promise has a .cancel() method that sends a cancellation
      * request to the handler and rejects the promise with code 0.
      *
+     * A payload carries at most 64 MiB. A larger one rejects with code -8
+     * before anything is sent; a stream carries more.
+     *
      * @param {string} command
      * @param {ArrayBuffer | ArrayBufferView | *} payload
      * @returns {Promise<ArrayBuffer | *> & { cancel: () => boolean }}
@@ -221,6 +224,9 @@
 
         /**
          * Write a chunk of data to the stream.
+         *
+         * A chunk carries at most 64 MiB. A larger one throws and sends
+         * nothing; the stream stays open.
          *
          * @param {ArrayBuffer | ArrayBufferView} data
          */
@@ -411,6 +417,16 @@
             const { bytes } = await invoke('fs.copy_file', { src, dst });
             return bytes;
         },
+    });
+
+    // A leaving page's messages leave at once since the page may be gone
+    // before the answers that pace them. A page back from the back-forward
+    // cache has its calls and streams rejected with code -9, since they
+    // ended as it left, and its subscriptions made again. These listeners
+    // run before the page's own.
+    window.addEventListener('pagehide', function () { window.core.leaving(); });
+    window.addEventListener('pageshow', function (e) {
+        if (e.persisted) window.core.returned();
     });
 
     window.kurogane = Object.freeze({

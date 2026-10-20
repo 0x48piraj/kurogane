@@ -1,26 +1,26 @@
-//! The menu a right-click opens, and what its items do.
+//! Right-click menu and what its items do.
 //!
 //! Chromium builds a different menu in each kind of browser. A window
-//! (Chrome style) gets Chrome's own: Back, Reload, Save as, Print, Cast,
-//! View page source and Inspect on the page; a link's "Open in new tab, new
-//! window, incognito window"; an image's "Search image with Google"; a text
-//! field's "Import passwords" and spell-check settings. Chrome runs those
-//! items itself, past Kurogane's command policy (`crate::chrome_commands`):
-//! "View page source" and "Import passwords" open a whole Chromium browser
-//! with an address bar in the application's profile, "Cast" looks for
-//! devices on the network, the Google items hand the page's text or image
-//! to Google. An embedded browser (Alloy style) gets CEF's small menu
-//! instead.
+//! (Chrome style) gets Chrome's own menu. It holds Back, Reload, Save as,
+//! Print, Cast, View page source and Inspect on the page; a link's "Open in
+//! new tab, new window, incognito window"; an image's "Search image with
+//! Google"; a text field's "Import passwords" and spell-check settings.
+//! Chrome runs those items itself, past Kurogane's command policy
+//! (`crate::chrome_commands`). "View page source" and "Import passwords"
+//! open a whole Chromium browser with an address bar in the application's
+//! profile. "Cast" looks for devices on the network. The Google items hand
+//! the page's text or image to Google. An embedded browser (Alloy style)
+//! gets CEF's small menu instead.
 //!
-//! Kurogane builds one menu of its own for both, from typed items: by
-//! default the editing items in a text field, with Chromium's spelling
-//! suggestions on a misspelled word, Copy on a selection, nothing
-//! elsewhere, and Inspect in a debug build. The application's
-//! [`App::on_context_menu`](crate::App::on_context_menu) hook edits it, and
+//! Kurogane builds one menu of its own for both from typed items. By
+//! default it holds the editing items in a text field (with Chromium's
+//! spelling suggestions on a misspelled word), Copy on a selection and
+//! nothing elsewhere. A debug build adds Inspect. The application's
+//! [`App::on_context_menu`](crate::App::on_context_menu) hook edits it.
 //! [`App::on_context_menu_command`](crate::App::on_context_menu_command)
 //! hears which of the application's own items was chosen. A standard item
 //! whose command [`App::on_chrome_command`](crate::App::on_chrome_command)
-//! refuses is left out of the menu, and asked about again when chosen.
+//! refuses is left out of the menu and asked about again when chosen.
 
 use std::ffi::{CStr, c_int};
 use std::fmt::Write as _;
@@ -105,15 +105,15 @@ pub enum MenuItem {
 }
 
 impl MenuItem {
-    /// An item of the application's: choosing it calls
+    /// An item of the application's. Choosing it calls
     /// [`App::on_context_menu_command`](crate::App::on_context_menu_command)
     /// with `id`.
     ///
     /// In a window's menu an `&` in `label` marks the letter that chooses
-    /// it from the keyboard, and `&&` shows an `&`. An embedded browser's
-    /// menu, which CEF draws, takes every `&` out of a label: there a
-    /// typed letter chooses the item whose label begins with it, and a
-    /// label cannot show an `&`.
+    /// it from the keyboard and `&&` shows an `&`. An embedded browser's
+    /// menu, which CEF draws, takes every `&` out of a label. There a typed
+    /// letter chooses the item whose label begins with it. A label cannot
+    /// show an `&`.
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
         MenuItem::App(AppItem::new(id, label))
     }
@@ -175,7 +175,7 @@ impl AppItem {
     }
 
     /// A check item, shown checked when `checked` is true. Choosing it does
-    /// not change the mark: the application shows it as it decides.
+    /// not change the mark; the application shows it as it decides.
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = Some(checked);
         self
@@ -256,9 +256,9 @@ pub struct ContextMenuTarget {
 }
 
 impl ContextMenuTarget {
-    /// The origin of the document right-clicked: the page's, or a frame's
-    /// inside it. A sandboxed document's own origin is opaque, whatever its
-    /// URL, and so is its origin here.
+    /// Returns the origin of the document right-clicked (the page's or a
+    /// frame's inside it). A sandboxed document's origin is opaque here
+    /// whatever its URL.
     pub fn origin(&self) -> &Origin {
         &self.origin
     }
@@ -278,7 +278,8 @@ impl ContextMenuTarget {
         self.link_url.as_deref()
     }
 
-    /// The kind of media right-clicked: an image, a video.
+    /// Returns the kind of media right-clicked (for example an image or a
+    /// video).
     pub fn media(&self) -> Option<MediaKind> {
         self.media.as_ref().map(|(kind, _)| *kind)
     }
@@ -381,7 +382,7 @@ impl ContextMenu {
         remove_from(&mut self.items, item);
     }
 
-    /// Takes every item out: no menu shows.
+    /// Takes every item out. An empty menu does not show.
     pub fn clear(&mut self) {
         self.items.clear();
     }
@@ -416,9 +417,10 @@ impl ContextMenuCommand {
     }
 }
 
-/// Kurogane's menu for `target`: in a text field the editing items, under
-/// the spelling items when Chromium has some (`spelling`); Copy on a
-/// selection; nothing elsewhere; Inspect last in a debug build (`debug`).
+/// Returns Kurogane's menu for `target`. A text field gets the editing
+/// items, under the spelling items when Chromium has some (`spelling`). A
+/// selection gets Copy and anything else nothing. A debug build (`debug`)
+/// adds Inspect last.
 fn default_items(target: &ContextMenuTarget, spelling: bool, debug: bool) -> Vec<MenuItem> {
     use StandardItem::*;
     let mut items: Vec<MenuItem> = Vec::new();
@@ -451,8 +453,8 @@ fn default_items(target: &ContextMenuTarget, spelling: bool, debug: bool) -> Vec
     items
 }
 
-/// `items` without what does not show: a standard item `hidden` says so
-/// of, at every level, and a submenu left empty.
+/// Returns `items` without what does not show. A standard item `hidden`
+/// returns true for goes at every level, as does a submenu left empty.
 fn visible(items: Vec<MenuItem>, hidden: &mut impl FnMut(StandardItem) -> bool) -> Vec<MenuItem> {
     items
         .into_iter()
@@ -467,8 +469,8 @@ fn visible(items: Vec<MenuItem>, hidden: &mut impl FnMut(StandardItem) -> bool) 
         .collect()
 }
 
-/// `items` without the separators that would show at an edge of a menu or
-/// next to another, at every level, and submenus left with none.
+/// Returns `items` without the separators that would show at an edge of a
+/// menu or next to another at any level. A submenu left empty goes too.
 fn tidy(items: Vec<MenuItem>) -> Vec<MenuItem> {
     let mut kept: Vec<MenuItem> = Vec::new();
     for item in items {
@@ -493,8 +495,9 @@ fn tidy(items: Vec<MenuItem>) -> Vec<MenuItem> {
     kept
 }
 
-/// The menu as the log says it: standard items by name, the application's
-/// as `app:<id>`, separators as `-`, submenus as `<label>[...]`.
+/// Returns the menu as the log shows it. Standard items show by name, the
+/// application's as `app:<id>`, separators as `-` and submenus as
+/// `<label>[...]`.
 fn summary(items: &[MenuItem]) -> String {
     let mut text = String::new();
     for (index, item) in items.iter().enumerate() {
@@ -520,8 +523,8 @@ fn summary(items: &[MenuItem]) -> String {
     text
 }
 
-/// How the browser's menu runs: Chrome's menu in a window, CEF's in an
-/// embedded browser, each with command ids of its own.
+/// Kind of menu a browser runs. A window runs Chrome's menu and an embedded
+/// browser CEF's. Each has command ids of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Style {
     Chrome,
@@ -571,8 +574,8 @@ fn command_id(style: Style, item: StandardItem) -> Option<c_int> {
     }
 }
 
-/// The ids of Chromium's spelling items in a menu of `style`: its
-/// suggestions (and "no suggestions"), and "Add to dictionary".
+/// Returns the ids of Chromium's spelling items in a menu of `style`. These
+/// are its suggestions (with "no suggestions") and "Add to dictionary".
 fn spelling_ids(style: Style) -> (Vec<c_int>, Option<c_int>) {
     match style {
         Style::Alloy => (
@@ -607,8 +610,8 @@ fn spelling_ids(style: Style) -> (Vec<c_int>, Option<c_int>) {
     }
 }
 
-/// An item of Chromium's own menu kept as it is: a spelling item, whose
-/// label Chromium fills in, in a window, once the suggestions arrive.
+/// Item of Chromium's own menu kept as it is (a spelling item). In a window
+/// Chromium fills in its label once the suggestions arrive.
 #[derive(Debug, Clone)]
 struct Kept {
     id: c_int,
@@ -616,8 +619,8 @@ struct Kept {
     enabled: bool,
 }
 
-/// The spelling items of Chromium's menu `model`: its suggestions, and
-/// "Add to dictionary".
+/// Returns the spelling items of Chromium's menu `model`. The first list
+/// holds its suggestions and the second "Add to dictionary".
 fn spelling_items(model: &MenuModel, style: Style) -> (Vec<Kept>, Vec<Kept>) {
     let (suggestion_ids, add_id) = spelling_ids(style);
     let mut suggestions = Vec::new();
@@ -638,8 +641,8 @@ fn spelling_items(model: &MenuModel, style: Style) -> (Vec<Kept>, Vec<Kept>) {
     (suggestions, add)
 }
 
-/// The label of `item`: Chromium's own, in the language it runs in, or
-/// English when the build has no such string.
+/// Returns Chromium's label for `item` in the language it runs in. English
+/// stands in when the build has no such string.
 fn label(item: StandardItem) -> String {
     use StandardItem::*;
     let (name, english): (&CStr, &str) = match item {
@@ -697,9 +700,9 @@ enum Chosen {
     Standard(StandardItem),
 }
 
-/// A browser's last menu: what its command ids run, what it was opened on,
-/// and in which document. It stays until the next one replaces it, since
-/// Chromium may close a menu before it reports the item chosen from it.
+/// Last menu of a browser. It records what its command ids run, what it was
+/// opened on and in which document. It stays until the next one replaces
+/// it. Chromium may close a menu before it reports the item chosen from it.
 #[derive(Debug, Clone)]
 pub(crate) struct OpenMenu {
     style: Style,
@@ -708,10 +711,10 @@ pub(crate) struct OpenMenu {
     document: Document,
 }
 
-/// The document a menu was opened in: the page's main frame and the frame
-/// right-clicked, by CEF's identifiers, which a navigation to another
-/// document replaces. A page that leaves while its menu stays open leaves
-/// nothing for a late choice to act on.
+/// Document a menu was opened in. It holds CEF's identifiers of the page's
+/// main frame and of the frame right-clicked; a navigation to another
+/// document replaces them. A page that leaves while its menu stays open
+/// leaves nothing for a late choice to act on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Document {
     main: Option<String>,
@@ -741,9 +744,9 @@ impl Document {
     }
 }
 
-/// The process message a renderer sends the browser when a document whose
-/// own origin is opaque (a sandboxed document) gets its script context:
-/// CEF's menu reports only URLs, which hide a sandbox.
+/// Process message a renderer sends the browser when a document whose own
+/// origin is opaque (a sandboxed document) gets its script context. CEF's
+/// menu reports only URLs, which hide a sandbox.
 pub(crate) const OPAQUE_DOCUMENT: &str = "kurogane-opaque-document";
 /// ...and when that context goes.
 pub(crate) const OPAQUE_DOCUMENT_GONE: &str = "kurogane-opaque-document-gone";
@@ -893,8 +896,8 @@ fn target_of(params: &ContextMenuParams, browser: Option<BrowserId>) -> ContextM
 /// The kind of media `params` was opened on.
 ///
 /// cef-rs binds the media type as a Rust enum, which a value CEF adds
-/// later could not hold, so CEF's function is called as returning the
-/// integer it does (as `crate::client`'s `transition` does).
+/// later could not hold. CEF's function is called as returning the integer
+/// it does (as `crate::client`'s `transition` does).
 fn media_kind(params: &ContextMenuParams) -> Option<MediaKind> {
     let raw = params.get_raw();
     type GetMediaType = unsafe extern "C" fn(*mut sys::_cef_context_menu_params_t) -> i32;
@@ -919,8 +922,8 @@ fn media_kind(params: &ContextMenuParams) -> Option<MediaKind> {
 
 /// CEF's edit flags this module reads (cef_types.h,
 /// cef_context_menu_edit_state_flags_t). cef-rs's own constants wrap a C
-/// `int` on Windows and an `unsigned int` elsewhere, so a flag is read as
-/// the `i64` either fits in; a test holds these to them on every platform.
+/// `int` on Windows and an `unsigned int` elsewhere. A flag is read as the
+/// `i64` either fits in; a test holds these to them on every platform.
 mod edit {
     pub const CAN_UNDO: i64 = 1 << 0;
     pub const CAN_REDO: i64 = 1 << 1;
@@ -939,7 +942,7 @@ fn edit_flags(params: &ContextMenuParams) -> i64 {
 }
 
 /// Builds the menu of a right-click in `browser` (`id`, the application's)
-/// into Chromium's `model`, and keeps what its items run in the browser's
+/// into Chromium's `model` and keeps what its items run in the browser's
 /// state. Runs on CEF's UI thread with no lock held; the application's
 /// hook runs here.
 pub(crate) fn build(
@@ -1055,10 +1058,10 @@ pub(crate) fn build(
 }
 
 /// Runs command `command_id` chosen from the last menu of `browser`, or
-/// leaves it to Chromium. Returns whether it is handled: a standard item
+/// leaves it to Chromium. Returns whether it is handled. A standard item
 /// the application refuses now, an item of the application's, Alloy's
-/// Inspect, and anything Kurogane did not put in the menu are; the other
-/// standard items run as Chromium runs them. UI thread, no lock held.
+/// Inspect and anything Kurogane did not put in the menu are handled. The
+/// other standard items run as Chromium runs them. UI thread, no lock held.
 pub(crate) fn chosen(
     app: &AppHandle,
     browser: &Browser,

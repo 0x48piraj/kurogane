@@ -42,10 +42,10 @@ pub(crate) fn uses_bootstrap(app: &AppConfig) -> bool {
 
 /// Returns the name the application takes on disk, without an extension.
 ///
-/// A sandboxed crate has both a binary and a library target, and the library
-/// is usually named apart from the binary so Cargo does not collide their
-/// debug symbols. The binary's name is the one an unsandboxed build produces,
-/// so the bootstrap takes it and the two shapes stay recognizably the same
+/// A sandboxed crate has both a binary and a library target. The library is
+/// usually named apart from the binary so Cargo does not collide their debug
+/// symbols. The binary's name is the one an unsandboxed build produces. The
+/// bootstrap takes it and the two shapes stay recognizably the same
 /// application.
 pub(crate) fn app_name(package: &Package) -> Result<&str> {
     launch::find_target(package, TargetKind::Bin)
@@ -57,8 +57,8 @@ pub(crate) fn app_name(package: &Package) -> Result<&str> {
 /// Builds the application's library and returns the module the bootstrap
 /// loads.
 ///
-/// The bootstrap loads the application rather than being it, so only the
-/// `cdylib` is built, and Cargo reports where it landed.
+/// The bootstrap loads the application rather than being it. Only the
+/// `cdylib` is built and Cargo reports where it landed.
 pub(crate) fn build_library(package: &Package, build_args: &[OsString]) -> Result<PathBuf> {
     let target =
         launch::find_target(package, TargetKind::CDyLib).ok_or_else(|| anyhow!(NEEDS_A_LIBRARY))?;
@@ -88,9 +88,9 @@ pub(crate) fn build_library(package: &Package, build_args: &[OsString]) -> Resul
 
 /// Finds the module Cargo reports building for the `cdylib` target `name`.
 ///
-/// A `cdylib` is not an executable, so Cargo lists it among the artifact's
-/// file names, beside the import library it writes as `<name>.dll.lib`. The
-/// last report wins: a rebuilt library is reported after any fresh one.
+/// A `cdylib` is not an executable. Cargo lists it among the artifact's file
+/// names beside the import library it writes as `<name>.dll.lib`. The last
+/// report wins since a rebuilt library is reported after any fresh one.
 fn built_library(stdout: &[u8], name: &str) -> Option<PathBuf> {
     let mut library = None;
 
@@ -116,7 +116,8 @@ fn built_library(stdout: &[u8], name: &str) -> Option<PathBuf> {
     library
 }
 
-/// Returns what a bundle starts: CEF's windowed bootstrap, loading `library`.
+/// Returns the executable a bundle starts, CEF's windowed bootstrap loading
+/// `library`.
 pub(crate) fn bundled(cef: &Path, library: PathBuf) -> Result<Executable> {
     Ok(Executable::Bootstrap {
         bootstrap: bootstrap_in(cef, Bootstrap::Windowed)?,
@@ -142,11 +143,11 @@ fn bootstrap_in(cef: &Path, bootstrap: Bootstrap) -> Result<PathBuf> {
 /// Builds the application as a library and runs it under CEF's bootstrap.
 ///
 /// The bootstrap finds both the application's library and `chrome_elf.dll`
-/// in its own directory and nowhere else, so the run is staged beside the
-/// build output rather than started in place.
+/// in its own directory and nowhere else. The run is staged beside the build
+/// output rather than started in place.
 ///
-/// The console bootstrap is used here, so the application keeps the terminal
-/// it was started from. `kurogane bundle` ships the windowed one.
+/// A run uses the console bootstrap. The application keeps the terminal it
+/// was started from. `kurogane bundle` ships the windowed one.
 pub(crate) fn run(
     cef: &Path,
     cargo_args: &[OsString],
@@ -215,9 +216,9 @@ fn staging_dir(artifact_dir: &Path) -> PathBuf {
 
 /// Stages the packaged frontend beside the bootstrap.
 ///
-/// The bootstrap moves the browser process's working directory to its own,
-/// as it does for a packaged application, so a relative asset root resolves
-/// there rather than in the project. Installing the frontend under the
+/// The bootstrap moves the browser process's working directory to its own
+/// (as for a packaged application). A relative asset root resolves there
+/// rather than in the project. Installing the frontend under the
 /// bundle's fixed `content/` name makes a development run resolve it exactly
 /// as the bundle will.
 ///

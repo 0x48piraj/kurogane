@@ -95,17 +95,80 @@ sh install.sh
 
 On NixOS install through the flake. Prebuilt Linux binaries and the Chromium runtime they download expect the usual `/lib` layout. NixOS has none. `install.sh` stops there and prints the Nix command instead.
 
+The flake builds the CLI from source and includes the Chromium runtime, its libraries and the required toolchain. `kurogane dev` works right away.
+
+### In your system flake
+
+Add Kurogane to your flake inputs:
+
+```nix
+inputs.kurogane.url = "github:0x48piraj/kurogane";
+```
+
+On `nixos-unstable`, follow your system's `nixpkgs` revision:
+
+```nix
+inputs.kurogane = {
+  url = "github:0x48piraj/kurogane";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+```
+
+Pass `inputs` to your NixOS modules through `specialArgs` in `nixpkgs.lib.nixosSystem`:
+
+```nix
+specialArgs = { inherit inputs; };
+```
+
+Install Kurogane from any module:
+
+```nix
+{ inputs, pkgs, ... }:
+{
+  environment.systemPackages = [
+    inputs.kurogane.packages.${pkgs.stdenv.hostPlatform.system}.default
+  ];
+}
+```
+
+On a stable NixOS release, such as 26.05, change `inputs.nixpkgs.follows` to `"nixpkgs-unstable"` if your flake defines that input. Otherwise, omit the `follows` line and use Kurogane's own nixpkgs revision.
+
+Kurogane requires Rust 1.96 which a stable release may not provide. Its own nixpkgs revision may also provide newer GPU drivers than the release channel.
+
+The Home Manager module adds Kurogane to `home.packages`. `nixos-rebuild switch` activates it when Home Manager is integrated into the NixOS configuration; standalone Home Manager uses `home-manager switch`.
+
+### With your Nix profile
+
 ```bash
 nix profile add github:0x48piraj/kurogane                 # latest
 nix profile add github:0x48piraj/kurogane/v0.0.6-alpha.2  # a release
 nix run github:0x48piraj/kurogane -- --help               # without installing
 ```
 
-The flake builds the CLI from source and includes the Chromium runtime, its libraries and the required toolchain. `kurogane dev` works right away.
+On nixos-unstable add `--override-input nixpkgs nixpkgs`. It builds Kurogane on your registry's nixpkgs which a NixOS system built from a flake points at its own:
 
-Both installation routes work on other Linux distributions with Nix.
+```bash
+nix profile add github:0x48piraj/kurogane --override-input nixpkgs nixpkgs
+```
+
+`nix profile upgrade` drops the override and rebuilds on Kurogane's own nixpkgs. Upgrade by installing again:
+
+```bash
+nix profile remove kurogane
+nix profile add github:0x48piraj/kurogane --override-input nixpkgs nixpkgs
+```
+
+`nix profile` and `nix run` work on other Linux distributions with Nix too.
 
 See [Install notes](platforms.md#nix) for `nix develop` and contributor setup.
+
+### GPU drivers on NixOS
+
+The drivers come from your system's nixpkgs. An app built on an older nixpkgs can't load them. Chromium then renders without the GPU and so does any GPU code of your own. On `nixos-unstable`, follow your system's `nixpkgs` input to build Kurogane against the same revision.
+
+An app keeps the C library it was built with. Run `cargo clean` in projects built before you change nixpkgs. `kurogane clean` removes the showcase.
+
+`kurogane doctor` checks OpenGL with the libraries your apps load. The flake brings its own `glxinfo` for that.
 
 ## Uninstalling
 

@@ -1,7 +1,7 @@
 //! CEF's sandbox bootstrap and the layout around it.
 //!
 //! Chromium's Windows sandbox is brokered by the process that starts the
-//! browser, and CEF ships that broker as two prebuilt executables rather than
+//! browser. CEF ships that broker as two prebuilt executables rather than
 //! exporting it from `libcef.dll`. A sandboxed application installs one of
 //! them under its own name; the bootstrap then loads `<app>.dll` from its own
 //! directory and calls into it.
@@ -10,21 +10,21 @@
 //!
 //! - The client library is looked up beside the bootstrap, never on a search
 //!   path.
-//! - `chrome_elf.dll` must resolve to the bootstrap's own directory, so the
+//! - `chrome_elf.dll` must resolve to the bootstrap's own directory. The
 //!   whole Chromium runtime sits there too.
 //!
-//! Both are rules about paths, so they are compiled and tested on every
-//! platform, although only Windows builds this shape.
+//! Both rules are about paths. They are compiled and tested on every
+//! platform; only Windows builds this shape.
 
 use std::path::{Path, PathBuf};
 
 /// CEF's sandbox bootstraps, one per Windows subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Bootstrap {
-    /// `bootstrap.exe`: no console, for a packaged application.
+    /// `bootstrap.exe` without a console for a packaged application.
     Windowed,
 
-    /// `bootstrapc.exe`: keeps stdio attached, for development.
+    /// `bootstrapc.exe` with stdio attached for development.
     Console,
 }
 
@@ -49,8 +49,8 @@ impl Bootstrap {
 /// Returns where a bootstrap installed at `bootstrap` looks for the
 /// application's library.
 ///
-/// Mirrors CEF's own derivation: the bootstrap's path with its last extension
-/// replaced by `.dll`.
+/// CEF derives it as the bootstrap's path with its last extension replaced
+/// by `.dll`.
 pub fn client_library_path(bootstrap: &Path) -> PathBuf {
     bootstrap.with_extension("dll")
 }
@@ -59,7 +59,7 @@ pub fn client_library_path(bootstrap: &Path) -> PathBuf {
 /// bundle's, which runs that runtime and the resources staged with it.
 ///
 /// The bootstrap resolves `chrome_elf.dll` in its own directory and refuses
-/// to start when it finds it anywhere else, so a development run needs the
+/// to start when it finds it anywhere else. A development run needs the
 /// whole runtime there rather than on `PATH`. The files are shared with the
 /// installation where the filesystem allows it.
 pub fn stage_runtime(cef_root: &Path, dst: &Path) -> std::io::Result<()> {

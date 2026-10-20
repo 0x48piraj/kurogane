@@ -21,6 +21,7 @@ mod destination;
 mod new_window;
 mod navigation;
 mod keys;
+mod shortcuts;
 mod downloads;
 mod permissions;
 mod file_dialog;
@@ -33,6 +34,7 @@ mod scheme;
 mod error;
 mod fs;
 mod resources;
+mod chromium_defaults;
 mod chromium_flags;
 mod sandbox;
 mod gpu;
@@ -57,8 +59,8 @@ pub use error::{CefLocation, ConfigError, RuntimeError};
 pub use acl::{Origin, OriginError};
 pub use app::App;
 pub use resources::resource_dir;
-/// The window-handle traits [`AppInstance::create_child_browser`] takes, at
-/// the version Kurogane uses: a host passes its window as it is.
+/// Window-handle traits [`AppInstance::create_child_browser`] takes, at the
+/// version Kurogane uses. A host passes its window as it is.
 pub use raw_window_handle;
 /// tanso, Kurogane's CEF bindings, at the revision Kurogane is built with.
 pub use tanso;

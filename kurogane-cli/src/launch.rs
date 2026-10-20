@@ -73,8 +73,8 @@ pub(crate) fn exit_with(status: ExitStatus) -> ! {
     std::process::exit(exit_code(status))
 }
 
-/// The exit code a shell reports for `status`: a program's own code, or 128
-/// plus the number of the signal that killed it.
+/// Returns the exit code a shell reports for `status`. That is a program's
+/// own code or 128 plus the number of the signal that killed it.
 fn exit_code(status: ExitStatus) -> i32 {
     #[cfg(unix)]
     {
@@ -118,8 +118,8 @@ pub(crate) fn split_cargo_args(args: &[OsString]) -> (&[OsString], &[OsString]) 
 
 /// Strips any caller-supplied `--message-format` from build arguments.
 ///
-/// Cargo rejects multiple format flags, and a build whose artifacts are read
-/// back needs JSON output of its own.
+/// Cargo rejects multiple format flags. A build whose artifacts are read back
+/// needs JSON output of its own.
 pub(crate) fn strip_message_format(args: &[OsString]) -> Vec<OsString> {
     let mut args_iter = args.iter();
     let mut kept = Vec::with_capacity(args.len());

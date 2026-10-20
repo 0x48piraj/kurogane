@@ -9,7 +9,7 @@ use crate::browser_registry::BrowserType;
 use crate::client::KuroganeClient;
 use crate::window::{Opening, open_browser_window};
 use crate::app::{PumpRequest, SecondInstance};
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 wrap_browser_process_handler! {
     pub struct KuroganeBrowserProcessHandler {
@@ -21,12 +21,19 @@ wrap_browser_process_handler! {
     }
 
     impl BrowserProcessHandler {
+        fn on_register_custom_preferences(
+            &self,
+            type_: PreferencesType,
+            registrar: Option<&mut PreferenceRegistrar>,
+        ) {
+            crate::chromium_defaults::register_preferences(type_, registrar);
+        }
+
         fn on_context_initialized(&self) {
             debug!("on_context_initialized called");
 
-            // Prevent Chromium from restoring the previous session before creating a window
-            start_without_restoring_session();
-            hide_finished_downloads();
+            // Kurogane's preferences and the application's, before any window
+            crate::chromium_defaults::apply_preferences(&self.spec.chromium_prefs);
 
             // Dispatch to lifecycle delegates first
             for delegate in &self.spec.delegates {
@@ -114,11 +121,11 @@ impl KuroganeBrowserProcessHandler {
     }
 }
 
-/// Registers the scheme handler factories on the global request context:
-/// `app://` when the application serves local assets and every scheme given
-/// to [`App::register_scheme`](crate::App::register_scheme).
+/// Registers the scheme handler factories on the global request context.
+/// These are `app://` when the application serves local assets and every
+/// scheme given to [`App::register_scheme`](crate::App::register_scheme).
 ///
-/// Nothing here keeps the factories: cef-rs adds the reference CEF adopts
+/// Nothing here keeps the factories. cef-rs adds the reference CEF adopts
 /// for each one and CEF holds it until the factory is replaced or cleared.
 fn register_scheme_handlers(spec: &RuntimeSpec) {
     let Some(global) = request_context_get_global_context() else {
@@ -152,50 +159,5 @@ fn register_scheme_handlers(spec: &RuntimeSpec) {
             "register {}:// scheme handler factory result: {result}",
             scheme.name
         );
-    }
-}
-
-/// Chrome's `session.restore_on_startup` value for starting without the last
-/// session ([`SessionStartupPref::kPrefValueNewTab`](https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/prefs/session_startup_pref.h)).
-const START_WITHOUT_LAST_SESSION: i32 = 5;
-
-/// Turns off Chromium's "continue where you left off" for this profile.
-///
-/// Kurogane creates its own windows on each start, so session restore would
-/// reopen stale windows after an unclean exit.
-fn start_without_restoring_session() {
-    set_preference("session.restore_on_startup", |value| {
-        value.set_int(START_WITHOUT_LAST_SESSION);
-    });
-}
-
-/// Turns off Chromium's bubble that shows each finished download, its
-/// "Recent download history", for this profile.
-///
-/// It would open over the page, at the top of the window, even for a file
-/// the application saved itself. Kurogane's windows show no download UI of
-/// Chromium's; the application says what it saved.
-fn hide_finished_downloads() {
-    set_preference("download_bubble.partial_view_enabled", |value| {
-        value.set_bool(0);
-    });
-}
-
-/// Sets one of Chromium's preferences on the global request context, the
-/// profile every Kurogane window uses.
-fn set_preference(name: &str, set: impl FnOnce(&mut Value)) {
-    let Some(context) = request_context_get_global_context() else {
-        return;
-    };
-    let Some(mut value) = value_create() else {
-        return;
-    };
-    set(&mut value);
-
-    let key = CefString::from(name);
-    let mut error = CefString::default();
-
-    if context.set_preference(Some(&key), Some(&mut value), Some(&mut error)) == 0 {
-        warn!("failed to set Chromium's {name}: {error}");
     }
 }

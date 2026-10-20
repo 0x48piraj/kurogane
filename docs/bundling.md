@@ -508,7 +508,7 @@ These values are checked when bundling starts on macOS before anything is built.
 
 #### Subprocess helpers
 
-Chromium runs its GPU, renderer and utility work in separate processes. On macOS it finds the executable for them in the **main bundle** and not through `browser_subprocess_path`. A `.app` whose `Contents/Frameworks` carries no helper bundles starts no renderer. The window opens and never paints.
+Chromium runs its GPU, renderer and utility work in separate processes. On macOS each runs from a helper bundle in `Contents/Frameworks`. The runtime starts them from the one bundle there named `<name> Helper.app` and Chromium finds the GPU, renderer and other helpers beside it by name. The runtime finds it whatever the `.app` is called. A renamed bundle runs the same, and so does one started through a link. A `.app` without exactly one such helper refuses to start and says to reinstall the application.
 
 Each helper is the application binary again under its own bundle identity. The binary dispatches on `--type=` and serves as both the application and its helpers. The helpers are copies and not links because each carries its own `CFBundleIdentifier` and once signed its own signature. Every helper plist sets `LSUIElement`. That keeps the helpers out of the Dock and the app switcher.
 
@@ -527,7 +527,13 @@ A helper carries neither resources nor the framework. Both belong to the applica
 
 #### How the framework is found
 
-The CEF framework is not linked against and there is no RPATH to fix up. The runtime opens it by absolute path from the `Contents/Frameworks` of the bundle the running executable belongs to. A bundle finds its own framework wherever it is moved.
+Every executable of a `.app` links the CEF framework at launch. The application finds it at `@executable_path/../Frameworks`. The helpers find it at `@executable_path/../../..`, the same `Contents/Frameworks` seen from a helper bundle. That path is the one difference between a helper's binary and the application's. There is no RPATH, so each executable reaches only the framework of its own bundle. A bundle finds its own framework wherever it is moved.
+
+macOS applies the fixups of a framework linked at launch as it pages them in. Those pages stay clean and shared between processes. A framework opened later is fixed up again in every process. The link is weak. A bundle missing its framework still starts far enough to say so.
+
+The runtime then loads CEF from the `Contents/Frameworks` of the bundle the running executable belongs to. It takes the image macOS mapped at launch and checks that it is the CEF build Kurogane was built for. Another CEF already mapped is an error. A helper maps the framework before it enters its seatbelt sandbox, as Electron's helpers do. CEF itself starts inside the sandbox.
+
+Only `kurogane bundle` links the framework. A binary from `cargo build` or `kurogane run` links no CEF. The runtime opens the framework by absolute path there.
 
 > [!NOTE]
 > A bundled application uses only its own framework even when `CEF_PATH` is set. A packaged app is tested with the CEF it ships. `CEF_PATH` serves applications outside a bundle as `kurogane run` starts them.

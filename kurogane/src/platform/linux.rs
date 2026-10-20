@@ -10,11 +10,11 @@ type ContextIteration = unsafe extern "C" fn(context: *mut c_void, may_block: c_
 /// waiting.
 ///
 /// Chromium reads its X11 and Wayland connections from glib sources on that
-/// context. CEF's external message pump never iterates it, so an application
+/// context. CEF's external message pump never iterates it. An application
 /// pumping CEF itself gets no input, window close or resize unless its pump
 /// does; cefclient's Linux pump is a glib loop for the same reason. One
-/// iteration is not enough: it dispatches only the sources ready at the
-/// highest priority, and Chromium's come ready in bursts of hundreds.
+/// iteration is not enough. It dispatches only the sources ready at the
+/// highest priority and Chromium's come ready in bursts of hundreds.
 pub(crate) fn dispatch_glib_events() {
     static ITERATION: OnceLock<Option<ContextIteration>> = OnceLock::new();
     let iteration = ITERATION.get_or_init(|| {

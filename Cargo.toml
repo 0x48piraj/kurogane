@@ -19,10 +19,10 @@ authors = [
 repository = "https://github.com/0x48piraj/kurogane"
 
 [workspace.dependencies]
-tanso = { version = "=154.4.0", git = "https://github.com/kurogane-rs/tanso", rev = "b946486f4d025ffd2828773cede4e72f54833c4d", default-features = false }
-tanso-sys = { version = "=154.4.0", git = "https://github.com/kurogane-rs/tanso", rev = "b946486f4d025ffd2828773cede4e72f54833c4d" }
-tanso-download = { version = "3.0.0", git = "https://github.com/kurogane-rs/tanso", rev = "b946486f4d025ffd2828773cede4e72f54833c4d" }
-tanso-build = { version = "=154.4.0", git = "https://github.com/kurogane-rs/tanso", rev = "b946486f4d025ffd2828773cede4e72f54833c4d" }
+tanso = { version = "=154.4.0", git = "https://github.com/kurogane-rs/tanso", rev = "d09152184b48fecbe60fddcae74f61b5b6b1a03c", default-features = false }
+tanso-sys = { version = "=154.4.0", git = "https://github.com/kurogane-rs/tanso", rev = "d09152184b48fecbe60fddcae74f61b5b6b1a03c" }
+tanso-download = { version = "3.0.0", git = "https://github.com/kurogane-rs/tanso", rev = "d09152184b48fecbe60fddcae74f61b5b6b1a03c" }
+tanso-build = { version = "=154.4.0", git = "https://github.com/kurogane-rs/tanso", rev = "d09152184b48fecbe60fddcae74f61b5b6b1a03c" }
 kurogane = { version = "=0.0.6-alpha.2", path = "kurogane" }
 kurogane-build = { version = "=0.0.6-alpha.2", path = "kurogane-build" }
 kurogane-cli = { path = "kurogane-cli" }

@@ -28,9 +28,9 @@ struct RuntimeLayout {
     subprocess: Option<std::path::PathBuf>,
 }
 
-/// The runtime's layout around the CEF it loaded: the profile is `chosen`
-/// (App::profile_dir), or the one Kurogane names from `profile_id` or the
-/// executable.
+/// Returns the runtime's layout around the CEF it loaded. The profile is
+/// `chosen` (App::profile_dir) or the one Kurogane names from `profile_id`
+/// or the executable.
 fn resolve_layout(
     cef_root: std::path::PathBuf,
     profile_id: Option<String>,
@@ -53,7 +53,7 @@ fn resolve_layout(
     Ok(RuntimeLayout {
         cef_root,
         profile_dir,
-        subprocess: subprocess_path(&exe),
+        subprocess: subprocess_path(&exe)?,
     })
 }
 
@@ -62,9 +62,9 @@ fn resolve_layout(
 /// The name is the identity given to [`App::profile_id`](crate::App::profile_id),
 /// or else the executable's, which `kurogane run`, bundles and the sandbox
 /// bootstrap all share and which survives the application moving or being
-/// updated. CEF runs one instance per profile, so the name also decides which
+/// updated. CEF runs one instance per profile. The name also decides which
 /// launches hand over to a running instance. Debug builds keep a profile of
-/// their own, so a development run never hands its launch to an installed copy.
+/// their own; a development run never hands its launch to an installed copy.
 fn profile_name(profile_id: Option<String>, exe: &std::path::Path) -> String {
     let id = profile_id
         .or_else(|| {
@@ -100,9 +100,10 @@ fn locate_cef() -> Result<(std::path::PathBuf, CefLocation), RuntimeError> {
 }
 
 /// Loads libcef from the runtime the application resolves, before any other
-/// call into CEF; the binary links none. macOS loads it in `init_ns_app`,
-/// after a sandboxed helper enters its sandbox. Returns the runtime's
-/// directory, canonical.
+/// call into CEF. The executables `kurogane bundle` builds for macOS link
+/// their framework at launch, which loading takes as it is. macOS loads it in
+/// `init_ns_app`, after a sandboxed helper enters its sandbox. Returns the
+/// runtime's directory, canonical.
 pub(crate) fn load_libcef() -> Result<std::path::PathBuf, RuntimeError> {
     let (root, location) = locate_cef()?;
     let invalid =
@@ -149,32 +150,37 @@ fn cef_not_found(error: sys::FindError) -> RuntimeError {
 /// Returns the executable CEF should start helper processes from.
 ///
 /// Windows names none. CEF reads any value there as "the helpers are a
-/// separate executable", which its Windows sandbox does not support, and
+/// separate executable". Its Windows sandbox does not support that and CEF
 /// turns the sandbox off without saying so. Helpers relaunch this executable
 /// either way, which is what the setting would have named.
 #[cfg(target_os = "windows")]
-fn subprocess_path(_exe: &std::path::Path) -> Option<std::path::PathBuf> {
-    None
+fn subprocess_path(_exe: &std::path::Path) -> Result<Option<std::path::PathBuf>, RuntimeError> {
+    Ok(None)
 }
 
 /// Returns the executable CEF should start helper processes from.
 #[cfg(target_os = "linux")]
-fn subprocess_path(exe: &std::path::Path) -> Option<std::path::PathBuf> {
-    Some(exe.to_path_buf())
+fn subprocess_path(exe: &std::path::Path) -> Result<Option<std::path::PathBuf>, RuntimeError> {
+    Ok(Some(exe.to_path_buf()))
 }
 
-/// Returns the executable CEF should start helper processes from: the
-/// bundle's helper app, or this executable when running unbundled.
+/// Returns the executable CEF should start helper processes from (the
+/// bundle's helper app or this executable when running unbundled). A bundle
+/// without one helper app is an error; Chromium would look for the
+/// renderer's beside the bundle and start none.
 #[cfg(target_os = "macos")]
-fn subprocess_path(exe: &std::path::Path) -> Option<std::path::PathBuf> {
-    let helper = kurogane_layout::bundled_helper_path_for(exe);
+fn subprocess_path(exe: &std::path::Path) -> Result<Option<std::path::PathBuf>, RuntimeError> {
+    let helper = kurogane_layout::bundled_helper_path_for(exe).map_err(|source| {
+        RuntimeError::BundleHelperUnavailable {
+            source: Box::new(source),
+        }
+    })?;
 
-    Some(helper.unwrap_or_else(|| exe.to_path_buf()))
+    Ok(Some(helper.unwrap_or_else(|| exe.to_path_buf())))
 }
 
 fn build_settings(
     layout: &RuntimeLayout,
-    persist_session_cookies: bool,
     external_message_pump: bool,
     sandbox: SandboxMode,
 ) -> Settings {
@@ -184,7 +190,10 @@ fn build_settings(
         external_message_pump: external_message_pump.into(),
         cache_path: cef_path(&layout.profile_dir),
         root_cache_path: cef_path(&layout.profile_dir),
-        persist_session_cookies: persist_session_cookies.into(),
+        // Off, so CEF starts each run without the last session's windows.
+        // Chrome keeps session cookies only by restoring those, stale after
+        // an unclean exit
+        persist_session_cookies: 0,
         no_sandbox: crate::sandbox::cef_no_sandbox(sandbox),
         ..Default::default()
     };
@@ -264,8 +273,8 @@ fn execute_subprocesses(args: &Args, app: &mut App, sandbox_info: *mut u8) {
 
 /// Closes every browser on Ctrl+C, as closing the windows by hand would.
 ///
-/// ctrlc keeps the handler until the process exits, so it holds the runtime
-/// weakly: it must not keep the application's state alive once it has ended.
+/// ctrlc keeps the handler until the process exits. The handler holds the
+/// runtime weakly and keeps no application state alive once it has ended.
 fn install_ctrlc_handler(app: &AppHandle) {
     let runtime = app.downgrade();
     // ctrlc runs the handler on its one "ctrl-c" thread, one signal at a
@@ -307,7 +316,7 @@ fn install_ctrlc_handler(app: &AppHandle) {
 /// directly, whose browser is not created yet or has closed; linked windows
 /// close with their browser.
 ///
-/// A forced close cannot be cancelled, so no browser may outlive shutdown.
+/// A forced close cannot be cancelled. No browser can outlive shutdown.
 /// Cancellable closes provide no equivalent signal from CEF.
 fn close_all(app: &AppHandle, force: bool) {
     if force {
@@ -418,11 +427,11 @@ fn close(app: &AppHandle, what: Close) {
 /// What the running application shares between CEF's callbacks, tasks and
 /// the application's handles, which hold it through an [`AppHandle`]. The
 /// Ctrl+C handler and the macOS `terminate:` override last as long as the
-/// process, so they hold it weakly: it goes with the last handle.
+/// process. They hold it weakly; it goes with the last handle.
 pub(crate) struct RuntimeServices {
     router: IpcRouter,
     registry: Mutex<Registry>,
-    /// The thread that initialized CEF: CEF's UI thread, since Kurogane
+    /// The thread that initialized CEF. It is CEF's UI thread since Kurogane
     /// never sets `multi_threaded_message_loop`
     ui_thread: std::thread::ThreadId,
     /// AppInstance::run is inside CEF's message loop, the only loop Kurogane
@@ -468,8 +477,8 @@ impl RuntimeServices {
 }
 
 /// A browser's place inside its parent window, for
-/// [`AppInstance::create_child_browser`] and [`BrowserHandle::set_bounds`]:
-/// a position and a size in that window's own coordinates, which CEF
+/// [`AppInstance::create_child_browser`] and [`BrowserHandle::set_bounds`].
+/// It is a position and a size in that window's own coordinates, which CEF
 /// applies unconverted. Pixels from the top-left of the client area on
 /// Windows and X11; on macOS, points in the parent `NSView`, whose origin is
 /// its top-left corner when the view is flipped (winit's is) and its
@@ -494,7 +503,8 @@ pub struct BrowserBounds {
 /// Usable from any thread. Queries copy what is open under a short lock.
 /// A broadcast sends to its subscribers on the calling thread, which CEF
 /// allows for frames in the browser process. Closing and ending run on CEF's
-/// UI thread: at once when called there, posted there otherwise.
+/// UI thread. They run at once when called there and are posted there
+/// otherwise.
 ///
 /// Once [`AppInstance::shutdown`] has begun, calls that would reach CEF do
 /// nothing, since CEF takes no call after it has shut down.
@@ -516,15 +526,15 @@ impl AppHandle {
     ///
     /// Only the UI thread changes them; any thread may read them. Copy out
     /// what is needed and let the guard go before any CEF call that can run
-    /// Kurogane's callbacks: creating a browser or a window, adding a
-    /// browser's view to a window, or closing either. CEF may run those
-    /// callbacks on this thread before the call returns, and they take this
-    /// lock again, which deadlocks or panics. No other Kurogane lock is taken
+    /// Kurogane's callbacks (creating a browser or a window, adding a
+    /// browser's view to a window or closing either). CEF may run those
+    /// callbacks on this thread before the call returns. They take this lock
+    /// again, which deadlocks or panics. No other Kurogane lock is taken
     /// while the guard is held.
     ///
-    /// A poisoned lock is recovered rather than turned into another panic: a
+    /// A poisoned lock is recovered rather than turned into another panic. A
     /// panic under the guard can come only from a debug line, never from the
-    /// middle of a map update, so the maps stay usable.
+    /// middle of a map update. The maps stay usable.
     pub(crate) fn registry(&self) -> MutexGuard<'_, Registry> {
         self.services
             .registry
@@ -547,9 +557,9 @@ impl AppHandle {
         &self.services.identity
     }
 
-    /// Whether a mandatory end has begun, after which no browser may open:
-    /// a forced close of every browser (see [`close_all`]), or
-    /// [`AppInstance::shutdown`], after which nothing may reach CEF at all.
+    /// Returns whether a mandatory end has begun, after which no browser may
+    /// open. That end is a forced close of every browser (see [`close_all`])
+    /// or [`AppInstance::shutdown`], after which nothing may reach CEF at all.
     pub(crate) fn is_ending(&self) -> bool {
         self.services.ending.load(Ordering::Acquire) || self.cef_is_down()
     }
@@ -564,8 +574,8 @@ impl AppHandle {
         self.services.router.app_origin()
     }
 
-    /// The runtime held weakly, for what lasts as long as the process: the
-    /// Ctrl+C handler and the macOS `terminate:` override.
+    /// The runtime held weakly, for what lasts as long as the process (the
+    /// Ctrl+C handler and the macOS `terminate:` override).
     pub(crate) fn downgrade(&self) -> Weak<RuntimeServices> {
         Arc::downgrade(&self.services)
     }
@@ -576,7 +586,7 @@ impl AppHandle {
         runtime.upgrade().map(|services| Self { services })
     }
 
-    /// Ends the application once no browser is open: CEF asks an application
+    /// Ends the application once no browser is open. CEF asks an application
     /// to exit only after OnBeforeClose has run for every browser. Quits the
     /// message loop only while [`AppInstance::run`] is in it; an application
     /// that pumps CEF itself watches [`AppHandle::should_shutdown`] instead.
@@ -589,10 +599,10 @@ impl AppHandle {
         }
     }
 
-    /// Returns whether this is CEF's UI thread: the thread that ran
-    /// CefInitialize, since Kurogane never sets `multi_threaded_message_loop`
-    /// (cef_types.h:1753-1755). Compares thread ids and asks CEF nothing, so
-    /// it holds before CefInitialize and after CefShutdown alike.
+    /// Returns whether this is CEF's UI thread, the thread that ran
+    /// CefInitialize (Kurogane never sets `multi_threaded_message_loop`,
+    /// cef_types.h:1753-1755). Compares thread ids and asks CEF nothing. The
+    /// answer holds before CefInitialize and after CefShutdown alike.
     pub(crate) fn on_ui_thread(&self) -> bool {
         std::thread::current().id() == self.services.ui_thread
     }
@@ -602,7 +612,7 @@ impl AppHandle {
     ///
     /// A call on another thread can read false just before the flag is set
     /// and reach CEF while CefShutdown runs. Only a lock held across every
-    /// CEF call would close that gap, and CEF calls back into Kurogane on the
+    /// CEF call would close that gap. CEF calls back into Kurogane on the
     /// same thread. When every browser has closed first, as CEF requires,
     /// such a call can only be the post of a close request. A post that races
     /// CefShutdown is outside CEF's contract; if it runs, CloseTask checks
@@ -611,9 +621,9 @@ impl AppHandle {
         self.services.cef_shut_down.load(Ordering::Acquire)
     }
 
-    /// Closes `what` on CEF's UI thread: at once when called there, posted
-    /// there otherwise, as cefsimple's CloseAllBrowsers does. Does nothing
-    /// once CEF has begun shutting down.
+    /// Closes `what` on CEF's UI thread. Runs at once when called there and
+    /// is posted there otherwise, as cefsimple's CloseAllBrowsers does. Does
+    /// nothing once CEF has begun shutting down.
     pub(crate) fn request(&self, what: Close) {
         if self.cef_is_down() {
             debug!("CEF has shut down; ignoring {what:?}");
@@ -647,9 +657,9 @@ impl AppHandle {
 
     /// Returns whether the application has ended.
     ///
-    /// Becomes true once the last browser has closed, whatever closed it: its
+    /// Becomes true once the last browser has closed, whatever closed it (its
     /// window, [`AppHandle::shutdown`], Ctrl+C or macOS asking the
-    /// application to quit. Any of those three that finds nothing open ends
+    /// application to quit). Any of those three that finds nothing open ends
     /// it at once. Also true once [`AppInstance::shutdown`] has begun. An
     /// application that pumps CEF itself keeps pumping until then.
     pub fn should_shutdown(&self) -> bool {
@@ -704,33 +714,33 @@ impl AppHandle {
         reg.windows.iter().map(|(id, _)| *id).collect()
     }
 
-    /// Close all open windows.
+    /// Closes all open windows.
     ///
-    /// Safe to call from any thread: CEF's windows close only on the UI
-    /// thread, so a call from elsewhere is posted there. Does nothing once
+    /// Safe to call from any thread. CEF's windows close only on the UI
+    /// thread; a call from elsewhere is posted there. Does nothing once
     /// [`AppInstance::shutdown`] has begun.
     pub fn close_all_windows(&self) {
         self.request(Close::Windows);
     }
 
-    /// Close all live browser instances.
+    /// Closes all live browser instances.
     ///
-    /// The call does not wait: a browser counts in [`AppHandle::browser_count`]
-    /// until CEF has finished closing it, so an application that pumps CEF
-    /// keeps pumping until the count is 0. A browser embedded in the
+    /// The call does not wait. A browser counts in [`AppHandle::browser_count`]
+    /// until CEF has finished closing it. An application that pumps CEF keeps
+    /// pumping until the count is 0. A browser embedded in the
     /// application's own window closes without asking that window to close.
     /// A call from another thread is posted to the UI thread. Does nothing
     /// once [`AppInstance::shutdown`] has begun.
     ///
-    /// With `force`, no page can cancel the close, so a call that finds a
-    /// browser open ends the application as [`AppHandle::shutdown`] does and
-    /// nothing opens after it. Without, a page's `beforeunload` may keep its
-    /// browser and the application, running.
+    /// With `force` no page can cancel the close. A call that finds a browser
+    /// open then ends the application as [`AppHandle::shutdown`] does and
+    /// nothing opens after it. Without it a page's `beforeunload` may keep its
+    /// browser and the application running.
     pub fn close_all_browsers(&self, force: bool) {
         self.request(Close::Browsers { force });
     }
 
-    /// Look up the window that hosts a given browser.
+    /// Looks up the window that hosts a given browser.
     ///
     /// None once the browser has closed, even while CEF is still closing
     /// its window.
@@ -738,12 +748,12 @@ impl AppHandle {
         self.registry().windows.window_id_for_browser(browser_id)
     }
 
-    /// Look up the open window named `name`
+    /// Looks up the open window named `name`
     /// ([`WindowOptions::name`](crate::WindowOptions::name)).
     ///
     /// None once its close has been reported
     /// ([`App::on_window_closing`](crate::App::on_window_closing)), even
-    /// while CEF is still closing it: the name is free for a new window.
+    /// while CEF is still closing it. The name is then free for a new window.
     pub fn find_window_by_name(&self, name: &str) -> Option<WindowId> {
         self.registry().windows.window_named(name)
     }
@@ -783,20 +793,20 @@ impl AppHandle {
 
     /// Browser hosted in the given window.
     ///
-    /// None until the window's browser has been created, and once it has
+    /// None until the window's browser has been created and once it has
     /// closed.
     pub fn browser_for_window(&self, id: WindowId) -> Option<BrowserId> {
         self.registry().windows.browser_for_window(id)
     }
 
-    /// Forgets the permission answers Chromium remembers for `origin`, so
-    /// the site's next request reaches
-    /// [`App::on_permission`](crate::App::on_permission) again: after the
-    /// application's policy changed, or the user took a permission back.
+    /// Forgets the permission answers Chromium remembers for `origin`. The
+    /// site's next request then reaches
+    /// [`App::on_permission`](crate::App::on_permission) again. Use it after
+    /// the application's policy changed or the user took a permission back.
     ///
     /// Chromium remembers its answers to web sites (http, https), granted
-    /// or denied, in the profile, and forgets them nowhere else. Forgetting
-    /// also takes back a grant the site holds now: its notifications stop.
+    /// or denied, in the profile. It forgets them nowhere else. Forgetting
+    /// also takes back a grant the site holds now; its notifications stop.
     /// Applies to the profile of every open browser, an embedded browser's
     /// own profile included. A call from another thread is posted to the UI
     /// thread. Does nothing for the opaque origin, or once
@@ -860,9 +870,10 @@ impl Drop for AppInstance {
     }
 }
 
-/// The CEF parent window for `parent`: its HWND on Windows, its NSView on
-/// macOS, its X11 window on Linux (Xlib or XCB). CEF parents a browser in
-/// nothing else, so any other handle, a Wayland surface included, is refused.
+/// Returns the CEF parent window for `parent` (its HWND on Windows, its
+/// NSView on macOS, its X11 window on Linux via Xlib or XCB). CEF parents a
+/// browser in nothing else. Any other handle is refused, a Wayland surface
+/// included.
 fn parent_window(parent: &impl HasWindowHandle) -> Result<cef_window_handle_t, RuntimeError> {
     let handle = parent
         .window_handle()
@@ -891,9 +902,9 @@ fn parent_window(parent: &impl HasWindowHandle) -> Result<cef_window_handle_t, R
 ///
 /// Usable from any thread, as CEF allows for a browser in the browser
 /// process. [`set_bounds`](Self::set_bounds) and
-/// [`has_devtools`](Self::has_devtools) are the exceptions: they run only on
-/// the thread that started the application, which is CEF's UI thread, and
-/// panic elsewhere.
+/// [`has_devtools`](Self::has_devtools) are the exceptions. They run only on
+/// the thread that started the application (CEF's UI thread) and panic
+/// elsewhere.
 pub struct BrowserHandle {
     id: BrowserId,
     app: AppHandle,
@@ -946,7 +957,7 @@ impl BrowserHandle {
     /// Closes the browser.
     ///
     /// With `force` false the page's unload handlers run first and may cancel
-    /// the close. The call does not wait: the browser is gone once CEF has
+    /// the close. The call does not wait. The browser is gone once CEF has
     /// finished closing it. A browser embedded in the application's own
     /// window closes without asking that window to close.
     pub fn close(&self, force: bool) {
@@ -968,18 +979,18 @@ impl BrowserHandle {
     /// `bounds` are in the parent's coordinates, as at creation (see
     /// [`BrowserBounds`]); a width or height below one counts as one. On
     /// Windows and Linux Chromium places such a browser once and does not
-    /// follow its parent, so the application calls this whenever the
-    /// browser's place changes: for a browser that fills its window, on every
-    /// resize. On macOS the browser stretches with its parent by itself, and
-    /// this places it anywhere.
+    /// follow its parent. The application calls this whenever the browser's
+    /// place changes (on every resize for a browser that fills its window).
+    /// On macOS the browser stretches with its parent by itself and this
+    /// places it anywhere.
     ///
-    /// Does nothing for any other browser, and nothing once the browser has
+    /// Does nothing for any other browser and nothing once the browser has
     /// closed.
     ///
     /// # Panics
     ///
-    /// Off the thread that started the application, which is CEF's UI thread:
-    /// the browser's native window is moved only there.
+    /// Off the thread that started the application (CEF's UI thread). The
+    /// browser's native window is moved only there.
     #[track_caller]
     pub fn set_bounds(&self, bounds: BrowserBounds) {
         self.assert_ui_thread();
@@ -1099,8 +1110,8 @@ impl BrowserHandle {
     ///
     /// # Panics
     ///
-    /// Off the thread that started the application, which is CEF's UI thread:
-    /// CEF answers this only there.
+    /// Off the thread that started the application (CEF's UI thread). CEF
+    /// answers this only there.
     #[track_caller]
     pub fn has_devtools(&self) -> bool {
         self.assert_ui_thread();
@@ -1132,8 +1143,8 @@ impl AppInstance {
     /// When using external event-loop ownership via App::start,
     /// this must be called repeatedly on the thread that initialized CEF.
     ///
-    /// Note: Kurogane currently assumes pump calls are non-reentrant and
-    /// originate from a single UI thread.
+    /// Kurogane assumes pump calls are non-reentrant and originate from a
+    /// single UI thread.
     pub fn pump(&self) {
         // Under the external pump nothing else dispatches Chromium's X11 and
         // Wayland events on Linux. Native events first, then the work they
@@ -1175,13 +1186,12 @@ impl AppInstance {
 
     /// Takes ownership and blocks on the CEF message loop.
     ///
-    /// The loop runs until the application's last browser has closed:
-    /// after [`AppHandle::shutdown`] (from any thread), its last window
-    /// closing, or Ctrl+C. After the loop exits, tanso::shutdown() is called on
-    /// the current (UI) thread.
+    /// The loop runs until the application's last browser has closed, after
+    /// [`AppHandle::shutdown`] (from any thread), its last window closing or
+    /// Ctrl+C. tanso::shutdown() then runs on the current (UI) thread.
     ///
-    /// Not for an application given an [`App::scheduler`](crate::App::scheduler):
-    /// the scheduler turns on CEF's external message pump, under which this
+    /// Not for an application given an [`App::scheduler`](crate::App::scheduler).
+    /// The scheduler turns on CEF's external message pump, under which this
     /// loop returns at once and tanso::shutdown() would run under a window
     /// still opening. Such an application calls [`AppInstance::pump`] from its
     /// own loop until [`AppInstance::should_shutdown`], then
@@ -1214,7 +1224,7 @@ impl AppInstance {
     /// true at that point.
     ///
     /// From here on, [`AppHandle`] and [`BrowserHandle`] calls that would
-    /// reach CEF do nothing. Finish using them on other threads first: a call
+    /// reach CEF do nothing. Finish using them on other threads first. A call
     /// made there at this moment can still reach CEF.
     pub fn shutdown(&self) {
         let services = &self.handle.services;
@@ -1234,8 +1244,8 @@ impl AppInstance {
     /// in the parent's coordinates (see [`BrowserBounds`]).
     /// [`BrowserHandle::set_bounds`] moves it later.
     ///
-    /// `parent` is the host's window as it is, a winit `Window` for one:
-    /// anything that hands out a [`raw_window_handle`] window handle. It must
+    /// `parent` is the host's window as it is, anything that hands out a
+    /// [`raw_window_handle`] window handle (a winit `Window` for one). It must
     /// outlive the browser, which the host closes first (docs/winit.md).
     ///
     /// The runtime must have been started with App::start_embedded,
@@ -1246,8 +1256,8 @@ impl AppInstance {
     ///
     /// [`RuntimeError::UnsupportedParentWindow`] when `parent` is not a
     /// Win32 window, an AppKit view or an X11 window (a Wayland surface, for
-    /// one), [`RuntimeError::ShuttingDown`] once [`AppHandle::shutdown`] has
-    /// begun, and [`RuntimeError::BrowserCreationFailed`] when CEF creates no
+    /// one); [`RuntimeError::ShuttingDown`] once [`AppHandle::shutdown`] has
+    /// begun; [`RuntimeError::BrowserCreationFailed`] when CEF creates no
     /// browser.
     pub fn create_child_browser(
         &self,
@@ -1267,7 +1277,7 @@ impl AppInstance {
     ///
     /// # Errors
     ///
-    /// As [`create_child_browser`](Self::create_child_browser), and
+    /// As [`create_child_browser`](Self::create_child_browser); also
     /// [`RuntimeError::BrowserCreationFailed`] when CEF creates no request
     /// context from `rc_settings`.
     pub fn create_child_browser_with_request_context(
@@ -1401,12 +1411,7 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
     crate::platform::raise_open_file_limit();
 
     let external_message_pump = spec.scheduler.is_some();
-    let settings = build_settings(
-        &layout,
-        spec.persist_session_cookies,
-        external_message_pump,
-        spec.sandbox_mode,
-    );
+    let settings = build_settings(&layout, external_message_pump, spec.sandbox_mode);
 
     debug!("Initializing CEF");
 
@@ -1421,13 +1426,14 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
         // application running has handed it its command line and, like a
         // helper process, has nothing left to do
         let notified = sys::cef_resultcode_t::CEF_RESULT_CODE_NORMAL_EXIT_PROCESS_NOTIFIED as i32;
+        let code = get_exit_code();
 
-        if get_exit_code() == notified {
+        if code == notified {
             debug!("Application already running; this launch was handed over to it");
             std::process::exit(0);
         }
 
-        return Err(RuntimeError::CefInitializeFailed);
+        return Err(RuntimeError::CefInitializeFailed { code });
     }
 
     debug!("CEF initialized");
@@ -1457,7 +1463,7 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
 /// loop.
 ///
 /// In [`RuntimeMode::Embedded`] the host application owns window creation
-/// and lifecycle, so CEF Views creates no window.
+/// and lifecycle. CEF Views creates no window.
 pub(crate) fn start(spec: RuntimeSpec, router: IpcRouter) -> Result<AppInstance, RuntimeError> {
     #[cfg(target_os = "linux")]
     let external_pump = spec.scheduler.is_some();
@@ -1569,7 +1575,7 @@ mod tests {
         // executable regardless, so the setting buys nothing and costs the
         // sandbox.
         assert_eq!(
-            subprocess_path(std::path::Path::new(r"C:\app\myapp.exe")),
+            subprocess_path(std::path::Path::new(r"C:\app\myapp.exe")).unwrap(),
             None,
             "naming a subprocess executable silently disables the Windows sandbox"
         );
@@ -1580,7 +1586,7 @@ mod tests {
     fn linux_names_its_own_executable() {
         // Linux has no such rule, and the helpers are this same binary
         assert_eq!(
-            subprocess_path(std::path::Path::new("/app/myapp")),
+            subprocess_path(std::path::Path::new("/app/myapp")).unwrap(),
             Some(std::path::PathBuf::from("/app/myapp"))
         );
     }
@@ -1591,7 +1597,7 @@ mod tests {
         // Outside an app bundle there are no helper apps, so helpers are this
         // same binary, as on Linux
         assert_eq!(
-            subprocess_path(std::path::Path::new("/app/myapp")),
+            subprocess_path(std::path::Path::new("/app/myapp")).unwrap(),
             Some(std::path::PathBuf::from("/app/myapp"))
         );
     }
@@ -1611,10 +1617,10 @@ mod tests {
     };
 
     use crate::acl::Origin;
-    use crate::ipc::FrameId;
+    use crate::ipc::document::Document;
     use crate::ipc::event::EventSubscription;
 
-    /// A CEF structure the test made, and the calls made through it.
+    /// A CEF structure the test made and the calls made through it.
     #[repr(C)]
     struct Fake<T> {
         // First, so the structure and its base share the fake's address
@@ -1656,12 +1662,6 @@ mod tests {
         // SAFETY: as in called
         unsafe { count(browser) };
         std::ptr::null_mut()
-    }
-
-    unsafe extern "C" fn called_false<T>(object: *mut T) -> c_int {
-        // SAFETY: as in called
-        unsafe { count(object) };
-        0
     }
 
     // Registering a browser reads its id; that is setup, not counted
@@ -1716,8 +1716,6 @@ mod tests {
         raw.base.size = std::mem::size_of::<_cef_frame_t>();
         raw.base.add_ref = Some(add_ref::<_cef_frame_t>);
         raw.base.release = Some(release::<_cef_frame_t>);
-        // Gone, so a broadcast stops at it
-        raw.is_valid = Some(called_false::<_cef_frame_t>);
         leak(raw)
     }
 
@@ -1764,10 +1762,8 @@ mod tests {
                 .push(EventSubscription {
                     id: 1,
                     frame,
-                    browser_id: id,
-                    frame_id: FrameId::new("1"),
-                    origin: origin.clone(),
-                    url_origin: origin,
+                    // Gone, so a broadcast stops at it
+                    document: Document::ended_for_test(origin),
                 });
             drop(browser);
             // Setup is over: from here each count is what the handle did
@@ -1937,8 +1933,8 @@ mod tests {
         );
     }
 
-    /// Runs `call` on a handle to an open browser, on a thread that is not
-    /// the UI thread, and panics with its panic.
+    /// Runs `call` on a handle to an open browser on a thread that is not the
+    /// UI thread. Panics with its panic.
     fn off_the_ui_thread(call: impl FnOnce(&BrowserHandle) + Send) {
         let opened = Opened::new();
         let handle = BrowserHandle {

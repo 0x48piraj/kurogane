@@ -1,7 +1,8 @@
-//! Links and new windows, checked by hand: every way a page asks for a
-//! window or takes its own somewhere, with what should happen next to it.
-//! The hooks let https://example.org in and print every request they are
-//! asked about.
+//! Links and new windows, checked by hand.
+//!
+//! The page covers every way a page asks for a window or takes its own
+//! somewhere. What should happen shows next to each. The hooks let
+//! https://example.org in and print every request they are asked about.
 
 use kurogane::{App, NavigationDecision, NewWindowDecision, Origin};
 

@@ -50,8 +50,8 @@ pub fn sample_distribution(dir: &Path) -> ResolvedDistribution {
     }
 }
 
-/// Creates a distribution shaped like a sandboxed Windows application:
-/// CEF's bootstrap under the application's name, loading its library.
+/// Creates a distribution shaped like a sandboxed Windows application. CEF's
+/// bootstrap carries the application's name and loads its library.
 pub fn sandboxed_distribution(dir: &Path) -> ResolvedDistribution {
     let mut dist = sample_distribution(dir);
 

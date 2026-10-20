@@ -2,19 +2,22 @@
 //!
 //! A Kurogane window omits standard browser UI (tab strips, toolbars, app menus).
 //! However, the underlying CEF framework still processes default Chrome shortcuts
-//! (e.g., Ctrl+N, Ctrl+T). The context menu is Kurogane's own
+//! (for example Ctrl+N and Ctrl+T). The context menu is Kurogane's own
 //! (`crate::context_menu`), whose standard items ask the application as
 //! these commands do.
 //!
 //! To prevent CEF from spawning unmanaged native windows or tabs, this module intercepts
-//! the command pipeline. Kurogane uses a strict allowlist: commands execute ONLY if they
+//! the command pipeline. Kurogane uses a strict allowlist. Commands execute only if they
 //! operate on the current page context. All other commands are intentionally swallowed.
 //! On macOS, Chrome's quit command maps ⌘Q to application termination.
 //!
 //! The application's [`App::on_chrome_command`](crate::App::on_chrome_command)
 //! is then asked about each command the allowlist lets run, named by
-//! [`ChromeCommand`], and may refuse it; it never sees, and so never allows,
-//! a command Kurogane refuses.
+//! [`ChromeCommand`]. It may refuse it. It never sees a command Kurogane
+//! refuses and so never allows one.
+//!
+//! Kurogane's own key shortcuts (`crate::shortcuts`) run as these commands.
+//! The hook decides them as it decides the context menu's.
 
 use std::ffi::{CStr, c_int};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -30,9 +33,9 @@ use crate::runtime::AppHandle;
 /// A command Chromium runs in a window of the application's, from a key
 /// shortcut or the context menu, as
 /// [`App::on_chrome_command`](crate::App::on_chrome_command) is asked about
-/// it. Chromium's own commands are folded by what the user asked for: every
-/// kind of reload is [`Reload`](Self::Reload), the context menu's Copy and
-/// Ctrl+C both [`Copy`](Self::Copy).
+/// it. Chromium's own commands are folded by what the user asked for. Every
+/// kind of reload is [`Reload`](Self::Reload); the context menu's Copy and
+/// Ctrl+C are both [`Copy`](Self::Copy).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ChromeCommand {
@@ -58,7 +61,7 @@ pub enum ChromeCommand {
     Redo,
     /// Closing the window (Ctrl+W and Ctrl+Shift+W).
     Close,
-    /// DevTools, its console, inspect, and the context menu's Inspect.
+    /// DevTools, its console, inspect and the context menu's Inspect.
     DevTools,
 }
 
@@ -145,6 +148,15 @@ const ALLOWED: &[(&CStr, ChromeCommand)] = &[
     ),
 ];
 
+/// Returns the command the Chromium command of name `name` is to the
+/// application when [`ALLOWED`] lets it run.
+pub(crate) fn command_named(name: &CStr) -> Option<ChromeCommand> {
+    ALLOWED
+        .iter()
+        .find(|&&(allowed, _)| allowed == name)
+        .map(|&(_, command)| command)
+}
+
 /// Translates [`ALLOWED`] command names to runtime IDs.
 /// Cached via [`OnceLock`] because CEF command IDs are unstable across Chromium
 /// versions, whereas string names provide a stable resolution ABI.
@@ -206,7 +218,7 @@ pub(crate) fn refuses(app: &AppHandle, command: ChromeCommand, browser: Option<B
 }
 
 /// Asks the application's hook about `command` in `browser`. A hook that
-/// panics refuses the command: the hook is there to restrict what runs.
+/// panics refuses the command; the hook is there to restrict what runs.
 fn decide(app: &AppHandle, command: ChromeCommand, browser: Option<BrowserId>) -> CommandDecision {
     let Some(hooks) = app.hooks() else {
         return CommandDecision::Default;

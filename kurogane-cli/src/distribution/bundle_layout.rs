@@ -48,7 +48,7 @@ pub enum BundleError {
     #[error("content/index.html missing at {0}")]
     MissingContentIndex(PathBuf),
 
-    /// Without it the application would not know it is a bundle, and would
+    /// Without it the application would not know it is a bundle and would
     /// look for Chromium outside it.
     #[error("bundle marker missing at {0}")]
     MissingMarker(PathBuf),
@@ -56,7 +56,7 @@ pub enum BundleError {
     #[error(transparent)]
     InvalidCefRuntime(#[from] kurogane_layout::IncompleteRuntime),
 
-    /// A file operation failed: what was being done, and to which path.
+    /// File operation that failed, with its action and path.
     #[error("failed to {action} {}", .path.display())]
     Io {
         action: &'static str,
@@ -126,8 +126,8 @@ impl BundleLayout {
 
     /// Path of the library a bootstrap installed as `exe_name` loads.
     ///
-    /// CEF looks it up beside the bootstrap, under the bootstrap's own name,
-    /// so it is never on a search path and never shared between applications.
+    /// CEF looks it up beside the bootstrap under the bootstrap's own name.
+    /// It is never on a search path and never shared between applications.
     pub fn client_library_path(&self, exe_name: &OsStr) -> PathBuf {
         crate::distribution::client_library_path(&self.executable_path(exe_name))
     }

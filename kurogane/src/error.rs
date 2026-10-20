@@ -21,7 +21,12 @@ pub enum RuntimeError {
         source: std::io::Error,
     },
 
-    CefInitializeFailed,
+    /// Chromium refused to start after Kurogane found its runtime; its log
+    /// names the cause.
+    CefInitializeFailed {
+        /// CEF's exit code, a `cef_resultcode_t` value
+        code: i32,
+    },
     /// No Chromium runtime beside the executable, no `CEF_PATH` and nothing
     /// installed at `expected`, which is `None` for a user without a local
     /// data directory.
@@ -50,6 +55,13 @@ pub enum RuntimeError {
 
     /// The path to the running executable could not be determined.
     ExecutableUnavailable(std::io::Error),
+
+    /// The macOS application bundle the executable belongs to has no single
+    /// helper app to start Chromium's processes from; `source` says what it
+    /// holds.
+    BundleHelperUnavailable {
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 
     CacheUnavailable {
         path: PathBuf,
@@ -80,8 +92,8 @@ pub enum RuntimeError {
 
     /// The window given to
     /// [`AppInstance::create_child_browser`](crate::AppInstance::create_child_browser)
-    /// cannot parent a browser: CEF embeds only in a Win32 window, an AppKit
-    /// view or an X11 window, never, for one, in a Wayland surface.
+    /// cannot parent a browser. CEF embeds only in a Win32 window, an AppKit
+    /// view or an X11 window. A Wayland surface is not one of them.
     UnsupportedParentWindow,
 
     /// The requested sandbox cannot be enforced on this platform or layout.
@@ -209,12 +221,14 @@ impl Display for RuntimeError {
                 path.display(),
             ),
 
-            RuntimeError::CefInitializeFailed => write!(
+            RuntimeError::CefInitializeFailed { code } => write!(
                 f,
                 concat!(
-                    "Chromium failed to initialize.\n\n",
-                    "This usually means required CEF resources are missing next to the executable."
-                )
+                    "Chromium failed to start (exit code {}).\n\n",
+                    "Chromium's log on the application's error output names the cause, ",
+                    "such as no display to open a window on."
+                ),
+                code
             ),
 
             RuntimeError::CefNotInstalled { expected } => {
@@ -278,6 +292,20 @@ impl Display for RuntimeError {
                 location,
                 path.display(),
                 location.remedy()
+            ),
+
+            RuntimeError::BundleHelperUnavailable { source } => write!(
+                f,
+                concat!(
+                    "The application bundle cannot start Chromium's processes:
+
+",
+                    "  {}
+
+",
+                    "Reinstall the application."
+                ),
+                source
             ),
 
             RuntimeError::ExecutableUnavailable(_) => write!(
@@ -368,8 +396,8 @@ impl Display for RuntimeError {
     }
 }
 
-/// `Display` names the failure and `source()` holds its cause, so a report
-/// that walks the chain ([`App::run_or_exit`](crate::App::run_or_exit) does)
+/// `Display` names the failure and `source()` holds its cause. A report that
+/// walks the chain ([`App::run_or_exit`](crate::App::run_or_exit) does)
 /// shows each cause once.
 impl std::error::Error for RuntimeError {
     /// Returns the underlying error that caused this runtime error, when available.
@@ -381,14 +409,15 @@ impl std::error::Error for RuntimeError {
             RuntimeError::ExecutableUnavailable(source) => Some(source),
 
             RuntimeError::InvalidFrontendUrl { source, .. }
-            | RuntimeError::InvalidCefRuntime { source, .. } => Some(&**source),
+            | RuntimeError::InvalidCefRuntime { source, .. }
+            | RuntimeError::BundleHelperUnavailable { source } => Some(&**source),
 
             RuntimeError::InvalidFilesystem(error) => Some(error),
 
             RuntimeError::InvalidAssetRoot(_)
             | RuntimeError::AssetRootMissing(_)
             | RuntimeError::EntrypointMissing(_)
-            | RuntimeError::CefInitializeFailed
+            | RuntimeError::CefInitializeFailed { .. }
             | RuntimeError::CefNotInstalled { .. }
             | RuntimeError::CefPathMissing(_)
             | RuntimeError::CefVersionMismatch { .. }

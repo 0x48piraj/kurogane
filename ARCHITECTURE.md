@@ -120,7 +120,7 @@ Cocoa's default `terminate:` calls `exit()`. That bypasses the run loop Chromium
 
 ## Startup policy
 
-Chromium's command line is assembled once in the browser process from a small set of runtime policies and user overrides. Each policy adds switches to a normalized switch set with last-write-wins precedence. User-supplied flags apply last and override runtime defaults. The feature lists `enable-features` and `disable-features` are merged instead and keep every entry.
+Chromium's command line is assembled once in the browser process from a small set of runtime policies and user overrides. Each policy adds switches to a normalized switch set with last-write-wins precedence. User-supplied flags apply last and in order. They set, override or remove any switch the runtime would pass. The feature lists `enable-features` and `disable-features` are merged instead and keep every entry. Chromium applies `disable-features` over `enable-features`. A feature Kurogane turns off by default therefore leaves the list when any `enable-features` entry names it.
 
 ```mermaid
 flowchart LR
@@ -128,6 +128,7 @@ flowchart LR
     B["GPU policy"]
     C["Credential policy"]
     F["Embedding policy"]
+    G["Chromium defaults"]
     D["User flags"]
 
     E["Chromium command line<br/><span style='font-size:12px'>normalized switch set</span>"]
@@ -136,6 +137,7 @@ flowchart LR
     B --> E
     C --> E
     F --> E
+    G --> E
     D --> E
 
     N["Last write wins<br/><span style='font-size:12px'>user flags override runtime defaults</span>"]
@@ -146,7 +148,7 @@ flowchart LR
     classDef command fill:#ddf4ff,stroke:#0969da,stroke-width:2px;
     classDef note fill:#fff8c5,stroke:#9a6700,stroke-width:2px;
 
-    class A,B,C,F,D policy;
+    class A,B,C,F,G,D policy;
     class E command;
     class N note;
 ```
@@ -155,6 +157,7 @@ flowchart LR
 * **GPU:** Backend selection (`GpuMode`) for the detected environment.
 * **Credentials:** Whether cookies and passwords are stored in the platform credential store (`CredentialStorage`).
 * **Embedding:** On Linux an embedded application runs Chromium on X11. CEF parents a browser only to an X11 window there.
+* **Chromium defaults:** What Chromium would run for every application and an application rarely needs. Features no preference gates are turned off on the command line. A switch covers what neither gates. Preferences are set once the profile exists. The application's own (`App::chromium_pref`) take the place of Kurogane's, so each is written once. Preferences are declarative; one set at an earlier start and set no more returns to Chromium's default. The application turns each default back on.
 
 ## Browser and window ownership
 
@@ -264,7 +267,7 @@ flowchart TD
 * **Events:** Publish and subscribe delivery to subscribed frames.
 * **Streams:** Bi-directional transfers identified by stream ID with per-stream handlers and state. A handler accepts or refuses the open before the page holds the stream; the first end or error sent closes it. An end the page sends is always answered.
 
-JavaScript values travel as JSON and binary data as raw bytes. Each travels behind a small binary envelope in a CEF process message. Smaller messages travel inline in the process message's argument list. A larger one travels in shared memory. That avoids serialization and an extra copy across the boundary. A very large payload for the page is copied into its `ArrayBuffer` on a thread of its own. The page's main thread stays free during a big transfer. A frame's messages still arrive in the order sent.
+JavaScript values travel as JSON and binary data as raw bytes. Each travels behind a small binary envelope in a CEF process message. A message leaves at once when nothing else is in flight. Under load the page's messages travel in batches as large as those already in flight. What the browser sends a frame while it handles one of the page's messages leaves as one message, replies, events and stream data alike. A burst's full batches each run in a task of their own, so the page's own work goes on between them. Many messages then cost few process messages while the browser and the page work at the same time. Smaller messages travel inline in the process message's argument list. A larger one travels in shared memory. That avoids serialization and an extra copy across the boundary. A very large payload for the page is copied into its `ArrayBuffer` on a thread of its own. The page's main thread stays free during a big transfer. A frame's messages still arrive in the order sent.
 
 See [exposing Rust commands to JavaScript](docs/recipes.md#exposing-rust-commands-to-javascript) and [streaming data](docs/recipes.md#streaming-data) for usage.
 
@@ -320,7 +323,7 @@ flowchart LR
 
 `AppHandle` and `BrowserHandle` calls that would reach CEF do nothing once `AppInstance::shutdown` has begun. CEF takes no call after `CefShutdown`. A call on another thread at that very moment can still reach CEF. An application stops using its handles on other threads before it shuts CEF down.
 
-CEF calls into Kurogane through the `extern "C"` trampolines tanso generates. They do not catch panics. A panic that reaches one aborts the process it runs in. In the browser process that ends the application. In a renderer it ends that renderer. Kurogane's own callbacks never unwrap a value CEF may leave out.
+CEF calls into Kurogane through the `extern "C"` trampolines tanso generates. Each catches a panic and aborts the process it runs in, which is defined where unwinding across the C ABI is not. In the browser process that ends the application. In a renderer it ends that renderer. Kurogane's own callbacks never unwrap a value CEF may leave out.
 
 Kurogane catches a panic in the application code it runs to answer a page's request:
 

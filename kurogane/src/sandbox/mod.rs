@@ -73,8 +73,8 @@ pub(crate) fn apply_sandbox_flags(flags: &mut ChromiumFlags, mode: SandboxMode) 
 
 /// Returns the user switches that weaken an enabled sandbox.
 ///
-/// User flags take precedence over runtime policy, so these are reported
-/// rather than removed.
+/// User flags take precedence over runtime policy. These are reported rather
+/// than removed.
 pub(crate) fn sandbox_overrides(flags: &ChromiumFlags, mode: SandboxMode) -> Vec<&'static str> {
     match mode {
         SandboxMode::Disabled => Vec::new(),

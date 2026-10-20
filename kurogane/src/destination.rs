@@ -15,8 +15,8 @@ pub(crate) enum Outcome {
     Refuse,
 }
 
-/// The system browser for a web link the user clicked, otherwise nothing:
-/// a page alone never starts another program.
+/// Returns the system browser for a web link the user clicked and a refusal
+/// otherwise. A page alone never starts another program.
 pub(crate) fn external_or_refused(url: &str, user_gesture: bool) -> Outcome {
     if user_gesture && crate::external::is_web_link(url) {
         Outcome::External
@@ -32,8 +32,8 @@ pub(crate) fn is_chromium_page(url: &str) -> bool {
         .is_ok_and(|url| matches!(url.scheme(), "chrome" | "chrome-untrusted" | "devtools"))
 }
 
-/// Whether `url` is an empty document a page fills in itself: no URL,
-/// `about:blank` or `about:srcdoc`.
+/// Returns whether `url` is an empty document a page fills in itself (no
+/// URL, `about:blank` or `about:srcdoc`).
 pub(crate) fn is_blank(url: &str) -> bool {
     url.is_empty()
         || url::Url::parse(url)

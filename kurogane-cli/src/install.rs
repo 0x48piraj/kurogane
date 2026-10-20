@@ -257,7 +257,7 @@ pub(crate) fn packaged_archive(cef: &ProjectCef, version: &str) -> Result<Archiv
 /// Returns the CEF the application will load, installing CEF `version` when
 /// the installation is missing or unverified.
 ///
-/// The application finds the same one itself, so nothing is passed to it.
+/// The application finds the same one itself. Nothing is passed to it.
 pub(crate) fn ensure_cef_runtime(version: &str) -> Result<ProjectCef> {
     tui::step("Checking Chromium engine");
 

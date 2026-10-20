@@ -1,5 +1,6 @@
 //! Browser client implementation.
 
+use std::ffi::CStr;
 use std::path::Path;
 
 use tanso::*;
@@ -10,8 +11,8 @@ use crate::chrome_commands::KuroganeCommandHandler;
 use crate::context_menu;
 use crate::destination::{Outcome, is_blank, is_chromium_page};
 use crate::downloads::{self, Answer, DownloadRequest, SavePrompt};
-use crate::ipc::FrameId;
-use crate::keys::{self, KeyDecision, KeyPress};
+use crate::keys::{self, KeyPress, Route};
+use crate::shortcuts::{self, Shortcut};
 use crate::navigation::{self, NavigationRequest};
 use crate::drag::{self, DragEnter};
 use crate::file_dialog::{self, FileDialogKind, FileDialogRequest};
@@ -21,8 +22,8 @@ use crate::permissions::{self, Answer as PermissionAnswer, Pending, PermissionRe
 use crate::window::{Opening, PopupGeometry, open_browser_window};
 use crate::window_closing;
 
-/// A load the application made itself, through CreateBrowser, LoadURL or
-/// LoadRequest, and the redirects it leads to (cef_types.h)
+/// A load the application made itself (CreateBrowser, LoadURL or
+/// LoadRequest) and the redirects it leads to (cef_types.h)
 const DIRECT_LOAD: TransitionType = TransitionType::DIRECT_LOAD_FLAG;
 /// Back or forward through the browser's history (cef_types.h)
 const FORWARD_BACK: TransitionType = TransitionType::FORWARD_BACK_FLAG;
@@ -40,9 +41,9 @@ wrap_life_span_handler! {
     }
 
     impl LifeSpanHandler {
-        // Give the popup a client of its own, decide whether it opens, and
-        // save the requested geometry of one that does until CEF creates
-        // its window.
+        // Decide whether the popup opens, and save the requested geometry of
+        // one that does until CEF creates its window. The popup keeps its
+        // opener's client.
         fn on_before_popup(
             &self,
             browser: Option<&mut Browser>,
@@ -54,14 +55,11 @@ wrap_life_span_handler! {
             user_gesture: i32,
             popup_features: Option<&PopupFeatures>,
             _window_info: Option<&mut WindowInfo>,
-            client: Option<&mut Option<Client>>,
+            _client: Option<&mut Option<Client>>,
             _settings: Option<&mut BrowserSettings>,
             _extra_info: Option<&mut Option<DictionaryValue>>,
             _no_javascript_access: Option<&mut i32>,
         ) -> i32 {
-            // On every path, a cancelled popup's included
-            own_client(client, &self.app, self.browser_type);
-
             // Before the geometry is saved: CEF reports no abort for a popup
             // cancelled here
             let request = new_window_request(frame, target_url, target_disposition, user_gesture);
@@ -123,10 +121,9 @@ wrap_life_span_handler! {
 
             let mut reg = self.app.registry();
 
-            // A popup has a client of its opener's kind (own_client). The
-            // BrowserView delegate classifies a Views popup exactly; CEF does
-            // not promise which of the two sees it first, and the first
-            // registers it
+            // A popup has its opener's client. The BrowserView delegate
+            // classifies a Views popup exactly; CEF does not promise which of
+            // the two sees it first, and the first registers it
             let (browser_type, opener) = match self.browser_type {
                 // DevTools, with the browser it inspects
                 _ if self.inspects.is_some() => (BrowserType::DevTools, self.inspects),
@@ -186,17 +183,20 @@ wrap_life_span_handler! {
             // here, its window still there. The guard ends with this
             // statement, before anything below calls CEF
             let closed = self.app.registry().browser_closed(browser);
-            let Some(closed) = closed else {
+            let Some(mut closed) = closed else {
                 return;
             };
             debug!("Browser {} destroyed", closed.id.as_u32());
 
-            for waiting in closed.waiting_permissions {
+            for waiting in closed.entry.permissions.take_all() {
                 waiting.answer(false);
             }
-            for waiting in closed.waiting_file_dialogs {
+            for waiting in closed.entry.file_dialogs.take_all() {
                 waiting.cancel();
             }
+            // Released outside the lock, since CEF reports a waiting
+            // download's cancel the moment its callback goes
+            drop(closed.entry);
 
             #[cfg(target_os = "macos")]
             crate::platform::embed::forget_view(closed.id);
@@ -207,8 +207,8 @@ wrap_life_span_handler! {
                 }
             }
 
-            // Cancel any pending async handlers for this browser
-            self.app.router().cancel_all_for_browser(closed.id);
+            // What the browser's documents opened ends with them
+            self.app.router().browser_closed(closed.id);
 
             // Before the last browser ends the application
             if let Some(closing) = closed.closing {
@@ -243,9 +243,9 @@ fn new_window_request(
     .with_kind(new_window_kind(disposition))
 }
 
-/// The kind of window a page asked for with `disposition`. Chromium's other
-/// ways to a tab (a singleton tab, switching to one) are tabs, and an
-/// off-the-record window a window.
+/// Returns the kind of window a page asked for with `disposition`. Chromium's
+/// other ways to a tab (a singleton tab, switching to one) are tabs. An
+/// off-the-record window is a window.
 fn new_window_kind(disposition: WindowOpenDisposition) -> NewWindowKind {
     if disposition == WindowOpenDisposition::NEW_POPUP {
         NewWindowKind::Popup
@@ -262,10 +262,10 @@ fn new_window_kind(disposition: WindowOpenDisposition) -> NewWindowKind {
     }
 }
 
-/// Whether a navigation of `disposition` asks for a window of its own: a
-/// new tab or window, as a link clicked with Ctrl (Cmd on macOS), the middle
-/// button or Shift asks. The current tab, a download (Alt) and an ignored
-/// action are not.
+/// Returns whether a navigation of `disposition` asks for a window of its
+/// own. A link clicked with Ctrl (Cmd on macOS), the middle button or Shift
+/// asks for a new tab or window. The current tab, a download (Alt) and an
+/// ignored action do not.
 fn opens_new_window(disposition: WindowOpenDisposition) -> bool {
     ![
         WindowOpenDisposition::UNKNOWN,
@@ -274,23 +274,6 @@ fn opens_new_window(disposition: WindowOpenDisposition) -> bool {
         WindowOpenDisposition::IGNORE_ACTION,
     ]
     .contains(&disposition)
-}
-
-/// Puts a new client in `client`, in place of the one CEF passes in for a
-/// popup (its opener's). DevTools gets one of its own the same way
-/// (`on_before_dev_tools_popup`).
-///
-/// tanso keeps the reference CEF passes with that client when a handler
-/// leaves it unchanged, so the opener's client, and the application's state
-/// it holds, would never be released. Replacing the client releases that
-/// reference. Remove this once tanso releases it itself.
-fn own_client(client: Option<&mut Option<Client>>, app: &AppHandle, browser_type: BrowserType) {
-    // No client stays no client
-    if let Some(client) = client
-        && client.is_some()
-    {
-        *client = Some(KuroganeClient::new(app.clone(), browser_type, None));
-    }
 }
 
 //
@@ -438,6 +421,15 @@ wrap_keyboard_handler! {
         ) -> i32 {
             pre_key_event(&self.app, browser, event, is_keyboard_shortcut)
         }
+
+        fn on_key_event(
+            &self,
+            browser: Option<&mut Browser>,
+            event: Option<&KeyEvent>,
+            _os_event: Option<&mut sys::MSG>,
+        ) -> i32 {
+            key_event(&self.app, browser, event)
+        }
     }
 }
 
@@ -456,6 +448,15 @@ wrap_keyboard_handler! {
             is_keyboard_shortcut: Option<&mut i32>,
         ) -> i32 {
             pre_key_event(&self.app, browser, event, is_keyboard_shortcut)
+        }
+
+        fn on_key_event(
+            &self,
+            browser: Option<&mut Browser>,
+            event: Option<&KeyEvent>,
+            _os_event: Option<&mut sys::XEvent>,
+        ) -> i32 {
+            key_event(&self.app, browser, event)
         }
     }
 }
@@ -476,12 +477,69 @@ wrap_keyboard_handler! {
         ) -> i32 {
             pre_key_event(&self.app, browser, event, is_keyboard_shortcut)
         }
+
+        fn on_key_event(
+            &self,
+            browser: Option<&mut Browser>,
+            event: Option<&KeyEvent>,
+            _os_event: *mut u8,
+        ) -> i32 {
+            key_event(&self.app, browser, event)
+        }
     }
 }
 
-/// A key on its way to a page, before Chromium's own shortcuts see it
-/// (crate::keys). Only its press reaches the application's hook; consuming
-/// the press drops the key's character and release too.
+/// Owner of the browser a key went to.
+enum KeyTarget {
+    /// Chromium's own browser (DevTools, a window it restored). Its keys are
+    /// Chromium's.
+    Chromium,
+    /// Application's browser in a window of Chromium's (Chrome style).
+    /// Kurogane's shortcuts run there.
+    Window(Option<BrowserId>),
+    /// Application's browser embedded in its own window (Alloy style). No
+    /// shortcut runs there.
+    Embedded(Option<BrowserId>),
+}
+
+/// Returns whose `browser` is. No registry guard outlives the call.
+fn key_target(app: &AppHandle, browser: &Browser) -> KeyTarget {
+    let (id, kind) = {
+        let reg = app.registry();
+        let id = reg.browsers.find_id_by_browser(browser);
+        let kind = id
+            .and_then(|id| reg.browsers.get(id))
+            .map(|state| state.metadata.browser_type);
+        (id, kind)
+    };
+    if matches!(kind, Some(BrowserType::DevTools | BrowserType::ChromeUi)) {
+        return KeyTarget::Chromium;
+    }
+    if browser
+        .host()
+        .is_some_and(|host| host.runtime_style() == RuntimeStyle::ALLOY)
+    {
+        KeyTarget::Embedded(id)
+    } else {
+        KeyTarget::Window(id)
+    }
+}
+
+/// Returns the press `event` is in `browser`.
+fn key_press(event: &KeyEvent, browser: Option<BrowserId>) -> KeyPress {
+    KeyPress::new(
+        event.windows_key_code as u32,
+        event.modifiers,
+        event.character,
+        event.focus_on_editable_field != 0,
+        browser,
+    )
+}
+
+/// Answers CEF for a key on its way to a page (crate::keys). Only its press
+/// reaches the application's hook; consuming the press drops the key's
+/// character and release too. Kurogane's shortcut for it runs in Chromium's
+/// place in a window of Chromium's (crate::shortcuts).
 fn pre_key_event(
     app: &AppHandle,
     browser: Option<&mut Browser>,
@@ -494,38 +552,72 @@ fn pre_key_event(
     if event.type_ != KeyEventType::RAWKEYDOWN {
         return 0;
     }
-    // The guard ends with the block, before the hook runs
-    let id = {
-        let reg = app.registry();
-        let id = reg.browsers.find_id_by_browser(browser);
-        let kind = id
-            .and_then(|id| reg.browsers.get(id))
-            .map(|state| state.metadata.browser_type);
-        // Chromium's own browsers, DevTools' included, are not the application's
-        if matches!(kind, Some(BrowserType::DevTools | BrowserType::ChromeUi)) {
-            return 0;
+    let (press, shortcut) = match key_target(app, browser) {
+        KeyTarget::Chromium => return 0,
+        KeyTarget::Window(id) => {
+            let press = key_press(event, id);
+            let shortcut = shortcuts::shortcut_for(press.key(), press.modifiers());
+            (
+                press.with_command(shortcut.and_then(Shortcut::command)),
+                shortcut,
+            )
         }
-        id
+        KeyTarget::Embedded(id) => (key_press(event, id), None),
     };
-    let press = KeyPress::new(
-        event.windows_key_code as u32,
-        event.modifiers,
-        event.character,
-        event.focus_on_editable_field != 0,
-        id,
-    );
-    answer_key(keys::decide(app, &press), is_keyboard_shortcut)
+    let route = keys::before_page(keys::decide(app, &press), shortcut);
+    if let Route::Run(name) = route
+        && !run_shortcut(browser, name)
+    {
+        return 0;
+    }
+    answer_key(route, is_keyboard_shortcut)
 }
 
-/// What `on_pre_key_event` answers CEF for `decision`: whether the key is
-/// handled, and in `is_keyboard_shortcut` whether it is a shortcut, which
-/// CEF holds until the page has seen the key and runs only if the page lets
-/// it through.
-fn answer_key(decision: KeyDecision, is_keyboard_shortcut: Option<&mut i32>) -> i32 {
-    match decision {
-        KeyDecision::Consume => 1,
-        KeyDecision::Default => 0,
-        KeyDecision::PageFirst => {
+/// Runs Kurogane's shortcut in Chromium's place for a key the page let
+/// through in a window of Chromium's (crate::shortcuts).
+fn key_event(app: &AppHandle, browser: Option<&mut Browser>, event: Option<&KeyEvent>) -> i32 {
+    let (Some(browser), Some(event)) = (browser, event) else {
+        return 0;
+    };
+    if event.type_ != KeyEventType::RAWKEYDOWN {
+        return 0;
+    }
+    let KeyTarget::Window(id) = key_target(app, browser) else {
+        return 0;
+    };
+    let press = key_press(event, id);
+    match shortcuts::shortcut_for(press.key(), press.modifiers()).and_then(Shortcut::name) {
+        Some(name) => i32::from(run_shortcut(browser, name)),
+        None => 0,
+    }
+}
+
+/// Runs the Chromium command of name `name` for a key that went to
+/// `browser` as Chromium runs one of its own shortcuts. The command handler
+/// asks the application about it (crate::chrome_commands). Returns false
+/// when this CEF has no such command and the key goes on.
+fn run_shortcut(browser: &Browser, name: &CStr) -> bool {
+    let (Some(host), Some(id)) = (browser.host(), tanso::id_for_command_id_name(name)) else {
+        warn!(
+            "[Keys] no command {} to run for the key",
+            name.to_string_lossy()
+        );
+        return false;
+    };
+    debug!("[Keys] {} runs for the key", name.to_string_lossy());
+    host.execute_chrome_command(id, WindowOpenDisposition::CURRENT_TAB);
+    true
+}
+
+/// Returns what `on_pre_key_event` answers CEF for `route`. The answer says
+/// whether the key is handled. `is_keyboard_shortcut` says whether it is a
+/// shortcut that CEF holds until the page has seen the key. A key whose
+/// shortcut ran is handled.
+fn answer_key(route: Route, is_keyboard_shortcut: Option<&mut i32>) -> i32 {
+    match route {
+        Route::Taken | Route::Run(_) => 1,
+        Route::On => 0,
+        Route::PageFirst => {
             if let Some(shortcut) = is_keyboard_shortcut {
                 *shortcut = 1;
             }
@@ -699,9 +791,10 @@ fn page_of(browser: &Browser) -> String {
         .unwrap_or_default()
 }
 
-/// The dialog of download `id` was answered, `saved` with a place: a
-/// dismissal cancels the download, and the browser's next waiting download
-/// asks. The guard ends with the statement, before CEF is called.
+/// Acts on the answer to the dialog of download `id`, `saved` when it named
+/// a place. A dismissal cancels the download. The browser's next waiting
+/// download then asks. The guard ends with the statement, before CEF is
+/// called.
 fn answered(app: &AppHandle, browser_id: Option<BrowserId>, id: u32, saved: bool) {
     let (cancel, next) = browser_id
         .and_then(|browser_id| {
@@ -875,9 +968,9 @@ wrap_permission_handler! {
     }
 }
 
-/// The id of `browser` and whether it is the application's: Chromium's own
-/// browsers, DevTools' included, are not, and their requests never reach
-/// the application's hooks.
+/// Returns the id of `browser` and whether it is the application's.
+/// Chromium's own browsers (DevTools' included) are not. Their requests
+/// never reach the application's hooks.
 fn app_browser(app: &AppHandle, browser: Option<&Browser>) -> (Option<BrowserId>, bool) {
     let reg = app.registry();
     let id = browser.and_then(|browser| reg.browsers.find_id_by_browser(browser));
@@ -939,6 +1032,24 @@ wrap_context_menu_handler! {
 }
 
 //
+// FRAME HANDLER
+//
+wrap_frame_handler! {
+    pub struct KuroganeFrameHandler {
+        app: AppHandle,
+    }
+
+    impl FrameHandler {
+        // A frame's document ends with its last notification
+        fn on_frame_destroyed(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>) {
+            if let Some(frame) = frame {
+                self.app.router().frame_gone(frame);
+            }
+        }
+    }
+}
+
+//
 // LOAD HANDLER
 //
 wrap_load_handler! {
@@ -949,17 +1060,20 @@ wrap_load_handler! {
     impl LoadHandler {
         fn on_load_start(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             frame: Option<&mut Frame>,
             _transition_type: TransitionType,
         ) {
-            let Some(frame) = frame else {
+            let (Some(browser), Some(frame)) = (browser, frame) else {
                 return;
             };
             let u: CefString = (&frame.url()).into();
             debug!("[LoadHandler] START {}", u.to_string());
-            // Reset state when the frame loads a new document
-            self.app.router().clear_for_frame(&FrameId::of(frame));
+            // A browser the runtime does not know sends nothing it keeps
+            let browser_id = self.app.registry().browsers.find_id_by_browser(browser);
+            if let Some(browser_id) = browser_id {
+                self.app.router().document_committed(frame, browser_id);
+            }
         }
 
         fn on_load_end(
@@ -1175,8 +1289,8 @@ wrap_drag_handler! {
     }
 }
 
-/// `browser` and its window, if it is a browser of the application's:
-/// registered, and neither DevTools nor one of Chromium's own.
+/// Returns the id and window of `browser` when it is a registered browser
+/// of the application's, neither DevTools nor one of Chromium's own.
 fn application_browser(
     reg: &crate::registry::Registry,
     browser: &Browser,
@@ -1187,6 +1301,38 @@ fn application_browser(
         return None;
     }
     Some((id, reg.windows.window_id_for_browser(id)))
+}
+
+//
+// JS DIALOGS
+//
+// A page's beforeunload cannot hold an end no page may cancel. Every other
+// dialog keeps CEF's default.
+wrap_jsdialog_handler! {
+    pub struct KuroganeJsdialogHandler {
+        app: AppHandle,
+    }
+
+    impl JsdialogHandler {
+        // Leaves the page without asking once the application is ending;
+        // until then Chromium asks the user
+        fn on_before_unload_dialog(
+            &self,
+            _browser: Option<&mut Browser>,
+            _message_text: Option<&CefString>,
+            _is_reload: ::std::os::raw::c_int,
+            callback: Option<&mut JsdialogCallback>,
+        ) -> ::std::os::raw::c_int {
+            match callback {
+                Some(callback) if self.app.is_ending() => {
+                    debug!("[Close] a page's beforeunload passed: the application is ending");
+                    callback.cont(1, None);
+                    1
+                }
+                _ => 0,
+            }
+        }
+    }
 }
 
 //
@@ -1214,6 +1360,10 @@ wrap_client! {
             Some(KuroganeDownloadHandler::new(self.app.clone()))
         }
 
+        fn frame_handler(&self) -> Option<FrameHandler> {
+            Some(KuroganeFrameHandler::new(self.app.clone()))
+        }
+
         fn load_handler(&self) -> Option<LoadHandler> {
             Some(KuroganeLoadHandler::new(self.app.clone()))
         }
@@ -1224,6 +1374,10 @@ wrap_client! {
 
         fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
             Some(KuroganeContextMenuHandler::new(self.app.clone()))
+        }
+
+        fn jsdialog_handler(&self) -> Option<JsdialogHandler> {
+            Some(KuroganeJsdialogHandler::new(self.app.clone()))
         }
 
         // Only for an application that answers file dialogs
@@ -1238,10 +1392,10 @@ wrap_client! {
             wanted.then(|| KuroganeDragHandler::new(self.app.clone()))
         }
 
-        // Only for an application that asks to see keys
+        // Kurogane's shortcuts run from it in every application
+        // (crate::shortcuts)
         fn keyboard_handler(&self) -> Option<KeyboardHandler> {
-            let wanted = self.app.hooks().is_some_and(|hooks| hooks.key.is_some());
-            wanted.then(|| KuroganeKeyboardHandler::new(self.app.clone()))
+            Some(KuroganeKeyboardHandler::new(self.app.clone()))
         }
 
         // Only OnOpenURLFromTab is answered; every other method keeps CEF's
@@ -1353,46 +1507,22 @@ mod tests {
     }
 
     #[test]
-    fn a_new_browser_gets_a_client_of_its_own() {
-        let app = AppHandle::detached();
-        let opener = KuroganeClient::new(app.clone(), BrowserType::Main, None);
-
-        // What CEF passes in: the opener's client, with a reference of its own
-        let mut passed = Some(opener.clone());
-        own_client(Some(&mut passed), &app, BrowserType::Main);
-        let own = passed.expect("a client is replaced, not cleared");
-        assert_ne!(
-            tanso::ImplClient::get_raw(&own),
-            tanso::ImplClient::get_raw(&opener),
-            "the new browser gets a client of its own"
-        );
-        assert!(
-            tanso::rc::Rc::has_one_ref(&opener),
-            "the reference that came with the opener's client is released"
-        );
-
-        // CEF passed no client: none is made up
-        let mut none: Option<Client> = None;
-        own_client(Some(&mut none), &app, BrowserType::Main);
-        assert!(none.is_none());
-    }
-
-    #[test]
     fn page_first_keys_are_shortcuts_and_the_rest_are_left_as_cef_set_them() {
-        for (decision, handled, shortcut) in [
-            (KeyDecision::Default, 0, 7),
-            (KeyDecision::Consume, 1, 7),
-            (KeyDecision::PageFirst, 0, 1),
+        for (route, handled, shortcut) in [
+            (Route::On, 0, 7),
+            (Route::Taken, 1, 7),
+            (Route::Run(c"IDC_CLOSE_TAB"), 1, 7),
+            (Route::PageFirst, 0, 1),
         ] {
             // 7 stands for whatever CEF passed in
             let mut is_keyboard_shortcut = 7;
             assert_eq!(
-                answer_key(decision, Some(&mut is_keyboard_shortcut)),
+                answer_key(route, Some(&mut is_keyboard_shortcut)),
                 handled,
-                "{decision:?}"
+                "{route:?}"
             );
-            assert_eq!(is_keyboard_shortcut, shortcut, "{decision:?}");
-            assert_eq!(answer_key(decision, None), handled, "{decision:?}");
+            assert_eq!(is_keyboard_shortcut, shortcut, "{route:?}");
+            assert_eq!(answer_key(route, None), handled, "{route:?}");
         }
     }
 }

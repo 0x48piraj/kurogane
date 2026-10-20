@@ -4,7 +4,7 @@
 //! relative path beneath the root fd with `O_NOFOLLOW_ANY` (macOS 11+).
 //! Unlike `O_NOFOLLOW`, which applies only to the final component,
 //! `O_NOFOLLOW_ANY` rejects a symlink at any path component. A path cannot
-//! leave the root; validated names contain neither `..` nor separators, and
+//! leave the root. Validated names contain neither `..` nor separators and
 //! resolution never follows a symlink.
 //!
 //! A symlink at any component, including the final one, fails with `ELOOP`.
@@ -13,8 +13,8 @@
 //! canonical on-disk path while preserving case and normalization. The
 //! authorization layer re-checks that path against the deny rules. This is
 //! the macOS equivalent of the Linux `/proc/self/fd` and Windows
-//! `GetFinalPathNameByHandleW` re-checks, and it prevents case-insensitive
-//! aliases on the default APFS/HFS+ volumes from bypassing the check.
+//! `GetFinalPathNameByHandleW` re-checks. It keeps case-insensitive aliases
+//! on the default APFS/HFS+ volumes from bypassing the check.
 //!
 //! A file may have several names through hard links. `F_GETPATH` reports the
 //! name used by the most recent kernel lookup, which may be outside the root.
@@ -23,8 +23,8 @@
 //! `fstatat` confirms that the leaf still names the same file.
 //!
 //! A volume mounted beneath the root is treated the same as a link. macOS
-//! resolution cannot restrict lookup to a device boundary, so every opened
-//! object, every leaf touched by a mutation, and every listed directory must
+//! resolution cannot restrict lookup to a device boundary. Every opened
+//! object, every leaf touched by a mutation and every listed directory must
 //! have the same device as the root. Objects on another device are refused
 //! (`Denial::ObjectLocation`) or omitted.
 //!
@@ -36,8 +36,8 @@
 //! replace it between the checks and the operation; a link placed there is
 //! removed or renamed as the link itself, never followed.
 //!
-//! `O_NOFOLLOW_ANY` requires macOS 11 (Darwin 20). On older kernels the flag
-//! is ignored, so roots cannot be opened there.
+//! `O_NOFOLLOW_ANY` requires macOS 11 (Darwin 20). Older kernels ignore the
+//! flag and roots cannot be opened there.
 
 use std::ffi::{CStr, CString, OsStr};
 use std::fs::{File, OpenOptions};
@@ -55,14 +55,14 @@ use super::{Create, DirEntry, EntryKind};
 use crate::capability::error::{Denial, FsError};
 use crate::capability::path::{Name, RelPath};
 
-/// `O_NOFOLLOW_ANY` (`<sys/fcntl.h>`, macOS 11+): fail if *any* component of
-/// the path is a symlink, not just the final one. Plain `O_NOFOLLOW` only
-/// covers the final component, so an interior directory symlink would be
-/// followed and could leave the root. `libc` does not always export this, so
-/// it is defined here.
+/// `O_NOFOLLOW_ANY` (`<sys/fcntl.h>`, macOS 11+) fails an open if *any*
+/// component of the path is a symlink, not just the final one. Plain
+/// `O_NOFOLLOW` only covers the final component; an interior directory
+/// symlink would be followed and could leave the root. `libc` does not always
+/// export the flag. It is defined here.
 const O_NOFOLLOW_ANY: c_int = 0x2000_0000;
 
-/// An entry held for removal or renaming: its name within the parent fd.
+/// An entry held for removal or renaming by its name within the parent fd.
 pub(crate) struct Entry {
     leaf: Name,
 }
@@ -142,7 +142,7 @@ fn device(fd: RawFd) -> io::Result<libc::dev_t> {
     Ok(stat(fd)?.st_dev)
 }
 
-/// Refuses `fd` unless it lies on the same volume as `anchor`: a different
+/// Refuses `fd` unless it lies on the same volume as `anchor`. A different
 /// device is a volume mounted inside the root.
 fn same_volume(anchor: RawFd, fd: RawFd) -> Result<(), FsError> {
     if device(anchor)? == device(fd)? {
@@ -329,13 +329,13 @@ pub(super) fn rename(dir: &File, entry: Entry, to: &File, leaf: &Name) -> Result
 
 /// Opens `rel` beneath the root fd in one syscall. `O_NOFOLLOW_ANY` refuses a
 /// symlink met at *any* component (POSIX `O_NOFOLLOW` covers only the final
-/// one, so an interior directory symlink would otherwise be followed straight
+/// one; an interior directory symlink would otherwise be followed straight
 /// out of the root). With no symlink traversed and no `..` in the validated
 /// names, resolution from the root fd cannot leave the root. A symlink is
 /// `ELOOP`, a confinement verdict.
 ///
-/// `O_NOFOLLOW_ANY` covers the final component too, and must be passed
-/// alone: XNU's `vn_open_auth` answers `EINVAL` when it is combined with
+/// `O_NOFOLLOW_ANY` covers the final component too and must be passed alone.
+/// XNU's `vn_open_auth` answers `EINVAL` when it is combined with
 /// `O_NOFOLLOW`.
 fn lookup(root: &File, rel: &RelPath, flags: c_int) -> Result<OwnedFd, FsError> {
     let fd = openat(root.as_raw_fd(), &c_path(rel), flags | O_NOFOLLOW_ANY, 0)?;
@@ -353,8 +353,8 @@ fn openat(dirfd: RawFd, name: &CStr, flags: c_int, mode: mode_t) -> Result<Owned
     Ok(unsafe { OwnedFd::from_raw_fd(rc) })
 }
 
-/// `ELOOP` means a symlink was met (`O_NOFOLLOW_ANY` / `O_NOFOLLOW`): a
-/// confinement verdict, not an I/O error. (Mount points are caught by the
+/// `ELOOP` means a symlink was met (`O_NOFOLLOW_ANY` / `O_NOFOLLOW`). That is
+/// a confinement verdict, not an I/O error. (Mount points are caught by the
 /// device checks; macOS resolution itself never reports them.)
 fn lookup_error(err: io::Error) -> FsError {
     match err.raw_os_error() {

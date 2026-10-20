@@ -1,19 +1,26 @@
 //! IPC message router
 //!
 //! Central dispatch layer for all IPC messages between browser and renderer.
-//! Owns the per-subsystem handler maps and the ACL, which it applies once,
-//! here, before any subsystem sees a message.
+//! Owns the per-subsystem handler maps, the ACL and the documents messages
+//! come from. Applies the ACL once, here, before any subsystem sees a
+//! message.
+
+use std::sync::Arc;
+
+use std::time::Instant;
 
 use tanso::*;
 
 use crate::acl::{CommandAcl, Origin};
 use crate::browser_registry::BrowserId;
 use tracing::debug;
+use crate::ipc::batch;
 use crate::ipc::browser_state::{ErrorCode, FrameId, IpcContext, IpcError};
+use crate::ipc::document::{Document, Documents};
 use crate::ipc::envelope::*;
 use crate::ipc::request_response::RequestResponseSubsystem;
 use crate::ipc::event::EventSubsystem;
-use crate::ipc::stream::{StreamResponder, StreamSubsystem};
+use crate::ipc::stream::{StreamKey, StreamResponder, StreamSubsystem};
 use crate::runtime::AppHandle;
 
 /// Top-level IPC router that owns all subsystems.
@@ -22,6 +29,7 @@ pub struct IpcRouter {
     pub event: EventSubsystem,
     pub stream: StreamSubsystem,
     acl: CommandAcl,
+    documents: Documents,
 }
 
 /// The ACL's answer for one incoming message.
@@ -34,8 +42,8 @@ enum Verdict<'p> {
     RefuseEvent(&'p str),
 }
 
-/// What a message opens: a command invocation, a stream or an event
-/// subscription, whose sender waits for an answer (the invocation's promise,
+/// What a message opens. The sender of a command invocation, a stream or an
+/// event subscription waits for an answer (the invocation's promise,
 /// `openStream`'s promise, the subscription's `onError`). Follow-ups
 /// (cancel, stream data, end, error and cancel, unsubscribe) open nothing
 /// and wait for nothing.
@@ -96,24 +104,70 @@ fn refuse_opening(frame: &Frame, envelope: &Envelope, error: IpcError) {
 ///
 /// Routes a decoded envelope + payload to the appropriate subsystem handler.
 /// Needs no [`IpcRouter`] which exists only in the browser process.
-/// `filled` already holds the bytes of the ArrayBuffer the message makes.
+/// `filled` already holds the bytes of the ArrayBuffer the message makes;
+/// `addressed` is the frame it reached.
 pub fn route_renderer(
-    frame: &mut Frame,
+    addressed: &FrameId,
     envelope: &Envelope,
     payload: &[u8],
     filled: Option<V8BackingStore>,
 ) -> bool {
     match envelope.subsystem {
-        SUB_RPC => crate::ipc::rpc::renderer::handle_rpc_renderer(frame, envelope, payload, filled),
-        SUB_EVENT => {
-            crate::ipc::event::renderer::handle_event_renderer(frame, envelope, payload, filled)
+        SUB_RPC => {
+            crate::ipc::rpc::renderer::handle_rpc_renderer(addressed, envelope, payload, filled)
         }
-        SUB_STREAM => {
-            crate::ipc::stream::renderer::handle_stream_renderer(frame, envelope, payload, filled)
+        SUB_EVENT => {
+            crate::ipc::event::renderer::handle_event_renderer(addressed, envelope, payload, filled)
+        }
+        SUB_STREAM => crate::ipc::stream::renderer::handle_stream_renderer(
+            addressed, envelope, payload, filled,
+        ),
+        SUB_BATCH => {
+            route_batch(addressed, payload, 0, None);
+            true
         }
         _ => {
             debug!("[Router Renderer] unknown subsystem {}", envelope.subsystem);
             false
+        }
+    }
+}
+
+/// Routes the messages of a batch from byte `from` to `addressed`, each as if
+/// it came alone, until `deadline` passes. Returns where the rest starts
+/// when it passed. At least one message goes each time. A run of answers to
+/// calls settles under one enter of its context
+/// ([`settle_answers`](crate::ipc::rpc::renderer::settle_answers)).
+pub(crate) fn route_batch(
+    addressed: &FrameId,
+    payload: &[u8],
+    from: usize,
+    deadline: Option<Instant>,
+) -> Option<usize> {
+    let is_answer =
+        |e: &Envelope| e.subsystem == SUB_RPC && matches!(e.opcode, RPC_RESOLVE | RPC_REJECT);
+    let in_time = || deadline.is_none_or(|deadline| Instant::now() < deadline);
+    let mut items = batch::Items::at(payload, from);
+    let mut first = true;
+    loop {
+        if !first && !in_time() {
+            return items.peek().map(|_| items.pos());
+        }
+        first = false;
+        let (envelope, data) = items.next()?;
+        if is_answer(&envelope) {
+            let more = std::iter::from_fn(|| {
+                let answer = in_time() && items.peek().is_some_and(|(e, _)| is_answer(&e));
+                answer.then(|| items.next()).flatten()
+            });
+            crate::ipc::rpc::renderer::settle_answers(
+                addressed,
+                std::iter::once((envelope, data)).chain(more),
+            );
+        } else if envelope.subsystem == SUB_BATCH {
+            debug!("[Router Renderer] batch inside a batch dropped");
+        } else {
+            route_renderer(addressed, &envelope, data, None);
         }
     }
 }
@@ -130,6 +184,7 @@ impl IpcRouter {
             event,
             stream,
             acl,
+            documents: Documents::default(),
         }
     }
 
@@ -148,7 +203,7 @@ impl IpcRouter {
         payload: &[u8],
         ctx: IpcContext,
     ) -> bool {
-        if self.refuse(frame, envelope, payload, &ctx.origin) {
+        if self.refuse(frame, envelope, payload, ctx.origin()) {
             return true;
         }
         match envelope.subsystem {
@@ -166,9 +221,9 @@ impl IpcRouter {
         }
     }
 
-    /// Answers a message the ACL refuses, in the form its caller awaits:
-    /// an RPC rejection, a failed stream open, or a refused subscription.
-    /// All carry [`ErrorCode::Acl`]. Returns true when the message was refused.
+    /// Answers a message the ACL refuses in the form its caller awaits (an
+    /// RPC rejection, a failed stream open or a refused subscription). All
+    /// carry [`ErrorCode::Acl`]. Returns true when the message was refused.
     fn refuse(&self, frame: &Frame, envelope: &Envelope, payload: &[u8], origin: &Origin) -> bool {
         let message = match verdict(&self.acl, envelope, payload, origin) {
             Verdict::Pass => return false,
@@ -202,47 +257,66 @@ impl IpcRouter {
         refuse_opening(frame, envelope, IpcError::new("the browser is not open"));
     }
 
-    /// Drops everything opened by the document in `frame`. Pending requests are
-    /// cancelled and their late responses suppressed; subscriptions and streams
-    /// are removed. State never carries into the next document, regardless of
-    /// origin. State belonging to invalid frames is swept at the same time.
-    pub fn clear_for_frame(&self, frame: &FrameId) {
-        let requests = self.request_response.pending.cancel_frame(frame);
-        let events = self.event.clear_frame(frame);
-        let streams = self.stream.clear_frame(frame);
-        if requests + events + streams > 0 {
-            debug!(
-                "[Router] frame started a new document: cancelled {} requests, removed {} event subs, {} streams",
-                requests, events, streams
-            );
-        }
-
-        let events = self.event.clear_invalid_frames();
-        let streams = self.stream.clear_invalid_frames();
-        if events + streams > 0 {
-            debug!(
-                "[Router] cleaned up {} event subs, {} streams for invalid frames",
-                events, streams
-            );
+    /// Answers a message past the page's limit, refused unread, with
+    /// [`ErrorCode::TooLarge`]. What it opens is refused; a stream chunk
+    /// fails its stream; any other follow-up is dropped.
+    pub(crate) fn refuse_oversized(&self, frame: &Frame, envelope: &Envelope, ctx: IpcContext) {
+        let error = IpcError::with_code(MESSAGE_TOO_LARGE, ErrorCode::TooLarge);
+        if (envelope.subsystem, envelope.opcode) == (SUB_STREAM, STREAM_DATA) {
+            self.stream
+                .fail(StreamKey::new(&ctx, envelope.correlation_id), error);
+        } else {
+            refuse_opening(frame, envelope, error);
         }
     }
 
-    /// Cancel all pending async handlers for a given browser.
-    pub fn cancel_all_for_browser(&self, browser_id: BrowserId) -> usize {
-        let req_count = self
+    /// Returns the document `frame` shows, for a message it sent. A frame
+    /// that has gone shows none.
+    pub(crate) fn document(
+        &self,
+        frame: &Frame,
+        frame_id: &FrameId,
+        browser: BrowserId,
+    ) -> Option<Arc<Document>> {
+        self.documents.current(frame, frame_id, browser)
+    }
+
+    /// Starts the document `frame` commits, ending the one it replaces.
+    pub(crate) fn document_committed(&self, frame: &Frame, browser: BrowserId) {
+        if let Some(ended) = self.documents.commit(frame, browser) {
+            self.end(&ended, "another document committed in its frame");
+        }
+    }
+
+    /// Ends the document of `frame`, which has gone.
+    pub(crate) fn frame_gone(&self, frame: &Frame) {
+        if let Some(ended) = self.documents.frame_gone(frame) {
+            self.end(&ended, "its frame has gone");
+        }
+    }
+
+    /// Ends every document of `browser`, which has closed.
+    pub(crate) fn browser_closed(&self, browser: BrowserId) {
+        for ended in self.documents.browser_closed(browser) {
+            self.end(&ended, "its browser has closed");
+        }
+    }
+
+    /// Drops everything `document` opened, which has ended. Pending requests
+    /// are cancelled and their late responses suppressed; subscriptions and
+    /// streams are removed. Nothing carries into a later document.
+    fn end(&self, document: &Document, why: &str) {
+        let requests = self
             .request_response
             .pending
-            .cancel_all_for_browser(browser_id);
-        // Clean up event subscriptions and stream state
-        let events = self.event.clear_for_browser(browser_id);
-        let streams = self.stream.clear_for_browser(browser_id);
-        if req_count + events + streams > 0 {
+            .cancel_document(document.key());
+        let events = self.event.remove_document(document.key());
+        let streams = self.stream.close_document(document.key());
+        if requests + events + streams > 0 {
             debug!(
-                "[Router] browser closed: canceled {} pending handlers, removed {} event subs, {} streams",
-                req_count, events, streams
+                "[Router] a document ended, {why}: cancelled {requests} requests, removed {events} event subs, {streams} streams"
             );
         }
-        req_count
     }
 }
 

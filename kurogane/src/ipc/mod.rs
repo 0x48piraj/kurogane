@@ -1,8 +1,10 @@
 pub(crate) mod envelope;
+pub(crate) mod batch;
 pub(crate) mod transport {
     pub(crate) mod message;
 }
 pub(crate) mod browser_state;
+pub(crate) mod document;
 pub(crate) mod renderer_registry;
 pub(crate) mod renderer_state;
 pub(crate) mod pending;
@@ -17,6 +19,9 @@ pub(crate) mod browser;
 pub(crate) mod renderer;
 pub(crate) mod renderer_inbox;
 pub(crate) mod renderer_delivery;
+pub(crate) mod pacing;
+pub(crate) mod renderer_outbox;
+pub(crate) mod browser_outbox;
 
 // Public API: the types handlers see.
 pub use browser_state::{ErrorCode, IpcError};

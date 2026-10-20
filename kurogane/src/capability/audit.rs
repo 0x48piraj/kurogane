@@ -2,7 +2,7 @@
 //!
 //! 1. The command ACL and filesystem grants are disjoint; no ACL rule yields
 //!    native access and an ACL rejection never revokes a grant.
-//! 2. [`Filesystem::authorize`] is the only origin-dependent decision: equal
+//! 2. [`Filesystem::authorize`] is the only origin-dependent decision. Equal
 //!    grants under different origins behave identically.
 //! 3. Every denial is class-level text that never contains the request.
 

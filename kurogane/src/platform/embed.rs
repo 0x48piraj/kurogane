@@ -1,16 +1,16 @@
-//! The window CEF makes for a browser embedded with
-//! [`AppInstance::create_child_browser`](crate::AppInstance::create_child_browser):
-//! a native child window of the application's own window.
+//! Native child window CEF makes in the application's own window for a
+//! browser embedded with
+//! [`AppInstance::create_child_browser`](crate::AppInstance::create_child_browser).
 //!
 //! Closing. Once such a browser is ready to close, CEF's default asks the
 //! host's top-level window to close (`WM_CLOSE` on Windows, `performClose:` on
 //! macOS) and finishes only when a window is destroyed. Kurogane destroys the
 //! browser's own window instead, which completes the close
-//! (`CefLifeSpanHandler::DoClose`). Linux needs neither: CEF closes the
+//! (`CefLifeSpanHandler::DoClose`). Linux needs neither; CEF closes the
 //! browser's own X window there.
 //!
-//! Placing. CEF places the window once, at its creation bounds, and has no
-//! call that moves it: `CefBrowserHost::WasResized` is only for windowless
+//! Placing. CEF places the window once at its creation bounds. It has no call
+//! that moves it; `CefBrowserHost::WasResized` is only for windowless
 //! browsers (cef_browser.h). [`BrowserHandle::set_bounds`](crate::BrowserHandle::set_bounds)
 //! moves it the way CEF's sample client does on Windows and X11
 //! (`BrowserWindowStd*::SetBounds`). On macOS CEF makes the view stretch with
@@ -33,10 +33,10 @@ pub(crate) use imp::{forget_view, remember_view};
 
 /// Runs Chromium on X11 in an embedded application on Linux.
 ///
-/// CEF parents an embedded browser to an X11 window there, and Chromium
-/// draws into it only on its X11 backend. In a Wayland session Chromium picks
-/// Wayland by itself: the page goes to a surface of its own beside the host's
-/// window, and the browser's close never completes.
+/// CEF parents an embedded browser to an X11 window there. Chromium draws
+/// into it only on its X11 backend. In a Wayland session Chromium picks
+/// Wayland by itself. The page then goes to a surface of its own beside the
+/// host's window and the browser's close never completes.
 /// `App::chromium_flag_with_value("ozone-platform", ..)` still overrides this;
 /// as with every switch the runtime sets, the process's own command line does
 /// not.
@@ -71,7 +71,7 @@ mod close {
 
     /// Destroys `browser`'s own window once the running CEF callback returns.
     ///
-    /// Destroying it re-enters CEF's close, so it cannot happen inside
+    /// Destroying it re-enters CEF's close. It cannot happen inside
     /// `DoClose`. Returns false when the task could not be posted.
     pub(crate) fn destroy_child_window_later(browser: &Browser) -> bool {
         let mut task = DestroyChildWindow::new(browser.clone());
@@ -227,9 +227,9 @@ mod imp {
 
     thread_local! {
         /// The view of each browser made by create_child_browser, held
-        /// weakly. Only its parent keeps CEF's view alive, and it can be
-        /// freed before the browser's OnBeforeClose, so the browser's handle
-        /// alone could name a freed object.
+        /// weakly. Only its parent keeps CEF's view alive. The view can be
+        /// freed before the browser's OnBeforeClose. The browser's handle
+        /// alone could then name a freed object.
         static VIEWS: RefCell<HashMap<BrowserId, Weak<NSView>>> = RefCell::new(HashMap::new());
     }
 

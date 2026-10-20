@@ -1,16 +1,16 @@
 //! Windows backend for filesystem access confined beneath a directory handle.
 //!
 //! Path resolution is performed by NT relative to the root or parent handle.
-//! Validated path components contain no `..`, and `OBJ_DONT_REPARSE` prevents
-//! traversal through symlinks, junctions and mount points, including at the
-//! final component.
+//! Validated path components contain no `..`. `OBJ_DONT_REPARSE` prevents
+//! traversal through symlinks, junctions and mount points, the final component
+//! included.
 //!
 //! `OBJ_CASE_INSENSITIVE` preserves Win32 name semantics. Object locations
 //! come from `GetFinalPathNameByHandleW`, providing the long, on-disk path
 //! used by the authorization layer to catch aliases such as 8.3 names.
 //!
-//! Removals and renames operate on the verified entry handle, so the object
-//! that was authorized is the object that is modified. Data reparse points
+//! Removals and renames operate on the verified entry handle. The object that
+//! was authorized is the object that is modified. Data reparse points
 //! handled by the filesystem filter stack, such as WOF compression, dedup
 //! and cloud placeholders, are not treated as reparse-point traversal.
 //!
@@ -66,7 +66,7 @@ const ENTRY_ACCESS: FILE_ACCESS_RIGHTS = DELETE | FILE_READ_ATTRIBUTES | SYNCHRO
 /// Reparse tags with this bit redirect name resolution (symlinks, junctions).
 const TAG_NAME_SURROGATE: u32 = 0x2000_0000;
 
-/// An entry held for removal or renaming: a handle opened with `DELETE`.
+/// Entry held for removal or renaming, as a handle opened with `DELETE`.
 pub(crate) struct Entry {
     handle: File,
 }

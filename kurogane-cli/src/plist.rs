@@ -1,8 +1,8 @@
 //! Property lists, as a macOS bundle's `Info.plist` files and its signing
 //! entitlements are written.
 //!
-//! A plist is built as data and written by one serializer, so every value a
-//! bundle declares is escaped the same way, and a new key is one more entry.
+//! A plist is built as data and written by one serializer. Every value a
+//! bundle declares is escaped the same way. A new key is one more entry.
 
 use thiserror::Error;
 
@@ -35,8 +35,8 @@ impl From<bool> for Value {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Dict(Vec<(String, Value)>);
 
-/// A key or value XML cannot carry: XML 1.0 has no form, escaped or not, for
-/// most control characters.
+/// A key or value XML cannot carry. XML 1.0 has no form for most control
+/// characters, escaped or not.
 #[derive(Debug, Error, PartialEq, Eq)]
 #[error("the property list key {key:?} holds {character:?}, which a property list cannot")]
 pub struct PlistError {

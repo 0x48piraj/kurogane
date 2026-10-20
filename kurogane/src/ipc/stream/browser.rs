@@ -4,15 +4,15 @@
 //! chunk delivery, completion, cancellation and cleanup of active streams.
 //! Each stream gets its own handler instance from the registered factory.
 //!
-//! An open is answered before the handler can send: `STREAM_BROWSER_OPENED`
-//! once `on_open` accepts, or `STREAM_BROWSER_ERROR`.
+//! An open is answered before the handler can send. The answer is
+//! `STREAM_BROWSER_OPENED` once `on_open` accepts and `STREAM_BROWSER_ERROR`
+//! otherwise.
 //!
-//! Streams are scoped to the frame and origin that opened them. Only that
-//! frame may send data, complete, or cancel the stream and only while it
-//! retains the same origin.
+//! Streams are scoped to the document that opened them. Only that document
+//! may send data, complete or cancel the stream, which closes with it.
 //!
-//! Stream responders share stream state, so responses stop once the stream
-//! has ended or failed.
+//! Stream responders share stream state. Responses stop once the stream has
+//! ended or failed.
 
 use tanso::*;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -51,6 +51,20 @@ impl StreamSubsystem {
         }
     }
 
+    /// Fails `key`'s stream with `error`, as a failing handler does. Its
+    /// handler is dropped without `on_error`, which reports only the page's
+    /// own failures.
+    pub(crate) fn fail(&self, key: StreamKey, error: IpcError) {
+        let Some(entry) = self.streams.lock().unwrap().remove(&key) else {
+            debug!("[Stream Browser] failure for unknown stream {}", key.id);
+            return;
+        };
+        if !entry.is_closed() {
+            let _ = entry.responder(&key).error(error);
+        }
+        entry.close();
+    }
+
     fn on_cancel(&self, key: &StreamKey) -> bool {
         if let Some(entry) = self.streams.lock().unwrap().remove(key) {
             entry.close();
@@ -73,8 +87,8 @@ impl StreamSubsystem {
         let closed = Arc::new(AtomicBool::new(false));
         let responder = StreamResponder::bound(
             frame.clone(),
+            ctx.document.clone(),
             stream_id,
-            ctx.url_origin.clone(),
             closed.clone(),
         );
 
@@ -146,10 +160,9 @@ impl StreamSubsystem {
         );
 
         let mut entry = StreamEntry {
-            browser_id: ctx.browser_id,
+            document: ctx.document,
             handler,
             frame: frame.clone(),
-            url_origin: ctx.url_origin,
             closed,
         };
         let opened = catch_unwind(AssertUnwindSafe(|| entry.handler.on_opened(&responder)));
@@ -187,7 +200,7 @@ impl StreamSubsystem {
             return true;
         }
 
-        let responder = entry.responder(stream_id);
+        let responder = entry.responder(&key);
         let data_result = catch_unwind(AssertUnwindSafe(|| {
             entry.handler.on_chunk(payload, &responder)
         }));
@@ -227,7 +240,7 @@ impl StreamSubsystem {
             // Another thread ended or failed the stream: the page has its answer
             return true;
         }
-        let responder = entry.responder(stream_id);
+        let responder = entry.responder(&key);
         let responder_clone = responder.clone();
         let end_result = catch_unwind(AssertUnwindSafe(|| {
             entry.handler.on_end(&result_str, responder)

@@ -1,4 +1,4 @@
-//! Winit + Kurogane: Views mode (scheduler driven)
+//! Winit and Kurogane in Views mode, pumped when Chromium asks.
 //!
 //! Chromium owns the native window via the Views framework.
 //! The host application owns the outer winit event loop.
@@ -21,14 +21,14 @@ use kurogane::{App, PumpRequest};
 use winit::application::ApplicationHandler;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 
-/// The longest the loop waits between pumps: cefclient's kMaxTimerDelay.
+/// The longest the loop waits between pumps (cefclient's kMaxTimerDelay).
 /// CEF does not promise to ask again after every pump.
 const MAX_PUMP_DELAY: Duration = Duration::from_millis(1000 / 30);
 
 struct ViewsDriver {
     handle: kurogane::AppInstance,
-    /// The earliest deadline CEF asked for, and never later than
-    /// MAX_PUMP_DELAY after the last pump
+    /// The earliest deadline CEF asked for, never later than MAX_PUMP_DELAY
+    /// after the last pump
     next_pump: Instant,
     stats: Option<PumpStats>,
 }

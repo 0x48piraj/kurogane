@@ -1,4 +1,6 @@
-//! What the application hears as one of its windows closes:
+//! Window closing reports.
+//!
+//! The application hears of each of its windows closing through
 //! [`App::on_window_closing`](crate::App::on_window_closing).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -7,12 +9,13 @@ use tanso::{ImplView, ImplWindow, Rect, Window};
 use tracing::{debug, error};
 
 use crate::runtime::AppHandle;
+use crate::window::shown_state;
 use crate::window_options::{WindowPlacement, WindowState};
 use crate::window_registry::WindowId;
 
 /// A window of the application's closing, passed to
-/// [`App::on_window_closing`](crate::App::on_window_closing): which it is,
-/// and where it was, to open it there again with
+/// [`App::on_window_closing`](crate::App::on_window_closing). It says which
+/// window it is and where it was, to open it there again with
 /// [`WindowOptions::placement`](crate::WindowOptions::placement).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WindowClosing {
@@ -22,9 +25,9 @@ pub struct WindowClosing {
 }
 
 impl WindowClosing {
-    /// The window: the one
+    /// The window
     /// [`AppInstance::create_window`](crate::AppInstance::create_window)
-    /// returned, or the start window.
+    /// returned or the start window.
     pub fn window(&self) -> WindowId {
         self.window
     }
@@ -32,7 +35,7 @@ impl WindowClosing {
     /// The name its options gave it
     /// ([`WindowOptions::name`](crate::WindowOptions::name)); none for a
     /// window opened without one, as a page's is. The name is free from
-    /// this report on: a window opened now may take it.
+    /// this report on. A window opened now may take it.
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }
@@ -40,9 +43,9 @@ impl WindowClosing {
     /// Where the window was and how it showed. A window maximized,
     /// minimized or fullscreen gives the place and size it restores to, not
     /// the display it fills. The state is `Normal`, `Maximized` or
-    /// `Fullscreen`: a window minimized, or never shown, gives the state it
-    /// shows in once restored, so the placement given back opens a window
-    /// the user sees.
+    /// `Fullscreen`. A window minimized or never shown gives the state it
+    /// shows in once restored. The placement given back opens a window the
+    /// user sees.
     ///
     /// Under xfwm4 a window the user maximized can give its maximized place
     /// and size as `Normal` because xfwm4 sends a maximize's geometry before
@@ -67,8 +70,8 @@ pub(crate) struct Closing {
 /// Tells the application's hook that `closing`'s window closes. UI thread,
 /// from the browser's OnBeforeClose, which every way a window closes goes
 /// through while the window still answers, before the last one ends the
-/// application. Call it with no registry guard held: the hook may read the
-/// application's state. A hook that panics is logged, and the window closes
+/// application. Call it with no registry guard held. The hook may read the
+/// application's state. A hook that panics is logged and the window closes
 /// as it would.
 pub(crate) fn report(app: &AppHandle, closing: Closing) {
     let Some(hooks) = app.hooks() else {
@@ -78,25 +81,41 @@ pub(crate) fn report(app: &AppHandle, closing: Closing) {
         return;
     };
     let window = &closing.window;
-    // A minimized window comes back as it showed before. One CEF opened
-    // hidden is minimized too (Windows), and comes back as it opened
-    let state = if window.is_minimized() != 0 {
-        closing.shown
-    } else if window.is_fullscreen() != 0 {
-        WindowState::Fullscreen
-    } else if window.is_maximized() != 0 {
-        WindowState::Maximized
-    } else {
+    let now = shown_state(window);
+    let state = match now {
+        // A minimized window comes back as it showed before. One CEF opened
+        // hidden is minimized too (Windows) and comes back as it opened
+        WindowState::Minimized => closing.shown,
+        // On macOS a zoomed window on another Space reads normal. It keeps
+        // the state it showed in at its last frame
         WindowState::Normal
+            if cfg!(target_os = "macos") && closing.shown == WindowState::Maximized =>
+        {
+            WindowState::Maximized
+        }
+        WindowState::Normal
+        | WindowState::Maximized
+        | WindowState::Fullscreen
+        | WindowState::Hidden => now,
+    };
+    // A window closing in its normal state restores to where it is, a size
+    // still settling included (crate::window_registry)
+    let restored = match state {
+        WindowState::Normal if now == WindowState::Normal => {
+            Some(window.client_area_bounds_in_screen())
+        }
+        WindowState::Normal
+        | WindowState::Minimized
+        | WindowState::Maximized
+        | WindowState::Fullscreen
+        | WindowState::Hidden => closing.restored,
     };
     let Rect {
         x,
         y,
         width,
         height,
-    } = closing
-        .restored
-        .unwrap_or_else(|| window.bounds_in_screen());
+    } = restored.unwrap_or_else(|| window.bounds_in_screen());
     // A window's sides are positive; at least 1 keeps the placement one a
     // window can open at
     let placement = WindowPlacement {

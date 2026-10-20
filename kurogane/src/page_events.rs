@@ -1,5 +1,7 @@
-//! What a page changes about itself that the application may follow: its
-//! title ([`App::on_title_change`](crate::App::on_title_change)) and
+//! Page changes the application may follow.
+//!
+//! A page changes its title
+//! ([`App::on_title_change`](crate::App::on_title_change)) and its
 //! fullscreen ([`App::on_fullscreen_change`](crate::App::on_fullscreen_change)).
 //!
 //! CEF tells its display handler of both. Kurogane titles a window after
@@ -33,7 +35,7 @@ impl TitleChange {
         }
     }
 
-    /// The title the page gave itself: its `<title>`, or what a script set
+    /// The title the page gave itself, its `<title>` or what a script set
     /// `document.title` to.
     pub fn title(&self) -> &str {
         &self.title
@@ -73,8 +75,8 @@ impl FullscreenChange {
         }
     }
 
-    /// Whether the page is fullscreen now: it asked with
-    /// `requestFullscreen()`, or left with `exitFullscreen()` or Escape.
+    /// Whether the page is fullscreen now. It asked with
+    /// `requestFullscreen()` or left with `exitFullscreen()` or Escape.
     pub fn is_fullscreen(&self) -> bool {
         self.fullscreen
     }

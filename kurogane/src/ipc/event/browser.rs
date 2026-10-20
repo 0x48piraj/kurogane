@@ -3,14 +3,16 @@
 //! Handles subscription management for renderer processes and delivers emitted
 //! events to subscribed frames.
 
+use std::sync::Arc;
+
 use tanso::*;
 
-use crate::acl::Origin;
 use tracing::debug;
-use crate::ipc::browser_state::{still_addressed, IpcContext, IpcError};
+use crate::ipc::browser_outbox;
+use crate::ipc::browser_state::{FrameId, IpcContext, IpcError};
+use crate::ipc::document::Document;
 use crate::ipc::envelope::*;
 use crate::ipc::event::EventSubsystem;
-use crate::ipc::transport::message::build_message;
 
 impl EventSubsystem {
     /// Handle an event message arriving from the renderer (browser-side dispatch).
@@ -46,19 +48,19 @@ impl EventSubsystem {
             }
         };
 
-        let browser_id = ctx.browser_id;
+        let browser_id = ctx.document.browser();
 
         let mut subs = self.subscriptions.lock().unwrap();
-        subs.entry(event_name.to_string()).or_default().push(
-            crate::ipc::event::EventSubscription {
-                id: envelope.correlation_id,
-                frame: frame.clone(),
-                browser_id,
-                frame_id: ctx.frame,
-                origin: ctx.origin,
-                url_origin: ctx.url_origin,
-            },
-        );
+        let entries = subs.entry(event_name.to_string()).or_default();
+        // A page back from the back-forward cache subscribes again under the
+        // same id; a subscription its document kept is not doubled
+        let key = ctx.document.key();
+        entries.retain(|sub| !(sub.id == envelope.correlation_id && sub.document.key() == key));
+        entries.push(crate::ipc::event::EventSubscription {
+            id: envelope.correlation_id,
+            frame: frame.clone(),
+            document: ctx.document,
+        });
 
         debug!(
             "[Event Browser] subscribed '{}' browser={}",
@@ -86,7 +88,7 @@ impl EventSubsystem {
     }
 
     /// Tells the renderer that the subscription carried by `envelope` was
-    /// refused with `error`, so its `onError` fires instead of silence.
+    /// refused with `error`. Its `onError` fires instead of silence.
     pub(crate) fn refuse(frame: &Frame, envelope: &Envelope, error: &IpcError) {
         if frame.is_valid() == 0 {
             return;
@@ -100,19 +102,17 @@ impl EventSubsystem {
             payload_kind: PAYLOAD_BINARY,
         };
         let payload = encode_error_payload(error.code().wire(), error.message());
-        match build_message("kurogane_event", &reply, &payload) {
-            Some(mut msg) => frame.send_process_message(ProcessId::RENDERER, Some(&mut msg)),
-            None => debug!("[Event Browser] failed to build refusal message"),
-        }
+        browser_outbox::send_owned(frame, &FrameId::of(frame), &reply, payload);
     }
 
-    /// Broadcast an event to all subscribers of a given event name.
+    /// Broadcasts an event to all subscribers of a given event name.
     ///
-    /// Each subscription gets its own message, addressed by its id, so the
+    /// Each subscription gets its own message addressed by its id. The
     /// renderer runs exactly the callback of that subscription (which the ACL
-    /// admitted) and nothing else in the process. A subscription whose frame
-    /// now shows another document receives nothing. `payload_kind` decides
-    /// whether the page receives an `ArrayBuffer` or a string.
+    /// admitted) and nothing else in the process. A frame's messages may
+    /// travel together ([`browser_outbox`]). A subscription whose document
+    /// has ended receives nothing. `payload_kind` decides whether the page
+    /// receives an `ArrayBuffer` or a string.
     pub fn broadcast(&self, cmd: &str, data: &[u8], payload_kind: u8) {
         let Some(payload) = encode_cmd_payload(cmd, data) else {
             debug!("[Event Browser] event name exceeds the protocol length limit");
@@ -120,22 +120,18 @@ impl EventSubsystem {
         };
 
         // Copied out, so no CEF call runs under the lock
-        let targets: Vec<(Frame, u32, Origin)> = {
+        let targets: Vec<(Frame, Arc<Document>, u32)> = {
             let subs = self.subscriptions.lock().unwrap();
             let Some(entries) = subs.get(cmd) else {
                 return;
             };
             entries
                 .iter()
-                .map(|sub| (sub.frame.clone(), sub.id, sub.url_origin.clone()))
+                .map(|sub| (sub.frame.clone(), sub.document.clone(), sub.id))
                 .collect()
         };
-        for (frame, id, url_origin) in targets {
-            if frame.is_valid() == 0 {
-                continue;
-            }
-            let url: CefString = (&frame.url()).into();
-            if !still_addressed(&url_origin, &url.to_string()) {
+        for (frame, document, id) in targets {
+            if !document.is_live() {
                 continue;
             }
             let envelope = Envelope {
@@ -146,11 +142,7 @@ impl EventSubsystem {
                 correlation_id: id,
                 payload_kind,
             };
-            // A sent message belongs to CEF; build one per subscription
-            match build_message("kurogane_event", &envelope, &payload) {
-                Some(mut msg) => frame.send_process_message(ProcessId::RENDERER, Some(&mut msg)),
-                None => debug!("[Event Browser] failed to build an event message"),
-            }
+            browser_outbox::send(&frame, document.frame(), &envelope, &payload);
         }
     }
 }

@@ -9,10 +9,11 @@ use crate::app::ClientAppRendererDelegate;
 use tracing::debug;
 use crate::ipc::browser_state::ErrorCode;
 use crate::ipc::envelope::*;
-use crate::ipc::transport::message::{build_message, build_message_parts, receive_from_browser};
+use crate::ipc::transport::message::{is_ipc_message, receive_from_browser};
 use crate::ipc::renderer_delivery;
+use crate::ipc::renderer_outbox;
 use crate::ipc::renderer_registry::StreamSink;
-use crate::ipc::renderer_state::state;
+use crate::ipc::renderer_state::with_state;
 use crate::ipc::utils::rejection;
 use crate::ipc::FrameId;
 use crate::bridge;
@@ -62,22 +63,47 @@ fn parse_view(rest: &[Option<V8Value>]) -> Result<Option<(usize, usize)>, ()> {
     }
 }
 
-/// Returns a message whose payload is `header` then the bytes of `buffer`
-/// that `view` names as an offset and length, or every byte without a view.
-/// `None` when a non-empty buffer has no memory, the view lies outside the
-/// buffer or the message cannot be built.
+/// Returns how many bytes of `buffer` a message sends, those `view` names or
+/// the whole buffer's.
+fn data_len(buffer: &V8Value, view: Option<(usize, usize)>) -> usize {
+    view.map_or_else(|| buffer.array_buffer_byte_length(), |(_, len)| len)
+}
+
+/// Why a page's call or stream open was not sent.
+enum Unsent {
+    /// Its data exceeds [`MESSAGE_MAX`].
+    TooLarge,
+    /// The message could not be built.
+    Unbuilt,
+}
+
+impl Unsent {
+    /// Returns the rejection the page's promise gets.
+    fn rejection(&self) -> CefString {
+        match self {
+            Self::TooLarge => rejection(ErrorCode::TooLarge.wire(), MESSAGE_TOO_LARGE),
+            Self::Unbuilt => rejection(ErrorCode::Buffer.wire(), "Failed to build IPC message"),
+        }
+    }
+}
+
+/// Sends a message of `frame`'s page whose payload is `header` then the
+/// bytes of `buffer` that `view` names as an offset and length, or every
+/// byte without a view. `None` when a non-empty buffer has no memory, the
+/// view lies outside the buffer or the message cannot be built.
 ///
-/// The only reader of an ArrayBuffer's memory. The bytes are borrowed just
-/// to build the message, which copies them, so no JavaScript, which could
-/// detach or resize the buffer, runs while they are borrowed. Any page script
-/// can pass a view, so it is checked against the buffer's length.
-fn buffer_message(
-    name: &str,
+/// The only reader of an ArrayBuffer's memory. The outbox only copies the
+/// bytes. No JavaScript runs while they are borrowed (a script could detach
+/// or resize the buffer). Any page script can pass a view. The view is
+/// checked against the buffer's length.
+fn send_buffer(
+    frame: &Frame,
+    frame_id: &FrameId,
     envelope: &Envelope,
     header: &[u8],
     buffer: &V8Value,
     view: Option<(usize, usize)>,
-) -> Option<ProcessMessage> {
+) -> Option<()> {
     let len = buffer.array_buffer_byte_length();
     let whole: &[u8] = if len == 0 {
         &[]
@@ -88,19 +114,21 @@ fn buffer_message(
         }
         // SAFETY: V8 keeps an ArrayBuffer's `len` bytes at `data` until
         // JavaScript detaches or resizes it, and `buffer` keeps it alive. No
-        // JavaScript runs before the slice's last use: building the message
-        // only copies it
+        // JavaScript runs before the slice's last use, since the outbox only
+        // copies it
         unsafe { std::slice::from_raw_parts(data, len) }
     };
     let bytes = match view {
         Some((offset, len)) => whole.get(offset..)?.get(..len)?,
         None => whole,
     };
-    if header.is_empty() {
-        build_message(name, envelope, bytes)
+    let parts = [header, bytes];
+    let parts = if header.is_empty() {
+        &parts[1..]
     } else {
-        build_message_parts(name, envelope, &[header, bytes])
-    }
+        &parts[..]
+    };
+    renderer_outbox::send(frame, frame_id, envelope, parts)
 }
 
 /// Encode [cmd_len:u16 LE][cmd_bytes] into a Vec.
@@ -188,6 +216,11 @@ wrap_render_process_handler! {
                 ("openStream", IpcOpenStreamHandler::new()),
                 ("writeStream", IpcWriteStreamHandler::new()),
                 ("endStream", IpcEndStreamHandler::new()),
+                // Unpaces the page's messages while it leaves
+                ("leaving", IpcLeavingHandler::new()),
+                // Settles what a page back from the back-forward cache left
+                // open and subscribes it again
+                ("returned", IpcReturnedHandler::new()),
             ];
             for (name, handler) in functions {
                 if !set_function(&core, name, handler) {
@@ -203,7 +236,7 @@ wrap_render_process_handler! {
                 global.value_bykey(Some(&CefString::from("origin"))),
                 Some(origin) if origin.is_string() != 0 && v8_to_string(&origin) != "null"
             );
-            state().context_created(context.clone(), FrameId::of(frame), opaque);
+            with_state(|state| state.context_created(context.clone(), FrameId::of(frame), opaque));
             // The browser sees only URLs, which hide a sandbox: it learns of
             // the document here, for what it reports of a frame
             // (crate::context_menu's target)
@@ -245,9 +278,14 @@ wrap_render_process_handler! {
                 delegate.on_context_released(browser_ref, frame_ref, context_ref);
             }
 
+            // Messages the page sent just before its context went still leave
+            if let Some(frame) = frame_ref {
+                renderer_outbox::release_frame(&FrameId::of(frame));
+            }
+
             if let Some(ctx) = context {
-                let opaque = state().is_opaque(ctx);
-                state().context_released(ctx);
+                let opaque = with_state(|state| state.is_opaque(ctx));
+                with_state(|state| state.context_released(ctx));
                 if opaque && let Some(frame) = frame {
                     tell_browser(frame, crate::context_menu::OPAQUE_DOCUMENT_GONE);
                 }
@@ -327,39 +365,38 @@ wrap_render_process_handler! {
             source_process: ProcessId,
             message: Option<&mut ProcessMessage>,
         ) -> i32 {
-            {
-                let browser_ref = browser.as_deref();
-                let frame_ref = frame.as_deref();
-                let message_ref = message.as_deref();
+            let ipc = source_process == ProcessId::BROWSER
+                && message.as_deref().is_some_and(is_ipc_message);
 
-                for delegate in &self.delegates {
-                    if delegate.on_process_message_received(
-                        browser_ref, frame_ref, source_process, message_ref,
-                    ) != 0 {
-                        return 1;
-                    }
-                }
+            // Kurogane's own messages never reach the delegates. One a
+            // delegate kept would hold its frame's later messages for good
+            if ipc {
+                let (Some(frame), Some(msg)) = (frame, message) else {
+                    debug!("[IPC Renderer] missing frame");
+                    return 0;
+                };
+
+                // SAFETY: the browser sent it, as source_process says
+                let Some(received) = (unsafe { receive_from_browser(msg) }) else {
+                    debug!("[IPC Renderer] failed to extract message");
+                    return 1;
+                };
+
+                renderer_delivery::receive(frame, received);
+                return 1;
             }
 
-            if source_process != ProcessId::BROWSER { return 0; }
-            let Some(msg) = message else { return 0; };
-
-            let name: CefString = (&msg.name()).into();
-            if !name.to_string().starts_with("kurogane_") { return 0; }
-
-            let Some(frame) = frame else {
-                debug!("[IPC Renderer] missing frame");
-                return 0;
-            };
-
-            // SAFETY: the browser sent it: source_process was checked above
-            let Some(received) = (unsafe { receive_from_browser(msg) }) else {
-                debug!("[IPC Renderer] failed to extract message");
-                return 1;
-            };
-
-            renderer_delivery::receive(frame, received);
-            1
+            let browser_ref = browser.as_deref();
+            let frame_ref = frame.as_deref();
+            let message_ref = message.as_deref();
+            for delegate in &self.delegates {
+                if delegate.on_process_message_received(
+                    browser_ref, frame_ref, source_process, message_ref,
+                ) != 0 {
+                    return 1;
+                }
+            }
+            0
         }
 
         fn load_handler(&self) -> Option<LoadHandler> {
@@ -456,18 +493,15 @@ wrap_v8_handler! {
                 return throw(exception, "invoke: cannot create a promise");
             };
             let promise_for_retval = promise.clone();
-            let (id, flags) = {
-                let mut state = state();
-                (state.register_rpc(&context, promise.clone()), state.flags_for(&context))
-            };
-            let Some(id) = id else {
+            let registered = with_state(|state| state.register_rpc(&context, promise.clone()));
+            let Some((id, flags, frame_id)) = registered else {
                 return throw(exception, "invoke: this context is not connected");
             };
 
             // Expose the id on the promise for JS-side cancellation
             let id_key = CefString::from("__kurogane_id");
             let Some(mut id_value) = v8_value_create_int(id) else {
-                state().forget(id);
+                with_state(|state| state.forget(id));
                 return throw(exception, "invoke: cannot create the call id");
             };
             promise_for_retval.set_value_bykey(
@@ -478,7 +512,7 @@ wrap_v8_handler! {
 
             debug!("[IPC Renderer] JS invoke: '{}' (id={}, binary={})", cmd, id, binary.is_some());
 
-            if let Some(buffer) = binary {
+            let sent = if let Some(buffer) = binary {
                 let envelope = Envelope {
                     version: ENVELOPE_VERSION,
                     subsystem: SUB_RPC,
@@ -488,14 +522,11 @@ wrap_v8_handler! {
                     payload_kind: PAYLOAD_BINARY,
                 };
 
-                if let Some(mut msg) = buffer_message("kurogane_rpc", &envelope, &cmd_header, buffer, view) {
-                    frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+                if data_len(buffer, view) > MESSAGE_MAX {
+                    Err(Unsent::TooLarge)
                 } else {
-                    state().forget(id);
-                    let reject_msg = rejection(ErrorCode::Buffer.wire(), "Failed to build IPC message");
-                    promise.reject_promise(Some(&reject_msg));
-                    if let Some(ret) = retval { *ret = Some(promise_for_retval); }
-                    return 1;
+                    send_buffer(&frame, &frame_id, &envelope, &cmd_header, buffer, view)
+                        .ok_or(Unsent::Unbuilt)
                 }
             } else {
                 let payload = match args.get(1) {
@@ -512,17 +543,19 @@ wrap_v8_handler! {
                     payload_kind: PAYLOAD_STRING,
                 };
 
-                let payload_bytes = payload.as_bytes();
-
-                if let Some(mut msg) = build_message_parts("kurogane_rpc", &envelope, &[&cmd_header, payload_bytes]) {
-                    frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+                if payload.len() > MESSAGE_MAX {
+                    Err(Unsent::TooLarge)
                 } else {
-                    state().forget(id);
-                    let reject_msg = rejection(ErrorCode::Buffer.wire(), "Failed to build IPC message");
-                    promise.reject_promise(Some(&reject_msg));
-                    if let Some(ret) = retval { *ret = Some(promise_for_retval); }
-                    return 1;
+                    renderer_outbox::send(&frame, &frame_id, &envelope, &[&cmd_header, payload.as_bytes()])
+                        .ok_or(Unsent::Unbuilt)
                 }
+            };
+
+            if let Err(unsent) = sent {
+                with_state(|state| state.forget(id));
+                promise.reject_promise(Some(&unsent.rejection()));
+                if let Some(ret) = retval { *ret = Some(promise_for_retval); }
+                return 1;
             }
 
             if let Some(ret) = retval {
@@ -569,11 +602,9 @@ wrap_v8_handler! {
                 return 1;
             };
             // Only the context that made a request can cancel it
-            let (cancelled, flags) = {
-                let mut state = state();
-                (state.cancel(id, &context), state.flags_for(&context))
-            };
-            let Some((owner, promise, sub)) = cancelled else {
+            let (cancelled, sender) =
+                with_state(|state| (state.cancel(id, &context), state.sender(&context)));
+            let (Some((promise, sub)), Some((flags, frame_id))) = (cancelled, sender) else {
                 if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
                 return 1;
             };
@@ -590,23 +621,116 @@ wrap_v8_handler! {
                 correlation_id: id as u32,
                 payload_kind: PAYLOAD_EMPTY,
             };
-            if let Some(frame) = context.frame()
-                && let Some(mut msg) = build_message("kurogane_rpc", &envelope, &[])
-            {
-                frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
+            if let Some(frame) = context.frame() {
+                // A canceled call may get no reply
+                if sub == SUB_RPC {
+                    renderer_outbox::answered(&frame_id, id as u32);
+                }
+                renderer_outbox::send(&frame, &frame_id, &envelope, &[]);
             }
 
-            if owner.enter() == 0 {
-                debug!("[IPC Renderer] cancel: failed to enter V8 context for id={}", id);
-                return 1;
-            }
+            // The page calls from the owner's context, which is entered
+            // already. Entering it again here, inside a checkpoint its own
+            // exit runs, would stop the page's microtasks
             let reject_msg = rejection(ErrorCode::Handler.wire(), "Canceled");
             promise.reject_promise(Some(&reject_msg));
-            owner.exit();
             if let Some(ret) = retval {
                 *ret = v8_value_create_bool(1);
             }
 
+            1
+        }
+    }
+}
+
+//
+// Leaving handler
+//
+
+wrap_v8_handler! {
+    pub struct IpcLeavingHandler;
+
+    impl V8Handler {
+        fn execute(
+            &self,
+            _name: Option<&CefString>,
+            _object: Option<&mut V8Value>,
+            _arguments: Option<&[Option<V8Value>]>,
+            _retval: Option<&mut Option<V8Value>>,
+            _exception: Option<&mut CefString>,
+        ) -> i32 {
+            let Some(context) = v8_context_get_current_context() else {
+                return 1;
+            };
+            let sender = with_state(|state| state.sender(&context));
+            if let (Some((_, frame_id)), Some(frame)) = (sender, context.frame()) {
+                renderer_outbox::leaving(&frame, &frame_id, true);
+            }
+            1
+        }
+    }
+}
+
+//
+// Returned handler
+//
+
+wrap_v8_handler! {
+    pub struct IpcReturnedHandler;
+
+    impl V8Handler {
+        fn execute(
+            &self,
+            _name: Option<&CefString>,
+            _object: Option<&mut V8Value>,
+            _arguments: Option<&[Option<V8Value>]>,
+            _retval: Option<&mut Option<V8Value>>,
+            _exception: Option<&mut CefString>,
+        ) -> i32 {
+            let Some(context) = v8_context_get_current_context() else {
+                return 1;
+            };
+            let (returned, sender) =
+                with_state(|state| (state.returned(&context), state.sender(&context)));
+            let (Some((flags, frame_id)), Some(frame)) = (sender, context.frame()) else {
+                return 1;
+            };
+            let send = |subsystem, opcode, id: i32, parts: &[&[u8]]| {
+                let envelope = Envelope {
+                    version: ENVELOPE_VERSION,
+                    subsystem,
+                    opcode,
+                    flags,
+                    correlation_id: id as u32,
+                    payload_kind: PAYLOAD_EMPTY,
+                };
+                renderer_outbox::send(&frame, &frame_id, &envelope, parts);
+            };
+
+            // The browser ended the page's requests and streams as it left;
+            // each is cancelled again in case its document lived on
+            let left = rejection(ErrorCode::Left.wire(), "The page left");
+            for (id, subsystem, promise) in returned.requests {
+                if subsystem == SUB_RPC {
+                    renderer_outbox::answered(&frame_id, id as u32);
+                    send(SUB_RPC, RPC_CANCEL, id, &[]);
+                } else {
+                    send(SUB_STREAM, STREAM_CANCEL, id, &[]);
+                }
+                promise.reject_promise(Some(&left));
+            }
+            for (id, on_error) in returned.streams {
+                send(SUB_STREAM, STREAM_CANCEL, id, &[]);
+                let message = v8_value_create_string(Some(&CefString::from("The page left")));
+                on_error.execute_function(None, Some(&[message]));
+            }
+            // A subscription the browser kept takes the same id again
+            for (id, event) in returned.subscriptions {
+                if let Some(payload) = encode_cmd_payload(&event, &[]) {
+                    send(SUB_EVENT, EVENT_SUBSCRIBE, id, &[&payload]);
+                }
+            }
+            renderer_outbox::leaving(&frame, &frame_id, false);
             1
         }
     }
@@ -680,30 +804,23 @@ wrap_v8_handler! {
                 return throw(exception, "on: event name exceeds the 65535-byte protocol limit");
             };
 
-            let (id, flags) = {
-                let mut state = state();
+            let (id, sender) = with_state(|state| {
                 let id = state.subscribe(&context, event_name.clone(), callback.clone(), on_error);
-                (id, state.flags_for(&context))
-            };
-            let Some(id) = id else {
+                (id, state.sender(&context))
+            });
+            let (Some(id), Some((flags, frame_id))) = (id, sender) else {
                 return throw(exception, "on: this context is not connected");
             };
 
-            let subscribe = {
-                let envelope = Envelope {
-                    version: ENVELOPE_VERSION,
-                    subsystem: SUB_EVENT,
-                    opcode: EVENT_SUBSCRIBE,
-                    flags,
-                    correlation_id: id as u32,
-                    payload_kind: PAYLOAD_EMPTY,
-                };
-                build_message("kurogane_event", &envelope, &payload)
+            let envelope = Envelope {
+                version: ENVELOPE_VERSION,
+                subsystem: SUB_EVENT,
+                opcode: EVENT_SUBSCRIBE,
+                flags,
+                correlation_id: id as u32,
+                payload_kind: PAYLOAD_EMPTY,
             };
-
-            if let Some(mut msg) = subscribe {
-                frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
-            } else {
+            if renderer_outbox::send(&frame, &frame_id, &envelope, &[&payload]).is_none() {
                 debug!("[IPC Renderer] failed to build subscribe message");
             }
 
@@ -756,13 +873,12 @@ wrap_v8_handler! {
             };
 
             // Only the context that subscribed can unsubscribe
-            let (event_name, flags) = {
-                let mut state = state();
-                (state.unsubscribe(id, &context), state.flags_for(&context))
-            };
+            let (event_name, sender) =
+                with_state(|state| (state.unsubscribe(id, &context), state.sender(&context)));
             let was_valid = event_name.is_some();
 
             if let Some(event_name) = event_name
+                && let Some((flags, frame_id)) = sender
                 && let Some(frame) = context.frame()
                 && let Some(payload) = encode_cmd_payload(&event_name, &[])
             {
@@ -774,9 +890,7 @@ wrap_v8_handler! {
                     correlation_id: id as u32,
                     payload_kind: PAYLOAD_EMPTY,
                 };
-                if let Some(mut msg) = build_message("kurogane_event", &envelope, &payload) {
-                    frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
-                }
+                renderer_outbox::send(&frame, &frame_id, &envelope, &[&payload]);
             }
 
             if let Some(ret) = retval {
@@ -853,12 +967,11 @@ wrap_v8_handler! {
             let Some(promise) = v8_value_create_promise() else {
                 return throw(exception, "openStream: cannot create a promise");
             };
-            let (stream_id, flags) = {
-                let mut state = state();
-                let sink = StreamSink { data, end, error };
-                (state.register_stream_open(&context, promise.clone(), sink), state.flags_for(&context))
-            };
-            let Some(stream_id) = stream_id else {
+            let sink = StreamSink { data, end, error };
+            let (stream_id, sender) = with_state(|state| {
+                (state.register_stream_open(&context, promise.clone(), sink), state.sender(&context))
+            });
+            let (Some(stream_id), Some((flags, frame_id))) = (stream_id, sender) else {
                 return throw(exception, "openStream: this context is not connected");
             };
 
@@ -873,18 +986,16 @@ wrap_v8_handler! {
                 payload_kind: PAYLOAD_STRING,
             };
 
-            let sent = if let Some(payload) = encode_cmd_payload(&handler_name, metadata.as_bytes())
-                && let Some(mut msg) = build_message("kurogane_stream", &envelope, &payload)
-            {
-                frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
-                true
+            let sent = if metadata.len() > MESSAGE_MAX {
+                Err(Unsent::TooLarge)
             } else {
-                false
+                encode_cmd_payload(&handler_name, metadata.as_bytes())
+                    .and_then(|payload| renderer_outbox::send(&frame, &frame_id, &envelope, &[&payload]))
+                    .ok_or(Unsent::Unbuilt)
             };
-            if !sent {
-                state().forget(stream_id);
-                let reject_msg = rejection(ErrorCode::Buffer.wire(), "Failed to build IPC message");
-                promise.reject_promise(Some(&reject_msg));
+            if let Err(unsent) = sent {
+                with_state(|state| state.forget(stream_id));
+                promise.reject_promise(Some(&unsent.rejection()));
             }
 
             // The promise settles when the browser answers the open:
@@ -938,6 +1049,9 @@ wrap_v8_handler! {
             let Ok(view) = parse_view(args.get(2..).unwrap_or_default()) else {
                 return throw(exception, "writeStream: byteOffset and byteLength must be whole numbers");
             };
+            if data_len(buffer, view) > MESSAGE_MAX {
+                return throw(exception, "writeStream: a chunk carries at most 64 MiB; write smaller chunks");
+            }
 
             let context = match v8_context_get_current_context() {
                 Some(ctx) => ctx,
@@ -950,14 +1064,13 @@ wrap_v8_handler! {
                 return throw(exception, "writeStream: no frame for current context");
             };
 
-            let (owned, flags) = {
-                let state = state();
-                (state.owns_stream(stream_id, &context), state.flags_for(&context))
-            };
-            if !owned {
+            let sender = with_state(|state| {
+                state.owns_stream(stream_id, &context).then(|| state.sender(&context)).flatten()
+            });
+            let Some((flags, frame_id)) = sender else {
                 if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
                 return 1;
-            }
+            };
 
             let envelope = Envelope {
                 version: ENVELOPE_VERSION,
@@ -968,9 +1081,7 @@ wrap_v8_handler! {
                 payload_kind: PAYLOAD_BINARY,
             };
 
-            if let Some(mut msg) = buffer_message("kurogane_stream", &envelope, &[], buffer, view) {
-                frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
-            }
+            send_buffer(&frame, &frame_id, &envelope, &[], buffer, view);
 
             if let Some(ret) = retval {
                 *ret = v8_value_create_uint(1);
@@ -1015,6 +1126,9 @@ wrap_v8_handler! {
                 Some(Some(v)) if v.is_string() != 0 => v8_to_string(v),
                 _ => String::new(),
             };
+            if result.len() > MESSAGE_MAX {
+                return throw(exception, "endStream: a result carries at most 64 MiB");
+            }
 
             let context = match v8_context_get_current_context() {
                 Some(ctx) => ctx,
@@ -1027,14 +1141,13 @@ wrap_v8_handler! {
                 return throw(exception, "endStream: no frame for current context");
             };
 
-            let (owned, flags) = {
-                let state = state();
-                (state.owns_stream(stream_id, &context), state.flags_for(&context))
-            };
-            if !owned {
+            let sender = with_state(|state| {
+                state.owns_stream(stream_id, &context).then(|| state.sender(&context)).flatten()
+            });
+            let Some((flags, frame_id)) = sender else {
                 if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
                 return 1;
-            }
+            };
 
             let payload = result.as_bytes();
 
@@ -1047,9 +1160,7 @@ wrap_v8_handler! {
                 payload_kind: PAYLOAD_STRING,
             };
 
-            if let Some(mut msg) = build_message("kurogane_stream", &envelope, payload) {
-                frame.send_process_message(ProcessId::BROWSER, Some(&mut msg));
-            }
+            renderer_outbox::send(&frame, &frame_id, &envelope, &[payload]);
 
             if let Some(ret) = retval {
                 *ret = v8_value_create_uint(1);
@@ -1060,9 +1171,10 @@ wrap_v8_handler! {
     }
 }
 
-/// Sends the browser a message without a body, named `name`.
+/// Sends the browser a message without a body, named `name`, after the
+/// page's messages.
 fn tell_browser(frame: &Frame, name: &str) {
     if let Some(mut message) = process_message_create(Some(&CefString::from(name))) {
-        frame.send_process_message(ProcessId::BROWSER, Some(&mut message));
+        renderer_outbox::send_after(frame, &FrameId::of(frame), &mut message);
     }
 }

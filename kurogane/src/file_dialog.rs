@@ -1,5 +1,7 @@
-//! The file chooser a page opens: `<input type=file>` and the File System
-//! Access pickers (`showOpenFilePicker`, `showSaveFilePicker`,
+//! File choosers a page opens.
+//!
+//! A page opens one through `<input type=file>` or the File System Access
+//! pickers (`showOpenFilePicker`, `showSaveFilePicker`,
 //! `showDirectoryPicker`).
 //!
 //! CEF asks before it shows one (OnFileDialog). The application's
@@ -104,21 +106,21 @@ impl FileDialogRequest {
         &self.title
     }
 
-    /// The file name or path the dialog would start at, if any: a picker's
-    /// suggested name for saving.
+    /// The file name or path the dialog would start at, if any. For a
+    /// picker it is the suggested name for saving.
     pub fn default_path(&self) -> Option<&Path> {
         self.default_path.as_deref()
     }
 
-    /// What the page accepts, as it wrote it: MIME types (`image/*`,
+    /// What the page accepts as it wrote it, in MIME types (`image/*`,
     /// `text/plain`) and extensions (`.png`). Empty when it accepts any
     /// file.
     pub fn accept(&self) -> &[String] {
         &self.accept
     }
 
-    /// The origin of the page that opens the dialog: the frame that has the
-    /// focus, the one whose control the user activated.
+    /// The origin of the page that opens the dialog. That page is the frame
+    /// that has the focus, the one whose control the user activated.
     pub fn origin(&self) -> &Origin {
         &self.origin
     }
@@ -128,10 +130,10 @@ impl FileDialogRequest {
         self.browser
     }
 
-    /// A responder that answers this request later, from any thread, once
-    /// the hook returns [`FileDialogDecision::Later`]: after the
-    /// application's own picker closed, for example. With any other answer
-    /// from the hook, the responder does nothing.
+    /// A responder that answers this request later from any thread once the
+    /// hook returns [`FileDialogDecision::Later`] (after the application's
+    /// own picker closed, for example). With any other answer from the hook
+    /// the responder does nothing.
     pub fn responder(&self) -> FileDialogResponder {
         FileDialogResponder {
             ticket: Arc::clone(&self.ticket),
@@ -151,10 +153,10 @@ pub enum FileDialogDecision {
     #[default]
     Default,
 
-    /// No dialog: the page is told the user cancelled.
+    /// No dialog. The page is told the user cancelled.
     Cancel,
 
-    /// These files, as if the user chose them: the page reads them. An
+    /// These files, as if the user chose them. The page reads them. An
     /// [`Open`](FileDialogKind::Open) or [`Save`](FileDialogKind::Save)
     /// dialog takes the first, an
     /// [`OpenFolder`](FileDialogKind::OpenFolder) one a folder. No file is
@@ -170,9 +172,9 @@ pub enum FileDialogDecision {
 /// Answers a [`FileDialogRequest`] the hook left for later
 /// ([`FileDialogDecision::Later`]), from any thread.
 ///
-/// A request is answered once: the first answer counts. Dropping every
-/// responder of a request without answering cancels it, and an answer that
-/// comes after the page went away gives it nothing.
+/// A request is answered once and the first answer counts. Dropping every
+/// responder of a request without answering cancels it. An answer that comes
+/// after the page went away gives it nothing.
 ///
 /// ```no_run
 /// # use kurogane::{App, FileDialogDecision};
@@ -205,10 +207,10 @@ impl FileDialogResponder {
     }
 }
 
-/// What a request's deferred answer needs: the request's id, the browser
-/// that holds its callback, and the runtime, held weakly so a responder an
-/// application keeps does not keep the runtime alive. The last holder to go
-/// without an answer cancels the request.
+/// What a request's deferred answer needs. It holds the request's id, the
+/// browser that holds its callback and the runtime. The runtime is held
+/// weakly and a responder an application keeps does not keep it alive. The
+/// last holder to go without an answer cancels the request.
 #[derive(Debug)]
 struct Ticket {
     id: u64,
@@ -218,7 +220,7 @@ struct Ticket {
 }
 
 impl Ticket {
-    /// Takes the request's one answer: true the first time only.
+    /// Takes the request's one answer. Returns true the first time only.
     fn claim(&self) -> bool {
         !self.answered.swap(true, Ordering::AcqRel)
     }
@@ -281,9 +283,9 @@ pub(crate) enum Answer {
     Later,
 }
 
-/// Asks the application's hook about `request`, and settles what Kurogane
+/// Asks the application's hook about `request` and settles what Kurogane
 /// does. Runs on CEF's UI thread with no lock held. A hook that panics
-/// cancels the dialog: the page gets no file an error might have chosen.
+/// cancels the dialog. The page gets no file an error might have chosen.
 pub(crate) fn decide(app: &AppHandle, request: &FileDialogRequest) -> Answer {
     let hooks = app.hooks();
     let Some(hook) = hooks
@@ -331,8 +333,8 @@ fn resolve(request: &FileDialogRequest, decision: FileDialogDecision) -> Answer 
     }
 }
 
-/// Answers `callback` with `files`; none cancels. Not under the registry's
-/// lock: CEF may call back into Kurogane as it answers.
+/// Answers `callback` with `files`; none cancels. Call it without the
+/// registry's lock. CEF may call back into Kurogane as it answers.
 pub(crate) fn complete(callback: &FileDialogCallback, files: &[PathBuf]) {
     if files.is_empty() {
         callback.cancel();
@@ -414,8 +416,8 @@ fn answer_held(app: &AppHandle, browser: BrowserId, id: u64, files: &[PathBuf]) 
     }
 }
 
-/// The strings of a list CEF lends a callback. The list is borrowed: the
-/// copy read here does not free it.
+/// Returns the strings of a list CEF lends a callback. The list is borrowed.
+/// The copy read here does not free it.
 pub(crate) fn lent_strings(list: Option<&mut CefStringList>) -> Vec<String> {
     list.map(|list| {
         let raw: *mut sys::_cef_string_list_t = list.into();

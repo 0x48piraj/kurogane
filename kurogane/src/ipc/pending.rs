@@ -1,18 +1,16 @@
 //! Pending request state for async request/response IPC.
 //!
-//! Each request is identified by its browser, frame, origin, and correlation
-//! id. Correlation ids are local to a renderer process.
+//! Each request is identified by the document that made it and its
+//! correlation id. Correlation ids are local to a renderer process.
 //!
-//! Requests remain associated with their frame until completed or cancelled.
-//! Only the originating frame and origin may cancel a request.
+//! Only the document that made a request may cancel it. The request ends
+//! with that document.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::acl::Origin;
-use crate::browser_registry::BrowserId;
-use crate::ipc::FrameId;
+use crate::ipc::document::DocumentKey;
 
 /// Pending async entry that can be cancelled via its abort flag.
 #[derive(Clone)]
@@ -21,29 +19,23 @@ pub struct PendingEntry {
 }
 
 /// Identifies one pending request.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PendingKey {
-    browser: BrowserId,
-    frame: FrameId,
-    origin: Origin,
+    document: DocumentKey,
     id: i32,
 }
 
 impl PendingKey {
-    pub fn new(browser: BrowserId, frame: FrameId, origin: Origin, id: i32) -> Self {
-        Self {
-            browser,
-            frame,
-            origin,
-            id,
-        }
+    pub(crate) fn new(document: DocumentKey, id: i32) -> Self {
+        Self { document, id }
     }
 }
 
 /// Thread-safe handle to the pending map. Clones share one map.
 #[derive(Clone, Default)]
 pub struct PendingMap {
-    inner: Arc<Mutex<HashMap<PendingKey, PendingEntry>>>,
+    /// Entries by document, then by correlation id.
+    inner: Arc<Mutex<HashMap<DocumentKey, HashMap<i32, PendingEntry>>>>,
 }
 
 impl PendingMap {
@@ -52,16 +44,27 @@ impl PendingMap {
     }
 
     pub fn insert(&self, key: PendingKey, entry: PendingEntry) {
-        self.inner.lock().unwrap().insert(key, entry);
+        self.inner
+            .lock()
+            .unwrap()
+            .entry(key.document)
+            .or_default()
+            .insert(key.id, entry);
     }
 
     pub fn remove(&self, key: &PendingKey) -> Option<PendingEntry> {
-        self.inner.lock().unwrap().remove(key)
+        let mut documents = self.inner.lock().unwrap();
+        let entries = documents.get_mut(&key.document)?;
+        let entry = entries.remove(&key.id);
+        if entries.is_empty() {
+            documents.remove(&key.document);
+        }
+        entry
     }
 
     /// Aborts and removes the entry; false when there was none.
     pub fn cancel(&self, key: &PendingKey) -> bool {
-        match self.inner.lock().unwrap().remove(key) {
+        match self.remove(key) {
             Some(entry) => {
                 entry.aborted.store(true, Ordering::SeqCst);
                 true
@@ -70,43 +73,31 @@ impl PendingMap {
         }
     }
 
-    /// Aborts and removes every entry of `browser_id`; returns how many.
-    pub fn cancel_all_for_browser(&self, browser_id: BrowserId) -> usize {
-        self.cancel_where(|key| key.browser == browser_id)
-    }
-
-    /// Aborts and removes every entry `frame` sent; returns how many.
-    pub fn cancel_frame(&self, frame: &FrameId) -> usize {
-        self.cancel_where(|key| key.frame == *frame)
-    }
-
-    fn cancel_where(&self, mut matches: impl FnMut(&PendingKey) -> bool) -> usize {
-        let mut cancelled = 0;
-        self.inner.lock().unwrap().retain(|key, entry| {
-            if !matches(key) {
-                return true;
-            }
+    /// Aborts and removes every entry `document` made; returns how many.
+    pub(crate) fn cancel_document(&self, document: DocumentKey) -> usize {
+        let entries = self
+            .inner
+            .lock()
+            .unwrap()
+            .remove(&document)
+            .unwrap_or_default();
+        for entry in entries.values() {
             entry.aborted.store(true, Ordering::SeqCst);
-            cancelled += 1;
-            false
-        });
-        cancelled
+        }
+        entries.len()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::acl::Origin;
+    use crate::ipc::document::Document;
     use crate::ipc::responder::Responder;
     use std::sync::atomic::AtomicUsize;
 
-    fn key(browser: u32, frame: &str, id: i32) -> PendingKey {
-        keyed(browser, frame, "app://app", id)
-    }
-
-    fn keyed(browser: u32, frame: &str, origin: &str, id: i32) -> PendingKey {
-        let origin = Origin::parse(origin).unwrap();
-        PendingKey::new(BrowserId::new(browser), FrameId::new(frame), origin, id)
+    fn document() -> DocumentKey {
+        Document::for_test(Origin::parse("app://app").unwrap()).key()
     }
 
     fn entry() -> PendingEntry {
@@ -117,112 +108,95 @@ mod tests {
 
     #[test]
     fn entries_are_found_only_by_their_exact_key() {
+        let (a, b) = (document(), document());
         let map = PendingMap::new();
-        map.insert(key(1, "f", 10), entry());
-        assert!(map.remove(&key(2, "f", 10)).is_none(), "other browser");
-        assert!(map.remove(&key(1, "g", 10)).is_none(), "other frame");
-        assert!(map.remove(&key(1, "f", 99)).is_none(), "other id");
-        assert!(map.remove(&key(1, "f", 10)).is_some());
-        assert!(map.remove(&key(1, "f", 10)).is_none(), "removed once");
-    }
-
-    #[test]
-    fn frames_with_the_same_correlation_id_do_not_collide() {
-        let map = PendingMap::new();
-        let main = entry();
-        let main_flag = main.aborted.clone();
-        map.insert(key(1, "main", 1), main);
-        map.insert(key(1, "iframe", 1), entry());
-
-        assert!(map.cancel(&key(1, "iframe", 1)));
+        map.insert(PendingKey::new(a, 10), entry());
         assert!(
-            !main_flag.load(Ordering::SeqCst),
-            "the iframe cannot cancel the main frame"
+            map.remove(&PendingKey::new(b, 10)).is_none(),
+            "other document"
         );
-        assert!(map.remove(&key(1, "main", 1)).is_some());
+        assert!(map.remove(&PendingKey::new(a, 99)).is_none(), "other id");
+        assert!(map.remove(&PendingKey::new(a, 10)).is_some());
+        assert!(
+            map.remove(&PendingKey::new(a, 10)).is_none(),
+            "removed once"
+        );
     }
 
     #[test]
-    fn a_later_origin_in_the_same_frame_cannot_cancel() {
+    fn documents_with_the_same_correlation_id_do_not_collide() {
+        let (main, iframe) = (document(), document());
         let map = PendingMap::new();
-        let e = entry();
-        let flag = e.aborted.clone();
-        map.insert(keyed(1, "f", "app://app", 1), e);
-        assert!(!map.cancel(&keyed(1, "f", "https://evil.example", 1)));
-        assert!(!flag.load(Ordering::SeqCst));
-        assert!(map.cancel(&keyed(1, "f", "app://app", 1)));
-    }
+        let first = entry();
+        let first_flag = first.aborted.clone();
+        map.insert(PendingKey::new(main, 1), first);
+        map.insert(PendingKey::new(iframe, 1), entry());
 
-    #[test]
-    fn cancel_frame_touches_only_that_frame() {
-        let map = PendingMap::new();
-        let (first, second, other) = (entry(), entry(), entry());
-        let flags = [
-            first.aborted.clone(),
-            second.aborted.clone(),
-            other.aborted.clone(),
-        ];
-        map.insert(key(1, "f", 1), first);
-        map.insert(keyed(1, "f", "https://other.example", 2), second);
-        map.insert(key(1, "g", 1), other);
-
-        assert_eq!(
-            map.cancel_frame(&FrameId::new("f")),
-            2,
-            "every origin the frame showed"
+        assert!(map.cancel(&PendingKey::new(iframe, 1)));
+        assert!(
+            !first_flag.load(Ordering::SeqCst),
+            "the iframe cannot cancel the main frame's request"
         );
-        assert!(flags[0].load(Ordering::SeqCst) && flags[1].load(Ordering::SeqCst));
-        assert!(!flags[2].load(Ordering::SeqCst));
-        assert!(map.remove(&key(1, "g", 1)).is_some());
+        assert!(map.remove(&PendingKey::new(main, 1)).is_some());
     }
 
     #[test]
     fn cancel_sets_the_flag_and_removes_the_entry_once() {
+        let a = document();
         let map = PendingMap::new();
         let e = entry();
         let flag = e.aborted.clone();
-        map.insert(key(1, "f", 0), e);
-        assert!(map.cancel(&key(1, "f", 0)));
+        map.insert(PendingKey::new(a, 0), e);
+        assert!(map.cancel(&PendingKey::new(a, 0)));
         assert!(flag.load(Ordering::SeqCst));
-        assert!(!map.cancel(&key(1, "f", 0)));
-        assert!(map.remove(&key(1, "f", 0)).is_none());
+        assert!(!map.cancel(&PendingKey::new(a, 0)));
+        assert!(map.remove(&PendingKey::new(a, 0)).is_none());
     }
 
     #[test]
-    fn cancel_all_for_browser_touches_only_that_browser() {
+    fn cancel_document_touches_only_that_document() {
+        let (gone, other) = (document(), document());
         let map = PendingMap::new();
-        let other = entry();
-        let other_flag = other.aborted.clone();
-        map.insert(key(1, "a", 1), entry());
-        map.insert(key(1, "b", 2), entry());
-        map.insert(key(2, "a", 1), other);
+        let (first, second, third) = (entry(), entry(), entry());
+        let flags = [
+            first.aborted.clone(),
+            second.aborted.clone(),
+            third.aborted.clone(),
+        ];
+        map.insert(PendingKey::new(gone, 1), first);
+        map.insert(PendingKey::new(gone, 2), second);
+        map.insert(PendingKey::new(other, 1), third);
 
-        assert_eq!(map.cancel_all_for_browser(BrowserId::new(1)), 2);
-        assert_eq!(map.cancel_all_for_browser(BrowserId::new(1)), 0);
-        assert!(!other_flag.load(Ordering::SeqCst));
-        assert!(map.remove(&key(2, "a", 1)).is_some());
+        assert_eq!(map.cancel_document(gone), 2);
+        assert_eq!(map.cancel_document(gone), 0);
+        assert!(flags[0].load(Ordering::SeqCst) && flags[1].load(Ordering::SeqCst));
+        assert!(!flags[2].load(Ordering::SeqCst));
+        assert!(map.remove(&PendingKey::new(other, 1)).is_some());
     }
 
     #[test]
     fn clones_share_state() {
         let a = PendingMap::new();
         let b = a.clone();
-        a.insert(key(1, "f", 10), entry());
-        assert!(b.remove(&key(1, "f", 10)).is_some());
+        let key = PendingKey::new(document(), 10);
+        a.insert(key, entry());
+        assert!(b.remove(&key).is_some());
     }
 
     #[test]
-    fn concurrent_insert_cancel_and_cancel_all_are_safe() {
+    fn concurrent_insert_cancel_and_cancel_document_are_safe() {
         let map = PendingMap::new();
+        let documents = [document(), document()];
         let handles: Vec<_> = (0..8)
             .map(|t| {
                 let map = map.clone();
+                let document = documents[t % 2];
                 std::thread::spawn(move || {
                     for i in 0..100 {
-                        map.insert(key(t % 2, "f", i), entry());
-                        map.cancel(&key(t % 2, "f", i));
+                        map.insert(PendingKey::new(document, i), entry());
+                        map.cancel(&PendingKey::new(document, i));
                         if i % 25 == 0 {
-                            map.cancel_all_for_browser(BrowserId::new(t % 2));
+                            map.cancel_document(document);
                         }
                     }
                 })
@@ -231,13 +205,15 @@ mod tests {
         for handle in handles {
             handle.join().unwrap();
         }
-        map.cancel_all_for_browser(BrowserId::new(0));
-        map.cancel_all_for_browser(BrowserId::new(1));
-        assert!(map.remove(&key(0, "f", 0)).is_none());
+        for document in documents {
+            map.cancel_document(document);
+        }
+        assert!(map.remove(&PendingKey::new(documents[0], 0)).is_none());
     }
 
     #[test]
     fn cancellation_suppresses_late_responses() {
+        let a = document();
         let calls = Arc::new(AtomicUsize::new(0));
         let map = PendingMap::new();
         let mut responders = Vec::new();
@@ -250,10 +226,10 @@ mod tests {
                 }),
                 e.aborted.clone(),
             ));
-            map.insert(key(1, "f", id), e);
+            map.insert(PendingKey::new(a, id), e);
         }
-        assert!(map.cancel(&key(1, "f", 0)));
-        assert_eq!(map.cancel_all_for_browser(BrowserId::new(1)), 9);
+        assert!(map.cancel(&PendingKey::new(a, 0)));
+        assert_eq!(map.cancel_document(a), 9);
         for responder in responders {
             responder.resolve(Ok(()));
         }

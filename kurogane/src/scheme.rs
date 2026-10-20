@@ -10,7 +10,7 @@
 //! - No path traversal or root escape
 //! - No symlink-based escapes
 //! - No absolute, drive-relative or rooted path injection
-//! - No filesystem details leaked to clients: every request that does not
+//! - No filesystem details leaked to clients; every request that does not
 //!   name a file inside the root answers the same 404, whether the target is
 //!   missing, outside the root or malformed
 //!
@@ -45,17 +45,18 @@ pub enum ResolveError {
     /// The URL could not be parsed, or its scheme is not app
     InvalidUrl,
     /// The resolved path escapes the asset root (a link inside it pointing
-    /// out). Answers 404, like a missing file, so the client cannot tell.
+    /// out). Answers 404 like a missing file; the client cannot tell them
+    /// apart.
     Forbidden(PathBuf),
-    /// The path names no file inside the root: missing, or not a valid
-    /// sequence of names
+    /// The path names no file inside the root (missing or not a valid
+    /// sequence of names)
     NotFound(PathBuf),
     /// An I/O error occurred after validation
     Io(std::io::Error),
 }
 
 impl ResolveError {
-    /// The status sent to the client. An escape and a miss are both 404: a
+    /// The status sent to the client. An escape and a miss are both 404. A
     /// distinct answer would tell a page what exists outside the root.
     pub fn http_status(&self) -> i32 {
         match self {
@@ -102,13 +103,13 @@ pub struct ResolvedAsset {
 /// scheme name which is fixed per registration.
 ///
 /// CEF calls `create` on the browser-process IO thread, which also carries
-/// every IPC message and must not block: decide there what to answer. Slow
+/// every IPC message and must not block. Decide there what to answer. Slow
 /// work, such as reading a file, belongs in the returned handler's `open` and
 /// `read`, which CEF calls on a worker thread that may block.
 ///
 /// A panic in `create` fails the request, as returning `None` does (with
 /// Rust's default `panic = "unwind"`). A [`ResourceHandler`] you implement
-/// yourself is called by CEF directly: a panic inside it aborts the process.
+/// yourself is called by CEF directly. A panic inside it aborts the process.
 ///
 /// [`resource_handler_from_bytes`] covers the common static-bytes case.
 pub trait SchemeHandler: Send + Sync {
@@ -174,8 +175,8 @@ wrap_scheme_handler_factory! {
 
     impl SchemeHandlerFactory {
         /// Hands the request's URL to a handler that resolves and reads the
-        /// file in `open`: CEF calls this on the IO thread, which must not
-        /// block, and `open` on a worker that may.
+        /// file in `open`. CEF calls this on the IO thread and `open` on a
+        /// worker. Only the worker may block.
         fn create(
             &self,
             _browser: Option<&mut Browser>,
@@ -242,8 +243,8 @@ pub(crate) struct Body {
 
 impl Body {
     /// Resolves and reads the app:// asset `url` names under `root`. A failure
-    /// becomes its status's fixed answer: the same 404 for anything that is
-    /// not a file inside the root. Blocks on the filesystem.
+    /// becomes its status's fixed answer. Anything that is not a file inside
+    /// the root gets the same 404. Blocks on the filesystem.
     fn asset(root: &CanonicalRoot, url: &str) -> Self {
         match extract_rel_path(url).and_then(|rel| resolve_asset(root, &rel)) {
             Ok(asset) => {
@@ -288,9 +289,9 @@ wrap_resource_handler! {
 
     impl ResourceHandler {
 
-        /// Reads the app:// asset, if the handler has one. CEF calls this on a
-        /// worker that may block, never on the UI or IO thread, and asks for
-        /// the headers once it has returned.
+        /// Reads the app:// asset if the handler has one. CEF calls this on a
+        /// worker that may block (never the UI or IO thread). It asks for the
+        /// headers once this returns.
         fn open(
             &self,
             _request: Option<&mut Request>,
@@ -460,10 +461,10 @@ pub fn extract_rel_path(raw_url: &str) -> Result<String, ResolveError> {
 /// Resolves a request path relative to root and returns a canonical path
 /// inside the allowed filesystem boundary.
 ///
-/// Each `/`-separated segment must be one valid name, so the request can
-/// neither climb (`..`) nor replace the root (`C:x`, `\x`, `\\server`) when
-/// joined; nothing outside the root is consulted to answer it. A link inside
-/// the root is followed only while it stays inside. Every failure is 404.
+/// Each `/`-separated segment must be one valid name. A request then neither
+/// climbs (`..`) nor replaces the root (`C:x`, `\x`, `\\server`) when joined.
+/// Nothing outside the root is consulted to answer it. A link inside the root
+/// is followed only while it stays inside. Every failure is 404.
 pub fn safe_join(root: &CanonicalRoot, request: &str) -> Result<PathBuf, ResolveError> {
     let mut joined = root.as_path().to_path_buf();
     for segment in request.split('/') {
@@ -524,8 +525,8 @@ fn mime_from_path(path: &Path) -> String {
 /// and status code.
 ///
 /// For custom scheme handlers that answer with static bytes. The bytes exist
-/// before [`SchemeHandler::create`] returns, on the IO thread, so producing
-/// them must be cheap.
+/// before [`SchemeHandler::create`] returns on the IO thread. Producing them
+/// must be cheap.
 pub fn resource_handler_from_bytes(data: Vec<u8>, mime: &str, status: i32) -> ResourceHandler {
     let body = Body {
         bytes: data,

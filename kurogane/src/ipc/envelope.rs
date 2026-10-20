@@ -16,7 +16,7 @@ pub struct Envelope {
 /// Current wire protocol version.
 ///
 /// Peers reject messages with an unsupported version.
-pub const ENVELOPE_VERSION: u8 = 3;
+pub const ENVELOPE_VERSION: u8 = 4;
 
 /// Marks a message from a context with an opaque origin (a sandboxed frame).
 ///
@@ -24,7 +24,11 @@ pub const ENVELOPE_VERSION: u8 = 3;
 pub const FLAG_OPAQUE_CONTEXT: u8 = 0x01;
 
 /// Flags defined by this protocol version.
-pub const KNOWN_FLAGS: u8 = FLAG_OPAQUE_CONTEXT;
+pub const KNOWN_FLAGS: u8 = FLAG_OPAQUE_CONTEXT | FLAG_ANSWERS;
+
+/// Marks a message of the page's that the browser closes with a batch that
+/// counts it ([`SUB_BATCH`]).
+pub const FLAG_ANSWERS: u8 = 0x02;
 
 /// Fixed-size envelope header (9 bytes).
 /// version (1) | subsystem (1) | opcode (1) | flags (1) | correlation_id (4 LE u32) | payload_kind (1)
@@ -34,6 +38,12 @@ pub const ENVELOPE_SIZE: usize = 9;
 pub const SUB_RPC: u8 = 0;
 pub const SUB_EVENT: u8 = 1;
 pub const SUB_STREAM: u8 = 2;
+/// Several messages in one (`ipc::batch`), of any subsystem.
+pub const SUB_BATCH: u8 = 3;
+
+/// A batch's only opcode. Its correlation id counts the page's messages it
+/// closes.
+pub const BATCH_ITEMS: u8 = 0;
 
 /// RPC protocol opcodes.
 pub const RPC_INVOKE: u8 = 0;
@@ -45,8 +55,8 @@ pub const RPC_CANCEL: u8 = 3;
 /// Renderers subscribe to events. Browsers emit events to subscribed frames.
 pub const EVENT_SUBSCRIBE: u8 = 0;
 pub const EVENT_UNSUBSCRIBE: u8 = 1;
-/// One event for one subscription: the correlation id is the subscription
-/// id, and the payload is a command payload of the event name and data.
+/// One event for one subscription. The correlation id is the subscription
+/// id. The payload is a command payload of the event name and data.
 pub const EVENT_EMIT: u8 = 2;
 /// ACL refusal for a subscription. The id is the correlation id and the
 /// payload is an error payload ([`encode_error_payload`]).
@@ -62,7 +72,7 @@ pub const STREAM_CANCEL: u8 = 4;
 pub const STREAM_BROWSER_DATA: u8 = 5;
 /// Ends the stream; the payload is the result (UTF-8).
 pub const STREAM_BROWSER_END: u8 = 6;
-/// Fails the stream, or refuses its open: an error payload
+/// Fails the stream or refuses its open; the payload is an error payload
 /// ([`encode_error_payload`]).
 pub const STREAM_BROWSER_ERROR: u8 = 7;
 /// The handler accepted the open; empty payload. Sent before anything else
@@ -117,9 +127,21 @@ pub fn parse_envelope(data: &[u8]) -> Option<(Envelope, &[u8])> {
 /// wire-format length limit.
 pub const MAX_CMD_LEN: usize = u16::MAX as usize;
 
+/// Most bytes of data one message from a page carries. A larger argument,
+/// stream chunk or result is refused before it is read; a stream carries
+/// more. One message moves no faster past a few dozen MiB.
+pub const MESSAGE_MAX: usize = 64 << 20;
+
+/// Why a page's message past [`MESSAGE_MAX`] is refused, as the page reads it.
+pub const MESSAGE_TOO_LARGE: &str = "one message carries at most 64 MiB; send more as a stream";
+
+/// Most payload bytes the browser reads of a page's message, its data within
+/// [`MESSAGE_MAX`] behind the longest command header.
+pub const PAGE_PAYLOAD_MAX: usize = MESSAGE_MAX + 2 + MAX_CMD_LEN;
+
 /// Encodes a command payload.
 ///
-/// Wire format: [command_len: u16 LE][command UTF-8][data]
+/// The wire format is `[command_len: u16 LE][command UTF-8][data]`.
 ///
 /// Returns None when the command exceeds [`MAX_CMD_LEN`]. Truncating the
 /// prefix with an `as` cast instead would wrap the length silently and make
@@ -155,8 +177,8 @@ pub fn decode_cmd_payload(payload: &[u8]) -> Option<(&str, &[u8])> {
     Some((cmd, &payload[2 + cmd_len..]))
 }
 
-/// Encodes an error payload: `[code: i32 LE][message: UTF-8]`. Used by RPC
-/// rejections, stream errors and refused subscriptions alike.
+/// Encodes an error payload as `[code: i32 LE][message: UTF-8]`. RPC
+/// rejections, stream errors and refused subscriptions all use it.
 pub fn encode_error_payload(code: i32, message: &str) -> Vec<u8> {
     let mut payload = Vec::with_capacity(4 + message.len());
     payload.extend_from_slice(&code.to_le_bytes());
@@ -196,6 +218,17 @@ mod tests {
         assert!(rest.is_empty(), "no trailing data expected");
     }
 
+    // The refusal the page reads names the limit the runtime holds to
+    #[test]
+    fn the_refusal_names_the_message_limit() {
+        let limit = format!("{} MiB", MESSAGE_MAX >> 20);
+        assert!(
+            MESSAGE_TOO_LARGE.contains(&limit),
+            "{MESSAGE_TOO_LARGE} against {limit}"
+        );
+        assert_eq!(PAGE_PAYLOAD_MAX, MESSAGE_MAX + 2 + MAX_CMD_LEN);
+    }
+
     // Trailing bytes after the 9-byte header are returned as the remaining slice.
     #[test]
     fn envelope_roundtrip_with_payload() {
@@ -217,7 +250,7 @@ mod tests {
 
     #[test]
     fn envelope_roundtrip_all_subsystems() {
-        for sub in [SUB_RPC, SUB_EVENT, SUB_STREAM] {
+        for sub in [SUB_RPC, SUB_EVENT, SUB_STREAM, SUB_BATCH] {
             let env = Envelope {
                 version: ENVELOPE_VERSION,
                 subsystem: sub,
@@ -714,6 +747,7 @@ mod property_tests {
                 Just(SUB_RPC),
                 Just(SUB_EVENT),
                 Just(SUB_STREAM),
+                Just(SUB_BATCH),
             ],
             opcode in 0u8..=10,
             flags in 0u8..=0xFF,

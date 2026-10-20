@@ -110,7 +110,7 @@ fn parse(text: &str) -> Result<Receipt> {
 /// precedence order.
 ///
 /// The installer keeps the binary in its home's `bin` folder unless told
-/// otherwise, so a home chosen at install time is found from the binary.
+/// otherwise. A home chosen at install time is found from the binary.
 fn homes(exe: &Path) -> Vec<PathBuf> {
     let mut homes = Vec::new();
 

@@ -25,6 +25,12 @@
         pkgs = import nixpkgs { inherit system; };
         craneLib = inputs.crane.mkLib pkgs;
 
+        # nixpkgs packages glxinfo inside mesa-demos beside its demo programs.
+        # A copy of the one binary keeps mesa-demos out of the closure.
+        glxinfo = pkgs.runCommand "glxinfo" { } ''
+          install -Dm755 ${pkgs.mesa-demos}/bin/glxinfo $out/bin/glxinfo
+        '';
+
         commonArgs = {
           src = craneLib.cleanCargoSource ./.;
 
@@ -46,6 +52,7 @@
               dbus
               at-spi2-core
               libGL
+              vulkan-loader
               libxkbcommon
               wayland
               libX11
@@ -76,12 +83,22 @@
               libiconv
             ];
 
-          nativeBuildInputs = with pkgs; [
-            rustc
-            cargo
-            pkg-config
-            stdenv.cc
-          ];
+          nativeBuildInputs =
+            with pkgs;
+            [
+              rustc
+              cargo
+              pkg-config
+              stdenv.cc
+            ]
+            # kurogane doctor reads the GPU through glxinfo
+            ++ lib.optionals stdenv.hostPlatform.isLinux [
+              glxinfo
+            ]
+            # macOS bundles link CEF with otool and install_name_tool
+            ++ lib.optionals stdenv.hostPlatform.isDarwin [
+              cctools
+            ];
         };
 
         cef = pkgs.callPackage ./nix/cef.nix { inherit cefVersion; };
@@ -102,6 +119,7 @@
             nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
 
             # Cargo runs outside stdenv; specifically provide its build dependencies
+            # On macOS rustc otherwise targets an older macOS than Nix's Rust standard library
             postInstall = ''
               wrapProgram $out/bin/kurogane \
                 --prefix LIBRARY_PATH : ${pkgs.lib.makeLibraryPath commonArgs.buildInputs} \
@@ -109,8 +127,9 @@
                 --prefix PATH : ${pkgs.lib.makeBinPath commonArgs.nativeBuildInputs} \
                 --prefix LD_LIBRARY_PATH : ${
                   pkgs.lib.makeLibraryPath (commonArgs.buildInputs ++ [ pkgs.stdenv.cc.cc ])
-                }:${cef} \
-                --prefix PKG_CONFIG_PATH : ${pkgs.lib.makeSearchPath "lib/pkgconfig" commonArgs.buildInputs}
+                } \
+                --prefix PKG_CONFIG_PATH : ${pkgs.lib.makeSearchPath "lib/pkgconfig" commonArgs.buildInputs} \
+                ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set-default MACOSX_DEPLOYMENT_TARGET ${pkgs.stdenv.hostPlatform.darwinMinVersion}"}
             '';
 
             meta = {
