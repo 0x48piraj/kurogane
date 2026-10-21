@@ -47,6 +47,7 @@ windows-sys = { version = "0.61.2", features = [
 
 [dev-dependencies]
 kurogane-layout = { workspace = true, features = ["test-fixtures"] }
+schemars = "1"
 tempfile = "3"
 
 [build-dependencies]

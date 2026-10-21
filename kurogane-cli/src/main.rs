@@ -46,6 +46,8 @@ mod macos_settings;
 #[cfg(target_os = "macos")]
 mod plist;
 
+#[cfg(test)]
+mod cli_schema;
 mod collector;
 mod cache;
 mod template;
@@ -97,9 +99,9 @@ enum Commands {
         #[arg(long)]
         debug: bool,
         /// Package format (dir or appimage on Linux, dir or nsis on Windows,
-        /// app on macOS).
-        #[arg(long, default_value = crate::bundle::DEFAULT_FORMAT)]
-        format: String,
+        /// app on macOS). The default is app on macOS and dir elsewhere.
+        #[arg(long)]
+        format: Option<String>,
         /// Sign the bundle's Windows binaries ([signing.windows]) or macOS app
         /// ([signing.macos]). Linux bundles are not signed.
         #[arg(long)]
@@ -260,7 +262,9 @@ fn main() -> anyhow::Result<()> {
             format,
             sign,
         } => {
-            let format = bundle::PackageFormat::from_str(&format)?;
+            let format = bundle::PackageFormat::from_str(
+                format.as_deref().unwrap_or(bundle::DEFAULT_FORMAT),
+            )?;
             bundle::run(debug, format, sign)
         }
         Commands::New {

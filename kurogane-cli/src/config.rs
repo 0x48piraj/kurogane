@@ -26,6 +26,7 @@ pub enum ConfigError {
 
 /// Project packaging configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(default, rename_all = "kebab-case")]
 pub struct PackagingConfig {
     /// Application identity, frontend and sandbox (`[app]`).
@@ -70,6 +71,7 @@ pub fn anchor_path(project_root: &Path, path: &Path) -> PathBuf {
 
 /// Application identity and presentation configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(default, rename_all = "kebab-case")]
 pub struct AppConfig {
     /// Display name. Defaults to the Cargo package name.
@@ -138,6 +140,7 @@ impl AppConfig {
 
 /// Canonical bundle configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(default, rename_all = "kebab-case")]
 pub struct BundleConfig {
     /// Extra files and directories every bundle carries
@@ -150,6 +153,7 @@ pub struct BundleConfig {
 /// asks (a misspelt `destination`, a `preserve-symlinks` no version knows)
 /// would go unnoticed.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ResourceConfig {
     /// File or directory to bundle, relative to the project root.
@@ -180,6 +184,7 @@ impl ResourceConfig {
 
 /// Linux packaging configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(default, rename_all = "kebab-case")]
 pub struct LinuxPackagingConfig {
     /// Categories of an AppImage's desktop entry. Defaults to `Utility`.
@@ -195,6 +200,7 @@ pub struct LinuxPackagingConfig {
 /// builds. A mistake here never stops `kurogane run` elsewhere. A key the
 /// table does not take is an error naming it.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct MacosPackagingConfig {
     /// `LSMinimumSystemVersion`, such as `"13.0"`. Unset means CEF's own
@@ -211,6 +217,7 @@ pub struct MacosPackagingConfig {
 /// generic wording (`[macos.privacy]`). Every device a page can ask for is
 /// declared, configured or not.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields)]
 pub struct MacosPrivacyConfig {
     /// `NSCameraUsageDescription`.
@@ -221,6 +228,7 @@ pub struct MacosPrivacyConfig {
 
 /// Windows installer configuration.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(default, rename_all = "kebab-case")]
 pub struct WindowsPackagingConfig {
     /// Whether an NSIS installer creates a Start Menu shortcut.
@@ -244,6 +252,7 @@ impl Default for WindowsPackagingConfig {
 /// A key a table does not take, such as the older flat `[signing]` keys, is
 /// an error naming it, never ignored.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields)]
 pub struct SigningFileConfig {
     /// Signing for the PE files of a Windows bundle and installer
@@ -262,6 +271,7 @@ pub struct SigningFileConfig {
 /// environment variable the password is read from. CI keeps it in secrets
 /// and it stays out of version control.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct WindowsSigningConfig {
     /// Certificate file, a `.pfx` or `.p12` or with `osslsigncode` a PEM or
@@ -283,6 +293,7 @@ pub struct WindowsSigningConfig {
 /// macOS signing (`[signing.macos]`). It names the codesign identity from the
 /// keychain a `.app` is signed with; `-` signs ad hoc.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields)]
 pub struct MacosSigningConfig {
     /// Codesign identity from the keychain. `-` signs ad hoc.
