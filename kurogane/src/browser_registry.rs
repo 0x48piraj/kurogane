@@ -9,10 +9,12 @@ use crate::file_dialog::PendingFileDialogs;
 use crate::permissions::PendingPermissions;
 use crate::window::PendingPopups;
 
+/// Identifier of a browser, never reused while the application runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BrowserId(u32);
 
 impl BrowserId {
+    /// Returns the identifier as a number.
     pub fn as_u32(&self) -> u32 {
         self.0
     }
@@ -23,11 +25,18 @@ impl BrowserId {
     }
 }
 
+/// Kind of a browser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BrowserType {
+    /// The start window's browser, a browser of
+    /// [`AppInstance::create_window`](crate::AppInstance::create_window) or one
+    /// embedded with
+    /// [`AppInstance::create_child_browser`](crate::AppInstance::create_child_browser).
     Main,
+    /// A window a page opened. Its parent is the browser that opened it.
     Popup,
+    /// Chromium's developer tools. Its parent is the browser it inspects.
     DevTools,
     #[allow(dead_code)]
     Osr,
@@ -37,12 +46,20 @@ pub enum BrowserType {
     ChromeUi,
 }
 
+/// What the runtime knows about an open browser, from
+/// [`AppHandle::browsers`](crate::AppHandle::browsers).
 #[derive(Debug, Clone)]
 pub struct BrowserMetadata {
+    /// Browser identifier.
     pub id: BrowserId,
+    /// Kind of browser.
     pub browser_type: BrowserType,
+    /// Browser that opened a popup or that DevTools inspects. None for a
+    /// `Main` or `ChromeUi` browser.
     pub parent_id: Option<BrowserId>,
+    /// Same browser as `parent_id`.
     pub opener_id: Option<BrowserId>,
+    /// When the runtime first saw the browser.
     pub created_at: std::time::Instant,
 }
 

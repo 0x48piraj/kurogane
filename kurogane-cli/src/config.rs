@@ -28,11 +28,17 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct PackagingConfig {
+    /// Application identity, frontend and sandbox (`[app]`).
     pub app: AppConfig,
+    /// Bundle contents (`[bundle]`).
     pub bundle: BundleConfig,
+    /// Linux desktop entry (`[linux]`).
     pub linux: LinuxPackagingConfig,
+    /// macOS `Info.plist` declarations (`[macos]`).
     pub macos: MacosPackagingConfig,
+    /// Windows installer (`[windows]`).
     pub windows: WindowsPackagingConfig,
+    /// Code signing (`[signing]`).
     pub signing: SigningFileConfig,
 }
 
@@ -66,16 +72,36 @@ pub fn anchor_path(project_root: &Path, path: &Path) -> PathBuf {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct AppConfig {
+    /// Display name. Defaults to the Cargo package name.
     pub name: Option<String>,
+    /// Reverse-DNS identifier, such as `com.example.notes`. It is the macOS
+    /// `CFBundleIdentifier` (`com.kurogane.<name>` without it) and the window
+    /// class an AppImage's desktop entry names (the executable's name without
+    /// it).
     pub identifier: Option<String>,
+    /// Frontend source directory relative to the project root.
     pub frontend: Option<PathBuf>,
+    /// Frontend build output that `kurogane bundle` packages, relative to the
+    /// project root.
     pub frontend_dist: Option<PathBuf>,
+    /// Command `kurogane bundle` runs to build the frontend before
+    /// `cargo build`. It runs from the project root through `sh`, or `cmd` on
+    /// Windows.
     pub frontend_build: Option<String>,
+    /// Command that installs the frontend's dependencies. `kurogane new`
+    /// prints it in its next steps.
     pub frontend_install: Option<String>,
+    /// Command that starts the frontend's dev server. `kurogane new` prints it
+    /// in its next steps.
     pub frontend_run: Option<String>,
+    /// Publisher an NSIS installer names in Add/Remove Programs.
     pub publisher: Option<String>,
+    /// File description of an NSIS installer.
     pub description: Option<String>,
+    /// Copyright and branding text of an NSIS installer.
     pub copyright: Option<String>,
+    /// PNG icon of an AppImage and a macOS `.app`, relative to the project
+    /// root.
     pub icon: Option<PathBuf>,
     /// Whether the application enters Chromium's sandbox.
     ///
@@ -114,6 +140,8 @@ impl AppConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct BundleConfig {
+    /// Extra files and directories every bundle carries
+    /// (`[[bundle.resources]]`).
     pub resources: Vec<ResourceConfig>,
 }
 
@@ -124,7 +152,10 @@ pub struct BundleConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ResourceConfig {
+    /// File or directory to bundle, relative to the project root.
     pub source: PathBuf,
+    /// Place inside the bundle relative to its root. Defaults to the source's
+    /// file name.
     pub destination: Option<String>,
 }
 
@@ -151,7 +182,10 @@ impl ResourceConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct LinuxPackagingConfig {
+    /// Categories of an AppImage's desktop entry. Defaults to `Utility`.
     pub categories: Option<Vec<String>>,
+    /// Whether an AppImage's desktop entry runs in a terminal. Defaults to
+    /// false.
     pub terminal: Option<bool>,
 }
 
@@ -189,7 +223,9 @@ pub struct MacosPrivacyConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct WindowsPackagingConfig {
+    /// Whether an NSIS installer creates a Start Menu shortcut.
     pub start_menu_shortcut: bool,
+    /// Whether an NSIS installer creates a Desktop shortcut.
     pub desktop_shortcut: bool,
 }
 
@@ -228,10 +264,17 @@ pub struct SigningFileConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct WindowsSigningConfig {
+    /// Certificate file, a `.pfx` or `.p12` or with `osslsigncode` a PEM or
+    /// DER chain.
     pub certificate: Option<PathBuf>,
+    /// Thumbprint of a certificate in the Windows certificate store, for
+    /// `signtool`. Never beside `certificate`.
     pub certificate_thumbprint: Option<String>,
+    /// Environment variable a certificate file's password is read from.
     pub certificate_password_env: Option<String>,
+    /// RFC 3161 timestamp server.
     pub timestamp_url: Option<String>,
+    /// Digest algorithm. Defaults to `sha256`.
     pub digest_algorithm: Option<String>,
     /// A program and its arguments; `%1` in an argument is the file to sign.
     pub custom_command: Option<Vec<String>>,
@@ -242,6 +285,7 @@ pub struct WindowsSigningConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MacosSigningConfig {
+    /// Codesign identity from the keychain. `-` signs ad hoc.
     pub identity: Option<String>,
 }
 

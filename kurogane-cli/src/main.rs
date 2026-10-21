@@ -82,6 +82,7 @@ enum Commands {
     /// Unlike `dev`, this command passes arguments directly to Cargo.
     #[command(disable_help_flag = true)]
     Run {
+        /// Arguments for Cargo. Those after `--` reach the application.
         #[arg(
             num_args = 0..,
             trailing_var_arg = true,

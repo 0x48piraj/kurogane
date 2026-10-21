@@ -3,19 +3,25 @@ use std::path::PathBuf;
 
 use crate::capability::FsConfigError;
 
+/// Failure to start the application or to open a window or a browser.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum RuntimeError {
+    /// The frontend path given to [`App::new`](crate::App::new) exists but is
+    /// not a directory.
     InvalidAssetRoot(PathBuf),
     /// The frontend URL could not be parsed; `source` says why.
     InvalidFrontendUrl {
         url: String,
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+    /// The frontend directory given to [`App::new`](crate::App::new) does not
+    /// exist.
     AssetRootMissing(PathBuf),
     /// The frontend directory exists but has no `index.html` to serve; none,
     /// a directory by that name, or a link out of the directory.
     EntrypointMissing(PathBuf),
+    /// The frontend directory at `path` cannot be read; `source` says why.
     AssetRootUnavailable {
         path: PathBuf,
         source: std::io::Error,
@@ -30,9 +36,7 @@ pub enum RuntimeError {
     /// No Chromium runtime beside the executable, no `CEF_PATH` and nothing
     /// installed at `expected`, which is `None` for a user without a local
     /// data directory.
-    CefNotInstalled {
-        expected: Option<PathBuf>,
-    },
+    CefNotInstalled { expected: Option<PathBuf> },
     /// `CEF_PATH` names a directory that does not exist; no other runtime
     /// runs in its place.
     CefPathMissing(PathBuf),
@@ -63,12 +67,15 @@ pub enum RuntimeError {
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
+    /// The profile directory at `path` cannot be created; `source` says why.
     CacheUnavailable {
         path: PathBuf,
         source: std::io::Error,
     },
 
+    /// CEF created no browser.
     BrowserCreationFailed,
+    /// CEF created no window.
     WindowCreationFailed,
 
     /// [`AppInstance::create_window`](crate::AppInstance::create_window) was
@@ -97,14 +104,10 @@ pub enum RuntimeError {
     UnsupportedParentWindow,
 
     /// The requested sandbox cannot be enforced on this platform or layout.
-    SandboxUnsupported {
-        reason: String,
-    },
+    SandboxUnsupported { reason: String },
 
     /// The requested sandbox is supported but not usable on this machine.
-    SandboxUnavailable {
-        reason: String,
-    },
+    SandboxUnavailable { reason: String },
 
     /// The [`App`](crate::App) builder was misconfigured. Every problem is
     /// listed; nothing was started.

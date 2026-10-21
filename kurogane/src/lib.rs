@@ -1,3 +1,64 @@
+//! A composable Chromium runtime for Rust.
+//!
+//! Build high-performance, GPU-accelerated desktop applications on Chromium or
+//! embed it directly into existing applications.
+//!
+//! Guides, concepts and the CLI reference are at <https://kurogane-rs.org/docs>.
+//!
+//! # A first app
+//!
+//! ```no_run
+//! use kurogane::{App, AppHandle, IpcError};
+//!
+//! fn greet(name: String, _: &AppHandle) -> Result<String, IpcError> {
+//!     Ok(format!("Hello, {name}!"))
+//! }
+//!
+//! fn main() {
+//!     App::new("content").command("greet", greet).run_or_exit();
+//! }
+//! ```
+//!
+//! The page calls the command with `window.kurogane.invoke("greet", "Kurogane")`
+//! and gets `"Hello, Kurogane!"` back.
+//!
+//! # Where to start
+//!
+//! * [`App`] describes an application and starts it.
+//! * [`AppInstance`] is the running application, owned by the thread that
+//!   started it. [`AppHandle`] reaches it from any thread.
+//! * [`BrowserHandle`] drives one browser.
+//! * [`WindowOptions`] describes an application window.
+//!
+//! # Talking to the page
+//!
+//! * [`App::command`] registers a command. Its async and binary forms answer
+//!   later or take bytes. A handler fails with an [`IpcError`].
+//! * [`AppHandle::broadcast_json`] sends an event to every subscribed page.
+//! * [`App::stream`] registers a [`StreamHandler`] for chunks in both
+//!   directions.
+//! * [`App::permit`] opens a command or stream to another origin.
+//! * [`capability::Filesystem`] grants pages scoped access to files.
+//!
+//! # Deciding what a page may do
+//!
+//! Hooks such as [`App::on_new_window`], [`App::on_navigation`],
+//! [`App::on_download`] and [`App::on_permission`] take a typed request. Each
+//! answers with a decision whose `Default` leaves the choice to Kurogane.
+//!
+//! # Processes
+//!
+//! Chromium runs your binary again for each of its helper processes. Code
+//! before the call that starts the runtime runs in every process. Guard
+//! one-time work with [`is_browser_process`]. See [`App`].
+//!
+//! # Your own event loop
+//!
+//! [`App::start`] and [`App::start_embedded`] start Chromium without its
+//! message loop. Your loop calls [`AppInstance::pump`] until
+//! [`AppInstance::should_shutdown`] turns true and then
+//! [`AppInstance::shutdown`].
+
 #![deny(unused_must_use)]
 #![deny(unused_variables)]
 #![deny(dead_code)]

@@ -16,6 +16,8 @@ use crate::runtime::AppHandle;
 pub type SyncHandler =
     Box<dyn Fn(&[u8], &AppHandle, IpcContext) -> Result<Vec<u8>, IpcError> + Send + Sync>;
 pub type AsyncHandler = Box<dyn Fn(&[u8], BinaryResponder, &AppHandle, IpcContext) + Send + Sync>;
+/// Responder of an async binary command, resolved with the reply's bytes
+/// ([`App::async_binary_command`](crate::App::async_binary_command)).
 pub type BinaryResponder = Responder<Vec<u8>>;
 
 /// Unified request/response subsystem handling both JSON and Binary IPC.

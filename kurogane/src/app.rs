@@ -1338,7 +1338,8 @@ impl App {
     ///
     /// ```no_run
     /// # use kurogane::{App, DragDecision};
-    /// App::new("./dist")
+    /// # fn main() -> Result<(), kurogane::RuntimeError> {
+    /// let runtime = App::new("./dist")
     ///     .on_drag_enter(|drag, _| {
     ///         let images = !drag.files().is_empty()
     ///             && drag.files().iter().all(|file| {
@@ -1346,7 +1347,11 @@ impl App {
     ///             });
     ///         if images { DragDecision::Allow } else { DragDecision::Refuse }
     ///     })
-    ///     .run_or_exit();
+    ///     .start_embedded()?;
+    /// // Create the browser in the host's window with `create_child_browser`
+    /// # runtime.shutdown();
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn on_drag_enter<F>(mut self, f: F) -> Self
     where

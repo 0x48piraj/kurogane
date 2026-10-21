@@ -485,7 +485,39 @@ App::new("dist")
     .run_or_exit();
 ```
 
-`Permission` covers `Camera`, `Microphone`, `ScreenVideo`, `ScreenAudio`, `Geolocation`, `Notifications`, `ClipboardRead`, `MidiSysex`, `CameraPanTiltZoom`, `ArSession`, `VrSession`, `HandTracking` and `CapturedSurfaceControl`.
+`Permission` names what a page asks for:
+
+| Permission | What the page asks for |
+|---|---|
+| `Camera` | A camera (`getUserMedia` with video) |
+| `Microphone` | A microphone (`getUserMedia` with audio) |
+| `ScreenVideo` | A picture of the screen (`getDisplayMedia`) |
+| `ScreenAudio` | The sound the system plays along with a picture of the screen |
+| `Geolocation` | The device's location (`navigator.geolocation`) |
+| `Notifications` | Showing notifications (`Notification.requestPermission`) |
+| `ClipboardRead` | Reading the clipboard (`navigator.clipboard.readText` and `read`) |
+| `MidiSysex` | MIDI devices with system-exclusive messages (`requestMIDIAccess({ sysex: true })`) |
+| `CameraPanTiltZoom` | Turning a camera (pan, tilt and zoom) |
+| `ArSession` | An augmented-reality session (WebXR) |
+| `VrSession` | A virtual-reality session (WebXR) |
+| `HandTracking` | Tracking the user's hands in a WebXR session |
+| `CapturedSurfaceControl` | Scrolling and zooming a captured tab or window |
+| `StorageAccess` | An embedded site's own cookies and storage inside another site's page (`document.requestStorageAccess`) |
+| `TopLevelStorageAccess` | A site's own cookies and storage inside the pages of other sites (`requestStorageAccessFor`) |
+| `DiskQuota` | More disk space for the site's storage |
+| `LocalFonts` | The fonts installed on the system (`queryLocalFonts`) |
+| `IdentityProvider` | Signing in with the site as an identity provider (FedCM) |
+| `IdleDetection` | Whether the user is idle (`IdleDetector`) |
+| `KeyboardLock` | Keys the system would otherwise take, such as Alt+Tab (`navigator.keyboard.lock`) |
+| `PointerLock` | Holding the pointer inside the page (`requestPointerLock`) |
+| `ProtectedMediaIdentifier` | An identifier for playing protected media |
+| `RegisterProtocolHandler` | Handling links of a URL scheme (`registerProtocolHandler`) |
+| `WebAppInstallation` | Installing the site as an app |
+| `WindowManagement` | The screens' layout and placing windows on them (`getScreenDetails`) |
+| `FileSystemAccess` | Writing to files and folders the user picked (File System Access) |
+| `LocalNetwork` | Reaching devices on the local network |
+| `LoopbackNetwork` | Reaching services on this computer |
+| `Sensors` | Motion and orientation sensors |
 
 A request is granted or refused whole. A page asking for a camera and a microphone together gets both or neither. `Default` gives Kurogane's answer. That is `Deny`.
 
@@ -586,15 +618,22 @@ Kurogane's own Save As for a download is not asked about; `App::on_download` dec
 `App::on_drag_enter` decides a drag from another application as it enters a browser embedded in your own window. The drag may carry files from a file manager, a link or selected text. The hook runs before the page sees the drag. It sees the paths of the dragged files. The page never does. `DragDecision::Refuse` keeps the drag from the page:
 
 ```rust
-use kurogane::{App, DragDecision};
+use kurogane::{App, DragDecision, RuntimeError};
 
-App::new("dist")
-    .on_drag_enter(|drag, _app| {
-        let images = !drag.files().is_empty()
-            && drag.files().iter().all(|file| file.extension().is_some_and(|ext| ext == "png"));
-        if images { DragDecision::Allow } else { DragDecision::Refuse }
-    })
-    .run_or_exit();
+fn main() -> Result<(), RuntimeError> {
+    let runtime = App::new("dist")
+        .on_drag_enter(|drag, _app| {
+            let images = !drag.files().is_empty()
+                && drag.files().iter().all(|file| file.extension().is_some_and(|ext| ext == "png"));
+            if images { DragDecision::Allow } else { DragDecision::Refuse }
+        })
+        .start_embedded()?;
+
+    // Create the browser in your window with create_child_browser, then pump
+    // until should_shutdown turns true
+    runtime.shutdown();
+    Ok(())
+}
 ```
 
 `drag.files()`, `drag.link_url()` and `drag.text()` say what is dragged. `drag.origin()` is the page's origin.
@@ -1074,6 +1113,7 @@ Kurogane turns off what Chromium would run for every application and an applicat
 | Extensions other programs register for Google Chrome | preference `extensions.block_external_extensions` | `.chromium_pref("extensions.block_external_extensions", false)` |
 | Component updates, Widevine among them | preference `component_updates.component_updates_enabled` | `.chromium_pref("component_updates.component_updates_enabled", true)` |
 | Queries to Google's time server | preference `network_time.network_time_queries_enabled` | `.chromium_pref("network_time.network_time_queries_enabled", true)` |
+| The bubble of finished downloads | preference `download_bubble.partial_view_enabled` | `.chromium_pref("download_bubble.partial_view_enabled", true)` |
 | The omnibox's AI Mode check | feature `AimEnabled` | `.chromium_flag_with_value("enable-features", "AimEnabled")` |
 | Cast | feature `MediaRouter` | `.chromium_flag_with_value("enable-features", "MediaRouter")` |
 | A renderer kept ready for the next site | feature `SpareRendererForSitePerProcess` | `.chromium_flag_with_value("enable-features", "SpareRendererForSitePerProcess")` |

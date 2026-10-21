@@ -5,18 +5,24 @@ use crate::window_closing::Closing;
 use crate::window_options::WindowState;
 use tracing::debug;
 
+/// Identifier of a window, never reused while the application runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WindowId(u32);
 
 impl WindowId {
+    /// Returns the identifier as a number.
     pub fn as_u32(&self) -> u32 {
         self.0
     }
 }
 
+/// What the runtime knows about an open window, from
+/// [`AppHandle::windows`](crate::AppHandle::windows).
 #[derive(Debug, Clone)]
 pub struct WindowMetadata {
+    /// Window identifier.
     pub id: WindowId,
+    /// When the runtime first saw the window.
     pub created_at: std::time::Instant,
 }
 
