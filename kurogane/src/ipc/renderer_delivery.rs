@@ -8,6 +8,8 @@
 //! messages in flight lets the frame's queued messages leave
 //! (`renderer_outbox`).
 
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
 use std::cell::{Cell, RefCell};
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::OnceLock;

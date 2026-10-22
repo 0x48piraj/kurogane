@@ -125,7 +125,7 @@ impl KuroganeBrowserProcessHandler {
 /// These are `app://` when the application serves local assets and every
 /// scheme given to [`App::register_scheme`](crate::App::register_scheme).
 ///
-/// Nothing here keeps the factories. cef-rs adds the reference CEF adopts
+/// Nothing here keeps the factories. tanso adds the reference CEF adopts
 /// for each one and CEF holds it until the factory is replaced or cleared.
 fn register_scheme_handlers(spec: &RuntimeSpec) {
     let Some(global) = request_context_get_global_context() else {

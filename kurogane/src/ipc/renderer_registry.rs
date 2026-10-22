@@ -13,6 +13,8 @@
 //! Generic over the context handle so the rules can be tested without V8.
 //! `renderer_state` supplies the V8 context and value types.
 
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
 use std::collections::HashMap;
 
 use crate::ipc::envelope::{FLAG_OPAQUE_CONTEXT, SUB_RPC, SUB_STREAM};

@@ -157,7 +157,7 @@ impl Key {
 }
 
 /// CEF's event flags this module reads (cef_types.h, cef_event_flags_t), as
-/// the `u32` a key event carries them in. cef-rs's own constants wrap a C
+/// the `u32` a key event carries them in. tanso's own constants wrap a C
 /// `int` on Windows and an `unsigned int` elsewhere; a test holds these to
 /// them on every platform.
 pub(crate) mod flag {

@@ -895,14 +895,14 @@ fn target_of(params: &ContextMenuParams, browser: Option<BrowserId>) -> ContextM
 
 /// The kind of media `params` was opened on.
 ///
-/// cef-rs binds the media type as a Rust enum, which a value CEF adds
+/// tanso binds the media type as a Rust enum, which a value CEF adds
 /// later could not hold. CEF's function is called as returning the integer
 /// it does (as `crate::client`'s `transition` does).
 fn media_kind(params: &ContextMenuParams) -> Option<MediaKind> {
     let raw = params.get_raw();
     type GetMediaType = unsafe extern "C" fn(*mut sys::_cef_context_menu_params_t) -> i32;
     // SAFETY: `raw` is the live params CEF passed to this callback, borrowed
-    // as the call's `self` like every method cef-rs calls. The slot returns
+    // as the call's `self` like every method tanso calls. The slot returns
     // cef_context_menu_media_type_t, a C enum: a 32-bit integer on every
     // platform CEF supports.
     let value = unsafe {
@@ -921,7 +921,7 @@ fn media_kind(params: &ContextMenuParams) -> Option<MediaKind> {
 }
 
 /// CEF's edit flags this module reads (cef_types.h,
-/// cef_context_menu_edit_state_flags_t). cef-rs's own constants wrap a C
+/// cef_context_menu_edit_state_flags_t). tanso's own constants wrap a C
 /// `int` on Windows and an `unsigned int` elsewhere. A flag is read as the
 /// `i64` either fits in; a test holds these to them on every platform.
 mod edit {

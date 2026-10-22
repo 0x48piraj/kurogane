@@ -2,6 +2,8 @@
 //!
 //! Events are delivered only to their addressed subscription and owning frame.
 
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
 use tanso::*;
 
 use tracing::debug;

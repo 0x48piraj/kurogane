@@ -636,7 +636,7 @@ wrap_download_handler! {
 
     impl DownloadHandler {
         // CEF's own answer, which leaves the decision to OnBeforeDownload;
-        // cef-rs's default 0 would cancel every download
+        // tanso's default 0 would cancel every download
         fn can_download(
             &self,
             _browser: Option<&mut Browser>,

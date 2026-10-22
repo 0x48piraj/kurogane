@@ -3,6 +3,8 @@
 //! Connects JavaScript to the browser process via CEF messages.
 //! Defines the boundary between JavaScript and the native IPC system.
 
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
 use tanso::*;
 use std::sync::Arc;
 use crate::app::ClientAppRendererDelegate;
@@ -30,7 +32,7 @@ fn v8_to_string(v: &V8Value) -> String {
 
 /// Sets the V8 exception message and reports the call as handled.
 ///
-/// CEF throws the exception when `Execute` returns `1`. cef-rs exposes the
+/// CEF throws the exception when `Execute` returns `1`. tanso exposes the
 /// exception as a borrowed `CefString`; `try_set` writes through that wrapper.
 fn throw(exception: Option<&mut CefString>, message: &str) -> i32 {
     if let Some(exception) = exception {

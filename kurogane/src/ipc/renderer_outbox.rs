@@ -9,6 +9,8 @@
 //! at once outside the pacing, since the page may be gone before the answers
 //! that pace them.
 
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
 use std::cell::RefCell;
 
 use tanso::*;

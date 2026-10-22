@@ -3,6 +3,8 @@
 //! The main thread owns every V8 context and receives every IPC message.
 //! No borrow spans a call into JavaScript; IPC callbacks may re-enter.
 
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
 use std::cell::RefCell;
 
 use tanso::*;

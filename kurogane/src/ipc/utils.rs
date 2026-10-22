@@ -1,3 +1,5 @@
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
 use tanso::*;
 
 /// Formats a promise rejection as `"{code}: {message}"`, the form the

@@ -14,6 +14,8 @@
 //! Generic over the frame, message and store so the rules can be tested
 //! without CEF. `renderer_delivery` supplies CEF's types.
 
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::{Receiver, Sender, channel};
 

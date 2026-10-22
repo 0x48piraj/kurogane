@@ -6,6 +6,8 @@
 //! anything else of the stream. A stream still opening receives nothing but
 //! that answer.
 
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
 use tanso::*;
 
 use tracing::debug;

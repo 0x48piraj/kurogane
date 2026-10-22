@@ -247,7 +247,7 @@ fn decide(app: &AppHandle, command: ChromeCommand, browser: Option<BrowserId>) -
     }
 }
 
-// Leave CEF's four `is_chrome_*` callbacks at their defaults. cef-rs returns
+// Leave CEF's four `is_chrome_*` callbacks at their defaults. tanso returns
 // 0 for these callbacks, whereas CEF's C++ defaults return true. For a
 // Chrome-style window, this keeps the app menu items, page actions and
 // toolbar buttons hidden when Chromium creates them itself.
