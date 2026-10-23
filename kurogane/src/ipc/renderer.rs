@@ -218,6 +218,7 @@ wrap_render_process_handler! {
                 ("openStream", IpcOpenStreamHandler::new()),
                 ("writeStream", IpcWriteStreamHandler::new()),
                 ("endStream", IpcEndStreamHandler::new()),
+                ("errorStream", IpcErrorStreamHandler::new()),
                 // Unpaces the page's messages while it leaves
                 ("leaving", IpcLeavingHandler::new()),
                 // Settles what a page back from the back-forward cache left
@@ -1163,6 +1164,85 @@ wrap_v8_handler! {
             };
 
             renderer_outbox::send(&frame, &frame_id, &envelope, &[payload]);
+
+            if let Some(ret) = retval {
+                *ret = v8_value_create_uint(1);
+            }
+
+            1
+        }
+    }
+}
+
+//
+// Stream error handler
+//
+
+wrap_v8_handler! {
+    pub struct IpcErrorStreamHandler;
+
+    impl V8Handler {
+        fn execute(
+            &self,
+            _name: Option<&CefString>,
+            _object: Option<&mut V8Value>,
+            arguments: Option<&[Option<V8Value>]>,
+            retval: Option<&mut Option<V8Value>>,
+            exception: Option<&mut CefString>,
+        ) -> i32 {
+            let args = match arguments {
+                Some(a) if !a.is_empty() => a,
+                _ => {
+                    return throw(exception, "errorStream requires a streamId argument");
+                }
+            };
+
+            let stream_id = match args.first() {
+                Some(Some(v)) if v.is_int() != 0 || v.is_uint() != 0 => v.int_value(),
+                _ => {
+                    return throw(exception, "errorStream: streamId must be an integer");
+                }
+            };
+
+            let message = match args.get(1) {
+                Some(Some(v)) if v.is_string() != 0 => v8_to_string(v),
+                _ => String::new(),
+            };
+            if message.len() > MESSAGE_MAX {
+                return throw(exception, "errorStream: a message carries at most 64 MiB");
+            }
+
+            let context = match v8_context_get_current_context() {
+                Some(ctx) => ctx,
+                None => {
+                    return throw(exception, "errorStream: no active renderer context");
+                }
+            };
+
+            let Some(frame) = context.frame() else {
+                return throw(exception, "errorStream: no frame for current context");
+            };
+
+            // The stream is over on this side at once; the browser sends
+            // nothing back to a stream the page failed
+            let sender = with_state(|state| {
+                state.fail_stream(stream_id, &context).then(|| state.sender(&context)).flatten()
+            });
+            let Some((flags, frame_id)) = sender else {
+                if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
+                return 1;
+            };
+
+            let envelope = Envelope {
+                version: ENVELOPE_VERSION,
+                subsystem: SUB_STREAM,
+                opcode: STREAM_ERROR,
+                flags,
+                correlation_id: stream_id as u32,
+                payload_kind: PAYLOAD_STRING,
+            };
+
+            renderer_outbox::send(&frame, &frame_id, &envelope, &[message.as_bytes()]);
 
             if let Some(ret) = retval {
                 *ret = v8_value_create_uint(1);

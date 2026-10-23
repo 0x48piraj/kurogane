@@ -244,8 +244,9 @@ pub trait StreamHandler: Send + 'static {
         Ok(())
     }
 
-    /// Called when the renderer reports that the stream failed; not for a
-    /// failure the handler or the runtime sends.
+    /// Called when the page fails the stream with `stream.error(message)`;
+    /// not for a failure the handler or the runtime sends. The handler is
+    /// dropped once it returns.
     fn on_error(&mut self, message: &str) {
         let _ = message;
     }

@@ -256,6 +256,12 @@ impl<C: ContextHandle, V: Clone> Registry<C, V> {
             .is_some_and(|(owner, _)| owner.context.same(current))
     }
 
+    /// Closes the open stream `id` the page fails, only for the context that
+    /// opened it. Returns whether it was open.
+    pub(crate) fn fail_stream(&mut self, id: i32, current: &C) -> bool {
+        self.owns_stream(id, current) && self.streams.remove(&id).is_some()
+    }
+
     pub(crate) fn subscribe(
         &mut self,
         context: &C,
@@ -463,6 +469,20 @@ mod tests {
             "an ended stream stays closed"
         );
         assert!(r.pending.is_empty() && r.streams.is_empty());
+    }
+
+    #[test]
+    fn only_the_opening_context_fails_its_stream() {
+        let mut r = two_frames();
+        let id = r.register_stream_open(&Ctx(1), "open", sink()).unwrap();
+        r.stream_opened(id, &frame("A"));
+        assert!(!r.fail_stream(id, &Ctx(2)), "B failed A's stream");
+        assert!(r.fail_stream(id, &Ctx(1)));
+        assert!(
+            r.stream_end(id, &frame("A")).is_none(),
+            "a failed stream stays closed"
+        );
+        assert!(!r.fail_stream(id, &Ctx(1)), "failed twice");
     }
 
     #[test]

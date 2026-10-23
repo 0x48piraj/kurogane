@@ -236,6 +236,17 @@
         end(result) {
             window.core.endStream(this._id, result || '');
         }
+
+        /**
+         * Fail the stream. The handler's on_error receives `message`. The
+         * stream is over at once. onEnd and onError do not fire. Later writes
+         * and ends send nothing.
+         *
+         * @param {string} [message] - optional message
+         */
+        error(message) {
+            window.core.errorStream(this._id, message || '');
+        }
     }
 
 
