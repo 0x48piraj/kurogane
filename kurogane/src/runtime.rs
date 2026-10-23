@@ -1280,7 +1280,9 @@ impl AppInstance {
     ///
     /// [`RuntimeError::UnsupportedParentWindow`] when `parent` is not a
     /// Win32 window, an AppKit view or an X11 window (a Wayland surface, for
-    /// one); [`RuntimeError::ShuttingDown`] once [`AppHandle::shutdown`] has
+    /// one); [`RuntimeError::UnsupportedParentVisual`] when it is an X11
+    /// window of another visual than its screen's default;
+    /// [`RuntimeError::ShuttingDown`] once [`AppHandle::shutdown`] has
     /// begun; [`RuntimeError::BrowserCreationFailed`] when CEF creates no
     /// browser.
     pub fn create_child_browser(
@@ -1332,12 +1334,17 @@ impl AppInstance {
         if self.handle.is_ending() {
             return Err(RuntimeError::ShuttingDown);
         }
+        let parent = parent_window(parent)?;
+        #[cfg(target_os = "linux")]
+        if !crate::platform::embed::has_default_visual(parent) {
+            return Err(RuntimeError::UnsupportedParentVisual);
+        }
         let info = WindowInfo {
             runtime_style: RuntimeStyle::ALLOY,
             ..WindowInfo::default()
         }
         .set_as_child(
-            parent_window(parent)?,
+            parent,
             &Rect {
                 x: bounds.x,
                 y: bounds.y,

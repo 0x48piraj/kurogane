@@ -28,6 +28,8 @@ use crate::spec::RuntimeMode;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) use close::destroy_child_window_later;
 
+#[cfg(target_os = "linux")]
+pub(crate) use imp::has_default_visual;
 #[cfg(target_os = "macos")]
 pub(crate) use imp::{forget_view, remember_view};
 
@@ -176,9 +178,38 @@ mod imp {
 
 #[cfg(target_os = "linux")]
 mod imp {
-    use x11_dl::xlib::{Display, Xlib};
+    use x11_dl::xlib::{Display, XWindowAttributes, Xlib};
 
     use super::{BrowserBounds, BrowserId, cef_window_handle_t};
+
+    /// Whether X11 window `parent` has its screen's default visual. Chromium
+    /// shows no page in a parent of another visual and reports nothing.
+    /// True when CEF's X connection cannot tell (off CEF's UI thread, or for
+    /// a window the server does not know). The browser's creation then goes
+    /// ahead as before.
+    pub(crate) fn has_default_visual(parent: cef_window_handle_t) -> bool {
+        // Null off CEF's UI thread
+        let display = tanso::get_xdisplay().cast::<Display>();
+        if parent == 0 || display.is_null() {
+            return true;
+        }
+        let Ok(xlib) = Xlib::open() else {
+            return true;
+        };
+        // SAFETY: `display` is CEF's live Xlib connection, used on CEF's UI
+        // thread as cef_get_xdisplay requires. The server checks `parent`;
+        // an error goes to the handler Chromium installs, which logs it, and
+        // the call returns 0. On success the attributes hold the window's
+        // visual and screen, which live as long as the connection.
+        unsafe {
+            let mut attributes: XWindowAttributes = std::mem::zeroed();
+            if (xlib.XGetWindowAttributes)(display, parent, &mut attributes) == 0 {
+                return true;
+            }
+            let default = (xlib.XDefaultVisualOfScreen)(attributes.screen);
+            (xlib.XVisualIDFromVisual)(attributes.visual) == (xlib.XVisualIDFromVisual)(default)
+        }
+    }
 
     /// cefclient's `BrowserWindowStdGtk::SetBounds`, on CEF's own X connection.
     pub(super) fn set_child_window_bounds(

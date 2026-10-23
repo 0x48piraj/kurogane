@@ -103,6 +103,13 @@ pub enum RuntimeError {
     /// view or an X11 window. A Wayland surface is not one of them.
     UnsupportedParentWindow,
 
+    /// The X11 window given to
+    /// [`AppInstance::create_child_browser`](crate::AppInstance::create_child_browser)
+    /// has another visual than its screen's default. Chromium shows no page
+    /// in such a window and reports nothing. A toolkit that draws with
+    /// OpenGL picks a visual of its own unless told otherwise.
+    UnsupportedParentVisual,
+
     /// The requested sandbox cannot be enforced on this platform or layout.
     SandboxUnsupported { reason: String },
 
@@ -369,6 +376,15 @@ impl Display for RuntimeError {
                 )
             ),
 
+            RuntimeError::UnsupportedParentVisual => write!(
+                f,
+                concat!(
+                    "The window's X visual is not its screen's default. Chromium shows no page in it.\n\n",
+                    "Create the window with the screen's default visual. GTK 3 takes it through ",
+                    "gtk_widget_set_visual, SDL through the SDL_VIDEO_X11_VISUALID hint."
+                )
+            ),
+
             RuntimeError::SandboxUnsupported { reason } => write!(
                 f,
                 concat!(
@@ -430,6 +446,7 @@ impl std::error::Error for RuntimeError {
             | RuntimeError::WindowNameTaken { .. }
             | RuntimeError::ShuttingDown
             | RuntimeError::UnsupportedParentWindow
+            | RuntimeError::UnsupportedParentVisual
             | RuntimeError::SandboxUnsupported { .. }
             | RuntimeError::SandboxUnavailable { .. }
             | RuntimeError::InvalidConfiguration(_) => None,
