@@ -14,7 +14,7 @@ use crate::tui;
 pub const SHELL_TEMPLATE_REPO: &str = "https://github.com/kurogane-rs/kurogane-shell";
 
 /// Files owned by the Kurogane integration.
-const SHELL_FILES: &[&str] = &["Cargo.toml", "src/main.rs", "kurogane.toml"];
+const SHELL_FILES: &[&str] = &["Cargo.toml", "build.rs", "src/main.rs", "kurogane.toml"];
 
 pub fn run(
     assets: Option<PathBuf>,

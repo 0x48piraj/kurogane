@@ -75,7 +75,7 @@ Generated projects are not initialized as git repositories and are never added t
 _It never overwrites existing files or an existing Kurogane setup._ Its guardrails:
 
 * Refuses to run when `kurogane.toml` already exists.
-* Refuses to run when the directory already has a `Cargo.toml` or `src/main.rs`.
+* Refuses to run when the directory already has a `Cargo.toml`, `build.rs` or `src/main.rs`.
 * Asks for the build output directory and the dev server URL unless `--assets` and `--dev-url` give them. A non-interactive run needs both flags.
 
 `--assets` becomes `frontend-dist` in `kurogane.toml`. `kurogane bundle` packages that directory.
