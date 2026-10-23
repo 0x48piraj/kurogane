@@ -361,8 +361,7 @@ fn close_windows(windows: Vec<Window>) {
 /// brings it there.
 ///
 /// A forced close of every open browser begins application shutdown, like
-/// [`AppHandle::shutdown`]. Closing nothing leaves the application running.
-/// Refer [`close_all`].
+/// [`AppHandle::shutdown`]. Refer [`close_all`].
 fn close_browsers(app: &AppHandle, force: bool) {
     let browsers: Vec<Browser> = {
         let reg = app.registry();
@@ -390,7 +389,8 @@ pub(crate) enum Close {
     /// `OnBeforeClose` ends the application, or the request itself when
     /// nothing is open.
     Everything { force: bool },
-    /// Every browser; `force` skips the pages' unload handlers.
+    /// Every browser; `force` skips the pages' unload handlers. With none
+    /// open it closes as `Everything` does.
     Browsers { force: bool },
     /// Every Views window. Each asks its browser to close first.
     Windows,
@@ -415,7 +415,14 @@ wrap_task! {
 fn close(app: &AppHandle, what: Close) {
     match what {
         Close::Everything { force } => close_all(app, force),
-        Close::Browsers { force } => close_browsers(app, force),
+        Close::Browsers { force } => {
+            // No browser's close is coming to end the application
+            if app.registry().browsers.is_empty() {
+                close_all(app, force);
+            } else {
+                close_browsers(app, force);
+            }
+        }
         Close::Windows => {
             // The guard ends with the statement: Window::close runs CanClose
             let windows = app.registry().windows.all();
@@ -658,9 +665,9 @@ impl AppHandle {
     /// Returns whether the application has ended.
     ///
     /// Becomes true once the last browser has closed, whatever closed it (its
-    /// window, [`AppHandle::shutdown`], Ctrl+C or macOS asking the
-    /// application to quit). Any of those three that finds nothing open ends
-    /// it at once. Also true once [`AppInstance::shutdown`] has begun. An
+    /// window, [`AppHandle::shutdown`], [`AppHandle::close_all_browsers`],
+    /// Ctrl+C or macOS asking the application to quit). Any of the others
+    /// that finds nothing open ends it at once. Also true once [`AppInstance::shutdown`] has begun. An
     /// application that pumps CEF itself keeps pumping until then.
     pub fn should_shutdown(&self) -> bool {
         self.services.ended.load(Ordering::Acquire)
@@ -731,6 +738,9 @@ impl AppHandle {
     /// application's own window closes without asking that window to close.
     /// A call from another thread is posted to the UI thread. Does nothing
     /// once [`AppInstance::shutdown`] has begun.
+    ///
+    /// A call that finds no browser open ends the application at once, as
+    /// [`AppHandle::shutdown`] does.
     ///
     /// With `force` no page can cancel the close. A call that finds a browser
     /// open then ends the application as [`AppHandle::shutdown`] does and
@@ -1499,9 +1509,11 @@ mod tests {
         let graceful = AppHandle::detached();
         graceful.request(Close::Everything { force: false });
         assert!(!graceful.is_ending());
-        // A forced close of every browser that finds none closes and ends nothing
-        graceful.close_all_browsers(true);
-        assert!(!graceful.is_ending());
+        // A forced close of every browser that finds none ends the
+        // application at once, as shutdown does
+        let forced = AppHandle::detached();
+        forced.close_all_browsers(true);
+        assert!(forced.is_ending() && forced.should_shutdown());
 
         // Once CEF has shut down nothing may reach it, a browser least of all
         let down = AppHandle::detached();
