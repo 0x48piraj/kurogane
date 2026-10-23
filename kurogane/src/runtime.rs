@@ -1026,6 +1026,19 @@ impl BrowserHandle {
         }
     }
 
+    /// Gives the browser the keyboard focus.
+    ///
+    /// For a host whose toolkit keeps the focus on its own window, GTK's
+    /// among them. Such a host calls this when its window gains the focus.
+    /// The browser notices a loss of the focus by itself.
+    ///
+    /// Does nothing once the browser has closed.
+    pub fn focus(&self) {
+        if let Some(h) = self.host() {
+            h.set_focus(1);
+        }
+    }
+
     /// Navigate the main frame to the given URL.
     pub fn navigate(&self, url: &str) {
         if let Some(frame) = self.browser().and_then(|b| b.main_frame()) {
