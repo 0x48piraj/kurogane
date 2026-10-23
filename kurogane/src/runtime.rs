@@ -1246,7 +1246,8 @@ impl AppInstance {
     ///
     /// `parent` is the host's window as it is, anything that hands out a
     /// [`raw_window_handle`] window handle (a winit `Window` for one). It must
-    /// outlive the browser, which the host closes first (docs/winit.md).
+    /// outlive the browser, which the host closes first
+    /// (<https://kurogane-rs.org/docs/embedding/winit>).
     ///
     /// The runtime must have been started with App::start_embedded,
     /// and AppInstance::pump must continue to be called regularly for

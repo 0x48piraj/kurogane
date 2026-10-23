@@ -7,7 +7,7 @@
 //! CEF asks before it creates the window. The application's
 //! [`App::on_new_window`](crate::App::on_new_window) hook answers first;
 //! Kurogane's policy answers whatever the hook leaves to it. A page of the
-//! application's own origin gets an application window. A web link the user
+//! application's own origin gets a new window. A web link the user
 //! clicked goes to the system browser. Every other request is refused. A page
 //! the application never chose cannot get a window of its own.
 
@@ -98,9 +98,10 @@ impl NewWindowRequest {
         self.user_gesture
     }
 
-    /// What the page asked for (a tab, a popup or a window). Kurogane opens
-    /// each as an application window alike; the kind says how the page
-    /// asked.
+    /// What the page asked for (a tab, a popup or a window). `window.open`, a
+    /// `target=_blank` link and a form open a popup of the page that asked,
+    /// whatever the kind. A link clicked into a new tab or window opens an
+    /// application window.
     pub fn kind(&self) -> NewWindowKind {
         self.kind
     }
@@ -135,7 +136,7 @@ pub enum NewWindowDecision {
     #[default]
     Default,
 
-    /// Opens the page in an application window, whatever its origin. The
+    /// Opens the page in a new window, whatever its origin. The
     /// page reaches only the commands and events that
     /// [`App::permit`](crate::App::permit) and its kin grant its origin.
     Allow,

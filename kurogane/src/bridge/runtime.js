@@ -95,20 +95,6 @@
     }
 
     /**
-     * Cancel a pending IPC request by its native promise id.
-     *
-     * Prefer promise.cancel() on the return value of invoke().
-     * This function is the underlying implementation exposed for edge cases.
-     *
-     * @param {number} id - The native promise id
-     * @returns {boolean} true if the promise was found and canceled
-     * @throws {Error} if id is not an integer; the Error has no .code
-     */
-    function cancel(id) {
-        return !!window.core.cancel(id);
-    }
-
-    /**
      * Subscribe to a browser-side event.
      *
      * If the browser refuses the subscription (code -4 when the event is not
@@ -431,7 +417,6 @@
 
     window.kurogane = Object.freeze({
         invoke,
-        cancel,
         on,
         off,
         openStream,

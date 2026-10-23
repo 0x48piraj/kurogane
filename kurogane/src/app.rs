@@ -878,7 +878,7 @@ impl App {
     ///
     /// Kurogane decides without a hook or when it answers
     /// [`NewWindowDecision::Default`]. A page of the application's own origin
-    /// opens in an application window. An `http` or `https` link the user
+    /// opens in a new window. An `http` or `https` link the user
     /// clicked opens in the system's default browser. Anything else is
     /// refused. A website the application never chose stays out of its
     /// windows and a script alone never starts another program.
@@ -1163,7 +1163,7 @@ impl App {
     ///
     /// - in a text field the editing items (Undo, Redo, Cut, Copy, Paste,
     ///   Paste as plain text, Select all), under Chromium's spelling
-    ///   suggestions on a misspelled word
+    ///   suggestions and Add to dictionary on a misspelled word
     /// - Copy on a selection
     /// - nothing elsewhere
     /// - Inspect last in a debug build
