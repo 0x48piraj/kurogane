@@ -114,7 +114,7 @@ Windows uses a different launch model for Chromium's sandbox. The process that s
 
 The rest of the process model stays the same. CEF helpers start through the same application entry point. The runtime passes the sandbox state from the bootstrap into CEF.
 
-macOS needs a little more setup. AppKit expects an `NSApplication` subclass that conforms to Chromium's `CrAppProtocol` before any browser is created. The runtime provides that integration, loads the framework from its absolute path and attaches the application delegate. It also installs the standard App, Edit and Window menus.
+macOS needs a little more setup. AppKit expects an `NSApplication` subclass that conforms to Chromium's `CrAppProtocol` before any browser is created. The runtime provides that integration, loads the framework from its absolute path and attaches the application delegate. It also installs the standard App, Edit and Window menus. Then it finishes launching the application which a host's own loop may never do.
 
 Cocoa's default `terminate:` calls `exit()`. That bypasses the run loop Chromium relies on for orderly shutdown. Kurogane closes the browsers instead and lets the last browser's close end the message loop.
 

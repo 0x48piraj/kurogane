@@ -215,6 +215,18 @@ pub fn install_default_menu() {
     std::mem::forget(actions);
 }
 
+/// Finishes launching the application Kurogane made, as a toolkit finishes
+/// one it makes. A loop that never runs `[NSApp run]` would otherwise leave
+/// it half launched. It would answer no Accessibility request and never come
+/// to the front. AppKit posts the launch through the next events the loop
+/// takes. A later `[NSApp run]` finishes again and still posts it once.
+///
+/// Must run on the main thread after the menu is installed.
+pub fn finish_launching() {
+    let mtm = MainThreadMarker::new().expect("finish_launching must run on the main thread");
+    NSApp(mtm).finishLaunching();
+}
+
 /// Quits as the application menu's Quit does.
 /// Sends `terminate:` after the current event, allowing orderly
 /// shutdown to run outside the caller.
