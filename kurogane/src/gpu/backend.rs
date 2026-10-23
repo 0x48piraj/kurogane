@@ -1,5 +1,4 @@
 use crate::chromium_flags::ChromiumFlags;
-use crate::spec::SandboxMode;
 use super::detection::RenderingEnvironment;
 
 #[cfg(target_os = "linux")]
@@ -21,9 +20,6 @@ pub enum GpuMode {
     Auto,
 
     /// Use hardware acceleration
-    ///
-    /// On Windows without [`SandboxMode::Chromium`](crate::SandboxMode::Chromium),
-    /// GPU work runs inside the browser process rather than a GPU process.
     Hardware,
 
     /// Use SwiftShader software rendering
@@ -41,13 +37,13 @@ enum ResolvedGpuMode {
 }
 
 /// Apply Chromium command-line flags for the configured GPU mode
-pub(crate) fn apply_gpu_flags(flags: &mut ChromiumFlags, requested: GpuMode, sandbox: SandboxMode) {
+pub(crate) fn apply_gpu_flags(flags: &mut ChromiumFlags, requested: GpuMode) {
     let env = RenderingEnvironment::detect();
 
     let mode = resolve(requested, &env);
 
     match mode {
-        ResolvedGpuMode::Hardware => platform::apply_hardware(flags, sandbox),
+        ResolvedGpuMode::Hardware => platform::apply_hardware(flags),
         ResolvedGpuMode::Software => apply_software(flags),
         ResolvedGpuMode::Disabled => apply_disabled(flags),
     }
@@ -127,23 +123,11 @@ mod tests {
     }
 
     #[test]
-    fn the_sandbox_keeps_gpu_work_out_of_the_browser_process() {
+    fn gpu_work_stays_out_of_the_browser_process() {
         let mut flags = ChromiumFlags::default();
-        apply_gpu_flags(&mut flags, GpuMode::Hardware, SandboxMode::Chromium);
+        apply_gpu_flags(&mut flags, GpuMode::Hardware);
 
-        assert!(
-            !flags.contains("in-process-gpu"),
-            "the browser process is not sandboxed, so GPU work must not run there"
-        );
-    }
-
-    #[test]
-    #[cfg(target_os = "windows")]
-    fn unsandboxed_windows_runs_gpu_work_in_process() {
-        let mut flags = ChromiumFlags::default();
-        apply_gpu_flags(&mut flags, GpuMode::Hardware, SandboxMode::Disabled);
-
-        assert!(flags.contains("in-process-gpu"));
+        assert!(!flags.contains("in-process-gpu"));
     }
 
     #[test]

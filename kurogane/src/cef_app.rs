@@ -42,7 +42,7 @@ wrap_app! {
             let mut flags = ChromiumFlags::default();
 
             apply_sandbox_flags(&mut flags, self.spec.sandbox_mode);
-            apply_gpu_flags(&mut flags, self.spec.gpu_mode, self.spec.sandbox_mode);
+            apply_gpu_flags(&mut flags, self.spec.gpu_mode);
             apply_credential_flags(&mut flags, self.spec.credential_storage);
             apply_embedding_flags(&mut flags, self.spec.mode);
             apply_flag_defaults(&mut flags);

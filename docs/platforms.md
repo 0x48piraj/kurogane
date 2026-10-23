@@ -105,7 +105,7 @@ sandbox = true
 
 The `sandbox` key does nothing on Linux and macOS. One `kurogane.toml` serves every platform.
 
-Under the sandbox the GPU runs in a process of its own. Chromium sandboxes it at low integrity. Without the sandbox Kurogane runs GPU work in the browser process (`--in-process-gpu`). There it waits for a lost D3D device to recover. An out-of-process GPU restarts instead and falls back to software rendering after three losses. In-process GPU work runs with the user's full rights. The sandbox never uses it.
+The GPU runs in a process of its own. Under the sandbox Chromium sandboxes it at low integrity. A lost D3D device restarts it. After three losses Chromium falls back to software rendering.
 
 The process model, `is_browser_process` and everything before `App::run` behave the same under the sandbox. Chromium relaunches the bootstrap for its helper processes.
 

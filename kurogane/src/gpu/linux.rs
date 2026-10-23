@@ -1,7 +1,6 @@
 //! Linux GPU flags configuration.
 
 use crate::chromium_flags::ChromiumFlags;
-use crate::spec::SandboxMode;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GpuVendor {
@@ -15,7 +14,7 @@ enum DisplayServer {
     X11,
 }
 
-pub(super) fn apply_hardware(flags: &mut ChromiumFlags, _sandbox: SandboxMode) {
+pub(super) fn apply_hardware(flags: &mut ChromiumFlags) {
     let vendor = detect_gpu_vendor();
     let display = detect_display_server();
 
