@@ -358,8 +358,8 @@ fn framed_opening_bounds(options: &WindowOptions, frame: &Frame) -> Rect {
     }
 }
 
-/// Shows a window CEF opened normal in `state`. Maximized or minimized it
-/// shows as it takes the state. Hidden it stays unshown. UI thread.
+/// Shows a window CEF opened normal in `state`. Hidden it stays unshown. UI
+/// thread.
 fn show_in(window: &Window, state: WindowState) {
     match state {
         WindowState::Normal => window.show(),
@@ -369,8 +369,17 @@ fn show_in(window: &Window, state: WindowState) {
             window.show();
             window.maximize();
         }
-        WindowState::Maximized => window.maximize(),
-        WindowState::Minimized => window.minimize(),
+        WindowState::Minimized if cfg!(target_os = "macos") => window.minimize(),
+        // Chromium paints a window's page only once CEF has shown the window.
+        // The state alone shows the frame and no page
+        WindowState::Maximized => {
+            window.maximize();
+            window.show();
+        }
+        WindowState::Minimized => {
+            window.minimize();
+            window.show();
+        }
         // Chromium's X11 window drops a state set before it maps, so there
         // the window shows first
         WindowState::Fullscreen if cfg!(target_os = "linux") => {
