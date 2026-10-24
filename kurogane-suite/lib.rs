@@ -1,4 +1,9 @@
-//! Shared diagnostic logging for the suite's examples.
+//! Shared helpers for the suite's examples.
+//!
+//! Diagnostic logging for every example and the parts the embedding hosts
+//! share.
+
+pub mod embedding;
 
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;

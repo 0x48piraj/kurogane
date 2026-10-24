@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Kurogane embedded</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #0f172a;
+      color: #e5e7eb;
+      font-family: system-ui, sans-serif;
+    }
+    main {
+      display: grid;
+      gap: 16px;
+      padding: 24px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 28px;
+    }
+    .row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    input, button {
+      font: inherit;
+      padding: 6px 10px;
+    }
+    code {
+      font-size: 18px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 id="host">Kurogane embedded</h1>
+    <div class="row">Frames this second <code id="fps">0</code></div>
+    <div class="row">Viewport <code id="size"></code></div>
+    <div class="row">
+      <input id="text" placeholder="Type here" autofocus />
+      <code id="echo"></code>
+    </div>
+    <div class="row">
+      <button id="ping">Call Rust</button>
+      <code id="reply"></code>
+    </div>
+  </main>
+  <script>
+    const host = new URLSearchParams(location.search).get("host") || "a host";
+    document.getElementById("host").textContent = `Kurogane in ${host}`;
+    document.title = `Kurogane in ${host}`;
+
+    // Rust prints what the page reports, for a check without screenshots
+    const report = (what) => window.kurogane.invoke("host.report", what).catch(() => {});
+
+    // Frames show whether the host pumps Chromium often enough
+    const fps = document.getElementById("fps");
+    let frames = 0;
+    let second = performance.now();
+    let place = "";
+    function frame(now) {
+      frames++;
+      if (now - second >= 1000) {
+        fps.textContent = frames;
+        frames = 0;
+        second = now;
+      }
+      const at = `${screenX},${screenY}`;
+      if (at !== place) {
+        place = at;
+        report(`position ${at}`);
+      }
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+
+    // The viewport follows the host window once the host resizes the browser
+    const size = document.getElementById("size");
+    const showSize = () => (size.textContent = `${innerWidth} x ${innerHeight}`);
+    addEventListener("resize", () => {
+      showSize();
+      report(`viewport ${innerWidth}x${innerHeight}`);
+    });
+    showSize();
+    report(`loaded ${innerWidth}x${innerHeight}`);
+
+    // Typing shows that keyboard focus reaches the browser
+    const echo = document.getElementById("echo");
+    document.getElementById("text").addEventListener("input", (e) => {
+      echo.textContent = e.target.value;
+      report(`typed ${e.target.value}`);
+    });
+
+    // A command shows that IPC works inside the host
+    const reply = document.getElementById("reply");
+    document.getElementById("ping").addEventListener("click", async () => {
+      try {
+        reply.textContent = await window.kurogane.invoke("host.ping", host);
+      } catch (error) {
+        reply.textContent = `failed with ${error.code}: ${error.message}`;
+      }
+      report(`reply ${reply.textContent}`);
+    });
+  </script>
+</body>
+</html>

@@ -18,6 +18,48 @@ winit = "0.30"
 raw-window-handle = "0.6"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "std"] }
 
+sdl3 = { version = "0.20", optional = true, features = ["raw-window-handle", "build-from-source-static"] }
+glfw = { version = "0.63", optional = true, default-features = false, features = ["raw-window-handle-v0-6", "prebuilt-libs", "x11"] }
+
+[features]
+sdl3 = ["dep:sdl3"]
+glfw = ["dep:glfw"]
+gtk3 = ["dep:gtk", "dep:gdkx11"]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+x11-dl = "2.21.0"
+gtk = { version = "0.18", optional = true }
+gdkx11 = { version = "0.18", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "NSApplication",
+    "NSEvent",
+    "NSGraphics",
+    "NSResponder",
+    "NSView",
+    "NSWindow",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "NSDate",
+    "NSGeometry",
+    "NSObjCRuntime",
+    "NSRunLoop",
+    "NSString",
+    "NSTimer",
+] }
+
 [dev-dependencies]
 tempfile = "3"
 git2 = "0.21"
@@ -72,6 +114,25 @@ path = "winit/views_scheduler.rs"
 [[example]]
 name = "winit_native_embedding"
 path = "winit/host_window.rs"
+
+[[example]]
+name = "native_embedding"
+path = "embedding/native/main.rs"
+
+[[example]]
+name = "sdl3_embedding"
+path = "embedding/sdl3/main.rs"
+required-features = ["sdl3"]
+
+[[example]]
+name = "glfw_embedding"
+path = "embedding/glfw/main.rs"
+required-features = ["glfw"]
+
+[[example]]
+name = "gtk3_embedding"
+path = "embedding/gtk3/main.rs"
+required-features = ["gtk3"]
 
 [[example]]
 name = "popups"

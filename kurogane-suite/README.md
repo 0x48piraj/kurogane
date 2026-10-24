@@ -62,6 +62,10 @@ RUST_LOG=kurogane=debug kurogane run --example <name>
 | `winit_views_timer` | A winit loop that pumps Chromium at a fixed interval |
 | `winit_views_scheduler` | A winit loop that pumps Chromium when it asks |
 | `winit_native_embedding` | Chromium as a child browser inside a window winit owns |
+| `native_embedding` | Chromium as a child browser inside a window the system's own API makes (Win32, AppKit or Xlib) |
+| `sdl3_embedding` | Chromium as a child browser inside a window SDL3 owns |
+| `glfw_embedding` | Chromium as a child browser inside a window GLFW owns |
+| `gtk3_embedding` | Chromium as a child browser inside a window GTK 3 owns, on Linux |
 
 In the three `winit_views` examples Chromium owns its window. See [winit](../docs/winit.md) for each mode.
 
@@ -107,6 +111,18 @@ It shows the limits of DOM animation. It is not a benchmark. It covers:
 ### winit_views_scheduler
 
 `KUROGANE_PUMP_STATS=1` prints its pump rate every second.
+
+### Embedding hosts
+
+The four `*_embedding` hosts load one page. It reports its size, place, typed text and the reply from Rust. Each host prints the reports as `page` lines.
+
+The SDL3, GLFW and GTK 3 hosts need the suite's feature of the same name:
+
+```bash
+kurogane run --example sdl3_embedding --features sdl3
+```
+
+SDL3 builds from source with CMake. `gtk3_embedding` runs on Linux only.
 
 ### sandbox-smoke
 
