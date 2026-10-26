@@ -41,16 +41,14 @@ pub(crate) fn is_blank(url: &str) -> bool {
 }
 
 /// The origin of the document `url` shows when a page of origin `from`
-/// loads it. A blank document (see [`is_blank`]) inherits `from`; a `blob:`
-/// URL has the origin it was made in.
+/// loads it. A blank document (see [`is_blank`]) inherits `from`; everything
+/// else has the origin of its own URL, a `blob:` URL carrying the origin of
+/// the page that made it (see [`Origin::from_url`]).
 pub(crate) fn document_origin(url: &str, from: &Origin) -> Origin {
     if is_blank(url) {
         return from.clone();
     }
-    match url::Url::parse(url) {
-        Ok(parsed) if parsed.scheme() == "blob" => Origin::from_url(parsed.path()),
-        _ => Origin::from_url(url),
-    }
+    Origin::from_url(url)
 }
 
 #[cfg(test)]
@@ -88,6 +86,31 @@ mod tests {
             document_origin("http://127.0.0.1:8081/", &app),
             origin("http://127.0.0.1:8080")
         );
+    }
+
+    #[test]
+    fn a_document_the_guard_opens_reaches_the_commands_of_its_origin() {
+        // The guard names a document to decide whether it may open; the ACL
+        // names the same document to decide what it may call. When the two
+        // disagree the page loads and reaches nothing.
+        use crate::acl::CommandAcl;
+
+        let app = origin("app://app");
+        let acl = CommandAcl::new(app.clone());
+        for url in ["app://app/index.html", "blob:app://app/7f1c"] {
+            let opened = document_origin(url, &app);
+            assert_eq!(opened, app, "{url}");
+            assert!(
+                acl.allows("anything", &opened),
+                "{url} opens but reaches nothing"
+            );
+        }
+        // A document of another origin opens nowhere and calls nothing.
+        for url in ["blob:https://evil.example/7f1c", "https://docs.rs/"] {
+            let opened = document_origin(url, &app);
+            assert_ne!(opened, app, "{url}");
+            assert!(!acl.allows("anything", &opened), "{url}");
+        }
     }
 
     #[test]

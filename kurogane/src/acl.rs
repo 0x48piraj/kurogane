@@ -29,9 +29,9 @@ use crate::error::ConfigError;
 /// Security origin of a frame as `scheme://host[:port]` or opaque.
 ///
 /// Serialized like `location.origin` with a lowercase scheme and host and
-/// default ports elided. Frames without a host (`file:`, `data:`, `about:`)
-/// and unparseable URLs are opaque. An opaque origin matches no rule and no
-/// grant.
+/// default ports elided. A `blob:` URL names the origin of the page that made
+/// it. Frames without a host (`file:`, `data:`, `about:`) and unparseable URLs
+/// are opaque. An opaque origin matches no rule and no grant.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Origin(Repr);
 
@@ -50,11 +50,25 @@ impl Origin {
     pub const OPAQUE: Origin = Origin(Repr::Opaque);
 
     /// The origin of the document at `url` (browser side; never fails).
+    ///
+    /// A `blob:` URL carries the origin of the page that made it, ahead of its
+    /// uuid, so `blob:app://app/7f1c` has the origin `app://app`. A blob made
+    /// by a hostless page (`file:`, `data:`, `about:`) is opaque like that page.
     pub fn from_url(url: &str) -> Origin {
-        url::Url::parse(url)
-            .ok()
-            .and_then(|parsed| Origin::tuple(&parsed))
-            .unwrap_or(Origin::OPAQUE)
+        let Ok(mut document) = url::Url::parse(url) else {
+            return Origin::OPAQUE;
+        };
+        // Each step strips one `blob:`, so a blob nested in blobs ends at its
+        // innermost origin and never loops.
+        loop {
+            if document.scheme() != "blob" {
+                return Origin::tuple(&document).unwrap_or(Origin::OPAQUE);
+            }
+            let Ok(inner) = url::Url::parse(document.path()) else {
+                return Origin::OPAQUE;
+            };
+            document = inner;
+        }
     }
 
     /// Parses a configured origin such as `app://app` or
@@ -332,6 +346,61 @@ mod tests {
     }
 
     #[test]
+    fn a_blob_carries_the_origin_that_made_it() {
+        let cases = [
+            ("blob:app://app/7f1c", "app://app"),
+            ("blob:https://evil.example/7f1c", "https://evil.example"),
+            ("blob:http://localhost:5173/7f1c", "http://localhost:5173"),
+            // The uuid is not part of the origin, however long the path is
+            (
+                "blob:https://evil.example/deep/path/7f1c",
+                "https://evil.example",
+            ),
+            // Case and the default port fold like any other URL
+            ("BLOB:HTTPS://Example.com:443/7f1c", "https://example.com"),
+            // A blob of a blob still names its maker once
+            (
+                "blob:blob:https://evil.example/u1/u2",
+                "https://evil.example",
+            ),
+        ];
+        for (url, expected) in cases {
+            assert_eq!(Origin::from_url(url).to_string(), expected, "{url}");
+        }
+    }
+
+    #[test]
+    fn a_blob_of_a_hostless_page_is_opaque() {
+        for url in [
+            "blob:null/7f1c",
+            "blob:file:///home/me/index.html",
+            "blob:data:text/html,hi",
+            "blob:about:blank",
+            // Not a URL after the scheme at all
+            "blob:7f1c",
+            "blob:",
+            "blob",
+        ] {
+            assert!(Origin::from_url(url).is_opaque(), "{url}");
+        }
+    }
+
+    #[test]
+    fn a_blob_s_origin_matches_its_maker_s() {
+        let maker = Origin::from_url("app://app/index.html");
+        assert_eq!(
+            Origin::from_url("blob:app://app/7f1c"),
+            maker,
+            "a blob of the application's own page is of the application"
+        );
+        // So a blob cannot dress up as another host
+        assert_ne!(
+            Origin::from_url("blob:https://app.example.com.evil.example/7f1c"),
+            origin("https://app.example.com"),
+        );
+    }
+
+    #[test]
     fn hostless_and_file_urls_are_opaque() {
         for url in [
             "file:///home/me/index.html",
@@ -385,6 +454,24 @@ mod tests {
         let acl = CommandAcl::new(Origin::from_url("file:///frontend/index.html"));
         assert!(!acl.allows("anything", &Origin::OPAQUE));
         assert!(!acl.allows_event("anything", &Origin::OPAQUE));
+    }
+
+    #[test]
+    fn a_blob_of_another_origin_still_reaches_nothing() {
+        // Naming a blob's maker is not a way in: the blob is of that maker, so
+        // a blob made away from the application is refused like its maker.
+        let acl = CommandAcl::new(origin("app://app"));
+        for url in [
+            "blob:https://evil.example/7f1c",
+            "blob:app://other/7f1c",
+            "blob:null/7f1c",
+            "blob:file:///etc/passwd",
+        ] {
+            let origin = Origin::from_url(url);
+            assert!(!acl.allows("anything", &origin), "{url} ({origin})");
+            assert!(!acl.allows_event("anything", &origin), "{url} ({origin})");
+        }
+        assert!(acl.allows("anything", &Origin::from_url("blob:app://app/7f1c")));
     }
 
     #[test]
