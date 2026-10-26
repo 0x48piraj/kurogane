@@ -116,6 +116,77 @@ jobs:
       - name: Clippy
         run: cargo clippy -p kurogane -p kurogane-suite --all-targets --locked -- -D warnings
 
+  # Boot a real Chromium under a virtual display and check the process model
+  # end to end: the runtime starts, a renderer appears, and the sandbox policy
+  # the application asked for is the one the renderer really runs under.
+  # sandbox-smoke exits 0 when they agree, 1 when they do not or no renderer
+  # appears, 2 when the runtime refuses to start.
+  smoke:
+    name: smoke (sandbox)
+    if: github.event_name != 'push' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: smoke
+
+      # CEF version follows tanso-sys in the lock
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/tanso/cef
+          key: cef-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      # Chromium's own libraries, plus a virtual display for the window.
+      # The library list is the one this workflow used before the runtime
+      # stopped linking CEF; the -dev names survive Ubuntu 24.04's t64
+      # transition unchanged.
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb \
+            libgtk-3-dev libnss3-dev libnspr4-dev \
+            libasound2-dev libcups2-dev libdrm-dev libgbm-dev \
+            libxcomposite-dev libxdamage-dev libxfixes-dev libxrandr-dev \
+            libxkbcommon-dev libxss-dev libxtst-dev libwayland-dev
+
+      - name: Fetch dependencies
+        run: cargo fetch --locked
+
+      - name: Build the CLI and the smoke scenario
+        run: |
+          cargo build -p kurogane-cli --locked
+          cargo build -p kurogane-suite --example sandbox-smoke --locked
+
+      # The runtime loads libcef when an application starts, so the smoke run
+      # needs the same Chromium `kurogane dev` would install
+      - name: Install the Chromium runtime
+        run: '"$GITHUB_WORKSPACE/target/debug/kurogane" install'
+
+      # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor,
+      # which is what Chromium's sandbox needs here. The setuid helper is not
+      # usable either, so lift the restriction rather than skip the check.
+      - name: Allow unprivileged user namespaces
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sysctl kernel.apparmor_restrict_unprivileged_userns
+
+      - name: Smoke (unsandboxed)
+        run: xvfb-run -a target/debug/examples/sandbox-smoke
+        env:
+          KUROGANE_SMOKE_SANDBOX: disabled
+
+      - name: Smoke (Chromium sandbox)
+        run: xvfb-run -a target/debug/examples/sandbox-smoke
+        env:
+          KUROGANE_SMOKE_SANDBOX: chromium
+
   # Generate each official starter from its default branch with this CLI and
   # bundle against checkout's Kurogane
   starters:
