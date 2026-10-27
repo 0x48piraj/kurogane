@@ -12,7 +12,12 @@ powershell -c "irm https://kurogane-rs.org/install.ps1|iex"
 
 ```bash
 # Nix / NixOS
-nix profile add github:0x48piraj/kurogane
+# Install the release package
+nix profile add github:0x48piraj/kurogane#kurogane
+
+# Install the development build
+nix profile add github:0x48piraj/kurogane#kurogane-dev
+# defualt is also the development build
 ```
 
 The installers download the prebuilt `kurogane` CLI for your platform, verify its SHA-256 checksum and put it on your `PATH`. They need no administrator rights, no Rust toolchain and no package manager.
@@ -97,6 +102,13 @@ On NixOS install through the flake. Prebuilt Linux binaries and the Chromium run
 
 The flake builds the CLI from source and includes the Chromium runtime, its libraries and the required toolchain. `kurogane dev` works right away.
 
+> [!NOTE]
+> Nix support is still under development and the install methods will change.
+> The flake currently focuses on development builds and uses `craneLib` for faster, cached rebuilds.
+> The default output is the development version.
+> The separate `nix/package.nix` is intended for upstreaming to nixpkgs once the custom CEF work has been resolved and upstreamed.
+> Ideally we would have nixpkgs for releases, and the GitHub flake for development.
+
 ### In your system flake
 
 Add Kurogane to your flake inputs:
@@ -120,18 +132,27 @@ Pass `inputs` to your NixOS modules through `specialArgs` in `nixpkgs.lib.nixosS
 specialArgs = { inherit inputs; };
 ```
 
+The flake currently provides 4 outputs:
+
+| Flake output | Flake reference | Use |
+|---|---|---|
+| Default (`kurogane-dev`) | `github:0x48piraj/kurogane` | Builds the development version from `master`. (same as kurogane-dev) |
+| `kurogane-dev` | `github:0x48piraj/kurogane#kurogane-dev` | Builds the development version from `master`. |
+| `kurogane` | `github:0x48piraj/kurogane#kurogane` | Builds the release version. |
+| `cef-binary` | `github:0x48piraj/kurogane#cef-binary` | Builds the custom CEF binary required for Kurogane to work properly. |
+
 Install Kurogane from any module:
 
 ```nix
 { inputs, pkgs, ... }:
 {
   environment.systemPackages = [
-    inputs.kurogane.packages.${pkgs.stdenv.hostPlatform.system}.default
+    inputs.kurogane.packages.${pkgs.stdenv.hostPlatform.system}.kurogane # or another output
   ];
 }
 ```
 
-On a stable NixOS release, such as 26.05, change `inputs.nixpkgs.follows` to `"nixpkgs-unstable"` if your flake defines that input. Otherwise, omit the `follows` line and use Kurogane's own nixpkgs revision.
+On a stable NixOS release, such as 26.05, we strongly suggest you change `inputs.nixpkgs.follows` to `"nixpkgs-unstable"` if your flake defines that input. Otherwise, omit the `follows` line and use Kurogane's own nixpkgs revision.
 
 Kurogane requires Rust 1.96 which a stable release may not provide. Its own nixpkgs revision may also provide newer GPU drivers than the release channel.
 
@@ -141,8 +162,9 @@ The Home Manager module adds Kurogane to `home.packages`. `nixos-rebuild switch`
 
 ```bash
 nix profile add github:0x48piraj/kurogane                 # latest
-nix profile add github:0x48piraj/kurogane/v0.0.6-beta.1   # a release
-nix run github:0x48piraj/kurogane -- --help               # without installing
+nix profile add github:0x48piraj/kurogane#kurogane-dev    # latest (same as default)
+nix profile add github:0x48piraj/kurogane#kurogane        # a release
+nix run github:0x48piraj/kurogane -- --help               # without installing (release version)
 ```
 
 On nixos-unstable add `--override-input nixpkgs nixpkgs`. It builds Kurogane on your registry's nixpkgs which a NixOS system built from a flake points at its own:

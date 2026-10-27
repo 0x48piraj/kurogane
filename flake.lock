@@ -33,13 +33,29 @@
         "type": "github"
       }
     },
+    "kurogane-nixpkgs": {
+      "locked": {
+        "lastModified": 1792677508,
+        "narHash": "sha256-pNEHgVU1K1vm7lMPNuz0UlGH3bsW3qT2Kx1Av40oDco=",
+        "owner": "0x48piraj",
+        "repo": "nixpkgs",
+        "rev": "245a46ea47294e679908ddc369773093e8538ee7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "0x48piraj",
+        "ref": "cef-binary-optional-angle-libs",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1792094642,
-        "narHash": "sha256-zp8ToDMnqZcu4o4IH9pdwXFXGp7yLm/M0dEnNWnyd7I=",
+        "lastModified": 1792773339,
+        "narHash": "sha256-rZLrzrC6i+jnTAlvPZHogKDulY7WWDEv9hJeHieO7Zw=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "fe13242281a67641c0102cdb1087f0ebe586c7df",
+        "rev": "3ec636362e1816bc2f0888fa0fa2c69f1bc9e504",
         "type": "github"
       },
       "original": {
@@ -53,6 +69,7 @@
       "inputs": {
         "crane": "crane",
         "flake-utils": "flake-utils",
+        "kurogane-nixpkgs": "kurogane-nixpkgs",
         "nixpkgs": "nixpkgs"
       }
     },

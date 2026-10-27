@@ -1,5 +1,7 @@
 {
-  pkgs,
+  lib,
+  coreutils,
+  stdenvNoCC,
   craneLib,
   kurogane,
   src,
@@ -9,7 +11,7 @@ let
   vendored = craneLib.vendorCargoDeps { cargoLock = ./fixture/Cargo.lock; };
 in
 # Build the fixture offline with the packaged CLI and CEF
-pkgs.stdenvNoCC.mkDerivation {
+stdenvNoCC.mkDerivation {
   name = "kurogane-bundle-fixture";
   inherit src;
 
@@ -27,7 +29,7 @@ pkgs.stdenvNoCC.mkDerivation {
 
     # Test the wrapper without stdenv's build environment
     env -i HOME="$HOME" USER=nixbld TMPDIR="$TMPDIR" CARGO_HOME="$CARGO_HOME" \
-      CARGO_NET_OFFLINE=true PATH="${pkgs.lib.makeBinPath [ pkgs.coreutils ]}" \
+      CARGO_NET_OFFLINE=true PATH="${lib.makeBinPath [ coreutils ]}" \
       ${kurogane}/bin/kurogane bundle --ci
 
     runHook postBuild
