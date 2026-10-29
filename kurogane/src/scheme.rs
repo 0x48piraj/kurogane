@@ -114,11 +114,13 @@ pub struct ResolvedAsset {
 /// [`resource_handler_from_bytes`] covers the common static-bytes case.
 pub trait SchemeHandler: Send + Sync {
     /// Create a resource handler for `request`, or `None` to fail the request.
+    /// `browser` and `frame` are none for a request a service worker or a
+    /// `URLRequest` made.
     fn create(
         &self,
         browser: Option<&mut Browser>,
         frame: Option<&mut Frame>,
-        request: Option<&mut Request>,
+        request: &mut Request,
     ) -> Option<ResourceHandler>;
 }
 
@@ -181,11 +183,9 @@ wrap_scheme_handler_factory! {
             &self,
             _browser: Option<&mut Browser>,
             _frame: Option<&mut Frame>,
-            _scheme_name: Option<&CefString>,
-            request: Option<&mut Request>,
+            _scheme_name: &CefString,
+            request: &mut Request,
         ) -> Option<ResourceHandler> {
-
-            let request = request?;
             let raw_url = CefString::from(&request.url()).to_string();
 
             Some(AppResourceHandler::new(
@@ -213,8 +213,8 @@ wrap_scheme_handler_factory! {
             &self,
             browser: Option<&mut Browser>,
             frame: Option<&mut Frame>,
-            _scheme_name: Option<&CefString>,
-            request: Option<&mut Request>,
+            _scheme_name: &CefString,
+            request: &mut Request,
         ) -> Option<ResourceHandler> {
             // The page chose this request; a panic in the application's
             // handler fails it rather than unwind across this CEF callback
@@ -288,31 +288,17 @@ wrap_resource_handler! {
     }
 
     impl ResourceHandler {
-
         /// Reads the app:// asset if the handler has one. CEF calls this on a
         /// worker that may block (never the UI or IO thread). It asks for the
         /// headers once this returns.
         fn open(
             &self,
-            _request: Option<&mut Request>,
-            handle_request: Option<&mut i32>,
-            _callback: Option<&mut Callback>,
+            _request: &mut Request,
+            handle_request: &mut i32,
+            _callback: &mut Callback,
         ) -> i32 {
-            if let Some((root, url)) = &self.asset {
-                self.body.get_or_init(|| Body::asset(root, url));
-            }
-
-            debug!(
-                "[app://] open: {} bytes to serve",
-                self.body.get().map_or(0, |body| body.bytes.len())
-            );
-
-            self.offset.store(0, Ordering::Release);
-
-            if let Some(hr) = handle_request {
-                *hr = 1;
-            }
-
+            self.open_body();
+            *handle_request = 1;
             1
         }
 
@@ -320,89 +306,40 @@ wrap_resource_handler! {
             &self,
             data_out: *mut u8,
             bytes_to_read: i32,
-            bytes_read: Option<&mut i32>,
-            _callback: Option<&mut ResourceReadCallback>,
+            bytes_read: &mut i32,
+            _callback: &mut ResourceReadCallback,
         ) -> i32 {
-            // Runs inside a CEF FFI callback; refuse rather than panic
-            let Some(br) = bytes_read else {
-                debug!("[app://] read: refused (no bytes_read out-parameter)");
-                return 0;
-            };
-
+            *bytes_read = 0;
             // FFI safety guard (invalid pointer or non-positive length)
             if bytes_to_read <= 0 || data_out.is_null() {
                 debug!("[app://] read: refused (bytes_to_read={bytes_to_read}, null={})",
                     data_out.is_null());
-
-                *br = 0;
                 return 0;
             }
 
-            // open has filled the body by the time CEF reads
-            let Some(body) = self.body.get() else {
-                debug!("[app://] read: refused (no body)");
-
-                *br = 0;
-                return 0;
-            };
-
-            let offset = self.offset.load(Ordering::Acquire);
-            let data = body.bytes.as_slice();
-
-            // Runs inside a CEF FFI callback, where a slice panic could abort the process
-            // Refuse the read rather than panic
-            if offset > data.len() {
-                debug!(
-                    "[app://] read: refused (offset {offset} past {} bytes)",
-                    data.len()
-                );
-
-                *br = 0;
-                return 0;
-            }
-
-            let remaining = &data[offset..];
-            let read = remaining.len().min(bytes_to_read as usize);
-
-            if read > 0 {
-                // SAFETY: CEF guarantees `data_out` is a writable buffer of at
-                // least `bytes_to_read` bytes that does not alias the body.
-                // It is non-null and `bytes_to_read > 0` (checked above), and
-                // `read <= bytes_to_read`, so the copy stays in bounds. The raw
-                // copy never forms a reference to the possibly uninitialized
-                // buffer.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(remaining.as_ptr(), data_out, read);
-                }
-
-                self.offset.fetch_add(read, Ordering::Release);
-            }
-
-            *br = read as i32;
-
-            debug!(
-                "[app://] read: {read} bytes at offset {offset} of {} ({} requested)",
-                data.len(),
-                bytes_to_read
-            );
-
-            if read == 0 {
+            let chunk = self.next_chunk(bytes_to_read as usize);
+            if chunk.is_empty() {
                 return 0; // EOF
             }
-
+            // SAFETY: CEF guarantees `data_out` is a writable buffer of at
+            // least `bytes_to_read` bytes that does not alias the body. It is
+            // non-null and `bytes_to_read > 0` (checked above), and the chunk
+            // holds at most `bytes_to_read` bytes, so the copy stays in bounds.
+            // The raw copy never forms a reference to the possibly
+            // uninitialized buffer.
+            unsafe {
+                std::ptr::copy_nonoverlapping(chunk.as_ptr(), data_out, chunk.len());
+            }
+            *bytes_read = chunk.len() as i32;
             1
         }
 
         fn response_headers(
             &self,
-            response: Option<&mut Response>,
-            response_length: Option<&mut i64>,
-            _redirect_url: Option<&mut CefString>,
+            response: &mut Response,
+            response_length: &mut i64,
+            _redirect_url: &mut CefString,
         ) {
-            let Some(response) = response else {
-                return;
-            };
-
             // open has filled the body by the time CEF asks for the headers;
             // without one, fail the request the way CEF documents
             let Some(body) = self.body.get() else {
@@ -415,15 +352,59 @@ wrap_resource_handler! {
             response.set_status(body.status);
             response.set_mime_type(Some(&CefString::from(body.mime.as_str())));
 
-            if let Some(len) = response_length {
-                *len = data_len;
-            }
+            *response_length = data_len;
 
             debug!(
                 "[app://] response_headers: status={} mime={} length={data_len}",
                 body.status, body.mime
             );
         }
+
+        // Each read finishes inside `read`; nothing is left to stop
+        fn cancel(&self) {}
+    }
+}
+
+impl AppResourceHandler {
+    /// Reads the app:// asset if the handler has one, when CEF opens the
+    /// request rather than when the handler is made, and serves the body from
+    /// its start.
+    fn open_body(&self) {
+        if let Some((root, url)) = &self.asset {
+            self.body.get_or_init(|| Body::asset(root, url));
+        }
+        debug!(
+            "[app://] open: {} bytes to serve",
+            self.body.get().map_or(0, |body| body.bytes.len())
+        );
+        self.offset.store(0, Ordering::Release);
+    }
+
+    /// Returns the body's next bytes, at most `max`, and moves past them.
+    /// Empty at the body's end and when there is no body.
+    fn next_chunk(&self, max: usize) -> &[u8] {
+        // open has filled the body by the time CEF reads
+        let Some(body) = self.body.get() else {
+            debug!("[app://] read: refused (no body)");
+            return &[];
+        };
+        let offset = self.offset.load(Ordering::Acquire);
+        // Inside a CEF callback a slice panic would abort the process
+        let Some(remaining) = body.bytes.get(offset..) else {
+            debug!(
+                "[app://] read: refused (offset {offset} past {} bytes)",
+                body.bytes.len()
+            );
+            return &[];
+        };
+        let chunk = &remaining[..remaining.len().min(max)];
+        self.offset.fetch_add(chunk.len(), Ordering::Release);
+        debug!(
+            "[app://] read: {} bytes at offset {offset} of {} ({max} requested)",
+            chunk.len(),
+            body.bytes.len()
+        );
+        chunk
     }
 }
 
@@ -733,23 +714,18 @@ mod tests {
         // when it is made: a file written in between is what it serves
         let dir = tmp();
         let root = CanonicalRoot::new(dir.path()).unwrap();
-        let handler = AppResourceHandler::new(
-            Some((root, "app://app/late.txt".to_owned())),
-            Arc::new(OnceLock::new()),
-            Arc::new(AtomicUsize::new(0)),
-        );
+        // The handler's own logic, without the CEF object `new` wraps it in
+        let handler = AppResourceHandler {
+            asset: Some((root, "app://app/late.txt".to_owned())),
+            body: Arc::new(OnceLock::new()),
+            offset: Arc::new(AtomicUsize::new(0)),
+            cef_object: std::ptr::null_mut(),
+        };
         fs::write(dir.path().join("late.txt"), b"written after the handler").unwrap();
 
-        let mut handle_request = 0;
-        assert_eq!(handler.open(None, Some(&mut handle_request), None), 1);
-        assert_eq!(handle_request, 1);
-
-        let mut buf = [0u8; 64];
-        let mut n = 0;
-        assert_eq!(handler.read(buf.as_mut_ptr(), 64, Some(&mut n), None), 1);
-        assert_eq!(&buf[..n as usize], b"written after the handler");
-        assert_eq!(handler.read(buf.as_mut_ptr(), 64, Some(&mut n), None), 0);
-        assert_eq!(n, 0);
+        handler.open_body();
+        assert_eq!(handler.next_chunk(64), b"written after the handler");
+        assert_eq!(handler.next_chunk(64), b"");
     }
 
     #[test]
@@ -934,7 +910,7 @@ mod tests {
             &self,
             _browser: Option<&mut Browser>,
             _frame: Option<&mut Frame>,
-            _request: Option<&mut Request>,
+            _request: &mut Request,
         ) -> Option<ResourceHandler> {
             panic!("the application's handler has a bug");
         }
@@ -942,10 +918,24 @@ mod tests {
 
     #[test]
     fn a_panicking_scheme_handler_fails_its_request() {
-        // Called through tanso's extern "C" trampoline, as CEF calls it: a
-        // panic escaping the factory would abort the test process
-        let factory = CustomSchemeHandlerFactory::new(Arc::new(Panics));
-        assert!(factory.create(None, None, None, None).is_none());
+        use tanso::rc::ConvertReturnValue;
+
+        // The factory's own method, without the CEF object `new` wraps it
+        // in: a panic escaping the application's handler would fail the test
+        let factory = CustomSchemeHandlerFactory {
+            handler: Arc::new(Panics),
+            cef_object: std::ptr::null_mut(),
+        };
+        // A request stands in with no reference counting of its own; the
+        // factory hands it on unread
+        // SAFETY: a C struct of a size and function pointers, all valid zeroed
+        let mut raw: tanso::sys::_cef_request_t = unsafe { std::mem::zeroed() };
+        raw.base.size = std::mem::size_of::<tanso::sys::_cef_request_t>();
+        let mut request: Request = std::ptr::from_mut(&mut raw).wrap_result();
+        // Empty, so built without libcef
+        let scheme = CefString::default();
+        let created = ImplSchemeHandlerFactory::create(&factory, None, None, &scheme, &mut request);
+        assert!(created.is_none());
     }
 
     // Custom scheme name validation

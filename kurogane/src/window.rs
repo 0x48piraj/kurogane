@@ -274,7 +274,7 @@ pub(crate) fn shown_state(window: &Window) -> WindowState {
 /// Returns whether `window` fills its display's work area. UI thread.
 fn fills_work_area(window: &Window) -> bool {
     let bounds = window.bounds_in_screen();
-    display_get_matching_bounds(Some(&bounds), 0)
+    display_get_matching_bounds(&bounds, 0)
         .is_some_and(|display| covers(&bounds, &display.work_area()))
 }
 
@@ -468,7 +468,7 @@ fn centre(width: i32, height: i32, area: &Rect) -> Rect {
 /// the top edge not above it. They are moved inside it when less than
 /// [`MIN_VISIBLE`] of the window shows there. UI thread.
 fn on_a_display(bounds: Rect) -> Rect {
-    match display_get_matching_bounds(Some(&bounds), 0) {
+    match display_get_matching_bounds(&bounds, 0) {
         Some(display) => fit(bounds, &display.work_area()),
         None => bounds,
     }
@@ -511,11 +511,11 @@ wrap_window_delegate! {
     }
 
     impl ViewDelegate {
-        fn preferred_size(&self, _view: Option<&mut View>) -> Size {
+        fn preferred_size(&self, _view: &mut View) -> Size {
             self.opening.preferred_size()
         }
 
-        fn minimum_size(&self, _view: Option<&mut View>) -> Size {
+        fn minimum_size(&self, _view: &mut View) -> Size {
             self.opening.minimum_size()
         }
     }
@@ -523,7 +523,7 @@ wrap_window_delegate! {
     impl PanelDelegate {}
 
     impl WindowDelegate {
-        fn initial_bounds(&self, _window: Option<&mut Window>) -> Rect {
+        fn initial_bounds(&self, _window: &mut Window) -> Rect {
             opening_bounds(&self.opening)
         }
 
@@ -533,7 +533,7 @@ wrap_window_delegate! {
         // X11 window drops a fullscreen state set before it maps, so a
         // fullscreen window opens normal there too and takes the state once
         // it shows
-        fn initial_show_state(&self, _window: Option<&mut Window>) -> ShowState {
+        fn initial_show_state(&self, _window: &mut Window) -> ShowState {
             match &self.opening {
                 Opening::Application(_) if FRAME_KNOWN_AT_CREATION => ShowState::NORMAL,
                 Opening::Application(options) if options.initial_state() == WindowState::Fullscreen => {
@@ -548,10 +548,10 @@ wrap_window_delegate! {
         // own which tanso's write of this struct back to CEF keeps (crate::cef_string)
         fn linux_window_properties(
             &self,
-            _window: Option<&mut Window>,
-            properties: Option<&mut LinuxWindowProperties>,
+            _window: &mut Window,
+            properties: &mut LinuxWindowProperties,
         ) -> ::std::os::raw::c_int {
-            let (Some(class), Some(properties)) = (&self.app.window_identity().class, properties) else {
+            let Some(class) = &self.app.window_identity().class else {
                 return 0;
             };
             properties.wayland_app_id = owned_by_cef(class);
@@ -561,10 +561,7 @@ wrap_window_delegate! {
             1
         }
 
-        fn on_window_created(&self, window: Option<&mut Window>) {
-            let Some(window) = window else {
-                return;
-            };
+        fn on_window_created(&self, window: &mut Window) {
             // Registered before the view is added, which creates a main
             // window's browser; the guard ends with the statement
             self.app.registry().windows.insert(
@@ -584,7 +581,7 @@ wrap_window_delegate! {
                 Opening::Application(options) if FRAME_KNOWN_AT_CREATION => {
                     let frame = Frame::of(window);
                     let outer = framed_opening_bounds(options, &frame);
-                    window.set_bounds(Some(&outer));
+                    window.set_bounds(&outer);
                     frame.within(&outer)
                 }
                 Opening::Application(_) => opening_bounds(&self.opening),
@@ -592,7 +589,7 @@ wrap_window_delegate! {
             };
             self.app.registry().windows.set_restored(self.window_id, initial);
 
-            window.add_child_view(Some(&mut (&self.browser_view).into()));
+            window.add_child_view(&mut (&self.browser_view).into());
             if let Opening::Application(options) = &self.opening
                 && let Some(title) = options.fixed_title()
             {
@@ -601,8 +598,8 @@ wrap_window_delegate! {
             if let Some(png) = &self.app.window_identity().icon
                 && let Some((mut small, mut large)) = window_icons(png)
             {
-                window.set_window_icon(Some(&mut small));
-                window.set_window_app_icon(Some(&mut large));
+                window.set_window_icon(&mut small);
+                window.set_window_app_icon(&mut large);
             }
             match &self.opening {
                 Opening::Application(options)
@@ -628,10 +625,7 @@ wrap_window_delegate! {
             }
         }
 
-        fn on_window_bounds_changed(&self, window: Option<&mut Window>, new_bounds: Option<&Rect>) {
-            let (Some(window), Some(bounds)) = (window, new_bounds) else {
-                return;
-            };
+        fn on_window_bounds_changed(&self, window: &mut Window, bounds: &Rect) {
             // A maximized, minimized or fullscreen window's bounds are not where
             // it restores to
             let state = shown_state(window);
@@ -655,12 +649,12 @@ wrap_window_delegate! {
                 let settling = self.app.registry().windows.shown(self.window_id, state, &content);
                 if let Some(generation) = settling {
                     let mut task = SettleTask::new(self.app.clone(), self.window_id, generation);
-                    post_delayed_task(ThreadId::UI, Some(&mut task), SETTLE_MS);
+                    post_delayed_task(ThreadId::UI, &mut task, SETTLE_MS);
                 }
             }
         }
 
-        fn on_window_destroyed(&self, _window: Option<&mut Window>) {
+        fn on_window_destroyed(&self, _window: &mut Window) {
             debug!("[Window] {} destroyed", self.window_id.as_u32());
             self.app.registry().windows.unregister(self.window_id);
         }
@@ -669,26 +663,26 @@ wrap_window_delegate! {
         // answer true; these restore them
         fn with_standard_window_buttons(
             &self,
-            _window: Option<&mut Window>,
+            _window: &mut Window,
         ) -> ::std::os::raw::c_int {
             1
         }
 
-        fn can_resize(&self, _window: Option<&mut Window>) -> ::std::os::raw::c_int {
+        fn can_resize(&self, _window: &mut Window) -> ::std::os::raw::c_int {
             1
         }
 
-        fn can_maximize(&self, _window: Option<&mut Window>) -> ::std::os::raw::c_int {
+        fn can_maximize(&self, _window: &mut Window) -> ::std::os::raw::c_int {
             1
         }
 
-        fn can_minimize(&self, _window: Option<&mut Window>) -> ::std::os::raw::c_int {
+        fn can_minimize(&self, _window: &mut Window) -> ::std::os::raw::c_int {
             1
         }
 
         // CEF's default is true; the window asks its browser instead, as
         // cefsimple's CanClose does, so the page's unload handlers can run
-        fn can_close(&self, _window: Option<&mut Window>) -> ::std::os::raw::c_int {
+        fn can_close(&self, _window: &mut Window) -> ::std::os::raw::c_int {
             if let Some(browser) = self.browser_view.browser() && let Some(host) = browser.host() {
                 let answer = host.try_close_browser();
                 debug!("[Window] {} can close: {answer}", self.window_id.as_u32());
@@ -713,12 +707,12 @@ wrap_browser_view_delegate! {
     impl BrowserViewDelegate {
         fn on_browser_created(
             &self,
-            _browser_view: Option<&mut BrowserView>,
-            browser: Option<&mut Browser>,
+            _browser_view: &mut BrowserView,
+            browser: &mut Browser,
         ) {
             // A popup is registered and linked to its window in its opener's
             // on_popup_browser_view_created
-            let (Some(browser), Some(window_id)) = (browser, self.window_id) else {
+            let Some(window_id) = self.window_id else {
                 return;
             };
 
@@ -742,8 +736,8 @@ wrap_browser_view_delegate! {
         // it get CEF's window, which the runtime neither tracks nor sizes
         fn delegate_for_popup_browser_view(
             &self,
-            _browser_view: Option<&mut BrowserView>,
-            _settings: Option<&BrowserSettings>,
+            _browser_view: &mut BrowserView,
+            _settings: &BrowserSettings,
             _client: Option<&mut Client>,
             _is_devtools: ::std::os::raw::c_int,
         ) -> Option<BrowserViewDelegate> {
@@ -752,63 +746,61 @@ wrap_browser_view_delegate! {
 
         fn on_popup_browser_view_created(
             &self,
-            browser_view: Option<&mut BrowserView>,
-            popup_browser_view: Option<&mut BrowserView>,
+            browser_view: &mut BrowserView,
+            popup_browser_view: &mut BrowserView,
             is_devtools: ::std::os::raw::c_int,
         ) -> ::std::os::raw::c_int {
             debug!("[BrowserViewDelegate] popup browser view created");
 
-            if let Some(pbv) = popup_browser_view {
-                // Derive parent/opener BrowserId from the parent BrowserView
-                let parent_id = browser_view.and_then(|bv| bv.browser())
-                    .and_then(|b| {
-                        let reg = self.app.registry();
-                        reg.browsers.find_id_by_browser(&b)
-                    });
-
-                // Classified here, where its kind and opener are known,
-                // whether or not on_after_created registered it first
-                let browser_type = if is_devtools != 0 { BrowserType::DevTools } else { BrowserType::Popup };
-                let browser_id = pbv.browser().map(|browser| {
-                    let mut reg = self.app.registry();
-                    let id = reg.browsers.ensure_registered(&browser, browser_type, parent_id);
-                    reg.browsers.classify(id, browser_type, parent_id);
-                    debug!("[BrowserViewDelegate] registered popup browser");
-                    id
+            // Derive parent/opener BrowserId from the parent BrowserView
+            let parent_id = browser_view.browser()
+                .and_then(|b| {
+                    let reg = self.app.registry();
+                    reg.browsers.find_id_by_browser(&b)
                 });
 
-                // What the page asked of the window, kept by the opener since
-                // on_before_popup. DevTools popups come from
-                // on_before_dev_tools_popup and are not in its list
-                let requested = match parent_id {
-                    Some(opener) if is_devtools == 0 => self
-                        .app
-                        .registry()
-                        .browsers
-                        .get_mut(opener)
-                        .and_then(|state| state.pending_popups.take()),
-                    _ => None,
-                };
-                debug!("[BrowserViewDelegate] popup window requested {:?}", requested);
+            // Classified here, where its kind and opener are known,
+            // whether or not on_after_created registered it first
+            let browser_type = if is_devtools != 0 { BrowserType::DevTools } else { BrowserType::Popup };
+            let browser_id = popup_browser_view.browser().map(|browser| {
+                let mut reg = self.app.registry();
+                let id = reg.browsers.ensure_registered(&browser, browser_type, parent_id);
+                reg.browsers.classify(id, browser_type, parent_id);
+                debug!("[BrowserViewDelegate] registered popup browser");
+                id
+            });
 
-                // CEF made the popup's view; the window adds it and shows
-                // itself, as cefsimple's popup window does
-                let window_id = {
-                    let mut reg = self.app.registry();
-                    reg.windows.allocate_id()
-                };
+            // What the page asked of the window, kept by the opener since
+            // on_before_popup. DevTools popups come from
+            // on_before_dev_tools_popup and are not in its list
+            let requested = match parent_id {
+                Some(opener) if is_devtools == 0 => self
+                    .app
+                    .registry()
+                    .browsers
+                    .get_mut(opener)
+                    .and_then(|state| state.pending_popups.take()),
+                _ => None,
+            };
+            debug!("[BrowserViewDelegate] popup window requested {:?}", requested);
 
-                let mut delegate = KuroganeWindowDelegate::new(
-                    window_id,
-                    pbv.clone(),
-                    self.app.clone(),
-                    browser_id,
-                    Opening::Popup(requested),
-                );
-                if window_create_top_level(Some(&mut delegate)).is_some() {
-                    debug!("[BrowserViewDelegate] popup window created");
-                    return 1;
-                }
+            // CEF made the popup's view; the window adds it and shows
+            // itself, as cefsimple's popup window does
+            let window_id = {
+                let mut reg = self.app.registry();
+                reg.windows.allocate_id()
+            };
+
+            let mut delegate = KuroganeWindowDelegate::new(
+                window_id,
+                popup_browser_view.clone(),
+                self.app.clone(),
+                browser_id,
+                Opening::Popup(requested),
+            );
+            if window_create_top_level(Some(&mut delegate)).is_some() {
+                debug!("[BrowserViewDelegate] popup window created");
+                return 1;
             }
 
             0
@@ -878,7 +870,7 @@ fn create_browser_window(
     let browser_view = browser_view_create(
         Some(&mut client),
         Some(&CefString::from(url)),
-        Some(&settings),
+        &settings,
         None,
         None,
         Some(&mut view_delegate),

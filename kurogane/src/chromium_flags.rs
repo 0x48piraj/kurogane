@@ -190,15 +190,15 @@ impl ChromiumFlags {
     /// Chromium keeps only the last value of a switch.
     pub(crate) fn apply(self, cmd: &mut CommandLine) {
         for name in self.removed_switches() {
-            if cmd.has_switch(Some(&CefString::from(name))) != 0 {
+            if cmd.has_switch(&CefString::from(name)) != 0 {
                 warn!("--{name} stays: the application was launched with it or CEF passes it");
             }
         }
 
         let existing = |name: &str| {
             let name = CefString::from(name);
-            if cmd.has_switch(Some(&name)) != 0 {
-                CefString::from(&cmd.switch_value(Some(&name))).to_string()
+            if cmd.has_switch(&name) != 0 {
+                CefString::from(&cmd.switch_value(&name)).to_string()
             } else {
                 String::new()
             }
@@ -212,16 +212,16 @@ impl ChromiumFlags {
         for (name, value) in &passed {
             let name = CefString::from(name.as_str());
             if value.is_empty() {
-                cmd.append_switch(Some(&name));
+                cmd.append_switch(&name);
             } else {
-                cmd.append_switch_with_value(Some(&name), Some(&CefString::from(value.as_str())));
+                cmd.append_switch_with_value(&name, &CefString::from(value.as_str()));
             }
         }
 
         let held = |name: &str| {
             let name = CefString::from(name);
-            (cmd.has_switch(Some(&name)) != 0)
-                .then(|| CefString::from(&cmd.switch_value(Some(&name))).to_string())
+            (cmd.has_switch(&name) != 0)
+                .then(|| CefString::from(&cmd.switch_value(&name)).to_string())
         };
         for (name, value, held) in unheld(&passed, held) {
             let held = held.map_or_else(|| "no such switch".to_owned(), |held| format!("{held:?}"));

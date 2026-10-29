@@ -77,7 +77,7 @@ mod close {
     /// `DoClose`. Returns false when the task could not be posted.
     pub(crate) fn destroy_child_window_later(browser: &Browser) -> bool {
         let mut task = DestroyChildWindow::new(browser.clone());
-        post_task(ThreadId::UI, Some(&mut task)) != 0
+        post_task(ThreadId::UI, &mut task) != 0
     }
 
     wrap_task! {

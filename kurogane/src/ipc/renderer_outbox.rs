@@ -53,7 +53,7 @@ impl Outbox {
         // at its next allocation, so the queued calls are not rejected
         if let Some(mut msg) = self.queue.build(closing.flags(), 0) {
             self.frame
-                .send_process_message(ProcessId::BROWSER, Some(&mut msg));
+                .send_process_message(ProcessId::BROWSER, &mut msg);
             self.pacing.sent(messages, closing);
         }
         self.queue.clear();
@@ -67,7 +67,7 @@ impl Outbox {
         envelope.flags |= closing.map_or(0, Closing::flags);
         let mut msg = build_message_parts(&envelope, parts)?;
         self.frame
-            .send_process_message(ProcessId::BROWSER, Some(&mut msg));
+            .send_process_message(ProcessId::BROWSER, &mut msg);
         if let Some(closing) = closing {
             self.pacing.sent(1, closing);
         }
@@ -137,7 +137,7 @@ pub(crate) fn leaving(frame: &Frame, frame_id: &FrameId, leaving: bool) {
 /// messages.
 pub(crate) fn send_after(frame: &Frame, frame_id: &FrameId, msg: &mut ProcessMessage) {
     flush_frame(frame_id);
-    frame.send_process_message(ProcessId::BROWSER, Some(msg));
+    frame.send_process_message(ProcessId::BROWSER, msg);
 }
 
 /// Runs `deliver`, the delivery of one of the browser's messages to

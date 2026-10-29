@@ -161,7 +161,7 @@ fn send_now(frame: &Frame, leaving: Leaving<'_>) {
         Leaving::Alone { envelope, payload } => build_message(envelope, payload),
     };
     match msg {
-        Some(mut msg) => frame.send_process_message(ProcessId::RENDERER, Some(&mut msg)),
+        Some(mut msg) => frame.send_process_message(ProcessId::RENDERER, &mut msg),
         None => debug!("[IPC Browser] failed to build a message"),
     }
 }
@@ -380,7 +380,7 @@ fn later(later: Later) {
         return;
     }
     let mut task = LaterTask::new();
-    post_task(ThreadId::UI, Some(&mut task));
+    post_task(ThreadId::UI, &mut task);
 }
 
 /// Takes everything that waits for the UI thread's task, in the order queued.
@@ -412,7 +412,7 @@ fn send_laters(waiting: Vec<Later>) {
                 mut message,
             } => {
                 outgoing.leave_frame(&frame_id, &mut send_now);
-                frame.send_process_message(ProcessId::RENDERER, Some(&mut message));
+                frame.send_process_message(ProcessId::RENDERER, &mut message);
             }
             Later::Close { frame, frame_id } => outgoing.close(&frame_id, &frame),
         }

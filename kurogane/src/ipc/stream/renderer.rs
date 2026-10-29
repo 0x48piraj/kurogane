@@ -72,7 +72,7 @@ fn on_data(id: i32, addressed: &FrameId, payload: &[u8], filled: Option<V8Backin
     }
     match array_buffer(payload, filled) {
         Some(buffer) => {
-            callback.execute_function(None, Some(&[Some(buffer)]));
+            callback.execute_function(None, &[Some(buffer)]);
         }
         None => debug!(
             "[Stream Renderer] failed to create ArrayBuffer for stream {}",
@@ -96,7 +96,7 @@ fn on_end(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
     }
     let text = String::from_utf8_lossy(payload);
     let value = v8_value_create_string(Some(&CefString::from(text.as_ref())));
-    callback.execute_function(None, Some(&[value]));
+    callback.execute_function(None, &[value]);
     context.exit();
     true
 }
@@ -112,7 +112,7 @@ fn on_error(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
             return true;
         }
         let text = rejection(code, &message);
-        promise.reject_promise(Some(&text));
+        promise.reject_promise(&text);
         context.exit();
         return true;
     }
@@ -129,7 +129,7 @@ fn on_error(id: i32, addressed: &FrameId, payload: &[u8]) -> bool {
         return true;
     }
     let value = v8_value_create_string(Some(&CefString::from(message.as_ref())));
-    callback.execute_function(None, Some(&[value]));
+    callback.execute_function(None, &[value]);
     context.exit();
     true
 }

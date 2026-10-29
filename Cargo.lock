@@ -4096,8 +4096,7 @@ dependencies = [
 [[package]]
 name = "tanso"
 version = "154.5.0+154.0.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7155579453d057d2d1355cc229c854ad12875b80f3943772ff9c61ee0830953d"
+source = "git+https://github.com/kurogane-rs/tanso?rev=c7b0e3d113d6a06cbdd5cb1996ba3d6c8333910a#c7b0e3d113d6a06cbdd5cb1996ba3d6c8333910a"
 dependencies = [
  "libloading 0.9.0",
  "objc2 0.6.4",
@@ -4108,14 +4107,12 @@ dependencies = [
 [[package]]
 name = "tanso-build"
 version = "154.5.0+154.0.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7141e36c724f782d7f39997c28ac2bd86845acce2a354114aa91ee12d768907"
+source = "git+https://github.com/kurogane-rs/tanso?rev=c7b0e3d113d6a06cbdd5cb1996ba3d6c8333910a#c7b0e3d113d6a06cbdd5cb1996ba3d6c8333910a"
 
 [[package]]
 name = "tanso-download"
 version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ada3b31d1c110f36074860a97433bd6be7c9fc0fa54bb434badcd11db84a44ef"
+source = "git+https://github.com/kurogane-rs/tanso?rev=c7b0e3d113d6a06cbdd5cb1996ba3d6c8333910a#c7b0e3d113d6a06cbdd5cb1996ba3d6c8333910a"
 dependencies = [
  "bzip2",
  "dirs",
@@ -4132,8 +4129,7 @@ dependencies = [
 [[package]]
 name = "tanso-sys"
 version = "154.5.0+154.0.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8663e447e40a796f549e99e10e5f7ba556a2c9500009c59e6128e461eb965a07"
+source = "git+https://github.com/kurogane-rs/tanso?rev=c7b0e3d113d6a06cbdd5cb1996ba3d6c8333910a#c7b0e3d113d6a06cbdd5cb1996ba3d6c8333910a"
 dependencies = [
  "dirs",
  "libloading 0.9.0",

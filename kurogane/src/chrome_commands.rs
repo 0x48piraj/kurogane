@@ -259,7 +259,7 @@ wrap_command_handler! {
     impl CommandHandler {
         fn on_chrome_command(
             &self,
-            browser: Option<&mut Browser>,
+            browser: &mut Browser,
             command_id: c_int,
             disposition: WindowOpenDisposition,
         ) -> c_int {
@@ -272,20 +272,19 @@ wrap_command_handler! {
             }
 
             match verdict(command_id, disposition) {
-                Verdict::Ask(command) => match decide(
-                    &self.app,
-                    command,
-                    browser.and_then(|browser| self.app.registry().browsers.find_id_by_browser(browser)),
-                ) {
-                    CommandDecision::Default => {
-                        debug!("[Commands] {command:?} ({command_id}) runs");
-                        0 // Unhandled: CEF runs the command
+                Verdict::Ask(command) => {
+                    let browser_id = self.app.registry().browsers.find_id_by_browser(browser);
+                    match decide(&self.app, command, browser_id) {
+                        CommandDecision::Default => {
+                            debug!("[Commands] {command:?} ({command_id}) runs");
+                            0 // Unhandled: CEF runs the command
+                        }
+                        CommandDecision::Refuse => {
+                            debug!("[Commands] {command:?} ({command_id}) refused by the application");
+                            1
+                        }
                     }
-                    CommandDecision::Refuse => {
-                        debug!("[Commands] {command:?} ({command_id}) refused by the application");
-                        1
-                    }
-                },
+                }
                 Verdict::Run => 0,
                 Verdict::Refuse => {
                     debug!("[Commands] refused Chrome command {command_id} ({disposition:?})");

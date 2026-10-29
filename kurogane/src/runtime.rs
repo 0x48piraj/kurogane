@@ -257,7 +257,7 @@ fn execute_subprocesses(args: &Args, app: &mut App, sandbox_info: *mut u8) {
     debug!("Dispatching CEF process selection");
 
     // CEF internally determines process role here
-    let exit_code = execute_process(Some(args.as_main_args()), Some(app), sandbox_info);
+    let exit_code = execute_process(args.as_main_args(), Some(app), sandbox_info);
 
     // This was a subprocess and should exit now
     if exit_code >= 0 {
@@ -638,7 +638,7 @@ impl AppHandle {
             close(self, what);
         } else {
             let mut task = CloseTask::new(self.clone(), what);
-            if post_task(ThreadId::UI, Some(&mut task)) == 0 {
+            if post_task(ThreadId::UI, &mut task) == 0 {
                 debug!("CEF refused {what:?}; it did not run");
             }
         }
@@ -1043,7 +1043,7 @@ impl BrowserHandle {
     pub fn navigate(&self, url: &str) {
         if let Some(frame) = self.browser().and_then(|b| b.main_frame()) {
             let url = CefString::from(url);
-            frame.load_url(Some(&url));
+            frame.load_url(&url);
         }
     }
 
@@ -1107,7 +1107,7 @@ impl BrowserHandle {
             let code = CefString::from(code);
             let script_url = CefString::from(script_url);
 
-            frame.execute_java_script(Some(&code), Some(&script_url), start_line);
+            frame.execute_java_script(&code, Some(&script_url), start_line);
         }
     }
 
@@ -1319,7 +1319,7 @@ impl AppInstance {
         }
         // Without its own context the browser would share the global cookie
         // and cache partition the caller asked to avoid
-        let rc = tanso::request_context_create_context(Some(rc_settings), None)
+        let rc = tanso::request_context_create_context(rc_settings, None)
             .ok_or(RuntimeError::BrowserCreationFailed)?;
         self.create_child_browser_impl(parent, bounds, url, Some(rc))
     }
@@ -1357,10 +1357,10 @@ impl AppInstance {
 
         let mut rc = request_context;
         let browser = browser_host_create_browser_sync(
-            Some(&info),
+            &info,
             Some(&mut client),
             Some(&CefString::from(url)),
-            Some(&Default::default()),
+            &Default::default(),
             None,
             rc.as_mut(),
         )
@@ -1446,13 +1446,7 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
 
     debug!("Initializing CEF");
 
-    if initialize(
-        Some(args.as_main_args()),
-        Some(&settings),
-        Some(&mut app),
-        sandbox_info,
-    ) != 1
-    {
+    if initialize(args.as_main_args(), &settings, Some(&mut app), sandbox_info) != 1 {
         // CEF runs one instance per profile. A launch that finds this
         // application running has handed it its command line and, like a
         // helper process, has nothing left to do

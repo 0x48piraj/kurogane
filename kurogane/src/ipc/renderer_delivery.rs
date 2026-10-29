@@ -213,7 +213,7 @@ fn route(frame: &mut Frame, arrived: Arrived, filled: Option<V8BackingStore>) ->
 fn post_deferral() {
     if !DEFERRAL_POSTED.replace(true) {
         let mut task = DeferralTask::new();
-        post_task(ThreadId::RENDERER, Some(&mut task));
+        post_task(ThreadId::RENDERER, &mut task);
     }
 }
 
@@ -235,7 +235,7 @@ wrap_task! {
 /// never come.
 fn post_delivery() {
     let mut task = DeliverTask::new();
-    post_task(ThreadId::RENDERER, Some(&mut task));
+    post_task(ThreadId::RENDERER, &mut task);
 }
 
 wrap_task! {

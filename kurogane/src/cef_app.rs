@@ -24,10 +24,8 @@ wrap_app! {
         fn on_before_command_line_processing(
             &self,
             process_type: Option<&CefString>,
-            command_line: Option<&mut CommandLine>,
+            cmd: &mut CommandLine,
         ) {
-            let Some(cmd) = command_line else { return };
-
             // Dispatch to lifecycle delegates first
             for delegate in &self.spec.delegates {
                 delegate.on_before_command_line_processing(cmd);
@@ -62,16 +60,14 @@ wrap_app! {
 
         fn on_register_custom_schemes(
             &self,
-            registrar: Option<&mut SchemeRegistrar>,
+            registrar: &mut SchemeRegistrar,
         ) {
             debug!("on_register_custom_schemes called!");
-
-            let Some(registrar) = registrar else { return };
 
             let flags = crate::scheme::custom_scheme_flags();
 
             let result = registrar.add_custom_scheme(
-                Some(&CefString::from("app")),
+                &CefString::from("app"),
                 flags,
             );
 
@@ -79,7 +75,7 @@ wrap_app! {
 
             for scheme in &self.spec.scheme_handlers {
                 let result = registrar.add_custom_scheme(
-                    Some(&CefString::from(scheme.name.as_str())),
+                    &CefString::from(scheme.name.as_str()),
                     flags,
                 );
                 debug!(

@@ -20,51 +20,42 @@ impl kurogane::ClientAppRendererDelegate for RendererDelegate {
         println!("[renderer delegate] web kit initialized");
     }
 
-    fn on_context_created(
-        &self,
-        _browser: Option<&Browser>,
-        frame: Option<&Frame>,
-        _context: Option<&V8Context>,
-    ) {
+    fn on_context_created(&self, _browser: &Browser, frame: &Frame, _context: &V8Context) {
         println!("[renderer delegate] JS context created");
 
-        if let Some(frame) = frame {
-            frame.execute_java_script(
-                Some(&CefString::from(
-                    r#"
-                    setTimeout(() => {
-                        window.core.invoke("ping", { from: "renderer delegate" })
-                            .then(result => console.log("[demo] ping result:", result))
-                            .catch(err => console.error("[demo] ping failed:", err));
-                    }, 1000);
-                "#,
-                )),
-                None,
-                0,
-            );
-        }
+        frame.execute_java_script(
+            &CefString::from(
+                r#"
+                setTimeout(() => {
+                    window.core.invoke("ping", { from: "renderer delegate" })
+                        .then(result => console.log("[demo] ping result:", result))
+                        .catch(err => console.error("[demo] ping failed:", err));
+                }, 1000);
+            "#,
+            ),
+            None,
+            0,
+        );
     }
 
     fn on_uncaught_exception(
         &self,
-        _browser: Option<&Browser>,
-        _frame: Option<&Frame>,
-        _context: Option<&V8Context>,
-        exception: Option<&V8Exception>,
-        _stack_trace: Option<&V8StackTrace>,
+        _browser: &Browser,
+        _frame: &Frame,
+        _context: &V8Context,
+        exception: &V8Exception,
+        _stack_trace: &V8StackTrace,
     ) {
-        if let Some(exception) = exception {
-            let msg: CefString = (&exception.message()).into();
-            println!("[renderer delegate] uncaught exception: {}", msg);
-        }
+        let msg: CefString = (&exception.message()).into();
+        println!("[renderer delegate] uncaught exception: {}", msg);
     }
 
     fn on_process_message_received(
         &self,
-        _browser: Option<&Browser>,
-        _frame: Option<&Frame>,
+        _browser: &Browser,
+        _frame: &Frame,
         source_process: ProcessId,
-        _message: Option<&ProcessMessage>,
+        _message: &ProcessMessage,
     ) -> i32 {
         println!(
             "[renderer delegate] process message from {:?}",

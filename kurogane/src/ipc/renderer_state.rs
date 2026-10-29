@@ -16,7 +16,7 @@ pub(crate) type RendererState = Registry<V8Context, V8Value>;
 impl ContextHandle for V8Context {
     fn same(&self, other: &Self) -> bool {
         let mut other = other.clone();
-        self.is_same(Some(&mut other)) != 0
+        self.is_same(&mut other) != 0
     }
 }
 

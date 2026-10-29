@@ -24,7 +24,7 @@ wrap_browser_process_handler! {
         fn on_register_custom_preferences(
             &self,
             type_: PreferencesType,
-            registrar: Option<&mut PreferenceRegistrar>,
+            registrar: &mut PreferenceRegistrar,
         ) {
             crate::chromium_defaults::register_preferences(type_, registrar);
         }
@@ -72,7 +72,7 @@ wrap_browser_process_handler! {
         // Chrome window in this process instead
         fn on_already_running_app_relaunch(
             &self,
-            command_line: Option<&mut CommandLine>,
+            command_line: &mut CommandLine,
             current_directory: Option<&CefString>,
         ) -> i32 {
             // Chromium brings existing windows to the front before delivering the launch.
@@ -87,9 +87,7 @@ wrap_browser_process_handler! {
                 window.activate();
             }
 
-            if let (Some(on_second_instance), Some(command_line)) =
-                (&self.spec.on_second_instance, command_line)
-            {
+            if let Some(on_second_instance) = &self.spec.on_second_instance {
                 let launch = SecondInstance::from_launch(command_line, current_directory);
                 on_second_instance(&launch, &self.app);
             }
@@ -139,7 +137,7 @@ fn register_scheme_handlers(spec: &RuntimeSpec) {
         debug!("Registering scheme handler factory for app://");
         let mut factory = crate::scheme::AppSchemeHandlerFactory::new(root.clone());
         let result = global.register_scheme_handler_factory(
-            Some(&CefString::from("app")),
+            &CefString::from("app"),
             Some(&CefString::from("app")),
             Some(&mut factory),
         );
@@ -151,7 +149,7 @@ fn register_scheme_handlers(spec: &RuntimeSpec) {
         debug!("Registering scheme handler factory for {}://", scheme.name);
         let mut factory = crate::scheme::CustomSchemeHandlerFactory::new(scheme.handler.clone());
         let result = global.register_scheme_handler_factory(
-            Some(&CefString::from(scheme.name.as_str())),
+            &CefString::from(scheme.name.as_str()),
             Some(&CefString::from("")),
             Some(&mut factory),
         );

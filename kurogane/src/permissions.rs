@@ -536,7 +536,7 @@ impl Ticket {
             return;
         }
         let mut task = AnswerTask::new(app, browser, self.id, allow);
-        if post_task(ThreadId::UI, Some(&mut task)) == 0 {
+        if post_task(ThreadId::UI, &mut task) == 0 {
             debug!("[permission] CEF refused the answer to request {}", self.id);
         }
     }
@@ -807,7 +807,7 @@ pub(crate) fn forget_on_ui(app: &AppHandle, origin: &Origin) {
         forget(app, origin);
     } else {
         let mut task = ForgetTask::new(app.clone(), origin.clone());
-        if post_task(ThreadId::UI, Some(&mut task)) == 0 {
+        if post_task(ThreadId::UI, &mut task) == 0 {
             debug!("[permission] CEF refused to forget {origin}'s permissions");
         }
     }
@@ -833,7 +833,7 @@ fn forget(app: &AppHandle, origin: &Origin) {
         };
         if !contexts
             .iter()
-            .any(|known| known.is_same(Some(&mut context)) != 0)
+            .any(|known| known.is_same(&mut context) != 0)
         {
             contexts.push(context);
         }

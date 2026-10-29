@@ -59,7 +59,7 @@ pub(crate) fn settle_answers<'p>(
         };
         let same = entered
             .as_ref()
-            .is_some_and(|current| current.is_same(Some(&mut context.clone())) != 0);
+            .is_some_and(|current| current.is_same(&mut context.clone()) != 0);
         if !same {
             if let Some(current) = entered.take() {
                 current.exit();
@@ -86,7 +86,7 @@ fn settle(promise: &V8Value, envelope: &Envelope, payload: &[u8], filled: Option
             }
             None => {
                 let message = rejection(ErrorCode::Buffer.wire(), "Failed to create ArrayBuffer");
-                promise.reject_promise(Some(&message));
+                promise.reject_promise(&message);
             }
         },
         (RPC_RESOLVE, _) => {
@@ -97,7 +97,7 @@ fn settle(promise: &V8Value, envelope: &Envelope, payload: &[u8], filled: Option
         _ => {
             let (code, message) = decode_error_payload(payload);
             let text = rejection(code, &message);
-            promise.reject_promise(Some(&text));
+            promise.reject_promise(&text);
         }
     }
 }

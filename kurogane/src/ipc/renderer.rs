@@ -34,10 +34,8 @@ fn v8_to_string(v: &V8Value) -> String {
 ///
 /// CEF throws the exception when `Execute` returns `1`. tanso exposes the
 /// exception as a borrowed `CefString`; `try_set` writes through that wrapper.
-fn throw(exception: Option<&mut CefString>, message: &str) -> i32 {
-    if let Some(exception) = exception {
-        exception.try_set(message);
-    }
+fn throw(exception: &mut CefString, message: &str) -> i32 {
+    exception.try_set(message);
     1
 }
 
@@ -169,37 +167,27 @@ wrap_render_process_handler! {
 
         fn on_browser_created(
             &self,
-            browser: Option<&mut Browser>,
+            browser: &mut Browser,
             extra_info: Option<&mut DictionaryValue>,
         ) {
-            let browser_ref = browser.as_deref();
-            let extra_info_ref = extra_info.as_deref();
-
+            let extra_info = extra_info.as_deref();
             for delegate in &self.delegates {
-                delegate.on_browser_created(browser_ref, extra_info_ref);
+                delegate.on_browser_created(browser, extra_info);
             }
         }
 
-        fn on_browser_destroyed(
-            &self,
-            browser: Option<&mut Browser>,
-        ) {
-            let browser_ref = browser.as_deref();
-
+        fn on_browser_destroyed(&self, browser: &mut Browser) {
             for delegate in &self.delegates {
-                delegate.on_browser_destroyed(browser_ref);
+                delegate.on_browser_destroyed(browser);
             }
         }
 
         fn on_context_created(
             &self,
-            browser: Option<&mut Browser>,
-            frame: Option<&mut Frame>,
-            context: Option<&mut V8Context>,
+            browser: &mut Browser,
+            frame: &mut Frame,
+            context: &mut V8Context,
         ) {
-            let (Some(context), Some(frame)) = (context, frame) else {
-                return;
-            };
             let Some(global) = context.global() else {
                 return;
             };
@@ -249,92 +237,71 @@ wrap_render_process_handler! {
 
             global.set_value_bykey(
                 Some(&CefString::from("core")),
-                Some(&mut core),
+                &mut core,
                 V8Propertyattribute::default(),
             );
 
             frame.execute_java_script(
-                Some(&CefString::from(bridge::KUROGANE_BRIDGE)),
+                &CefString::from(bridge::KUROGANE_BRIDGE),
                 None,
                 0,
             );
 
             debug!("[IPC Renderer] Injected window.core.* + kurogane bridge");
 
-            let browser_ref = browser.as_deref();
             for delegate in &self.delegates {
-                delegate.on_context_created(browser_ref, Some(frame), Some(context));
+                delegate.on_context_created(browser, frame, context);
             }
         }
 
         fn on_context_released(
             &self,
-            browser: Option<&mut Browser>,
-            frame: Option<&mut Frame>,
-            context: Option<&mut V8Context>,
+            browser: &mut Browser,
+            frame: &mut Frame,
+            context: &mut V8Context,
         ) {
-            let context_ref = context.as_deref();
-            let browser_ref = browser.as_deref();
-            let frame_ref = frame.as_deref();
-
             for delegate in &self.delegates {
-                delegate.on_context_released(browser_ref, frame_ref, context_ref);
+                delegate.on_context_released(browser, frame, context);
             }
 
             // Messages the page sent just before its context went still leave
-            if let Some(frame) = frame_ref {
-                renderer_outbox::release_frame(&FrameId::of(frame));
-            }
+            renderer_outbox::release_frame(&FrameId::of(frame));
 
-            if let Some(ctx) = context {
-                let opaque = with_state(|state| state.is_opaque(ctx));
-                with_state(|state| state.context_released(ctx));
-                if opaque && let Some(frame) = frame {
-                    tell_browser(frame, crate::context_menu::OPAQUE_DOCUMENT_GONE);
-                }
+            let opaque = with_state(|state| state.is_opaque(context));
+            with_state(|state| state.context_released(context));
+            if opaque {
+                tell_browser(frame, crate::context_menu::OPAQUE_DOCUMENT_GONE);
             }
         }
 
         fn on_uncaught_exception(
             &self,
-            browser: Option<&mut Browser>,
-            frame: Option<&mut Frame>,
-            context: Option<&mut V8Context>,
-            exception: Option<&mut V8Exception>,
-            stack_trace: Option<&mut V8StackTrace>,
+            browser: &mut Browser,
+            frame: &mut Frame,
+            context: &mut V8Context,
+            exception: &mut V8Exception,
+            stack_trace: &mut V8StackTrace,
         ) {
-            let browser_ref = browser.as_deref();
-            let frame_ref = frame.as_deref();
-            let context_ref = context.as_deref();
-            let exception_ref = exception.as_deref();
-            let stack_trace_ref = stack_trace.as_deref();
-
             for delegate in &self.delegates {
-                delegate.on_uncaught_exception(
-                    browser_ref, frame_ref, context_ref, exception_ref, stack_trace_ref,
-                );
+                delegate.on_uncaught_exception(browser, frame, context, exception, stack_trace);
             }
 
-            if let Some(ex) = exception {
-                let msg: CefString = (&ex.message()).into();
-                let src: CefString = (&ex.script_resource_name()).into();
-                let line = ex.line_number();
-                debug!("[Renderer] Uncaught exception at {}:{} - {}", src.to_string(), line, msg.to_string());
-            }
+            let msg: CefString = (&exception.message()).into();
+            let src: CefString = (&exception.script_resource_name()).into();
+            let line = exception.line_number();
+            debug!("[Renderer] Uncaught exception at {}:{} - {}", src.to_string(), line, msg.to_string());
         }
 
         fn on_focused_node_changed(
             &self,
-            browser: Option<&mut Browser>,
+            browser: &mut Browser,
             frame: Option<&mut Frame>,
             node: Option<&mut Domnode>,
         ) {
             let Some(node_data) = node.as_ref() else {
-                let browser_ref = browser.as_deref();
-                let frame_ref = frame.as_deref();
-
+                let frame = frame.as_deref();
                 for delegate in &self.delegates {
-                    delegate.on_focused_node_changed(browser_ref, frame_ref, None);
+                    delegate.on_focused_node_changed(browser, frame, None);
                 }
                 return;
             };
@@ -352,35 +319,25 @@ wrap_render_process_handler! {
                     .unwrap_or("-"),
             );
 
-            let browser_ref = browser.as_deref();
-            let frame_ref = frame.as_deref();
-            let node_ref = Some(&**node_data);
-
+            let frame = frame.as_deref();
+            let node = Some(&**node_data);
             for delegate in &self.delegates {
-                delegate.on_focused_node_changed(browser_ref, frame_ref, node_ref);
+                delegate.on_focused_node_changed(browser, frame, node);
             }
         }
 
         fn on_process_message_received(
             &self,
-            browser: Option<&mut Browser>,
-            frame: Option<&mut Frame>,
+            browser: &mut Browser,
+            frame: &mut Frame,
             source_process: ProcessId,
-            message: Option<&mut ProcessMessage>,
+            message: &mut ProcessMessage,
         ) -> i32 {
-            let ipc = source_process == ProcessId::BROWSER
-                && message.as_deref().is_some_and(is_ipc_message);
-
             // Kurogane's own messages never reach the delegates. One a
             // delegate kept would hold its frame's later messages for good
-            if ipc {
-                let (Some(frame), Some(msg)) = (frame, message) else {
-                    debug!("[IPC Renderer] missing frame");
-                    return 0;
-                };
-
+            if source_process == ProcessId::BROWSER && is_ipc_message(message) {
                 // SAFETY: the browser sent it, as source_process says
-                let Some(received) = (unsafe { receive_from_browser(msg) }) else {
+                let Some(received) = (unsafe { receive_from_browser(message) }) else {
                     debug!("[IPC Renderer] failed to extract message");
                     return 1;
                 };
@@ -389,13 +346,8 @@ wrap_render_process_handler! {
                 return 1;
             }
 
-            let browser_ref = browser.as_deref();
-            let frame_ref = frame.as_deref();
-            let message_ref = message.as_deref();
             for delegate in &self.delegates {
-                if delegate.on_process_message_received(
-                    browser_ref, frame_ref, source_process, message_ref,
-                ) != 0 {
+                if delegate.on_process_message_received(browser, frame, source_process, message) != 0 {
                     return 1;
                 }
             }
@@ -421,14 +373,10 @@ wrap_render_process_handler! {
 /// cannot create the function.
 fn set_function(object: &V8Value, name: &str, mut handler: V8Handler) -> bool {
     let name = CefString::from(name);
-    let Some(mut function) = v8_value_create_function(Some(&name), Some(&mut handler)) else {
+    let Some(mut function) = v8_value_create_function(&name, &mut handler) else {
         return false;
     };
-    object.set_value_bykey(
-        Some(&name),
-        Some(&mut function),
-        V8Propertyattribute::default(),
-    );
+    object.set_value_bykey(Some(&name), &mut function, V8Propertyattribute::default());
     true
 }
 
@@ -438,15 +386,15 @@ wrap_v8_handler! {
     impl V8Handler {
         fn execute(
             &self,
-            _name: Option<&CefString>,
-            _object: Option<&mut V8Value>,
-            arguments: Option<&[Option<V8Value>]>,
-            retval: Option<&mut Option<V8Value>>,
-            exception: Option<&mut CefString>,
+            _name: &CefString,
+            _object: &mut V8Value,
+            arguments: &[Option<V8Value>],
+            retval: &mut Option<V8Value>,
+            exception: &mut CefString,
         ) -> i32 {
             // args must be present
             let args = match arguments {
-                Some(a) if !a.is_empty() => a,
+                a if !a.is_empty() => a,
                 _ => {
                     return throw(exception, "invoke requires at least a command argument");
                 }
@@ -509,7 +457,7 @@ wrap_v8_handler! {
             };
             promise_for_retval.set_value_bykey(
                 Some(&id_key),
-                Some(&mut id_value),
+                &mut id_value,
                 V8Propertyattribute::default(),
             );
 
@@ -556,14 +504,12 @@ wrap_v8_handler! {
 
             if let Err(unsent) = sent {
                 with_state(|state| state.forget(id));
-                promise.reject_promise(Some(&unsent.rejection()));
-                if let Some(ret) = retval { *ret = Some(promise_for_retval); }
+                promise.reject_promise(&unsent.rejection());
+                *retval = Some(promise_for_retval);
                 return 1;
             }
 
-            if let Some(ret) = retval {
-                *ret = Some(promise_for_retval);
-            }
+            *retval = Some(promise_for_retval);
 
             1
         }
@@ -580,14 +526,14 @@ wrap_v8_handler! {
     impl V8Handler {
         fn execute(
             &self,
-            _name: Option<&CefString>,
-            _object: Option<&mut V8Value>,
-            arguments: Option<&[Option<V8Value>]>,
-            retval: Option<&mut Option<V8Value>>,
-            exception: Option<&mut CefString>,
+            _name: &CefString,
+            _object: &mut V8Value,
+            arguments: &[Option<V8Value>],
+            retval: &mut Option<V8Value>,
+            exception: &mut CefString,
         ) -> i32 {
             let args = match arguments {
-                Some(a) if !a.is_empty() => a,
+                a if !a.is_empty() => a,
                 _ => {
                     return throw(exception, "cancel requires an id argument");
                 }
@@ -601,14 +547,14 @@ wrap_v8_handler! {
             };
 
             let Some(context) = v8_context_get_current_context() else {
-                if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
+                *retval = v8_value_create_bool(0);
                 return 1;
             };
             // Only the context that made a request can cancel it
             let (cancelled, sender) =
                 with_state(|state| (state.cancel(id, &context), state.sender(&context)));
             let (Some((promise, sub)), Some((flags, frame_id))) = (cancelled, sender) else {
-                if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
+                *retval = v8_value_create_bool(0);
                 return 1;
             };
 
@@ -636,10 +582,8 @@ wrap_v8_handler! {
             // already. Entering it again here, inside a checkpoint its own
             // exit runs, would stop the page's microtasks
             let reject_msg = rejection(ErrorCode::Handler.wire(), "Canceled");
-            promise.reject_promise(Some(&reject_msg));
-            if let Some(ret) = retval {
-                *ret = v8_value_create_bool(1);
-            }
+            promise.reject_promise(&reject_msg);
+            *retval = v8_value_create_bool(1);
 
             1
         }
@@ -656,11 +600,11 @@ wrap_v8_handler! {
     impl V8Handler {
         fn execute(
             &self,
-            _name: Option<&CefString>,
-            _object: Option<&mut V8Value>,
-            _arguments: Option<&[Option<V8Value>]>,
-            _retval: Option<&mut Option<V8Value>>,
-            _exception: Option<&mut CefString>,
+            _name: &CefString,
+            _object: &mut V8Value,
+            _arguments: &[Option<V8Value>],
+            _retval: &mut Option<V8Value>,
+            _exception: &mut CefString,
         ) -> i32 {
             let Some(context) = v8_context_get_current_context() else {
                 return 1;
@@ -684,11 +628,11 @@ wrap_v8_handler! {
     impl V8Handler {
         fn execute(
             &self,
-            _name: Option<&CefString>,
-            _object: Option<&mut V8Value>,
-            _arguments: Option<&[Option<V8Value>]>,
-            _retval: Option<&mut Option<V8Value>>,
-            _exception: Option<&mut CefString>,
+            _name: &CefString,
+            _object: &mut V8Value,
+            _arguments: &[Option<V8Value>],
+            _retval: &mut Option<V8Value>,
+            _exception: &mut CefString,
         ) -> i32 {
             let Some(context) = v8_context_get_current_context() else {
                 return 1;
@@ -720,12 +664,12 @@ wrap_v8_handler! {
                 } else {
                     send(SUB_STREAM, STREAM_CANCEL, id, &[]);
                 }
-                promise.reject_promise(Some(&left));
+                promise.reject_promise(&left);
             }
             for (id, on_error) in returned.streams {
                 send(SUB_STREAM, STREAM_CANCEL, id, &[]);
                 let message = v8_value_create_string(Some(&CefString::from("The page left")));
-                on_error.execute_function(None, Some(&[message]));
+                on_error.execute_function(None, &[message]);
             }
             // A subscription the browser kept takes the same id again
             for (id, event) in returned.subscriptions {
@@ -749,14 +693,14 @@ wrap_v8_handler! {
     impl V8Handler {
         fn execute(
             &self,
-            _name: Option<&CefString>,
-            _object: Option<&mut V8Value>,
-            arguments: Option<&[Option<V8Value>]>,
-            retval: Option<&mut Option<V8Value>>,
-            exception: Option<&mut CefString>,
+            _name: &CefString,
+            _object: &mut V8Value,
+            arguments: &[Option<V8Value>],
+            retval: &mut Option<V8Value>,
+            exception: &mut CefString,
         ) -> i32 {
             let args = match arguments {
-                Some(a) if a.len() >= 2 => a,
+                a if a.len() >= 2 => a,
                 _ => {
                     return throw(
                         exception,
@@ -829,9 +773,7 @@ wrap_v8_handler! {
 
             debug!("[IPC Renderer] event on '{}' id={}", event_name, id);
 
-            if let Some(ret) = retval {
-                *ret = v8_value_create_uint(id as u32);
-            }
+            *retval = v8_value_create_uint(id as u32);
 
             1
         }
@@ -848,14 +790,14 @@ wrap_v8_handler! {
     impl V8Handler {
         fn execute(
             &self,
-            _name: Option<&CefString>,
-            _object: Option<&mut V8Value>,
-            arguments: Option<&[Option<V8Value>]>,
-            retval: Option<&mut Option<V8Value>>,
-            exception: Option<&mut CefString>,
+            _name: &CefString,
+            _object: &mut V8Value,
+            arguments: &[Option<V8Value>],
+            retval: &mut Option<V8Value>,
+            exception: &mut CefString,
         ) -> i32 {
             let args = match arguments {
-                Some(a) if !a.is_empty() => a,
+                a if !a.is_empty() => a,
                 _ => {
                     return throw(exception, "off requires an id argument");
                 }
@@ -896,9 +838,7 @@ wrap_v8_handler! {
                 renderer_outbox::send(&frame, &frame_id, &envelope, &[&payload]);
             }
 
-            if let Some(ret) = retval {
-                *ret = v8_value_create_bool(if was_valid { 1 } else { 0 });
-            }
+            *retval = v8_value_create_bool(if was_valid { 1 } else { 0 });
             1
         }
     }
@@ -914,14 +854,14 @@ wrap_v8_handler! {
     impl V8Handler {
         fn execute(
             &self,
-            _name: Option<&CefString>,
-            _object: Option<&mut V8Value>,
-            arguments: Option<&[Option<V8Value>]>,
-            retval: Option<&mut Option<V8Value>>,
-            exception: Option<&mut CefString>,
+            _name: &CefString,
+            _object: &mut V8Value,
+            arguments: &[Option<V8Value>],
+            retval: &mut Option<V8Value>,
+            exception: &mut CefString,
         ) -> i32 {
             let args = match arguments {
-                Some(a) if !a.is_empty() => a,
+                a if !a.is_empty() => a,
                 _ => {
                     return throw(exception, "openStream requires a handler name argument");
                 }
@@ -998,15 +938,13 @@ wrap_v8_handler! {
             };
             if let Err(unsent) = sent {
                 with_state(|state| state.forget(stream_id));
-                promise.reject_promise(Some(&unsent.rejection()));
+                promise.reject_promise(&unsent.rejection());
             }
 
             // The promise settles when the browser answers the open:
             // STREAM_BROWSER_OPENED resolves it, STREAM_BROWSER_ERROR rejects it
 
-            if let Some(ret) = retval {
-                *ret = Some(promise);
-            }
+            *retval = Some(promise);
 
             1
         }
@@ -1023,14 +961,14 @@ wrap_v8_handler! {
     impl V8Handler {
         fn execute(
             &self,
-            _name: Option<&CefString>,
-            _object: Option<&mut V8Value>,
-            arguments: Option<&[Option<V8Value>]>,
-            retval: Option<&mut Option<V8Value>>,
-            exception: Option<&mut CefString>,
+            _name: &CefString,
+            _object: &mut V8Value,
+            arguments: &[Option<V8Value>],
+            retval: &mut Option<V8Value>,
+            exception: &mut CefString,
         ) -> i32 {
             let args = match arguments {
-                Some(a) if a.len() >= 2 => a,
+                a if a.len() >= 2 => a,
                 _ => {
                     return throw(exception, "writeStream(streamId, ArrayBuffer)");
                 }
@@ -1071,7 +1009,7 @@ wrap_v8_handler! {
                 state.owns_stream(stream_id, &context).then(|| state.sender(&context)).flatten()
             });
             let Some((flags, frame_id)) = sender else {
-                if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
+                *retval = v8_value_create_bool(0);
                 return 1;
             };
 
@@ -1086,9 +1024,7 @@ wrap_v8_handler! {
 
             send_buffer(&frame, &frame_id, &envelope, &[], buffer, view);
 
-            if let Some(ret) = retval {
-                *ret = v8_value_create_uint(1);
-            }
+            *retval = v8_value_create_uint(1);
 
             1
         }
@@ -1105,14 +1041,14 @@ wrap_v8_handler! {
     impl V8Handler {
         fn execute(
             &self,
-            _name: Option<&CefString>,
-            _object: Option<&mut V8Value>,
-            arguments: Option<&[Option<V8Value>]>,
-            retval: Option<&mut Option<V8Value>>,
-            exception: Option<&mut CefString>,
+            _name: &CefString,
+            _object: &mut V8Value,
+            arguments: &[Option<V8Value>],
+            retval: &mut Option<V8Value>,
+            exception: &mut CefString,
         ) -> i32 {
             let args = match arguments {
-                Some(a) if !a.is_empty() => a,
+                a if !a.is_empty() => a,
                 _ => {
                     return throw(exception, "endStream requires a streamId argument");
                 }
@@ -1148,7 +1084,7 @@ wrap_v8_handler! {
                 state.owns_stream(stream_id, &context).then(|| state.sender(&context)).flatten()
             });
             let Some((flags, frame_id)) = sender else {
-                if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
+                *retval = v8_value_create_bool(0);
                 return 1;
             };
 
@@ -1165,9 +1101,7 @@ wrap_v8_handler! {
 
             renderer_outbox::send(&frame, &frame_id, &envelope, &[payload]);
 
-            if let Some(ret) = retval {
-                *ret = v8_value_create_uint(1);
-            }
+            *retval = v8_value_create_uint(1);
 
             1
         }
@@ -1184,14 +1118,14 @@ wrap_v8_handler! {
     impl V8Handler {
         fn execute(
             &self,
-            _name: Option<&CefString>,
-            _object: Option<&mut V8Value>,
-            arguments: Option<&[Option<V8Value>]>,
-            retval: Option<&mut Option<V8Value>>,
-            exception: Option<&mut CefString>,
+            _name: &CefString,
+            _object: &mut V8Value,
+            arguments: &[Option<V8Value>],
+            retval: &mut Option<V8Value>,
+            exception: &mut CefString,
         ) -> i32 {
             let args = match arguments {
-                Some(a) if !a.is_empty() => a,
+                a if !a.is_empty() => a,
                 _ => {
                     return throw(exception, "errorStream requires a streamId argument");
                 }
@@ -1229,7 +1163,7 @@ wrap_v8_handler! {
                 state.fail_stream(stream_id, &context).then(|| state.sender(&context)).flatten()
             });
             let Some((flags, frame_id)) = sender else {
-                if let Some(ret) = retval { *ret = v8_value_create_bool(0); }
+                *retval = v8_value_create_bool(0);
                 return 1;
             };
 
@@ -1244,9 +1178,7 @@ wrap_v8_handler! {
 
             renderer_outbox::send(&frame, &frame_id, &envelope, &[message.as_bytes()]);
 
-            if let Some(ret) = retval {
-                *ret = v8_value_create_uint(1);
-            }
+            *retval = v8_value_create_uint(1);
 
             1
         }
@@ -1256,7 +1188,7 @@ wrap_v8_handler! {
 /// Sends the browser a message without a body, named `name`, after the
 /// page's messages.
 fn tell_browser(frame: &Frame, name: &str) {
-    if let Some(mut message) = process_message_create(Some(&CefString::from(name))) {
+    if let Some(mut message) = process_message_create(&CefString::from(name)) {
         renderer_outbox::send_after(frame, &FrameId::of(frame), &mut message);
     }
 }

@@ -88,10 +88,10 @@ impl SecondInstance {
     /// Copies out the launch CEF handed over.
     pub(crate) fn from_launch(command_line: &CommandLine, working_dir: Option<&CefString>) -> Self {
         let mut args = CefStringList::new();
-        command_line.arguments(Some(&mut args));
+        command_line.arguments(&mut args);
 
         let mut switches = CefStringMap::new();
-        command_line.switches(Some(&mut switches));
+        command_line.switches(&mut switches);
 
         Self {
             args: args.into_iter().collect(),
@@ -174,51 +174,35 @@ pub trait ClientAppRendererDelegate: Send + Sync {
     fn on_web_kit_initialized(&self) {}
 
     /// Invoked when a renderer-side browser instance is created.
-    fn on_browser_created(
-        &self,
-        _browser: Option<&Browser>,
-        _extra_info: Option<&DictionaryValue>,
-    ) {
-    }
+    fn on_browser_created(&self, _browser: &Browser, _extra_info: Option<&DictionaryValue>) {}
 
     /// Invoked before a renderer-side browser instance is destroyed.
-    fn on_browser_destroyed(&self, _browser: Option<&Browser>) {}
+    fn on_browser_destroyed(&self, _browser: &Browser) {}
 
     /// Invoked when a JavaScript execution context is created.
     ///
     /// Kurogane's built-in IPC bridge has already been installed when this callback is dispatched.
-    fn on_context_created(
-        &self,
-        _browser: Option<&Browser>,
-        _frame: Option<&Frame>,
-        _context: Option<&V8Context>,
-    ) {
-    }
+    fn on_context_created(&self, _browser: &Browser, _frame: &Frame, _context: &V8Context) {}
 
     /// Invoked when a JavaScript execution context is released.
-    fn on_context_released(
-        &self,
-        _browser: Option<&Browser>,
-        _frame: Option<&Frame>,
-        _context: Option<&V8Context>,
-    ) {
-    }
+    fn on_context_released(&self, _browser: &Browser, _frame: &Frame, _context: &V8Context) {}
 
     /// Invoked when an uncaught JavaScript exception occurs.
     fn on_uncaught_exception(
         &self,
-        _browser: Option<&Browser>,
-        _frame: Option<&Frame>,
-        _context: Option<&V8Context>,
-        _exception: Option<&V8Exception>,
-        _stack_trace: Option<&V8StackTrace>,
+        _browser: &Browser,
+        _frame: &Frame,
+        _context: &V8Context,
+        _exception: &V8Exception,
+        _stack_trace: &V8StackTrace,
     ) {
     }
 
-    /// Invoked when the focused DOM node changes.
+    /// Invoked when the focused DOM node changes. `frame` and `node` are none
+    /// when the focus leaves the page's nodes.
     fn on_focused_node_changed(
         &self,
-        _browser: Option<&Browser>,
+        _browser: &Browser,
         _frame: Option<&Frame>,
         _node: Option<&Domnode>,
     ) {
@@ -231,10 +215,10 @@ pub trait ClientAppRendererDelegate: Send + Sync {
     /// later delegates.
     fn on_process_message_received(
         &self,
-        _browser: Option<&Browser>,
-        _frame: Option<&Frame>,
+        _browser: &Browser,
+        _frame: &Frame,
         _source_process: ProcessId,
-        _message: Option<&ProcessMessage>,
+        _message: &ProcessMessage,
     ) -> i32 {
         0
     }
@@ -1884,7 +1868,7 @@ mod tests {
             &self,
             _: Option<&mut Browser>,
             _: Option<&mut Frame>,
-            _: Option<&mut Request>,
+            _: &mut Request,
         ) -> Option<ResourceHandler> {
             None
         }

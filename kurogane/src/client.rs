@@ -46,19 +46,19 @@ wrap_life_span_handler! {
         // opener's client.
         fn on_before_popup(
             &self,
-            browser: Option<&mut Browser>,
-            frame: Option<&mut Frame>,
+            browser: &mut Browser,
+            frame: &mut Frame,
             popup_id: i32,
             target_url: Option<&CefString>,
             _target_frame_name: Option<&CefString>,
             target_disposition: WindowOpenDisposition,
             user_gesture: i32,
-            popup_features: Option<&PopupFeatures>,
-            _window_info: Option<&mut WindowInfo>,
-            _client: Option<&mut Option<Client>>,
-            _settings: Option<&mut BrowserSettings>,
-            _extra_info: Option<&mut Option<DictionaryValue>>,
-            _no_javascript_access: Option<&mut i32>,
+            popup_features: &PopupFeatures,
+            _window_info: &mut WindowInfo,
+            _client: &mut Option<Client>,
+            _settings: &mut BrowserSettings,
+            _extra_info: &mut Option<DictionaryValue>,
+            _no_javascript_access: &mut i32,
         ) -> i32 {
             // Before the geometry is saved: CEF reports no abort for a popup
             // cancelled here
@@ -73,9 +73,9 @@ wrap_life_span_handler! {
             }
 
             let mut reg = self.app.registry();
-            let opener = browser.and_then(|browser| reg.browsers.find_id_by_browser(browser));
+            let opener = reg.browsers.find_id_by_browser(browser);
             if let Some(state) = opener.and_then(|id| reg.browsers.get_mut(id)) {
-                let requested = popup_features.and_then(PopupGeometry::requested);
+                let requested = PopupGeometry::requested(popup_features);
                 state.pending_popups.push(popup_id, requested);
                 // Let into the popup by its first navigation (crate::navigation)
                 state.opens_popup(popup_id, request.origin().clone());
@@ -83,9 +83,9 @@ wrap_life_span_handler! {
             0 // Allow the popup
         }
 
-        fn on_before_popup_aborted(&self, browser: Option<&mut Browser>, popup_id: i32) {
+        fn on_before_popup_aborted(&self, browser: &mut Browser, popup_id: i32) {
             let mut reg = self.app.registry();
-            let opener = browser.and_then(|browser| reg.browsers.find_id_by_browser(browser));
+            let opener = reg.browsers.find_id_by_browser(browser);
             if let Some(state) = opener.and_then(|id| reg.browsers.get_mut(id)) {
                 state.pending_popups.abort(popup_id);
                 state.popup_aborted(popup_id);
@@ -100,23 +100,18 @@ wrap_life_span_handler! {
         // own, and register as one of those
         fn on_before_dev_tools_popup(
             &self,
-            browser: Option<&mut Browser>,
-            _window_info: Option<&mut WindowInfo>,
-            client: Option<&mut Option<Client>>,
-            _settings: Option<&mut BrowserSettings>,
-            _extra_info: Option<&mut Option<DictionaryValue>>,
-            _use_default_window: Option<&mut i32>,
+            browser: &mut Browser,
+            _window_info: &mut WindowInfo,
+            client: &mut Option<Client>,
+            _settings: &mut BrowserSettings,
+            _extra_info: &mut Option<DictionaryValue>,
+            _use_default_window: &mut i32,
         ) {
-            let inspects = browser.and_then(|browser| self.app.registry().browsers.find_id_by_browser(browser));
-            if let Some(client) = client {
-                *client = Some(KuroganeClient::new(self.app.clone(), self.browser_type, inspects));
-            }
+            let inspects = self.app.registry().browsers.find_id_by_browser(browser);
+            *client = Some(KuroganeClient::new(self.app.clone(), self.browser_type, inspects));
         }
 
-        fn on_after_created(&self, browser: Option<&mut Browser>) {
-            let Some(browser) = browser else {
-                return;
-            };
+        fn on_after_created(&self, browser: &mut Browser) {
             debug!("on_after_created cef_id={}", browser.identifier());
 
             let mut reg = self.app.registry();
@@ -162,20 +157,15 @@ wrap_life_span_handler! {
         //
         // Linux keeps CEF's default, which closes the browser's X window.
         #[cfg(any(target_os = "windows", target_os = "macos"))]
-        fn do_close(&self, browser: Option<&mut Browser>) -> ::std::os::raw::c_int {
-            match browser {
-                // If the task cannot be posted, fall back to CEF's default.
-                Some(browser) if browser.is_popup() == 0 => {
-                    crate::platform::embed::destroy_child_window_later(browser).into()
-                }
-                _ => 0,
+        fn do_close(&self, browser: &mut Browser) -> ::std::os::raw::c_int {
+            if browser.is_popup() != 0 {
+                return 0;
             }
+            // If the task cannot be posted, fall back to CEF's default.
+            crate::platform::embed::destroy_child_window_later(browser).into()
         }
 
-        fn on_before_close(&self, browser: Option<&mut Browser>) {
-            let Some(browser) = browser else {
-                return;
-            };
+        fn on_before_close(&self, browser: &mut Browser) {
             debug!("on_before_close cef_id={}", browser.identifier());
 
             // The browser, its window's link and an application window's
@@ -229,15 +219,15 @@ fn has_qualifier(transition: TransitionType, flag: TransitionType) -> bool {
 
 /// A page's request, made in `frame`, for a window showing `target_url`.
 fn new_window_request(
-    frame: Option<&mut Frame>,
+    frame: &Frame,
     target_url: Option<&CefString>,
     disposition: WindowOpenDisposition,
     user_gesture: i32,
 ) -> NewWindowRequest {
-    let opener_url = frame.map(|frame| CefString::from(&frame.url()).to_string());
+    let opener_url = CefString::from(&frame.url()).to_string();
     NewWindowRequest::new(
         target_url.map(CefString::to_string).unwrap_or_default(),
-        opener_url.as_deref().unwrap_or_default(),
+        &opener_url,
     )
     .with_user_gesture(user_gesture != 0)
     .with_kind(new_window_kind(disposition))
@@ -288,15 +278,12 @@ wrap_request_handler! {
         // Where a page may take the window it is in (crate::navigation)
         fn on_before_browse(
             &self,
-            browser: Option<&mut Browser>,
-            frame: Option<&mut Frame>,
-            request: Option<&mut Request>,
+            browser: &mut Browser,
+            frame: &mut Frame,
+            request: &mut Request,
             user_gesture: i32,
             is_redirect: i32,
         ) -> i32 {
-            let (Some(browser), Some(frame), Some(request)) = (browser, frame, request) else {
-                return 0;
-            };
             let url = CefString::from(&request.url()).to_string();
             let transition = request.transition_type();
             debug!(
@@ -372,16 +359,16 @@ wrap_request_handler! {
         // has none
         fn on_open_urlfrom_tab(
             &self,
-            _browser: Option<&mut Browser>,
-            frame: Option<&mut Frame>,
-            target_url: Option<&CefString>,
+            _browser: &mut Browser,
+            frame: &mut Frame,
+            target_url: &CefString,
             target_disposition: WindowOpenDisposition,
             user_gesture: i32,
         ) -> i32 {
             if !opens_new_window(target_disposition) {
                 return 0;
             }
-            let request = new_window_request(frame, target_url, target_disposition, user_gesture);
+            let request = new_window_request(frame, Some(target_url), target_disposition, user_gesture);
             match new_window::decide(&self.app, &request) {
                 // A window of the application's own, as create_window's
                 // with no options
@@ -414,18 +401,18 @@ wrap_keyboard_handler! {
     impl KeyboardHandler {
         fn on_pre_key_event(
             &self,
-            browser: Option<&mut Browser>,
-            event: Option<&KeyEvent>,
+            browser: &mut Browser,
+            event: &KeyEvent,
             _os_event: Option<&mut sys::MSG>,
-            is_keyboard_shortcut: Option<&mut i32>,
+            is_keyboard_shortcut: &mut i32,
         ) -> i32 {
             pre_key_event(&self.app, browser, event, is_keyboard_shortcut)
         }
 
         fn on_key_event(
             &self,
-            browser: Option<&mut Browser>,
-            event: Option<&KeyEvent>,
+            browser: &mut Browser,
+            event: &KeyEvent,
             _os_event: Option<&mut sys::MSG>,
         ) -> i32 {
             key_event(&self.app, browser, event)
@@ -442,18 +429,18 @@ wrap_keyboard_handler! {
     impl KeyboardHandler {
         fn on_pre_key_event(
             &self,
-            browser: Option<&mut Browser>,
-            event: Option<&KeyEvent>,
+            browser: &mut Browser,
+            event: &KeyEvent,
             _os_event: Option<&mut sys::XEvent>,
-            is_keyboard_shortcut: Option<&mut i32>,
+            is_keyboard_shortcut: &mut i32,
         ) -> i32 {
             pre_key_event(&self.app, browser, event, is_keyboard_shortcut)
         }
 
         fn on_key_event(
             &self,
-            browser: Option<&mut Browser>,
-            event: Option<&KeyEvent>,
+            browser: &mut Browser,
+            event: &KeyEvent,
             _os_event: Option<&mut sys::XEvent>,
         ) -> i32 {
             key_event(&self.app, browser, event)
@@ -470,18 +457,18 @@ wrap_keyboard_handler! {
     impl KeyboardHandler {
         fn on_pre_key_event(
             &self,
-            browser: Option<&mut Browser>,
-            event: Option<&KeyEvent>,
+            browser: &mut Browser,
+            event: &KeyEvent,
             _os_event: *mut u8,
-            is_keyboard_shortcut: Option<&mut i32>,
+            is_keyboard_shortcut: &mut i32,
         ) -> i32 {
             pre_key_event(&self.app, browser, event, is_keyboard_shortcut)
         }
 
         fn on_key_event(
             &self,
-            browser: Option<&mut Browser>,
-            event: Option<&KeyEvent>,
+            browser: &mut Browser,
+            event: &KeyEvent,
             _os_event: *mut u8,
         ) -> i32 {
             key_event(&self.app, browser, event)
@@ -542,13 +529,10 @@ fn key_press(event: &KeyEvent, browser: Option<BrowserId>) -> KeyPress {
 /// place in a window of Chromium's (crate::shortcuts).
 fn pre_key_event(
     app: &AppHandle,
-    browser: Option<&mut Browser>,
-    event: Option<&KeyEvent>,
-    is_keyboard_shortcut: Option<&mut i32>,
+    browser: &Browser,
+    event: &KeyEvent,
+    is_keyboard_shortcut: &mut i32,
 ) -> i32 {
-    let (Some(browser), Some(event)) = (browser, event) else {
-        return 0;
-    };
     if event.type_ != KeyEventType::RAWKEYDOWN {
         return 0;
     }
@@ -575,10 +559,7 @@ fn pre_key_event(
 
 /// Runs Kurogane's shortcut in Chromium's place for a key the page let
 /// through in a window of Chromium's (crate::shortcuts).
-fn key_event(app: &AppHandle, browser: Option<&mut Browser>, event: Option<&KeyEvent>) -> i32 {
-    let (Some(browser), Some(event)) = (browser, event) else {
-        return 0;
-    };
+fn key_event(app: &AppHandle, browser: &Browser, event: &KeyEvent) -> i32 {
     if event.type_ != KeyEventType::RAWKEYDOWN {
         return 0;
     }
@@ -613,14 +594,12 @@ fn run_shortcut(browser: &Browser, name: &CStr) -> bool {
 /// whether the key is handled. `is_keyboard_shortcut` says whether it is a
 /// shortcut that CEF holds until the page has seen the key. A key whose
 /// shortcut ran is handled.
-fn answer_key(route: Route, is_keyboard_shortcut: Option<&mut i32>) -> i32 {
+fn answer_key(route: Route, is_keyboard_shortcut: &mut i32) -> i32 {
     match route {
         Route::Taken | Route::Run(_) => 1,
         Route::On => 0,
         Route::PageFirst => {
-            if let Some(shortcut) = is_keyboard_shortcut {
-                *shortcut = 1;
-            }
+            *is_keyboard_shortcut = 1;
             0
         }
     }
@@ -639,9 +618,9 @@ wrap_download_handler! {
         // tanso's default 0 would cancel every download
         fn can_download(
             &self,
-            _browser: Option<&mut Browser>,
-            _url: Option<&CefString>,
-            _request_method: Option<&CefString>,
+            _browser: &mut Browser,
+            _url: &CefString,
+            _request_method: &CefString,
         ) -> i32 {
             1
         }
@@ -651,24 +630,21 @@ wrap_download_handler! {
         // path answers 1
         fn on_before_download(
             &self,
-            browser: Option<&mut Browser>,
-            download_item: Option<&mut DownloadItem>,
-            suggested_name: Option<&CefString>,
-            callback: Option<&mut BeforeDownloadCallback>,
+            browser: &mut Browser,
+            item: &mut DownloadItem,
+            suggested_name: &CefString,
+            callback: &mut BeforeDownloadCallback,
         ) -> i32 {
-            let (Some(browser), Some(item), Some(callback)) = (browser, download_item, callback) else {
-                return 1;
-            };
             let page_url = browser
                 .main_frame()
                 .map(|frame| CefString::from(&frame.url()).to_string())
                 .unwrap_or_default();
             // The guard ends with the call, before the hook runs
-            let (id, ask) = app_browser(&self.app, Some(browser));
+            let (id, ask) = app_browser(&self.app, browser);
             let request = DownloadRequest::new(
                 CefString::from(&item.url()).to_string(),
                 &page_url,
-                suggested_name.map(CefString::to_string).unwrap_or_default(),
+                suggested_name.to_string(),
                 CefString::from(&item.mime_type()).to_string(),
                 id,
             );
@@ -711,13 +687,10 @@ wrap_download_handler! {
 
         fn on_download_updated(
             &self,
-            browser: Option<&mut Browser>,
-            download_item: Option<&mut DownloadItem>,
-            callback: Option<&mut DownloadItemCallback>,
+            browser: &mut Browser,
+            item: &mut DownloadItem,
+            callback: &mut DownloadItemCallback,
         ) {
-            let Some(item) = download_item else {
-                return;
-            };
             let path = CefString::from(&item.full_path()).to_string();
             debug!(
                 "[download] {} complete={} canceled={} interrupted={} reason={:?} path={path}",
@@ -732,12 +705,13 @@ wrap_download_handler! {
             // A refused download is cancelled; one asking the user keeps
             // what cancels it, should the user dismiss its dialog
             // (downloads::Downloads). The guard ends with the block
-            let cancel = browser.and_then(|browser| {
+            let cancel = {
                 let mut reg = self.app.registry();
-                let id = reg.browsers.find_id_by_browser(browser)?;
-                let state = reg.browsers.get_mut(id)?;
-                state.downloads.update(item.id(), callback.as_deref().cloned(), ended)
-            });
+                reg.browsers
+                    .find_id_by_browser(browser)
+                    .and_then(|id| reg.browsers.get_mut(id))
+                    .and_then(|state| state.downloads.update(item.id(), Some(callback.clone()), ended))
+            };
             if let Some(cancel) = cancel {
                 debug!("[download] {} refused: cancelling", item.id());
                 cancel.cancel();
@@ -778,7 +752,7 @@ fn ask_where(
         None,
         Some(&name),
         Some(&mut filters),
-        Some(&mut answer),
+        &mut answer,
     );
 }
 
@@ -874,24 +848,20 @@ wrap_permission_handler! {
         // pending forever in an embedded browser
         fn on_show_permission_prompt(
             &self,
-            browser: Option<&mut Browser>,
+            browser: &mut Browser,
             prompt_id: u64,
-            requesting_origin: Option<&CefString>,
+            requesting_origin: &CefString,
             requested_permissions: u32,
-            callback: Option<&mut PermissionPromptCallback>,
+            callback: &mut PermissionPromptCallback,
         ) -> i32 {
-            let origin = requesting_origin.map(CefString::to_string).unwrap_or_default();
+            let origin = requesting_origin.to_string();
             debug!("[permission] prompt {prompt_id} for {origin}: {requested_permissions:#x}");
-            // CEF always passes one
-            let Some(callback) = callback else {
-                return 0;
-            };
             if downloads::grants_prompt(requested_permissions) {
                 debug!("multiple downloads granted to {origin}");
                 callback.cont(permissions::prompt_result(true));
                 return 1;
             }
-            let (id, ask) = app_browser(&self.app, browser.as_deref());
+            let (id, ask) = app_browser(&self.app, browser);
             let request = PermissionRequest::prompt(&self.app, &origin, requested_permissions, id);
             let allow = match permissions::decide(&self.app, &request, ask) {
                 PermissionAnswer::Allow => true,
@@ -915,19 +885,15 @@ wrap_permission_handler! {
         // request is answered, as every prompt is
         fn on_request_media_access_permission(
             &self,
-            browser: Option<&mut Browser>,
-            frame: Option<&mut Frame>,
-            requesting_origin: Option<&CefString>,
+            browser: &mut Browser,
+            frame: &mut Frame,
+            requesting_origin: &CefString,
             requested_permissions: u32,
-            callback: Option<&mut MediaAccessCallback>,
+            callback: &mut MediaAccessCallback,
         ) -> i32 {
-            let origin = requesting_origin.map(CefString::to_string).unwrap_or_default();
+            let origin = requesting_origin.to_string();
             debug!("[permission] media for {origin}: {requested_permissions:#x}");
-            // CEF always passes one
-            let Some(callback) = callback else {
-                return 0;
-            };
-            let (id, ask) = app_browser(&self.app, browser.as_deref());
+            let (id, ask) = app_browser(&self.app, browser);
             let request = PermissionRequest::media(&self.app, &origin, requested_permissions, id);
             let allow = match permissions::decide(&self.app, &request, ask) {
                 PermissionAnswer::Allow => true,
@@ -936,7 +902,7 @@ wrap_permission_handler! {
                     let pending = Pending::Media {
                         callback: callback.clone(),
                         requested: requested_permissions,
-                        frame: frame.as_deref().cloned(),
+                        frame: Some(frame.clone()),
                     };
                     match permissions::hold(&self.app, id, request.id(), pending) {
                         Ok(()) => return 1,
@@ -952,17 +918,19 @@ wrap_permission_handler! {
         // when a request waiting for the application's answer goes too
         fn on_dismiss_permission_prompt(
             &self,
-            browser: Option<&mut Browser>,
+            browser: &mut Browser,
             prompt_id: u64,
             result: PermissionRequestResult,
         ) {
             debug!("[permission] prompt {prompt_id} ended: {result:?}");
             // The guard ends with the block; what it took goes after it
-            let ended = browser.and_then(|browser| {
+            let ended = {
                 let mut reg = self.app.registry();
-                let id = reg.browsers.find_id_by_browser(browser)?;
-                reg.browsers.get_mut(id)?.permissions.prompt_ended(prompt_id)
-            });
+                reg.browsers
+                    .find_id_by_browser(browser)
+                    .and_then(|id| reg.browsers.get_mut(id))
+                    .and_then(|state| state.permissions.prompt_ended(prompt_id))
+            };
             drop(ended);
         }
     }
@@ -971,9 +939,9 @@ wrap_permission_handler! {
 /// Returns the id of `browser` and whether it is the application's.
 /// Chromium's own browsers (DevTools' included) are not. Their requests
 /// never reach the application's hooks.
-fn app_browser(app: &AppHandle, browser: Option<&Browser>) -> (Option<BrowserId>, bool) {
+fn app_browser(app: &AppHandle, browser: &Browser) -> (Option<BrowserId>, bool) {
     let reg = app.registry();
-    let id = browser.and_then(|browser| reg.browsers.find_id_by_browser(browser));
+    let id = reg.browsers.find_id_by_browser(browser);
     let kind = id
         .and_then(|id| reg.browsers.get(id))
         .map(|state| state.metadata.browser_type);
@@ -996,33 +964,27 @@ wrap_context_menu_handler! {
         // application's browsers; DevTools' keep their own
         fn on_before_context_menu(
             &self,
-            browser: Option<&mut Browser>,
-            frame: Option<&mut Frame>,
-            params: Option<&mut ContextMenuParams>,
-            model: Option<&mut MenuModel>,
+            browser: &mut Browser,
+            frame: &mut Frame,
+            params: &mut ContextMenuParams,
+            model: &mut MenuModel,
         ) {
-            let (Some(browser), Some(params), Some(model)) = (browser, params, model) else {
-                return;
-            };
-            let (id, ask) = app_browser(&self.app, Some(browser));
+            let (id, ask) = app_browser(&self.app, browser);
             if ask {
-                context_menu::build(&self.app, browser, frame.as_deref(), id, params, model);
+                context_menu::build(&self.app, browser, frame, id, params, model);
             }
         }
 
         // Only what Kurogane put in the menu runs
         fn on_context_menu_command(
             &self,
-            browser: Option<&mut Browser>,
-            _frame: Option<&mut Frame>,
-            _params: Option<&mut ContextMenuParams>,
+            browser: &mut Browser,
+            _frame: &mut Frame,
+            _params: &mut ContextMenuParams,
             command_id: i32,
             _event_flags: EventFlags,
         ) -> i32 {
-            let Some(browser) = browser else {
-                return 1;
-            };
-            let (id, ask) = app_browser(&self.app, Some(browser));
+            let (id, ask) = app_browser(&self.app, browser);
             if !ask {
                 return 0;
             }
@@ -1041,10 +1003,8 @@ wrap_frame_handler! {
 
     impl FrameHandler {
         // A frame's document ends with its last notification
-        fn on_frame_destroyed(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>) {
-            if let Some(frame) = frame {
-                self.app.router().frame_gone(frame);
-            }
+        fn on_frame_destroyed(&self, _browser: &mut Browser, frame: &mut Frame) {
+            self.app.router().frame_gone(frame);
         }
     }
 }
@@ -1060,13 +1020,10 @@ wrap_load_handler! {
     impl LoadHandler {
         fn on_load_start(
             &self,
-            browser: Option<&mut Browser>,
-            frame: Option<&mut Frame>,
+            browser: &mut Browser,
+            frame: &mut Frame,
             _transition_type: TransitionType,
         ) {
-            let (Some(browser), Some(frame)) = (browser, frame) else {
-                return;
-            };
             let u: CefString = (&frame.url()).into();
             debug!("[LoadHandler] START {}", u.to_string());
             // A browser the runtime does not know sends nothing it keeps
@@ -1078,26 +1035,24 @@ wrap_load_handler! {
 
         fn on_load_end(
             &self,
-            _browser: Option<&mut Browser>,
-            frame: Option<&mut Frame>,
+            _browser: &mut Browser,
+            frame: &mut Frame,
             http_status_code: i32,
         ) {
-            if let Some(f) = frame {
-                let u: CefString = (&f.url()).into();
-                debug!("[LoadHandler] END {} status={}", u.to_string(), http_status_code);
-            }
+            let u: CefString = (&frame.url()).into();
+            debug!("[LoadHandler] END {} status={}", u.to_string(), http_status_code);
         }
 
         fn on_load_error(
             &self,
-            _browser: Option<&mut Browser>,
-            _frame: Option<&mut Frame>,
+            _browser: &mut Browser,
+            _frame: &mut Frame,
             error_code: Errorcode,
             error_text: Option<&CefString>,
-            failed_url: Option<&CefString>,
+            failed_url: &CefString,
         ) {
             let err = error_text.map(|s| s.to_string()).unwrap_or_default();
-            let url = failed_url.map(|s| s.to_string()).unwrap_or_default();
+            let url = failed_url.to_string();
             debug!("[LoadHandler] ERROR {:?} '{}' {}", error_code, err, url);
         }
     }
@@ -1116,8 +1071,8 @@ wrap_display_handler! {
         // A window takes its page's title, as a browser tab does, unless the
         // application's options fixed one (crate::window). CEF never titles
         // a Views window by itself
-        fn on_title_change(&self, browser: Option<&mut Browser>, title: Option<&CefString>) {
-            let (Some(browser), Some(title)) = (browser, title) else {
+        fn on_title_change(&self, browser: &mut Browser, title: Option<&CefString>) {
+            let Some(title) = title else {
                 return;
             };
             // The guard ends with the block, before the window is titled
@@ -1148,12 +1103,9 @@ wrap_display_handler! {
         // style); the application hears of it
         fn on_fullscreen_mode_change(
             &self,
-            browser: Option<&mut Browser>,
+            browser: &mut Browser,
             fullscreen: ::std::os::raw::c_int,
         ) {
-            let Some(browser) = browser else {
-                return;
-            };
             // The guard ends with the statement
             let place = application_browser(&self.app.registry(), browser);
             if let Some((id, window)) = place {
@@ -1178,18 +1130,15 @@ wrap_dialog_handler! {
     impl DialogHandler {
         fn on_file_dialog(
             &self,
-            browser: Option<&mut Browser>,
+            browser: &mut Browser,
             mode: FileDialogMode,
             title: Option<&CefString>,
             default_file_path: Option<&CefString>,
             accept_filters: Option<&mut CefStringList>,
             _accept_extensions: Option<&mut CefStringList>,
             _accept_descriptions: Option<&mut CefStringList>,
-            callback: Option<&mut FileDialogCallback>,
+            callback: &mut FileDialogCallback,
         ) -> ::std::os::raw::c_int {
-            let (Some(browser), Some(callback)) = (browser, callback) else {
-                return 0;
-            };
             let Some(kind) = FileDialogKind::from_cef(mode) else {
                 return 0;
             };
@@ -1255,19 +1204,16 @@ wrap_drag_handler! {
     impl DragHandler {
         fn on_drag_enter(
             &self,
-            browser: Option<&mut Browser>,
-            drag_data: Option<&mut DragData>,
+            browser: &mut Browser,
+            data: &mut DragData,
             _mask: DragOperationsMask,
         ) -> ::std::os::raw::c_int {
-            let (Some(browser), Some(data)) = (browser, drag_data) else {
-                return 0;
-            };
             // The guard ends with the statement, before the hook runs
             let Some((id, _)) = application_browser(&self.app.registry(), browser) else {
                 return 0;
             };
             let mut paths = CefStringList::new();
-            let files = if data.is_file() != 0 && data.file_paths(Some(&mut paths)) != 0 {
+            let files = if data.is_file() != 0 && data.file_paths(&mut paths) != 0 {
                 paths.into_iter().filter_map(drag::non_empty).collect()
             } else {
                 Vec::new()
@@ -1318,13 +1264,13 @@ wrap_jsdialog_handler! {
         // until then Chromium asks the user
         fn on_before_unload_dialog(
             &self,
-            _browser: Option<&mut Browser>,
+            _browser: &mut Browser,
             _message_text: Option<&CefString>,
             _is_reload: ::std::os::raw::c_int,
-            callback: Option<&mut JsdialogCallback>,
+            callback: &mut JsdialogCallback,
         ) -> ::std::os::raw::c_int {
             match callback {
-                Some(callback) if self.app.is_ending() => {
+                callback if self.app.is_ending() => {
                     debug!("[Close] a page's beforeunload passed: the application is ending");
                     callback.cont(1, None);
                     1
@@ -1410,20 +1356,15 @@ wrap_client! {
 
         fn on_process_message_received(
             &self,
-            browser: Option<&mut Browser>,
-            frame: Option<&mut Frame>,
+            browser: &mut Browser,
+            frame: &mut Frame,
             source_process: ProcessId,
-            message: Option<&mut ProcessMessage>,
+            msg: &mut ProcessMessage,
         ) -> i32 {
             // Only handle messages from renderer
             if source_process != ProcessId::RENDERER {
                 return 0;
             }
-
-            let (Some(browser), Some(frame), Some(msg)) = (browser, frame, message) else {
-                debug!("[IPC Browser] message without a browser, frame or body");
-                return 0;
-            };
 
             // Renderer-controlled bytes drive everything below; a panic must
             // not unwind across this CEF callback and abort the process
@@ -1517,12 +1458,11 @@ mod tests {
             // 7 stands for whatever CEF passed in
             let mut is_keyboard_shortcut = 7;
             assert_eq!(
-                answer_key(route, Some(&mut is_keyboard_shortcut)),
+                answer_key(route, &mut is_keyboard_shortcut),
                 handled,
                 "{route:?}"
             );
             assert_eq!(is_keyboard_shortcut, shortcut, "{route:?}");
-            assert_eq!(answer_key(route, None), handled, "{route:?}");
         }
     }
 }

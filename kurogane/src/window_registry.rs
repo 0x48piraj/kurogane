@@ -201,13 +201,13 @@ impl WindowRegistry {
         match state {
             WindowState::Normal if SIZES_SETTLE => {
                 entry.settling = Some(Settling {
-                    bounds: bounds.clone(),
+                    bounds: *bounds,
                     generation,
                 });
                 Some(generation)
             }
             WindowState::Normal => {
-                entry.restored = Some(bounds.clone());
+                entry.restored = Some(*bounds);
                 None
             }
             WindowState::Minimized
@@ -241,7 +241,7 @@ impl WindowRegistry {
     pub fn closing(&mut self, id: WindowId) -> Option<Closing> {
         let entry = self.windows.get(&id)?;
         let (window, restored, shown) = match entry.kind {
-            WindowKind::Application => (entry.window.clone(), entry.restored.clone(), entry.shown),
+            WindowKind::Application => (entry.window.clone(), entry.restored, entry.shown),
             WindowKind::Popup => return None,
         };
         Some(Closing {

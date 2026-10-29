@@ -305,24 +305,24 @@ pub fn build_message_parts(envelope: &Envelope, parts: &[&[u8]]) -> Option<Proce
 /// value, the payload in a second. CEF converts every ListValue entry on
 /// both sides. Two entries cost less than an int per envelope field.
 fn build_inline_parts(envelope: &Envelope, parts: &[&[u8]]) -> Option<ProcessMessage> {
-    let msg = process_message_create(Some(&CefString::from(IPC_MESSAGE)))?;
+    let msg = process_message_create(&CefString::from(IPC_MESSAGE))?;
     let args = msg.argument_list()?;
 
     let mut header = binary_value_create(Some(&encode_envelope_bytes(envelope)))?;
-    args.set_binary(0, Some(&mut header));
+    args.set_binary(0, &mut header);
 
     let total_payload: usize = parts.iter().map(|p| p.len()).sum();
     if total_payload > 0 {
         if parts.len() == 1 {
             let mut binary = binary_value_create(Some(parts[0]))?;
-            args.set_binary(1, Some(&mut binary));
+            args.set_binary(1, &mut binary);
         } else {
             let mut buf = Vec::with_capacity(total_payload);
             for part in parts {
                 buf.extend_from_slice(part);
             }
             let mut binary = binary_value_create(Some(&buf))?;
-            args.set_binary(1, Some(&mut binary));
+            args.set_binary(1, &mut binary);
         }
     }
 
@@ -332,8 +332,7 @@ fn build_inline_parts(envelope: &Envelope, parts: &[&[u8]]) -> Option<ProcessMes
 fn build_shm_parts(envelope: &Envelope, parts: &[&[u8]]) -> Option<ProcessMessage> {
     let total_payload: usize = parts.iter().map(|p| p.len()).sum();
     let total_size = ENVELOPE_SIZE + total_payload;
-    let builder =
-        shared_process_message_builder_create(Some(&CefString::from(IPC_MESSAGE)), total_size)?;
+    let builder = shared_process_message_builder_create(&CefString::from(IPC_MESSAGE), total_size)?;
     if builder.is_valid() == 0 {
         return None;
     }

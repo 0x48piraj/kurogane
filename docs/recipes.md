@@ -1283,7 +1283,7 @@ impl SchemeHandler for VirtualFile {
         &self,
         _browser: Option<&mut Browser>,
         _frame: Option<&mut Frame>,
-        _request: Option<&mut Request>,
+        _request: &mut Request,
     ) -> Option<ResourceHandler> {
         Some(resource_handler_from_bytes(
             b"hello from the data scheme".to_vec(),
@@ -1469,12 +1469,7 @@ use kurogane::tanso::{Browser, Frame, V8Context};
 struct RendererDelegate;
 
 impl kurogane::ClientAppRendererDelegate for RendererDelegate {
-    fn on_context_created(
-        &self,
-        _browser: Option<&Browser>,
-        _frame: Option<&Frame>,
-        _context: Option<&V8Context>,
-    ) {
+    fn on_context_created(&self, _browser: &Browser, _frame: &Frame, _context: &V8Context) {
         println!("context created");
     }
 }

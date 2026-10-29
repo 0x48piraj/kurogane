@@ -47,7 +47,7 @@ fn on_refused(addressed: &FrameId, envelope: &Envelope, payload: &[u8]) -> bool 
         return true;
     }
     let text = v8_value_create_string(Some(&rejection(code, &message)));
-    on_error.execute_function(None, Some(&[text]));
+    on_error.execute_function(None, &[text]);
     context.exit();
     true
 }
@@ -82,7 +82,7 @@ fn on_emit(
         let text = String::from_utf8_lossy(data);
         v8_value_create_string(Some(&CefString::from(text.as_ref())))
     };
-    callback.execute_function(None, Some(&[value]));
+    callback.execute_function(None, &[value]);
     context.exit();
     true
 }

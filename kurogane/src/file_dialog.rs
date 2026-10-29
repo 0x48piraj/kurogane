@@ -240,7 +240,7 @@ impl Ticket {
             return;
         }
         let mut task = AnswerTask::new(app, browser, self.id, files);
-        if post_task(ThreadId::UI, Some(&mut task)) == 0 {
+        if post_task(ThreadId::UI, &mut task) == 0 {
             debug!(
                 "[file dialog] CEF refused the answer to request {}",
                 self.id

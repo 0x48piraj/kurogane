@@ -20,7 +20,7 @@ pub fn array_buffer(data: &[u8], filled: Option<V8BackingStore>) -> Option<V8Val
             "a filled store of another length"
         );
         if store.byte_length() == data.len() {
-            return v8_value_create_array_buffer_from_backing_store(Some(&mut store));
+            return v8_value_create_array_buffer_from_backing_store(&mut store);
         }
     }
     v8_value_create_array_buffer_from_bytes(data)

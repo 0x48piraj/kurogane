@@ -737,7 +737,7 @@ impl Document {
             .map(|main| CefString::from(&main.identifier()).to_string());
         let frame_there = self.frame.as_ref().is_none_or(|id| {
             browser
-                .frame_by_identifier(Some(&CefString::from(id.as_str())))
+                .frame_by_identifier(&CefString::from(id.as_str()))
                 .is_some_and(|frame| frame.is_valid() != 0)
         });
         main == self.main && frame_there
@@ -814,11 +814,11 @@ impl Render<'_> {
                     let label = CefString::from(app.label.as_str());
                     match app.checked {
                         Some(checked) => {
-                            model.add_check_item(id, Some(&label));
+                            model.add_check_item(id, &label);
                             model.set_checked(id, checked as c_int);
                         }
                         None => {
-                            model.add_item(id, Some(&label));
+                            model.add_item(id, &label);
                         }
                     }
                     model.set_enabled(id, app.enabled as c_int);
@@ -827,7 +827,7 @@ impl Render<'_> {
                 MenuItem::Submenu(submenu) => {
                     let Some(id) = self.user_id() else { return };
                     let label = CefString::from(submenu.label.as_str());
-                    if let Some(child) = model.add_sub_menu(id, Some(&label)) {
+                    if let Some(child) = model.add_sub_menu(id, &label) {
                         self.add(&child, &submenu.items);
                     }
                 }
@@ -844,7 +844,7 @@ impl Render<'_> {
         };
         if let Some(kept) = kept {
             for kept in kept {
-                model.add_item(kept.id, Some(&CefString::from(kept.label.as_str())));
+                model.add_item(kept.id, &CefString::from(kept.label.as_str()));
                 model.set_enabled(kept.id, kept.enabled as c_int);
                 self.commands.push((kept.id, Chosen::Standard(item)));
             }
@@ -862,7 +862,7 @@ impl Render<'_> {
                 return;
             }
         };
-        model.add_item(id, Some(&CefString::from(label(item).as_str())));
+        model.add_item(id, &CefString::from(label(item).as_str()));
         model.set_enabled(id, enabled(item, self.edit, self.browser) as c_int);
         self.commands.push((id, Chosen::Standard(item)));
     }
@@ -948,7 +948,7 @@ fn edit_flags(params: &ContextMenuParams) -> i64 {
 pub(crate) fn build(
     app: &AppHandle,
     browser: &Browser,
-    frame: Option<&Frame>,
+    frame: &Frame,
     id: Option<BrowserId>,
     params: &ContextMenuParams,
     model: &MenuModel,
@@ -970,16 +970,15 @@ pub(crate) fn build(
     };
     let mut target = target_of(params, id);
     // A sandboxed document's own origin is opaque, whatever its URL says
-    let opaque = frame.is_some_and(|frame| {
-        let frame = FrameId::of(frame);
-        id.and_then(|id| {
+    let frame_id = FrameId::of(frame);
+    let opaque = id
+        .and_then(|id| {
             app.registry()
                 .browsers
                 .get(id)
-                .map(|state| state.opaque_documents.contains(&frame))
+                .map(|state| state.opaque_documents.contains(&frame_id))
         })
-        .unwrap_or(false)
-    });
+        .unwrap_or(false);
     if opaque {
         target.origin = Origin::OPAQUE;
     }
@@ -1048,7 +1047,7 @@ pub(crate) fn build(
         style,
         commands: render.commands,
         target,
-        document: Document::of(browser, frame),
+        document: Document::of(browser, Some(frame)),
     };
     if let Some(id) = id
         && let Some(state) = app.registry().browsers.get_mut(id)

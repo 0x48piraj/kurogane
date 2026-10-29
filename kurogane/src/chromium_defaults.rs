@@ -74,20 +74,15 @@ pub(crate) fn apply_flag_defaults(flags: &mut ChromiumFlags) {
 }
 
 /// Registers global preference [`SET_LAST_START`].
-pub(crate) fn register_preferences(
-    kind: PreferencesType,
-    registrar: Option<&mut PreferenceRegistrar>,
-) {
+pub(crate) fn register_preferences(kind: PreferencesType, registrar: &mut PreferenceRegistrar) {
     if kind != PreferencesType::GLOBAL {
         return;
     }
-    let (Some(registrar), Some(mut empty), Some(mut list)) =
-        (registrar, value_create(), list_value_create())
-    else {
+    let (Some(mut empty), Some(mut list)) = (value_create(), list_value_create()) else {
         return;
     };
-    empty.set_list(Some(&mut list));
-    if registrar.add_preference(Some(&CefString::from(SET_LAST_START)), Some(&mut empty)) == 0 {
+    empty.set_list(&mut list);
+    if registrar.add_preference(&CefString::from(SET_LAST_START), &mut empty) == 0 {
         warn!("Chromium refused Kurogane's preference {SET_LAST_START}");
     }
 }
@@ -138,7 +133,7 @@ fn resolved(
 /// Returns the names of the preferences Kurogane set at the last start.
 fn set_last_start() -> Vec<String> {
     let Some(list) = preference_manager_get_global()
-        .and_then(|global| global.preference(Some(&CefString::from(SET_LAST_START))))
+        .and_then(|global| global.preference(&CefString::from(SET_LAST_START)))
         .and_then(|value| value.list())
     else {
         return Vec::new();
@@ -162,13 +157,13 @@ fn set_preference(name: &str, value: &Json) {
     let mut error = CefString::default();
 
     let set = if let Some(context) = request_context_get_global_context()
-        && context.has_preference(Some(&key)) != 0
+        && context.has_preference(&key) != 0
     {
-        context.set_preference(Some(&key), cef.as_mut(), Some(&mut error))
+        context.set_preference(&key, cef.as_mut(), &mut error)
     } else if let Some(global) = preference_manager_get_global()
-        && global.has_preference(Some(&key)) != 0
+        && global.has_preference(&key) != 0
     {
-        global.set_preference(Some(&key), cef.as_mut(), Some(&mut error))
+        global.set_preference(&key, cef.as_mut(), &mut error)
     } else {
         warn!("Chromium has no preference {name}");
         return;
@@ -193,19 +188,16 @@ fn cef_value(json: &Json) -> Option<Value> {
         Json::Array(items) => {
             let mut list = list_value_create()?;
             for (index, item) in items.iter().enumerate() {
-                list.set_value(index, Some(&mut cef_value(item)?));
+                list.set_value(index, &mut cef_value(item)?);
             }
-            value.set_list(Some(&mut list))
+            value.set_list(&mut list)
         }
         Json::Object(entries) => {
             let mut dictionary = dictionary_value_create()?;
             for (key, item) in entries {
-                dictionary.set_value(
-                    Some(&CefString::from(key.as_str())),
-                    Some(&mut cef_value(item)?),
-                );
+                dictionary.set_value(&CefString::from(key.as_str()), &mut cef_value(item)?);
             }
-            value.set_dictionary(Some(&mut dictionary))
+            value.set_dictionary(&mut dictionary)
         }
     };
     Some(value)
