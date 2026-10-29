@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use tanso::{Browser, DownloadItemCallback, ImplBrowser, RequestContext};
+use tanso::{Browser, DownloadItemCallback, ImplBrowser};
 use tracing::debug;
 use crate::acl::Origin;
 use crate::downloads::{Downloads, SavePrompt};
@@ -38,8 +38,6 @@ pub enum BrowserType {
     Popup,
     /// Chromium's developer tools. Its parent is the browser it inspects.
     DevTools,
-    #[allow(dead_code)]
-    Osr,
     /// A browser Chromium opened on its own, such as a window restored from an
     /// earlier session. It closes with the application rather than keeping
     /// it running.
@@ -66,8 +64,6 @@ pub struct BrowserMetadata {
 pub(crate) struct BrowserEntry {
     pub browser: Browser,
     pub metadata: BrowserMetadata,
-    #[allow(dead_code)]
-    pub request_context: Option<RequestContext>,
     /// Popups this browser opened that are not shown yet; they go with it
     pub pending_popups: PendingPopups,
     /// Origins let into this browser besides the application's own. The
@@ -164,7 +160,7 @@ impl BrowserRegistry {
     ) -> BrowserId {
         match self.find_id_by_browser(browser) {
             Some(id) => id,
-            None => self.insert(browser.clone(), browser_type, parent_id, None),
+            None => self.insert(browser.clone(), browser_type, parent_id),
         }
     }
 
@@ -187,7 +183,6 @@ impl BrowserRegistry {
         browser: Browser,
         browser_type: BrowserType,
         parent_id: Option<BrowserId>,
-        request_context: Option<RequestContext>,
     ) -> BrowserId {
         let id = BrowserId(self.next_id);
         self.next_id += 1;
@@ -201,7 +196,6 @@ impl BrowserRegistry {
                 opener_id: parent_id,
                 created_at: std::time::Instant::now(),
             },
-            request_context,
             pending_popups: PendingPopups::default(),
             admitted: Vec::new(),
             popup_origins: Vec::new(),
@@ -282,15 +276,6 @@ impl BrowserRegistry {
         self.browsers
             .iter()
             .filter(|(_, s)| s.metadata.parent_id == Some(parent_id))
-            .map(|(id, _)| *id)
-            .collect()
-    }
-
-    #[allow(dead_code)]
-    pub fn by_type(&self, browser_type: BrowserType) -> Vec<BrowserId> {
-        self.browsers
-            .iter()
-            .filter(|(_, s)| s.metadata.browser_type == browser_type)
             .map(|(id, _)| *id)
             .collect()
     }

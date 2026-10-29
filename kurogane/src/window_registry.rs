@@ -176,18 +176,8 @@ impl WindowRegistry {
         self.windows.len()
     }
 
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.windows.is_empty()
-    }
-
     pub fn get(&self, id: WindowId) -> Option<&WindowEntry> {
         self.windows.get(&id)
-    }
-
-    #[allow(dead_code)]
-    pub fn get_mut(&mut self, id: WindowId) -> Option<&mut WindowEntry> {
-        self.windows.get_mut(&id)
     }
 
     /// Records that window `id` restores to `bounds` (crate::window).
@@ -311,11 +301,6 @@ impl WindowRegistry {
 
     pub fn browser_for_window(&self, id: WindowId) -> Option<BrowserId> {
         self.windows.get(&id).and_then(|s| s.browser_id)
-    }
-
-    #[allow(dead_code)]
-    pub fn metadata(&self, id: WindowId) -> Option<WindowMetadata> {
-        self.windows.get(&id).map(|s| s.metadata.clone())
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&WindowId, &WindowEntry)> {
