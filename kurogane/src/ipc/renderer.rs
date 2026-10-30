@@ -668,7 +668,6 @@ wrap_v8_handler! {
             let left = rejection(ErrorCode::Left.wire(), "The page left");
             for (id, subsystem, promise) in returned.requests {
                 if subsystem == SUB_RPC {
-                    renderer_outbox::answered(&frame_id, id as u32);
                     send(SUB_RPC, RPC_CANCEL, id, &[]);
                 } else {
                     send(SUB_STREAM, STREAM_CANCEL, id, &[]);

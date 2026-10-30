@@ -129,6 +129,11 @@ pub(crate) fn send(
 pub(crate) fn leaving(frame: &Frame, frame_id: &FrameId, leaving: bool) {
     with_outbox(frame, frame_id, |outbox| {
         outbox.leaving = leaving;
+        // A page back from the back-forward cache has nothing in flight.
+        // What it sent ended with its document and no close is sure to come
+        if !leaving {
+            outbox.pacing = Pacing::default();
+        }
         outbox.send_queue();
     });
 }
