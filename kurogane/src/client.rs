@@ -6,7 +6,7 @@ use std::path::Path;
 use tanso::*;
 use tracing::{debug, warn};
 use crate::runtime::AppHandle;
-use crate::browser_registry::{BrowserId, BrowserType};
+use crate::browser_registry::{BrowserId, BrowserType, Rendering};
 use crate::chrome_commands::KuroganeCommandHandler;
 use crate::context_menu;
 use crate::destination::{Outcome, is_blank, is_chromium_page};
@@ -17,6 +17,7 @@ use crate::navigation::{self, NavigationRequest};
 use crate::drag::{self, DragEnter};
 use crate::file_dialog::{self, FileDialogKind, FileDialogRequest};
 use crate::new_window::{self, NewWindowKind, NewWindowRequest};
+use crate::offscreen::{MouseCursor, OffscreenClient, OffscreenEvent};
 use crate::page_events::{self, FullscreenChange, TitleChange};
 use crate::permissions::{self, Answer as PermissionAnswer, Pending, PermissionRequest};
 use crate::window::{Opening, PopupGeometry, open_browser_window};
@@ -28,6 +29,36 @@ const DIRECT_LOAD: TransitionType = TransitionType::DIRECT_LOAD_FLAG;
 /// Back or forward through the browser's history (cef_types.h)
 const FORWARD_BACK: TransitionType = TransitionType::FORWARD_BACK_FLAG;
 
+/// Where a client's browsers draw, popups and DevTools aside.
+#[derive(Clone)]
+pub(crate) enum Surface {
+    Window,
+    Embedded,
+    Offscreen(OffscreenClient),
+}
+
+impl Surface {
+    /// How a browser of this client draws, opened by `browser_type`, a popup
+    /// when `popup`.
+    fn rendering(&self, browser_type: BrowserType, popup: bool) -> Rendering {
+        match self {
+            // Popups, DevTools and Chromium's own browsers open windows
+            _ if popup || browser_type != BrowserType::Main => Rendering::Window,
+            Self::Window => Rendering::Window,
+            Self::Embedded => Rendering::Embedded,
+            Self::Offscreen(_) => Rendering::Offscreen,
+        }
+    }
+
+    /// The offscreen browser's state, for an offscreen client.
+    fn offscreen(&self) -> Option<&OffscreenClient> {
+        match self {
+            Self::Offscreen(offscreen) => Some(offscreen),
+            Self::Window | Self::Embedded => None,
+        }
+    }
+}
+
 //
 // LifeSpanHandler
 //
@@ -38,6 +69,7 @@ wrap_life_span_handler! {
         browser_type: BrowserType,
         // For DevTools, the browser it inspects
         inspects: Option<BrowserId>,
+        surface: Surface,
     }
 
     impl LifeSpanHandler {
@@ -64,6 +96,11 @@ wrap_life_span_handler! {
             // cancelled here
             let request = new_window_request(frame, target_url, target_disposition, user_gesture);
             match new_window::decide(&self.app, &request) {
+                // An offscreen page opens no window of its own
+                Outcome::Open if self.surface.offscreen().is_some() => {
+                    debug!("refused a popup of offscreen browser cef_id={}", browser.identifier());
+                    return 1;
+                }
                 Outcome::Open => {}
                 Outcome::External => {
                     crate::external::open(request.url());
@@ -108,7 +145,7 @@ wrap_life_span_handler! {
             _use_default_window: &mut i32,
         ) {
             let inspects = self.app.registry().browsers.find_id_by_browser(browser);
-            *client = Some(KuroganeClient::new(self.app.clone(), self.browser_type, inspects));
+            *client = Some(KuroganeClient::new(self.app.clone(), self.browser_type, inspects, Surface::Window));
         }
 
         fn on_after_created(&self, browser: &mut Browser) {
@@ -132,8 +169,9 @@ wrap_life_span_handler! {
                 }
                 browser_type => (browser_type, None),
             };
+            let rendering = self.surface.rendering(browser_type, browser.is_popup() != 0);
 
-            reg.browsers.ensure_registered(browser, browser_type, opener);
+            reg.browsers.ensure_registered(browser, browser_type, opener, rendering);
             drop(reg);
 
             // A browser CEF was already creating when a mandatory end began
@@ -158,7 +196,8 @@ wrap_life_span_handler! {
         // Linux keeps CEF's default, which closes the browser's X window.
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         fn do_close(&self, browser: &mut Browser) -> ::std::os::raw::c_int {
-            if browser.is_popup() != 0 {
+            // An offscreen browser has no window to destroy
+            if browser.is_popup() != 0 || self.surface.offscreen().is_some() {
                 return 0;
             }
             // If the task cannot be posted, fall back to CEF's default.
@@ -173,6 +212,10 @@ wrap_life_span_handler! {
             // here, its window still there. The guard ends with this
             // statement, before anything below calls CEF
             let closed = self.app.registry().browser_closed(browser);
+            // Its frames end and its host hears of it, registered or not
+            if let Some(offscreen) = self.surface.offscreen() {
+                offscreen.closed();
+            }
             let Some(mut closed) = closed else {
                 return;
             };
@@ -210,6 +253,20 @@ wrap_life_span_handler! {
             }
         }
     }
+}
+
+/// Sends the cursor CEF names to the host of an offscreen browser. Returns
+/// whether it is handled, which keeps CEF from setting it on a window.
+fn offscreen_cursor(
+    offscreen: Option<&OffscreenClient>,
+    kind: CursorType,
+    info: &CursorInfo,
+) -> ::std::os::raw::c_int {
+    let Some(offscreen) = offscreen else {
+        return 0;
+    };
+    offscreen.push(OffscreenEvent::Cursor(MouseCursor::from_cef(kind, info)));
+    1
 }
 
 /// Whether `transition` carries the qualifier `flag`.
@@ -1065,9 +1122,53 @@ wrap_load_handler! {
 wrap_display_handler! {
     pub struct KuroganeDisplayHandler {
         app: AppHandle,
+        // The host of an offscreen browser, which shows its cursor and tooltip
+        offscreen: Option<OffscreenClient>,
     }
 
     impl DisplayHandler {
+        fn on_tooltip(&self, _browser: &mut Browser, text: Option<&mut CefString>) -> ::std::os::raw::c_int {
+            let Some(offscreen) = &self.offscreen else {
+                return 0;
+            };
+            let text = text.map(|text| text.to_string()).filter(|text| !text.is_empty());
+            offscreen.push(OffscreenEvent::Tooltip(text));
+            1
+        }
+
+        #[cfg(target_os = "windows")]
+        fn on_cursor_change(
+            &self,
+            _browser: &mut Browser,
+            _cursor: sys::HCURSOR,
+            type_: CursorType,
+            custom_cursor_info: &CursorInfo,
+        ) -> ::std::os::raw::c_int {
+            offscreen_cursor(self.offscreen.as_ref(), type_, custom_cursor_info)
+        }
+
+        #[cfg(target_os = "linux")]
+        fn on_cursor_change(
+            &self,
+            _browser: &mut Browser,
+            _cursor: ::std::os::raw::c_ulong,
+            type_: CursorType,
+            custom_cursor_info: &CursorInfo,
+        ) -> ::std::os::raw::c_int {
+            offscreen_cursor(self.offscreen.as_ref(), type_, custom_cursor_info)
+        }
+
+        #[cfg(target_os = "macos")]
+        fn on_cursor_change(
+            &self,
+            _browser: &mut Browser,
+            _cursor: *mut u8,
+            type_: CursorType,
+            custom_cursor_info: &CursorInfo,
+        ) -> ::std::os::raw::c_int {
+            offscreen_cursor(self.offscreen.as_ref(), type_, custom_cursor_info)
+        }
+
         // A window takes its page's title, as a browser tab does, unless the
         // application's options fixed one (crate::window). CEF never titles
         // a Views window by itself
@@ -1291,6 +1392,7 @@ wrap_client! {
         browser_type: BrowserType,
         // For DevTools, the browser it inspects (on_before_dev_tools_popup)
         inspects: Option<BrowserId>,
+        surface: Surface,
     }
 
     impl Client {
@@ -1299,7 +1401,12 @@ wrap_client! {
         }
 
         fn display_handler(&self) -> Option<DisplayHandler> {
-            Some(KuroganeDisplayHandler::new(self.app.clone()))
+            Some(KuroganeDisplayHandler::new(self.app.clone(), self.surface.offscreen().cloned()))
+        }
+
+        // Only for an offscreen browser, which CEF asks on every paint
+        fn render_handler(&self) -> Option<RenderHandler> {
+            self.surface.offscreen().map(OffscreenClient::render_handler)
         }
 
         fn download_handler(&self) -> Option<DownloadHandler> {
@@ -1351,7 +1458,7 @@ wrap_client! {
         }
 
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
-            Some(KuroganeLifeSpanHandler::new(self.app.clone(), self.browser_type, self.inspects))
+            Some(KuroganeLifeSpanHandler::new(self.app.clone(), self.browser_type, self.inspects, self.surface.clone()))
         }
 
         fn on_process_message_received(

@@ -32,10 +32,27 @@ const MAX_PUMP_DELAY: Duration = Duration::from_millis(1000 / 30);
 pub fn start(
     wake: impl Fn() + Send + Sync + 'static,
 ) -> Result<(AppInstance, PumpSchedule), RuntimeError> {
-    let (request, requests) = mpsc::channel();
-    let runtime = App::new("embedding/frontend")
+    start_app(app(), wake)
+}
+
+/// Returns the application of the page and its commands, not yet started.
+pub fn app() -> App {
+    App::new("embedding/frontend")
         .command("host.ping", ping)
         .command("host.report", report)
+}
+
+/// Starts `app` embedded; see [`start`].
+///
+/// # Errors
+///
+/// As [`App::start_embedded`].
+pub fn start_app(
+    app: App,
+    wake: impl Fn() + Send + Sync + 'static,
+) -> Result<(AppInstance, PumpSchedule), RuntimeError> {
+    let (request, requests) = mpsc::channel();
+    let runtime = app
         .scheduler(move |pump: PumpRequest| {
             // The schedule reads the deadline; the wake only ends the wait
             if request.send(pump.deadline(Instant::now())).is_ok() {

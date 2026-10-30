@@ -26,6 +26,7 @@ mod client;
 mod hooks;
 mod destination;
 mod new_window;
+mod offscreen;
 mod navigation;
 mod keys;
 mod shortcuts;
@@ -56,7 +57,7 @@ pub use runtime::{AppInstance, AppHandle, BrowserBounds, BrowserHandle};
 pub use window_options::{WindowOptions, WindowPlacement, WindowState};
 pub use window_closing::WindowClosing;
 pub use runtime::is_browser_process;
-pub use browser_registry::{BrowserId, BrowserMetadata, BrowserType};
+pub use browser_registry::{BrowserId, BrowserMetadata, BrowserType, Rendering};
 pub use window_registry::{WindowId, WindowMetadata};
 pub use gpu::GpuMode;
 pub use credentials::CredentialStorage;
@@ -83,6 +84,12 @@ pub mod __private {
 pub use crate::ipc::{BinaryResponder, ErrorCode, IpcError, Responder, StreamHandler, StreamResponder};
 pub use app::{PumpRequest, ClientAppBrowserDelegate, ClientAppRendererDelegate, SecondInstance};
 pub use new_window::{NewWindowDecision, NewWindowKind, NewWindowRequest};
+#[cfg(target_os = "linux")]
+pub use offscreen::DmabufPlane;
+pub use offscreen::{
+    CursorImage, Layer, MouseCursor, OffscreenBrowser, OffscreenEvent, OffscreenEvents,
+    OffscreenOptions, Pacing, PixelFrame, PixelRect, SharedTextureFrame, TextureFormat,
+};
 pub use navigation::{NavigationDecision, NavigationRequest};
 pub use keys::{Key, KeyDecision, KeyPress, Modifiers};
 pub use chrome_commands::{ChromeCommand, ChromeCommandRequest, CommandDecision};

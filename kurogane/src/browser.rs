@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::runtime::AppHandle;
 use crate::spec::{RuntimeSpec, RuntimeMode};
 use crate::browser_registry::BrowserType;
-use crate::client::KuroganeClient;
+use crate::client::{KuroganeClient, Surface};
 use crate::window::{Opening, open_browser_window};
 use crate::app::{PumpRequest, SecondInstance};
 use tracing::{debug, error};
@@ -114,7 +114,8 @@ impl KuroganeBrowserProcessHandler {
     /// CEF requests the handler from multiple threads. Keep one handler and
     /// its state for the lifetime of the process.
     pub(crate) fn create(app: AppHandle, spec: RuntimeSpec) -> BrowserProcessHandler {
-        let chrome_ui_client = KuroganeClient::new(app.clone(), BrowserType::ChromeUi, None);
+        let chrome_ui_client =
+            KuroganeClient::new(app.clone(), BrowserType::ChromeUi, None, Surface::Window);
         Self::new(app, spec, chrome_ui_client)
     }
 }

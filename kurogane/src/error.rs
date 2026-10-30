@@ -110,6 +110,15 @@ pub enum RuntimeError {
     /// OpenGL picks a visual of its own unless told otherwise.
     UnsupportedParentVisual,
 
+    /// [`AppInstance::create_offscreen_browser`](crate::AppInstance::create_offscreen_browser)
+    /// was called in an application started without
+    /// [`App::offscreen`](crate::App::offscreen).
+    OffscreenNotEnabled,
+
+    /// [`AppInstance::create_offscreen_browser`](crate::AppInstance::create_offscreen_browser)
+    /// was given options no offscreen browser can have, named here.
+    InvalidOffscreenOptions(&'static str),
+
     /// The requested sandbox cannot be enforced on this platform or layout.
     SandboxUnsupported { reason: String },
 
@@ -356,6 +365,15 @@ impl Display for RuntimeError {
                 write!(f, "Invalid window options: {problem}.")
             }
 
+            RuntimeError::OffscreenNotEnabled => write!(
+                f,
+                "Offscreen browsers need App::offscreen, called before the application starts."
+            ),
+
+            RuntimeError::InvalidOffscreenOptions(problem) => {
+                write!(f, "Invalid offscreen options: {problem}.")
+            }
+
             RuntimeError::WindowNameTaken { name, window } => write!(
                 f,
                 "The window named {name:?} is still open (window {}); the name is free once it closes.",
@@ -447,6 +465,8 @@ impl std::error::Error for RuntimeError {
             | RuntimeError::ShuttingDown
             | RuntimeError::UnsupportedParentWindow
             | RuntimeError::UnsupportedParentVisual
+            | RuntimeError::OffscreenNotEnabled
+            | RuntimeError::InvalidOffscreenOptions(_)
             | RuntimeError::SandboxUnsupported { .. }
             | RuntimeError::SandboxUnavailable { .. }
             | RuntimeError::InvalidConfiguration(_) => None,

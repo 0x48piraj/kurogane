@@ -260,6 +260,7 @@ pub struct App {
     profile_dir: Option<PathBuf>,
     sandbox_mode: SandboxMode,
     gpu_mode: GpuMode,
+    offscreen: bool,
     credential_storage: CredentialStorage,
     chromium_flags: Vec<ChromiumFlag>,
     chromium_prefs: Vec<(String, Value)>,
@@ -303,6 +304,7 @@ impl App {
             profile_dir: None,
             sandbox_mode: SandboxMode::default(),
             gpu_mode: GpuMode::Auto,
+            offscreen: false,
             credential_storage: CredentialStorage::System,
             chromium_flags: Vec::new(),
             chromium_prefs: Vec::new(),
@@ -1410,6 +1412,17 @@ impl App {
         self
     }
 
+    /// Turns on offscreen browsers, which
+    /// [`AppInstance::create_offscreen_browser`](crate::AppInstance::create_offscreen_browser)
+    /// creates.
+    ///
+    /// CEF takes windowless rendering at startup only. An application that
+    /// creates no offscreen browser leaves it off.
+    pub fn offscreen(mut self) -> Self {
+        self.offscreen = true;
+        self
+    }
+
     /// Override how cookies and saved passwords are protected at rest.
     ///
     /// Defaults to the platform credential store. `CredentialStorage::Basic`
@@ -1608,6 +1621,7 @@ impl App {
             profile_dir,
             sandbox_mode,
             gpu_mode,
+            offscreen,
             credential_storage,
             chromium_flags,
             chromium_prefs,
@@ -1640,6 +1654,7 @@ impl App {
             profile_id,
             profile_dir,
             gpu_mode,
+            offscreen,
             credential_storage,
             chromium_flags,
             chromium_prefs,

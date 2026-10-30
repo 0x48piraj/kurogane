@@ -44,6 +44,20 @@ pub enum BrowserType {
     ChromeUi,
 }
 
+/// Where a browser draws its pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Rendering {
+    /// A window of its own: Kurogane's, a popup's or DevTools'.
+    Window,
+    /// The application's own window, from
+    /// [`AppInstance::create_child_browser`](crate::AppInstance::create_child_browser).
+    Embedded,
+    /// Frames handed to the application, from
+    /// [`AppInstance::create_offscreen_browser`](crate::AppInstance::create_offscreen_browser).
+    Offscreen,
+}
+
 /// What the runtime knows about an open browser, from
 /// [`AppHandle::browsers`](crate::AppHandle::browsers).
 #[derive(Debug, Clone)]
@@ -52,6 +66,8 @@ pub struct BrowserMetadata {
     pub id: BrowserId,
     /// Kind of browser.
     pub browser_type: BrowserType,
+    /// Where the browser draws.
+    pub rendering: Rendering,
     /// Browser that opened a popup or that DevTools inspects. None for a
     /// `Main` or `ChromeUi` browser.
     pub parent_id: Option<BrowserId>,
@@ -157,10 +173,11 @@ impl BrowserRegistry {
         browser: &Browser,
         browser_type: BrowserType,
         parent_id: Option<BrowserId>,
+        rendering: Rendering,
     ) -> BrowserId {
         match self.find_id_by_browser(browser) {
             Some(id) => id,
-            None => self.insert(browser.clone(), browser_type, parent_id),
+            None => self.insert(browser.clone(), browser_type, parent_id, rendering),
         }
     }
 
@@ -183,6 +200,7 @@ impl BrowserRegistry {
         browser: Browser,
         browser_type: BrowserType,
         parent_id: Option<BrowserId>,
+        rendering: Rendering,
     ) -> BrowserId {
         let id = BrowserId(self.next_id);
         self.next_id += 1;
@@ -192,6 +210,7 @@ impl BrowserRegistry {
             metadata: BrowserMetadata {
                 id,
                 browser_type,
+                rendering,
                 parent_id,
                 opener_id: parent_id,
                 created_at: std::time::Instant::now(),

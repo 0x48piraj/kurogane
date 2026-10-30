@@ -57,6 +57,8 @@ pub(crate) struct RuntimeSpec {
     /// Where the profile is, when the application chose (App::profile_dir)
     pub profile_dir: Option<std::path::PathBuf>,
     pub gpu_mode: GpuMode,
+    /// Offscreen browsers are on (App::offscreen)
+    pub offscreen: bool,
     pub credential_storage: CredentialStorage,
     pub chromium_flags: Vec<ChromiumFlag>,
     /// Chromium preferences the application sets, in place of Kurogane's own

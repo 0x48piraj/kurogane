@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::acl::Origin;
 use crate::cef_app::KuroganeApp;
-use crate::client::KuroganeClient;
+use crate::client::{KuroganeClient, Surface};
 use crate::error::{CefLocation, RuntimeError};
 use crate::hooks::Hooks;
 use crate::browser_registry::{BrowserId, BrowserMetadata, BrowserType};
@@ -183,6 +183,7 @@ fn build_settings(
     layout: &RuntimeLayout,
     external_message_pump: bool,
     sandbox: SandboxMode,
+    offscreen: bool,
 ) -> Settings {
     // Use a persistent profile instead of CEF's default incognito mode
     // This enables cookies, storage APIs and service workers
@@ -195,6 +196,7 @@ fn build_settings(
         // an unclean exit
         persist_session_cookies: 0,
         no_sandbox: crate::sandbox::cef_no_sandbox(sandbox),
+        windowless_rendering_enabled: offscreen.into(),
         ..Default::default()
     };
 
@@ -457,6 +459,8 @@ pub(crate) struct RuntimeServices {
     hooks: Weak<Hooks>,
     /// What the system shows of every window Kurogane opens
     identity: WindowIdentity,
+    /// CEF renders windowless browsers (App::offscreen)
+    offscreen: bool,
 }
 
 impl RuntimeServices {
@@ -467,6 +471,7 @@ impl RuntimeServices {
         renderer_sandbox: RendererSandbox,
         hooks: Weak<Hooks>,
         identity: WindowIdentity,
+        offscreen: bool,
     ) -> Self {
         Self {
             router,
@@ -479,6 +484,7 @@ impl RuntimeServices {
             renderer_sandbox,
             hooks,
             identity,
+            offscreen,
         }
     }
 }
@@ -564,6 +570,11 @@ impl AppHandle {
         &self.services.identity
     }
 
+    /// Returns whether CEF renders windowless browsers (App::offscreen).
+    pub(crate) fn offscreen_enabled(&self) -> bool {
+        self.services.offscreen
+    }
+
     /// Returns whether a mandatory end has begun, after which no browser may
     /// open. That end is a forced close of every browser (see [`close_all`])
     /// or [`AppInstance::shutdown`], after which nothing may reach CEF at all.
@@ -624,7 +635,7 @@ impl AppHandle {
     /// such a call can only be the post of a close request. A post that races
     /// CefShutdown is outside CEF's contract; if it runs, CloseTask checks
     /// this flag again.
-    fn cef_is_down(&self) -> bool {
+    pub(crate) fn cef_is_down(&self) -> bool {
         self.services.cef_shut_down.load(Ordering::Acquire)
     }
 
@@ -866,6 +877,7 @@ impl AppHandle {
                 RendererSandbox::Sandboxed,
                 Weak::new(),
                 WindowIdentity::default(),
+                false,
             )),
         }
     }
@@ -916,8 +928,8 @@ fn parent_window(parent: &impl HasWindowHandle) -> Result<cef_window_handle_t, R
 /// the thread that started the application (CEF's UI thread) and panic
 /// elsewhere.
 pub struct BrowserHandle {
-    id: BrowserId,
-    app: AppHandle,
+    pub(crate) id: BrowserId,
+    pub(crate) app: AppHandle,
 }
 
 // By hand: the AppHandle it holds has no Debug
@@ -1324,6 +1336,31 @@ impl AppInstance {
         self.create_child_browser_impl(parent, bounds, url, Some(rc))
     }
 
+    /// Creates a browser without a window showing `url`, as `options` say
+    /// (see [`OffscreenOptions`](crate::OffscreenOptions)).
+    ///
+    /// Its frames go to the application, which draws them, sizes the browser
+    /// and shows or hides it. Works whether the application was started with
+    /// [`App::build`](crate::App::build) or
+    /// [`App::start_embedded`](crate::App::start_embedded). A popup its page
+    /// opens is refused.
+    ///
+    /// # Errors
+    ///
+    /// [`RuntimeError::OffscreenNotEnabled`] without
+    /// [`App::offscreen`](crate::App::offscreen);
+    /// [`RuntimeError::InvalidOffscreenOptions`] for options no offscreen
+    /// browser can have; [`RuntimeError::ShuttingDown`] once
+    /// [`AppHandle::shutdown`] has begun;
+    /// [`RuntimeError::BrowserCreationFailed`] when CEF creates no browser.
+    pub fn create_offscreen_browser(
+        &self,
+        url: &str,
+        options: crate::OffscreenOptions,
+    ) -> Result<crate::OffscreenBrowser, RuntimeError> {
+        crate::offscreen::create(&self.handle, url, options)
+    }
+
     fn create_child_browser_impl(
         &self,
         parent: &impl HasWindowHandle,
@@ -1353,7 +1390,12 @@ impl AppInstance {
             },
         );
 
-        let mut client = KuroganeClient::new(self.handle.clone(), BrowserType::Main, None);
+        let mut client = KuroganeClient::new(
+            self.handle.clone(),
+            BrowserType::Main,
+            None,
+            Surface::Embedded,
+        );
 
         let mut rc = request_context;
         let browser = browser_host_create_browser_sync(
@@ -1423,6 +1465,7 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
             RendererSandbox::of(spec.sandbox_mode),
             Arc::downgrade(&spec.hooks),
             spec.window_identity.clone(),
+            spec.offscreen,
         )),
     };
 
@@ -1442,7 +1485,12 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
     crate::platform::raise_open_file_limit();
 
     let external_message_pump = spec.scheduler.is_some();
-    let settings = build_settings(&layout, external_message_pump, spec.sandbox_mode);
+    let settings = build_settings(
+        &layout,
+        external_message_pump,
+        spec.sandbox_mode,
+        spec.offscreen,
+    );
 
     debug!("Initializing CEF");
 
@@ -1507,6 +1555,7 @@ pub(crate) fn start(spec: RuntimeSpec, router: IpcRouter) -> Result<AppInstance,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser_registry::Rendering;
 
     /// A host window whose handle is `raw`.
     struct HostWindow(RawWindowHandle);
@@ -1768,9 +1817,12 @@ mod tests {
             let (frame, frame_calls) = fake_frame();
             let (id, window_id) = {
                 let mut registry = app.registry();
-                let id = registry
-                    .browsers
-                    .ensure_registered(&browser, BrowserType::Main, None);
+                let id = registry.browsers.ensure_registered(
+                    &browser,
+                    BrowserType::Main,
+                    None,
+                    Rendering::Window,
+                );
                 let window_id = registry.windows.allocate_id();
                 registry.windows.insert(
                     window_id,
@@ -2018,9 +2070,12 @@ mod tests {
         let (window, _) = fake_window();
         let (id, window_id) = {
             let mut registry = app.registry();
-            let id = registry
-                .browsers
-                .ensure_registered(&browser, BrowserType::Main, None);
+            let id = registry.browsers.ensure_registered(
+                &browser,
+                BrowserType::Main,
+                None,
+                Rendering::Window,
+            );
             let window_id = registry.windows.allocate_id();
             registry.windows.insert(
                 window_id,
@@ -2055,9 +2110,12 @@ mod tests {
         let (window, _) = fake_window();
         let window_id = {
             let mut registry = app.registry();
-            let id = registry
-                .browsers
-                .ensure_registered(&browser, BrowserType::Main, None);
+            let id = registry.browsers.ensure_registered(
+                &browser,
+                BrowserType::Main,
+                None,
+                Rendering::Window,
+            );
             let window_id = registry
                 .windows
                 .allocate_named("main")

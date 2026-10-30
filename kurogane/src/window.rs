@@ -8,9 +8,9 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 
 use tracing::{debug, warn};
-use crate::browser_registry::{BrowserId, BrowserType};
+use crate::browser_registry::{BrowserId, BrowserType, Rendering};
 use crate::cef_string::owned_by_cef;
-use crate::client::KuroganeClient;
+use crate::client::{KuroganeClient, Surface};
 use crate::error::RuntimeError;
 use crate::runtime::AppHandle;
 use crate::window_options::{WindowOptions, WindowState};
@@ -720,7 +720,7 @@ wrap_browser_view_delegate! {
                 .app
                 .registry()
                 .browsers
-                .ensure_registered(browser, BrowserType::Main, None);
+                .ensure_registered(browser, BrowserType::Main, None, Rendering::Window);
 
             if self.app.registry().windows.link(window_id, browser_id) {
                 debug!(
@@ -764,7 +764,7 @@ wrap_browser_view_delegate! {
             let browser_type = if is_devtools != 0 { BrowserType::DevTools } else { BrowserType::Popup };
             let browser_id = popup_browser_view.browser().map(|browser| {
                 let mut reg = self.app.registry();
-                let id = reg.browsers.ensure_registered(&browser, browser_type, parent_id);
+                let id = reg.browsers.ensure_registered(&browser, browser_type, parent_id, Rendering::Window);
                 reg.browsers.classify(id, browser_type, parent_id);
                 debug!("[BrowserViewDelegate] registered popup browser");
                 id
@@ -852,7 +852,7 @@ fn create_browser_window(
     window_id: WindowId,
     opening: Opening,
 ) -> Result<WindowId, RuntimeError> {
-    let mut client = KuroganeClient::new(app.clone(), BrowserType::Main, None);
+    let mut client = KuroganeClient::new(app.clone(), BrowserType::Main, None, Surface::Window);
     let mut view_delegate = KuroganeBrowserViewDelegate::new(app.clone(), Some(window_id));
 
     debug!(

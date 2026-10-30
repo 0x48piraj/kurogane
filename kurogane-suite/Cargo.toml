@@ -125,6 +125,11 @@ path = "embedding/sdl3/main.rs"
 required-features = ["sdl3"]
 
 [[example]]
+name = "sdl3_offscreen"
+path = "embedding/sdl3/offscreen.rs"
+required-features = ["sdl3"]
+
+[[example]]
 name = "glfw_embedding"
 path = "embedding/glfw/main.rs"
 required-features = ["glfw"]
