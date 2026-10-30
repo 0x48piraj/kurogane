@@ -569,17 +569,6 @@ fn key_target(app: &AppHandle, browser: &Browser) -> KeyTarget {
     }
 }
 
-/// Returns the press `event` is in `browser`.
-fn key_press(event: &KeyEvent, browser: Option<BrowserId>) -> KeyPress {
-    KeyPress::new(
-        event.windows_key_code as u32,
-        event.modifiers,
-        event.character,
-        event.focus_on_editable_field != 0,
-        browser,
-    )
-}
-
 /// Answers CEF for a key on its way to a page (crate::keys). Only its press
 /// reaches the application's hook; consuming the press drops the key's
 /// character and release too. Kurogane's shortcut for it runs in Chromium's
@@ -596,14 +585,14 @@ fn pre_key_event(
     let (press, shortcut) = match key_target(app, browser) {
         KeyTarget::Chromium => return 0,
         KeyTarget::Window(id) => {
-            let press = key_press(event, id);
-            let shortcut = shortcuts::shortcut_for(press.key(), press.modifiers());
+            let press = KeyPress::from_cef(event, id);
+            let shortcut = shortcuts::shortcut_for(press.virtual_key(), press.modifiers());
             (
                 press.with_command(shortcut.and_then(Shortcut::command)),
                 shortcut,
             )
         }
-        KeyTarget::Embedded(id) => (key_press(event, id), None),
+        KeyTarget::Embedded(id) => (KeyPress::from_cef(event, id), None),
     };
     let route = keys::before_page(keys::decide(app, &press), shortcut);
     if let Route::Run(name) = route
@@ -623,8 +612,8 @@ fn key_event(app: &AppHandle, browser: &Browser, event: &KeyEvent) -> i32 {
     let KeyTarget::Window(id) = key_target(app, browser) else {
         return 0;
     };
-    let press = key_press(event, id);
-    match shortcuts::shortcut_for(press.key(), press.modifiers()).and_then(Shortcut::name) {
+    let press = KeyPress::from_cef(event, id);
+    match shortcuts::shortcut_for(press.virtual_key(), press.modifiers()).and_then(Shortcut::name) {
         Some(name) => i32::from(run_shortcut(browser, name)),
         None => 0,
     }
@@ -1072,6 +1061,7 @@ wrap_frame_handler! {
 wrap_load_handler! {
     pub struct KuroganeLoadHandler {
         app: AppHandle,
+        offscreen: Option<OffscreenClient>,
     }
 
     impl LoadHandler {
@@ -1087,6 +1077,14 @@ wrap_load_handler! {
             let browser_id = self.app.registry().browsers.find_id_by_browser(browser);
             if let Some(browser_id) = browser_id {
                 self.app.router().document_committed(frame, browser_id);
+            }
+            // A cross-site page starts unfocused in an offscreen browser; it
+            // gets the focus the host gave
+            if frame.is_main() != 0
+                && self.offscreen.as_ref().is_some_and(OffscreenClient::focused)
+                && let Some(host) = browser.host()
+            {
+                host.set_focus(1);
             }
         }
 
@@ -1418,7 +1416,7 @@ wrap_client! {
         }
 
         fn load_handler(&self) -> Option<LoadHandler> {
-            Some(KuroganeLoadHandler::new(self.app.clone()))
+            Some(KuroganeLoadHandler::new(self.app.clone(), self.surface.offscreen().cloned()))
         }
 
         fn permission_handler(&self) -> Option<PermissionHandler> {
@@ -1487,12 +1485,27 @@ wrap_client! {
                 Ok(true) => 1,
                 // Not IPC: a document's opacity, which IPC's own messages
                 // carry with them, so their path never comes here
-                Ok(false) => context_menu::opaque_document(&self.app, browser, frame, msg) as i32,
+                Ok(false) => {
+                    (context_menu::opaque_document(&self.app, browser, frame, msg)
+                        || self.focused_field(msg)) as i32
+                }
                 Err(_) => {
                     debug!("[IPC Browser] dispatch panicked; message dropped");
                     1
                 }
             }
+        }
+    }
+}
+
+impl KuroganeClient {
+    /// Takes a renderer's focused-field report `message` for an offscreen
+    /// browser's events; another browser hears nothing of it. Returns
+    /// whether `message` was one.
+    fn focused_field(&self, message: &ProcessMessage) -> bool {
+        match &self.surface {
+            Surface::Offscreen(offscreen) => crate::offscreen::field::take(offscreen, message),
+            _ => crate::offscreen::field::is_report(message),
         }
     }
 }

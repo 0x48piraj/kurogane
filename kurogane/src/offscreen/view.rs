@@ -80,6 +80,15 @@ impl View {
         )
     }
 
+    /// Returns the view's place on the screen in DIPs, the page's window as
+    /// `screenX` and `screenY` read it.
+    pub(crate) fn screen_rect(&self) -> (i32, i32, i32, i32) {
+        let (left, top) = self.origin;
+        let dips = |pixels: i32| (f64::from(pixels) / self.scale).round() as i32;
+        let (width, height) = self.dip_size();
+        (dips(left), dips(top), width, height)
+    }
+
     /// Returns the screen point of the view point `(x, y)` in DIPs. Windows and
     /// Linux take screen pixels; macOS takes screen DIPs (cef_render_handler.h).
     pub(crate) fn screen_point(&self, x: i32, y: i32) -> (i32, i32) {

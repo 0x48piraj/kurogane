@@ -298,6 +298,15 @@ wrap_render_process_handler! {
             frame: Option<&mut Frame>,
             node: Option<&mut Domnode>,
         ) {
+            // The browser hears what the focused field takes, for an
+            // offscreen browser's IME
+            let reporter = frame.as_deref().cloned().or_else(|| browser.main_frame());
+            if let Some(reporter) = &reporter {
+                let in_main_frame = reporter.is_main() != 0;
+                if let Some(mut message) = crate::offscreen::field::report(in_main_frame, node.as_deref()) {
+                    renderer_outbox::send_after(reporter, &FrameId::of(reporter), &mut message);
+                }
+            }
             let Some(node_data) = node.as_ref() else {
                 let frame = frame.as_deref();
                 for delegate in &self.delegates {

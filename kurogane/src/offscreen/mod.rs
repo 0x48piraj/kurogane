@@ -1,21 +1,30 @@
 //! Offscreen browsers, whose frames go to the application.
 //!
 //! An offscreen browser has no window. The application draws its frames,
-//! sizes it and shows or hides it. Its cursor and tooltip come as events.
+//! sizes it, shows or hides it and gives it the user's input. Its cursor,
+//! tooltip and what its IME needs come as events.
 
+mod drag;
 mod events;
+pub(crate) mod field;
 mod frame;
+mod input;
 mod paint;
+mod typing;
 mod view;
 
-pub use events::{CursorImage, MouseCursor, OffscreenEvent, OffscreenEvents};
+pub use events::{CursorImage, InputPurpose, MouseCursor, OffscreenEvent, OffscreenEvents};
 #[cfg(target_os = "linux")]
 pub use frame::DmabufPlane;
 pub use frame::{Layer, PixelFrame, PixelRect, SharedTextureFrame, TextureFormat};
+pub use input::{PointerButton, WheelDelta};
+pub use typing::KeyInput;
 
 use std::fmt;
 use std::os::raw::c_int;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Instant;
 
 use tanso::*;
 use tracing::debug;
@@ -23,8 +32,11 @@ use tracing::debug;
 use crate::browser_registry::{BrowserId, BrowserType};
 use crate::client::{KuroganeClient, Surface};
 use crate::error::RuntimeError;
+use crate::keys::Modifiers;
 use crate::runtime::{AppHandle, BrowserHandle};
 use events::{EventQueue, Wake};
+use input::{DoubleClick, Pointer, PointerEvent};
+use typing::NO_RANGE;
 use paint::{OnPixelLayers, OnPixels, OnSharedTexture, Painter, PainterKey};
 use view::View;
 
@@ -211,6 +223,9 @@ impl fmt::Debug for OffscreenOptions {
 /// State an offscreen browser's handle shares with its handlers.
 pub(crate) struct Shared {
     view: Mutex<View>,
+    pointer: Mutex<Pointer>,
+    /// Keyboard focus as the host last gave it; CEF starts a browser focused.
+    focused: AtomicBool,
     pacing: Pacing,
     events: EventQueue,
 }
@@ -228,6 +243,13 @@ impl Shared {
         f(&mut view);
         (before, *view)
     }
+
+    /// Runs `f` on the pointer with the view's scale.
+    fn pointer<T>(&self, f: impl FnOnce(&mut Pointer, f64) -> T) -> T {
+        let scale = self.view().scale();
+        let mut pointer = self.pointer.lock().unwrap_or_else(PoisonError::into_inner);
+        f(&mut pointer, scale)
+    }
 }
 
 /// What the client of an offscreen browser holds of it.
@@ -244,6 +266,11 @@ impl OffscreenClient {
         self.render.clone()
     }
 
+    /// Returns whether the host gave the browser the keyboard focus.
+    pub(crate) fn focused(&self) -> bool {
+        self.shared.focused.load(Ordering::Relaxed)
+    }
+
     /// Queues `event` for the host.
     pub(crate) fn push(&self, event: OffscreenEvent) {
         self.shared.events.push(event);
@@ -252,6 +279,7 @@ impl OffscreenClient {
     /// Ends the browser's frames and tells the host it closed. UI thread.
     pub(crate) fn closed(&self) {
         paint::drop_painter(self.key);
+        drag::forget(self.key);
         self.shared.events.push(OffscreenEvent::Closed);
     }
 }
@@ -270,6 +298,7 @@ impl OffscreenClient {
 pub struct OffscreenBrowser {
     browser: BrowserHandle,
     shared: Arc<Shared>,
+    key: PainterKey,
 }
 
 const _: () = {
@@ -314,10 +343,13 @@ impl OffscreenBrowser {
     }
 
     /// Sets the surface's top-left corner on the screen in pixels, from which
-    /// menus, dialogs and drags place themselves. The screen's origin by
-    /// default.
+    /// menus, dialogs and drags place themselves and which the page reads as
+    /// `screenX` and `screenY`. The screen's origin by default.
     pub fn set_screen_origin(&self, x: i32, y: i32) {
-        self.shared.change(|view| view.set_origin(x, y));
+        let (before, after) = self.shared.change(|view| view.set_origin(x, y));
+        if after != before {
+            self.call(HostCall::ScreenChanged);
+        }
     }
 
     /// Shows or hides the browser. A hidden browser paints nothing and its
@@ -365,6 +397,122 @@ impl OffscreenBrowser {
         self.call(HostCall::Close { force: false });
     }
 
+    /// Moves the pointer to `(x, y)` in surface pixels.
+    pub fn pointer_move(&self, x: f64, y: f64) {
+        let event = self
+            .shared
+            .pointer(|pointer, scale| pointer.moved(x, y, scale));
+        self.call(HostCall::PointerMove {
+            event,
+            leave: false,
+        });
+    }
+
+    /// Presses `button` at `(x, y)` in surface pixels. Quick presses in
+    /// place count as a double or triple click by the OS's double-click time
+    /// and distance.
+    pub fn pointer_down(&self, x: f64, y: f64, button: PointerButton) {
+        let at = Instant::now();
+        let (event, count) = self
+            .shared
+            .pointer(|pointer, scale| pointer.pressed(x, y, button, scale, at));
+        self.call(HostCall::PointerButton {
+            event,
+            button,
+            up: false,
+            count,
+        });
+    }
+
+    /// Releases `button` at `(x, y)` in surface pixels.
+    pub fn pointer_up(&self, x: f64, y: f64, button: PointerButton) {
+        let (event, count) = self
+            .shared
+            .pointer(|pointer, scale| pointer.released(x, y, button, scale));
+        self.call(HostCall::PointerButton {
+            event,
+            button,
+            up: true,
+            count,
+        });
+    }
+
+    /// Tells the page the pointer left the surface.
+    pub fn pointer_leave(&self) {
+        let event = self.shared.pointer(|pointer, scale| pointer.event(scale));
+        self.call(HostCall::PointerMove { event, leave: true });
+    }
+
+    /// Turns the wheel by `delta` at the pointer's last position.
+    pub fn wheel(&self, delta: WheelDelta) {
+        let turn = self
+            .shared
+            .pointer(|pointer, scale| pointer.wheel(delta, scale));
+        if let Some((event, (x, y))) = turn {
+            self.call(HostCall::Wheel { event, x, y });
+        }
+    }
+
+    /// Gives the browser the keyboard focus or takes it away. The page sees
+    /// its focus and blur events and shows a caret only while focused.
+    pub fn set_focused(&self, focused: bool) {
+        self.shared.focused.store(focused, Ordering::Relaxed);
+        self.call(HostCall::Focus(focused));
+    }
+
+    /// Sets the modifier keys held and the locks on, which every later
+    /// pointer and wheel event carries.
+    pub fn set_modifiers(&self, modifiers: Modifiers) {
+        self.shared
+            .pointer(|pointer, _| pointer.set_modifiers(modifiers));
+    }
+
+    /// Presses `key` with the modifiers of [`set_modifiers`](Self::set_modifiers).
+    /// Its text types after it, one UTF-16 unit as the key's character and
+    /// longer text committed whole.
+    pub fn key_down(&self, key: &KeyInput) {
+        let modifiers = self.shared.pointer(|pointer, _| pointer.modifiers());
+        let press = key.press(modifiers);
+        self.call(HostCall::Key(press.down));
+        if let Some(character) = press.character {
+            self.call(HostCall::Key(character));
+        }
+        if let Some(text) = press.commit {
+            self.call(HostCall::ImeCommit(text));
+        }
+    }
+
+    /// Releases `key`.
+    pub fn key_up(&self, key: &KeyInput) {
+        let modifiers = self.shared.pointer(|pointer, _| pointer.modifiers());
+        self.call(HostCall::Key(key.release(modifiers)));
+    }
+
+    /// Shows `text` as the IME composes it, underlined in the focused field,
+    /// the cursor or selection at byte offsets `cursor` into it (its end for
+    /// none). An empty text ends the composition.
+    pub fn ime_preedit(&self, text: &str, cursor: Option<(usize, usize)>) {
+        if text.is_empty() {
+            self.call(HostCall::ImeCancel);
+        } else {
+            self.call(HostCall::ImePreedit {
+                selection: typing::preedit_selection(text, cursor),
+                text: text.to_owned(),
+            });
+        }
+    }
+
+    /// Types `text` into the focused field, in the composition's place when
+    /// there is one.
+    pub fn ime_commit(&self, text: &str) {
+        self.call(HostCall::ImeCommit(text.to_owned()));
+    }
+
+    /// Ends the composition without typing it.
+    pub fn ime_cancel(&self) {
+        self.call(HostCall::ImeCancel);
+    }
+
     /// Takes the events waiting, oldest first. Returns at once.
     pub fn events(&self) -> OffscreenEvents {
         self.shared.events.drain()
@@ -377,10 +525,10 @@ impl OffscreenBrowser {
         if app.cef_is_down() {
             return;
         }
-        let mut task = HostTask::new(app.clone(), self.browser.id, call);
+        let mut task = HostTask::new(app.clone(), self.browser.id, self.key, call);
         if post_task(ThreadId::UI, &mut task) == 0 {
             debug!(
-                "CEF refused {call:?} for offscreen browser {}",
+                "CEF refused a call for offscreen browser {}",
                 self.browser.id.as_u32()
             );
         }
@@ -403,7 +551,7 @@ impl fmt::Debug for OffscreenBrowser {
 }
 
 /// Call on an offscreen browser's host.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum HostCall {
     Resized,
     ScreenChanged,
@@ -411,7 +559,32 @@ enum HostCall {
     FrameRate(c_int),
     BeginFrame,
     Repaint,
-    Close { force: bool },
+    Close {
+        force: bool,
+    },
+    PointerMove {
+        event: PointerEvent,
+        leave: bool,
+    },
+    PointerButton {
+        event: PointerEvent,
+        button: PointerButton,
+        up: bool,
+        count: c_int,
+    },
+    Wheel {
+        event: PointerEvent,
+        x: c_int,
+        y: c_int,
+    },
+    Focus(bool),
+    Key(KeyEvent),
+    ImePreedit {
+        text: String,
+        selection: Range,
+    },
+    ImeCommit(String),
+    ImeCancel,
 }
 
 // Runs a call on the host of an offscreen browser still open
@@ -419,6 +592,7 @@ wrap_task! {
     struct HostTask {
         app: AppHandle,
         browser: BrowserId,
+        key: PainterKey,
         call: HostCall,
     }
 
@@ -431,16 +605,46 @@ wrap_task! {
             let Some(host) = browser.and_then(|browser| browser.host()) else {
                 return;
             };
-            match self.call {
+            match &self.call {
                 HostCall::Resized => host.was_resized(),
                 HostCall::ScreenChanged => host.notify_screen_info_changed(),
-                HostCall::Hidden(hidden) => host.was_hidden(hidden.into()),
-                HostCall::FrameRate(rate) => host.set_windowless_frame_rate(rate),
+                HostCall::Hidden(hidden) => host.was_hidden((*hidden).into()),
+                HostCall::FrameRate(rate) => host.set_windowless_frame_rate(*rate),
                 HostCall::BeginFrame => host.send_external_begin_frame(),
                 HostCall::Repaint => host.invalidate(PaintElementType::VIEW),
-                HostCall::Close { force } => host.close_browser(force.into()),
+                HostCall::Close { force } => host.close_browser((*force).into()),
+                // A drag the page started takes the pointer while it lasts
+                HostCall::PointerMove { event, leave } => {
+                    let event = mouse_event(*event);
+                    if !drag::moved(self.key, &host, &event, *leave) {
+                        host.send_mouse_move_event(&event, (*leave).into());
+                    }
+                }
+                HostCall::PointerButton { event, up: true, .. }
+                    if drag::released(self.key, &host, &mouse_event(*event)) => {}
+                HostCall::PointerButton { event, button, up, count } => {
+                    host.send_mouse_click_event(&mouse_event(*event), button.cef(), (*up).into(), *count);
+                }
+                HostCall::Wheel { event, x, y } => host.send_mouse_wheel_event(&mouse_event(*event), *x, *y),
+                HostCall::Focus(focused) => host.set_focus((*focused).into()),
+                HostCall::Key(event) => host.send_key_event(event),
+                HostCall::ImePreedit { text, selection } => {
+                    let underline = typing::preedit_underline(text);
+                    host.ime_set_composition(Some(&CefString::from(text.as_str())), Some(&[underline]), &NO_RANGE, selection);
+                }
+                HostCall::ImeCommit(text) => host.ime_commit_text(Some(&CefString::from(text.as_str())), &NO_RANGE, 0),
+                HostCall::ImeCancel => host.ime_cancel_composition(),
             }
         }
+    }
+}
+
+/// Returns CEF's mouse event of `event`.
+pub(super) fn mouse_event(event: PointerEvent) -> MouseEvent {
+    MouseEvent {
+        x: event.x,
+        y: event.y,
+        modifiers: event.modifiers,
     }
 }
 
@@ -481,6 +685,8 @@ pub(crate) fn create(
     let view = View::new(width, height, scale);
     let shared = Arc::new(Shared {
         view: Mutex::new(view),
+        pointer: Mutex::new(Pointer::new(DoubleClick::of_os())),
+        focused: AtomicBool::new(true),
         pacing,
         events: EventQueue::new(wake),
     });
@@ -542,6 +748,7 @@ pub(crate) fn create(
             app: app.clone(),
         },
         shared,
+        key,
     };
     if !view.shown() {
         offscreen.call(HostCall::Hidden(true));

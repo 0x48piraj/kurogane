@@ -28,6 +28,7 @@ mod destination;
 mod new_window;
 mod offscreen;
 mod navigation;
+mod keyboard;
 mod keys;
 mod shortcuts;
 mod downloads;
@@ -87,11 +88,13 @@ pub use new_window::{NewWindowDecision, NewWindowKind, NewWindowRequest};
 #[cfg(target_os = "linux")]
 pub use offscreen::DmabufPlane;
 pub use offscreen::{
-    CursorImage, Layer, MouseCursor, OffscreenBrowser, OffscreenEvent, OffscreenEvents,
-    OffscreenOptions, Pacing, PixelFrame, PixelRect, SharedTextureFrame, TextureFormat,
+    CursorImage, InputPurpose, KeyInput, Layer, MouseCursor, OffscreenBrowser, OffscreenEvent,
+    OffscreenEvents, OffscreenOptions, Pacing, PixelFrame, PixelRect, PointerButton,
+    SharedTextureFrame, TextureFormat, WheelDelta,
 };
 pub use navigation::{NavigationDecision, NavigationRequest};
-pub use keys::{Key, KeyDecision, KeyPress, Modifiers};
+pub use keyboard::{LogicalKey, PhysicalCode};
+pub use keys::{KeyDecision, KeyPress, Modifiers};
 pub use chrome_commands::{ChromeCommand, ChromeCommandRequest, CommandDecision};
 pub use downloads::{DownloadDecision, DownloadRequest};
 pub use permissions::{Permission, PermissionDecision, PermissionRequest, PermissionResponder};

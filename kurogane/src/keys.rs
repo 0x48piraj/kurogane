@@ -1,48 +1,60 @@
-//! Key presses in a window of the application's.
+//! Key presses in a browser of the application's.
 //!
 //! [`App::on_key`](crate::App::on_key) is asked about each key press and its
-//! repeats. It never sees a release or the character a key types. Its
-//! [`KeyDecision`] sends the key on in Kurogane's order, nowhere or to the
-//! page first. Kurogane's shortcuts (crate::shortcuts) are the same on every
-//! OS.
+//! repeats. It never sees a release. Its [`KeyDecision`] sends the key on in
+//! Kurogane's order, nowhere or to the page first. Kurogane's shortcuts
+//! (crate::shortcuts) are the same on every OS.
 
 use std::ffi::CStr;
+use std::ops::{BitOr, BitOrAssign};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use tanso::KeyEvent;
 use tracing::{debug, error};
 
 use crate::browser_registry::BrowserId;
 use crate::chrome_commands::ChromeCommand;
+use crate::keyboard::{LogicalKey, PhysicalCode, us_characters};
 use crate::runtime::AppHandle;
 use crate::shortcuts::Shortcut;
 
 /// A key the user pressed, passed to [`App::on_key`](crate::App::on_key).
 #[derive(Debug, Clone)]
 pub struct KeyPress {
-    key: Key,
+    code: PhysicalCode,
+    key: LogicalKey,
+    text: Option<String>,
+    /// Windows virtual-key code CEF reports on every OS, which Chromium's
+    /// shortcuts match on
+    virtual_key: u32,
     modifiers: Modifiers,
-    character: Option<char>,
     in_editable_field: bool,
     browser: Option<BrowserId>,
     command: Option<ChromeCommand>,
 }
 
 impl KeyPress {
-    /// The press of the key of Windows virtual-key code `code` (CEF reports
-    /// keys by that code on every platform), with CEF's event flags
-    /// `flags`, typing `character`.
-    pub(crate) fn new(
-        code: u32,
-        flags: u32,
-        character: u16,
-        in_editable_field: bool,
-        browser: Option<BrowserId>,
-    ) -> Self {
+    /// The press CEF reports as `event` in `browser`.
+    pub(crate) fn from_cef(event: &KeyEvent, browser: Option<BrowserId>) -> Self {
+        let printable = |unit: u16| char::from_u32(u32::from(unit)).filter(|c| !c.is_control());
+        let virtual_key = u32::try_from(event.windows_key_code).unwrap_or(0);
+        let modifiers = Modifiers(event.modifiers);
+        let key = printable(event.character)
+            .or_else(|| printable(event.unmodified_character))
+            .map(|c| LogicalKey::Character(c.to_string()))
+            .or_else(|| LogicalKey::from_virtual_key(virtual_key))
+            .or_else(|| {
+                without_ctrl(event.unmodified_character, virtual_key, modifiers)
+                    .map(|c| LogicalKey::Character(c.to_string()))
+            })
+            .unwrap_or(LogicalKey::Unidentified);
         Self {
-            key: Key::from_code(code),
-            modifiers: Modifiers(flags),
-            character: char::from_u32(u32::from(character)).filter(|c| !c.is_control()),
-            in_editable_field,
+            code: physical_code(event.native_key_code),
+            key,
+            text: printable(event.character).map(String::from),
+            virtual_key,
+            modifiers,
+            in_editable_field: event.focus_on_editable_field != 0,
             browser,
             command: None,
         }
@@ -53,9 +65,20 @@ impl KeyPress {
         Self { command, ..self }
     }
 
-    /// The key.
-    pub fn key(&self) -> Key {
-        self.key
+    /// The key's place on the keyboard, the same in every layout.
+    pub fn code(&self) -> PhysicalCode {
+        self.code
+    }
+
+    /// What the key means in the layout, the character it types without
+    /// Ctrl or Cmd or a named key. Shift+W is `"W"` and Ctrl+W `"w"`.
+    pub fn key(&self) -> &LogicalKey {
+        &self.key
+    }
+
+    /// Windows virtual-key code of the key, as Chromium's shortcuts know it.
+    pub(crate) fn virtual_key(&self) -> u32 {
+        self.virtual_key
     }
 
     /// The modifier keys held with it.
@@ -63,11 +86,11 @@ impl KeyPress {
         self.modifiers
     }
 
-    /// Returns the character the press types. There is none with a modifier
-    /// that turns it into a control character (Ctrl+W) and none for keys
-    /// that type nothing (F5, the arrows).
-    pub fn character(&self) -> Option<char> {
-        self.character
+    /// Returns the text the press types. There is none with a modifier that
+    /// turns it into a control character (Ctrl+W) and none for keys that
+    /// type nothing (F5, the arrows).
+    pub fn text(&self) -> Option<&str> {
+        self.text.as_deref()
     }
 
     /// Whether the focus is in a field the user types into (an input, a
@@ -97,62 +120,62 @@ impl KeyPress {
     }
 }
 
-/// A key by its place on the keyboard rather than what it types. Shift+W
-/// and W are both `Key::Char('W')`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum Key {
-    /// A letter key, as its uppercase ASCII letter.
-    Char(char),
-    /// A digit key of the top row, 0 to 9.
-    Digit(u8),
-    /// A function key, F1 to F24.
-    F(u8),
-    Escape,
-    Enter,
-    Tab,
-    Space,
-    Backspace,
-    Delete,
-    Insert,
-    Home,
-    End,
-    PageUp,
-    PageDown,
-    ArrowUp,
-    ArrowDown,
-    ArrowLeft,
-    ArrowRight,
-    /// Any other key by its Windows virtual-key code, which CEF uses on
-    /// every platform. Such keys are punctuation (whose code depends on the
-    /// keyboard layout), the keypad and the modifier keys themselves.
-    Other(u32),
+/// Returns the key of the native code CEF reports, `Unidentified` for one
+/// Chromium names no key for. On Windows a value above 0xffff is the lParam
+/// of a native key message (the scan code in bits 16 to 23, bit 24 for an
+/// extended key) and any other the scan code itself, 0xe000 for an extended
+/// key, as Chromium gives it for an event of no native message.
+fn physical_code(native: i32) -> PhysicalCode {
+    #[cfg(target_os = "windows")]
+    let code = {
+        let native = native.cast_unsigned();
+        let scan_code = if native > 0xffff {
+            let extended = if native & (1 << 24) != 0 { 0xe000 } else { 0 };
+            ((native >> 16) & 0xff) as u16 | extended
+        } else {
+            native as u16
+        };
+        PhysicalCode::from_windows_scan_code(scan_code)
+    };
+    #[cfg(target_os = "linux")]
+    let code = u16::try_from(native)
+        .ok()
+        .and_then(PhysicalCode::from_xkb_keycode);
+    #[cfg(target_os = "macos")]
+    let code = u16::try_from(native)
+        .ok()
+        .and_then(PhysicalCode::from_mac_keycode);
+    code.unwrap_or(PhysicalCode::Unidentified)
 }
 
-impl Key {
-    /// The key of Windows virtual-key code `code`.
-    fn from_code(code: u32) -> Key {
-        match code {
-            0x41..=0x5A => Key::Char(char::from(code as u8)),
-            0x30..=0x39 => Key::Digit((code - 0x30) as u8),
-            0x70..=0x87 => Key::F((code - 0x70 + 1) as u8),
-            0x1B => Key::Escape,
-            0x0D => Key::Enter,
-            0x09 => Key::Tab,
-            0x20 => Key::Space,
-            0x08 => Key::Backspace,
-            0x2E => Key::Delete,
-            0x2D => Key::Insert,
-            0x24 => Key::Home,
-            0x23 => Key::End,
-            0x21 => Key::PageUp,
-            0x22 => Key::PageDown,
-            0x26 => Key::ArrowUp,
-            0x28 => Key::ArrowDown,
-            0x25 => Key::ArrowLeft,
-            0x27 => Key::ArrowRight,
-            other => Key::Other(other),
-        }
+/// Returns the character a Ctrl chord types without Ctrl. Chromium reports
+/// the chord's character as a control character, the character's low five
+/// bits. The virtual key's US character settles it, else the one other
+/// character that fits and is no letter.
+fn without_ctrl(control: u16, virtual_key: u32, modifiers: Modifiers) -> Option<char> {
+    let [unshifted, shifted] = us_characters(virtual_key)?;
+    if !modifiers.ctrl() || control >= 0x20 {
+        return None;
+    }
+    let fits = |c: char| matches!(c, ' '..='~') && u32::from(c) & 0x1f == u32::from(control);
+
+    // CapsLock shifts letters only
+    let shift = if unshifted.is_ascii_alphabetic() {
+        modifiers.shift() != modifiers.has(flag::CAPS_LOCK_ON)
+    } else {
+        modifiers.shift()
+    };
+    let us = if shift { shifted } else { unshifted };
+    if fits(us) {
+        return Some(us);
+    }
+    let mut others = [0x20, 0x40, 0x60]
+        .into_iter()
+        .filter_map(|bits| char::from_u32(u32::from(control) | bits))
+        .filter(|&c| fits(c) && !c.is_ascii_alphabetic());
+    match (others.next(), others.next()) {
+        (Some(c), None) => Some(c),
+        _ => None,
     }
 }
 
@@ -161,18 +184,38 @@ impl Key {
 /// `int` on Windows and an `unsigned int` elsewhere; a test holds these to
 /// them on every platform.
 pub(crate) mod flag {
+    pub const CAPS_LOCK_ON: u32 = 1 << 0;
     pub const SHIFT_DOWN: u32 = 1 << 1;
     pub const CONTROL_DOWN: u32 = 1 << 2;
     pub const ALT_DOWN: u32 = 1 << 3;
+    pub const LEFT_MOUSE_BUTTON: u32 = 1 << 4;
+    pub const MIDDLE_MOUSE_BUTTON: u32 = 1 << 5;
+    pub const RIGHT_MOUSE_BUTTON: u32 = 1 << 6;
     pub const COMMAND_DOWN: u32 = 1 << 7;
+    pub const NUM_LOCK_ON: u32 = 1 << 8;
+    pub const IS_KEY_PAD: u32 = 1 << 9;
+    pub const IS_LEFT: u32 = 1 << 10;
+    pub const IS_RIGHT: u32 = 1 << 11;
+    pub const ALTGR_DOWN: u32 = 1 << 12;
     pub const IS_REPEAT: u32 = 1 << 13;
 }
 
-/// The modifier keys held with a key.
+/// Modifier keys held and locks on with a key or an offscreen browser's
+/// input. The constants combine with `|`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Modifiers(u32);
 
 impl Modifiers {
+    pub const NONE: Self = Self(0);
+    pub const SHIFT: Self = Self(flag::SHIFT_DOWN);
+    pub const CONTROL: Self = Self(flag::CONTROL_DOWN);
+    /// Alt, Option on macOS.
+    pub const ALT: Self = Self(flag::ALT_DOWN);
+    /// Cmd on macOS, the Windows key elsewhere.
+    pub const META: Self = Self(flag::COMMAND_DOWN);
+    pub const CAPS_LOCK: Self = Self(flag::CAPS_LOCK_ON);
+    pub const NUM_LOCK: Self = Self(flag::NUM_LOCK_ON);
+
     fn has(self, flag: u32) -> bool {
         self.0 & flag != 0
     }
@@ -214,6 +257,25 @@ impl Modifiers {
     /// Returns CEF's flags of the modifier keys held and no other flag.
     pub(crate) fn chord(self) -> u32 {
         self.0 & (flag::SHIFT_DOWN | flag::CONTROL_DOWN | flag::ALT_DOWN | flag::COMMAND_DOWN)
+    }
+
+    /// Returns CEF's flags of the modifier keys held and the locks on.
+    pub(crate) fn state(self) -> u32 {
+        self.chord() | self.0 & (flag::CAPS_LOCK_ON | flag::NUM_LOCK_ON)
+    }
+}
+
+impl BitOr for Modifiers {
+    type Output = Self;
+
+    fn bitor(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
+
+impl BitOrAssign for Modifiers {
+    fn bitor_assign(&mut self, other: Self) {
+        self.0 |= other.0;
     }
 }
 
@@ -312,57 +374,147 @@ mod tests {
     fn the_flags_are_cef_s() {
         use tanso::sys::cef_event_flags_t as Flags;
         for (ours, cef) in [
+            (flag::CAPS_LOCK_ON, Flags::EVENTFLAG_CAPS_LOCK_ON),
             (flag::SHIFT_DOWN, Flags::EVENTFLAG_SHIFT_DOWN),
             (flag::CONTROL_DOWN, Flags::EVENTFLAG_CONTROL_DOWN),
             (flag::ALT_DOWN, Flags::EVENTFLAG_ALT_DOWN),
+            (flag::LEFT_MOUSE_BUTTON, Flags::EVENTFLAG_LEFT_MOUSE_BUTTON),
+            (
+                flag::MIDDLE_MOUSE_BUTTON,
+                Flags::EVENTFLAG_MIDDLE_MOUSE_BUTTON,
+            ),
+            (
+                flag::RIGHT_MOUSE_BUTTON,
+                Flags::EVENTFLAG_RIGHT_MOUSE_BUTTON,
+            ),
             (flag::COMMAND_DOWN, Flags::EVENTFLAG_COMMAND_DOWN),
+            (flag::NUM_LOCK_ON, Flags::EVENTFLAG_NUM_LOCK_ON),
+            (flag::IS_KEY_PAD, Flags::EVENTFLAG_IS_KEY_PAD),
+            (flag::IS_LEFT, Flags::EVENTFLAG_IS_LEFT),
+            (flag::IS_RIGHT, Flags::EVENTFLAG_IS_RIGHT),
+            (flag::ALTGR_DOWN, Flags::EVENTFLAG_ALTGR_DOWN),
             (flag::IS_REPEAT, Flags::EVENTFLAG_IS_REPEAT),
         ] {
             assert_eq!(i64::from(ours), i64::from(cef.0), "{cef:?}");
         }
     }
 
+    /// W's native code on the platform
+    const W: i32 = if cfg!(target_os = "windows") {
+        0x11
+    } else if cfg!(target_os = "macos") {
+        0x0d
+    } else {
+        0x19
+    };
+
+    fn press(virtual_key: i32, modifiers: u32, character: u8, unmodified: u8) -> KeyPress {
+        let event = KeyEvent {
+            windows_key_code: virtual_key,
+            native_key_code: W,
+            modifiers,
+            character: u16::from(character),
+            unmodified_character: u16::from(unmodified),
+            ..Default::default()
+        };
+        KeyPress::from_cef(&event, None)
+    }
+
     #[test]
-    fn keys_are_named_by_place_and_the_rest_by_code() {
-        for (code, key) in [
-            (0x57, Key::Char('W')),
-            (0x41, Key::Char('A')),
-            (0x30, Key::Digit(0)),
-            (0x39, Key::Digit(9)),
-            (0x70, Key::F(1)),
-            (0x74, Key::F(5)),
-            (0x87, Key::F(24)),
-            (0x1B, Key::Escape),
-            (0x0D, Key::Enter),
-            (0x25, Key::ArrowLeft),
-            (0x2E, Key::Delete),
-            // Ctrl itself, a keypad digit and a layout-dependent key
-            (0x11, Key::Other(0x11)),
-            (0x60, Key::Other(0x60)),
-            (0xBB, Key::Other(0xBB)),
+    fn a_key_is_its_place_and_its_meaning() {
+        let shift_w = press(0x57, flag::SHIFT_DOWN, b'W', b'W');
+        assert_eq!(shift_w.code(), PhysicalCode::KeyW);
+        assert_eq!(shift_w.key(), &LogicalKey::Character("W".into()));
+        assert_eq!(shift_w.text(), Some("W"));
+
+        // Ctrl turns w into a control character
+        let ctrl_w = press(0x57, flag::CONTROL_DOWN, 0x17, b'w');
+        assert_eq!(ctrl_w.key(), &LogicalKey::Character("w".into()));
+        assert_eq!(ctrl_w.text(), None);
+
+        for (virtual_key, character, key) in [
+            (0x74, 0, LogicalKey::F5),
+            (0x0d, b'\r', LogicalKey::Enter),
+            (0x1b, 0x1b, LogicalKey::Escape),
+            (0x2e, 0x7f, LogicalKey::Delete),
+            (0xa1, 0, LogicalKey::Shift),
+            (0xde, 0, LogicalKey::Unidentified),
         ] {
-            assert_eq!(Key::from_code(code), key, "{code:#x}");
+            let press = press(virtual_key, 0, character, character);
+            assert_eq!(press.key(), &key, "{virtual_key:#x}");
+            assert_eq!(press.text(), None, "{virtual_key:#x}");
         }
     }
 
     #[test]
-    fn the_primary_modifier_is_the_platform_s_and_control_characters_are_none() {
-        let ctrl_w = KeyPress::new(0x57, flag::CONTROL_DOWN, 0x17, false, None);
-        let cmd_w = KeyPress::new(0x57, flag::COMMAND_DOWN, 0x77, false, None);
+    fn a_ctrl_chord_means_its_character_without_ctrl() {
+        const CTRL: u32 = flag::CONTROL_DOWN;
+        let character = |text: &str| LogicalKey::Character(text.into());
+        for (virtual_key, modifiers, control, key) in [
+            (0x54, CTRL, 0x14, character("t")),
+            (0x54, CTRL | flag::SHIFT_DOWN, 0x14, character("T")),
+            (0x54, CTRL | flag::CAPS_LOCK_ON, 0x14, character("T")),
+            (0x31, CTRL, 0x11, character("1")),
+            (0x31, CTRL | flag::SHIFT_DOWN, 0x01, character("!")),
+            (0x20, CTRL, 0x00, character(" ")),
+            (0xbd, CTRL, 0x0d, character("-")),
+            // = shares its control character with ] and }
+            (0xbb, CTRL, 0x1d, character("=")),
+            // Another layout's # on the US layout's ' key
+            (0xde, CTRL, 0x03, character("#")),
+            (0xde, CTRL, 0x1d, LogicalKey::Unidentified),
+            (0x0d, CTRL, 0x0a, LogicalKey::Enter),
+            (0x54, 0, 0x14, LogicalKey::Unidentified),
+        ] {
+            let press = press(virtual_key, modifiers, control, control);
+            assert_eq!(press.key(), &key, "{virtual_key:#x} {modifiers:#x}");
+            assert_eq!(press.text(), None, "{virtual_key:#x} {modifiers:#x}");
+        }
+    }
+
+    #[test]
+    fn native_codes_name_the_place() {
+        #[cfg(target_os = "windows")]
+        let codes = [
+            (0x11, PhysicalCode::KeyW),
+            (0xe04d, PhysicalCode::ArrowRight),
+            // lParams of a W press and a right arrow's repeat
+            (0x0011_0001, PhysicalCode::KeyW),
+            (0x414d_0001, PhysicalCode::ArrowRight),
+            (0, PhysicalCode::Unidentified),
+        ];
+        #[cfg(target_os = "linux")]
+        let codes = [
+            (0x19, PhysicalCode::KeyW),
+            (0x72, PhysicalCode::ArrowRight),
+            (0, PhysicalCode::Unidentified),
+        ];
+        #[cfg(target_os = "macos")]
+        let codes = [
+            (0x0d, PhysicalCode::KeyW),
+            (0x7c, PhysicalCode::ArrowRight),
+            (0xffff, PhysicalCode::Unidentified),
+        ];
+        for (native, code) in codes {
+            assert_eq!(physical_code(native), code, "{native:#x}");
+        }
+    }
+
+    #[test]
+    fn the_primary_modifier_is_the_platform_s() {
+        let ctrl_w = press(0x57, flag::CONTROL_DOWN, 0x17, b'w');
+        let cmd_w = press(0x57, flag::COMMAND_DOWN, b'w', b'w');
         assert_eq!(ctrl_w.modifiers().primary(), !cfg!(target_os = "macos"));
         assert_eq!(cmd_w.modifiers().primary(), cfg!(target_os = "macos"));
-        assert_eq!(ctrl_w.character(), None);
 
-        let shift_w = KeyPress::new(0x57, flag::SHIFT_DOWN, u16::from(b'W'), true, None);
-        assert_eq!(shift_w.key(), Key::Char('W'));
-        assert_eq!(shift_w.character(), Some('W'));
+        let shift_w = press(0x57, flag::SHIFT_DOWN, b'W', b'W');
         assert!(shift_w.modifiers().shift() && !shift_w.modifiers().none());
-        assert!(shift_w.in_editable_field());
 
-        let held = KeyPress::new(0x28, flag::IS_REPEAT, 0, false, None);
+        let held = press(0x28, flag::IS_REPEAT, 0, 0);
         assert!(held.repeat() && held.modifiers().none());
         assert_eq!(held.modifiers().chord(), 0);
         assert_eq!(held.command(), None);
+        assert!(!held.in_editable_field());
     }
 
     #[test]

@@ -363,7 +363,7 @@ App::new("dist")
     .run_or_exit();
 ```
 
-The hook sees only presses. Held keys repeating count too (`repeat()`). It never sees releases. `command()` names the command a shortcut runs by whatever keys the OS gives it. `Key` names a key by its place. Shift+W is still `Key::Char('W')`. `modifiers().primary()` is Ctrl on Windows and Linux and Cmd on macOS. Check `in_editable_field()` before taking keys the user may be typing.
+The hook sees only presses. Held keys repeating count too (`repeat()`). It never sees releases. `command()` names the command a shortcut runs by whatever keys the OS gives it. `code()` names a key by its place, the same in every layout (`PhysicalCode::KeyW`). `key()` names what it means in the layout (`LogicalKey`). Shift+W is `"W"` and Ctrl+W is `"w"`. Both follow the W3C names of a page's `KeyboardEvent`. `modifiers().primary()` is Ctrl on Windows and Linux and Cmd on macOS. Check `in_editable_field()` before taking keys the user may be typing.
 
 On macOS Chromium still takes its own next-tab keys (Cmd+Option+Left and Right, Cmd+Shift+[ and ], Ctrl+Page Up and Page Down) before `on_key` and the page see them. A fullscreen window is the exception.
 

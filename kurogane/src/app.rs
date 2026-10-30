@@ -1825,7 +1825,12 @@ mod tests {
         assert!(ends(|h| {
             hook(&navigation, h);
         }));
-        let press = KeyPress::new(0x57, 0, u16::from(b'w'), false, None);
+        let event = tanso::KeyEvent {
+            windows_key_code: 0x57,
+            character: u16::from(b'w'),
+            ..Default::default()
+        };
+        let press = KeyPress::from_cef(&event, None);
         let hook = app.hooks.key.as_ref().expect("registered");
         assert!(ends(|h| {
             hook(&press, h);

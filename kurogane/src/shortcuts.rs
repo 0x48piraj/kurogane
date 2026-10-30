@@ -14,7 +14,7 @@
 use std::ffi::CStr;
 
 use crate::chrome_commands::{self, ChromeCommand};
-use crate::keys::{Key, Modifiers, flag};
+use crate::keys::{Modifiers, flag};
 
 /// Kurogane shortcut of a key press.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,9 +45,9 @@ impl Shortcut {
 }
 
 /// Returns the shortcut of `key` pressed with exactly `modifiers`.
-pub(crate) fn shortcut_for(key: Key, modifiers: Modifiers) -> Option<Shortcut> {
+pub(crate) fn shortcut_for(key: VirtualKey, modifiers: Modifiers) -> Option<Shortcut> {
     let chord = modifiers.chord();
-    let named = |table: &[(Key, u32, &'static CStr)]| {
+    let named = |table: &[(VirtualKey, u32, &'static CStr)]| {
         table
             .iter()
             .find(|&&(k, m, _)| k == key && m == chord)
@@ -72,104 +72,126 @@ const ALT: u32 = flag::ALT_DOWN;
 #[cfg(target_os = "macos")]
 const CMD: u32 = flag::COMMAND_DOWN;
 
-// Keys by the Windows virtual-key code CEF reports
-const PLUS: Key = Key::Other(0xBB);
-const MINUS: Key = Key::Other(0xBD);
+/// Windows virtual-key code CEF reports on every OS, which Chromium's
+/// shortcuts match on. A letter's code follows the keyboard layout.
+type VirtualKey = u32;
+
+/// Returns the virtual key of uppercase ASCII letter `letter`.
+const fn letter(letter: char) -> VirtualKey {
+    letter as VirtualKey
+}
+
+/// Returns the virtual key of function key F`number`.
+const fn function_key(number: u32) -> VirtualKey {
+    0x6F + number
+}
+
+const DIGIT_0: VirtualKey = 0x30;
 #[cfg(not(target_os = "macos"))]
-const PAD_PLUS: Key = Key::Other(0x6B);
+const PAGE_UP: VirtualKey = 0x21;
 #[cfg(not(target_os = "macos"))]
-const PAD_MINUS: Key = Key::Other(0x6D);
+const PAGE_DOWN: VirtualKey = 0x22;
 #[cfg(not(target_os = "macos"))]
-const PAD_0: Key = Key::Other(0x60);
+const ARROW_LEFT: VirtualKey = 0x25;
+#[cfg(not(target_os = "macos"))]
+const ARROW_RIGHT: VirtualKey = 0x27;
+const PLUS: VirtualKey = 0xBB;
+const MINUS: VirtualKey = 0xBD;
+#[cfg(not(target_os = "macos"))]
+const PAD_PLUS: VirtualKey = 0x6B;
+#[cfg(not(target_os = "macos"))]
+const PAD_MINUS: VirtualKey = 0x6D;
+#[cfg(not(target_os = "macos"))]
+const PAD_0: VirtualKey = 0x60;
 #[cfg(target_os = "macos")]
-const PERIOD: Key = Key::Other(0xBE);
+const PERIOD: VirtualKey = 0xBE;
 #[cfg(target_os = "macos")]
-const LEFT_BRACKET: Key = Key::Other(0xDB);
+const LEFT_BRACKET: VirtualKey = 0xDB;
 #[cfg(target_os = "macos")]
-const RIGHT_BRACKET: Key = Key::Other(0xDD);
+const RIGHT_BRACKET: VirtualKey = 0xDD;
 
 /// Shortcuts run before the page. These are Close and macOS's Quit.
 #[cfg(not(target_os = "macos"))]
-const BEFORE_PAGE: &[(Key, u32, &CStr)] = &[
-    (Key::Char('W'), CTRL, c"IDC_CLOSE_TAB"),
-    (Key::F(4), CTRL, c"IDC_CLOSE_TAB"),
-    (Key::Char('W'), CTRL | SHIFT, c"IDC_CLOSE_WINDOW"),
-    (Key::F(4), ALT, c"IDC_CLOSE_WINDOW"),
+const BEFORE_PAGE: &[(VirtualKey, u32, &CStr)] = &[
+    (letter('W'), CTRL, c"IDC_CLOSE_TAB"),
+    (function_key(4), CTRL, c"IDC_CLOSE_TAB"),
+    (letter('W'), CTRL | SHIFT, c"IDC_CLOSE_WINDOW"),
+    (function_key(4), ALT, c"IDC_CLOSE_WINDOW"),
 ];
 #[cfg(target_os = "macos")]
-const BEFORE_PAGE: &[(Key, u32, &CStr)] = &[
-    (Key::Char('W'), CMD, c"IDC_CLOSE_TAB"),
-    (Key::Char('W'), CMD | SHIFT, c"IDC_CLOSE_WINDOW"),
-    (Key::Char('Q'), CMD, c"IDC_EXIT"),
+const BEFORE_PAGE: &[(VirtualKey, u32, &CStr)] = &[
+    (letter('W'), CMD, c"IDC_CLOSE_TAB"),
+    (letter('W'), CMD | SHIFT, c"IDC_CLOSE_WINDOW"),
+    (letter('Q'), CMD, c"IDC_EXIT"),
 ];
 
 /// Shortcuts run once the page lets the key through. Their keys are
 /// Chromium's on Windows and Linux and Chrome's main menu's on macOS.
 #[cfg(not(target_os = "macos"))]
-const AFTER_PAGE: &[(Key, u32, &CStr)] = &[
-    (Key::Char('R'), CTRL, c"IDC_RELOAD"),
-    (Key::F(5), NONE, c"IDC_RELOAD"),
-    (Key::Char('R'), CTRL | SHIFT, c"IDC_RELOAD_BYPASSING_CACHE"),
-    (Key::F(5), CTRL, c"IDC_RELOAD_BYPASSING_CACHE"),
-    (Key::F(5), SHIFT, c"IDC_RELOAD_BYPASSING_CACHE"),
-    (Key::Char('F'), CTRL, c"IDC_FIND"),
-    (Key::Char('G'), CTRL, c"IDC_FIND_NEXT"),
-    (Key::F(3), NONE, c"IDC_FIND_NEXT"),
-    (Key::Char('G'), CTRL | SHIFT, c"IDC_FIND_PREVIOUS"),
-    (Key::F(3), SHIFT, c"IDC_FIND_PREVIOUS"),
-    (Key::Char('P'), CTRL, c"IDC_PRINT"),
+const AFTER_PAGE: &[(VirtualKey, u32, &CStr)] = &[
+    (letter('R'), CTRL, c"IDC_RELOAD"),
+    (function_key(5), NONE, c"IDC_RELOAD"),
+    (letter('R'), CTRL | SHIFT, c"IDC_RELOAD_BYPASSING_CACHE"),
+    (function_key(5), CTRL, c"IDC_RELOAD_BYPASSING_CACHE"),
+    (function_key(5), SHIFT, c"IDC_RELOAD_BYPASSING_CACHE"),
+    (letter('F'), CTRL, c"IDC_FIND"),
+    (letter('G'), CTRL, c"IDC_FIND_NEXT"),
+    (function_key(3), NONE, c"IDC_FIND_NEXT"),
+    (letter('G'), CTRL | SHIFT, c"IDC_FIND_PREVIOUS"),
+    (function_key(3), SHIFT, c"IDC_FIND_PREVIOUS"),
+    (letter('P'), CTRL, c"IDC_PRINT"),
     (PLUS, CTRL, c"IDC_ZOOM_PLUS"),
     (PLUS, CTRL | SHIFT, c"IDC_ZOOM_PLUS"),
     (PAD_PLUS, CTRL, c"IDC_ZOOM_PLUS"),
     (MINUS, CTRL, c"IDC_ZOOM_MINUS"),
     (MINUS, CTRL | SHIFT, c"IDC_ZOOM_MINUS"),
     (PAD_MINUS, CTRL, c"IDC_ZOOM_MINUS"),
-    (Key::Digit(0), CTRL, c"IDC_ZOOM_NORMAL"),
+    (DIGIT_0, CTRL, c"IDC_ZOOM_NORMAL"),
     (PAD_0, CTRL, c"IDC_ZOOM_NORMAL"),
-    (Key::ArrowLeft, ALT, c"IDC_BACK"),
-    (Key::ArrowRight, ALT, c"IDC_FORWARD"),
-    (Key::F(11), NONE, c"IDC_FULLSCREEN"),
-    (Key::F(12), NONE, c"IDC_DEV_TOOLS_TOGGLE"),
-    (Key::Char('I'), CTRL | SHIFT, c"IDC_DEV_TOOLS"),
-    (Key::Char('J'), CTRL | SHIFT, c"IDC_DEV_TOOLS_CONSOLE"),
-    (Key::Char('C'), CTRL | SHIFT, c"IDC_DEV_TOOLS_INSPECT"),
+    (ARROW_LEFT, ALT, c"IDC_BACK"),
+    (ARROW_RIGHT, ALT, c"IDC_FORWARD"),
+    (function_key(11), NONE, c"IDC_FULLSCREEN"),
+    (function_key(12), NONE, c"IDC_DEV_TOOLS_TOGGLE"),
+    (letter('I'), CTRL | SHIFT, c"IDC_DEV_TOOLS"),
+    (letter('J'), CTRL | SHIFT, c"IDC_DEV_TOOLS_CONSOLE"),
+    (letter('C'), CTRL | SHIFT, c"IDC_DEV_TOOLS_INSPECT"),
 ];
 #[cfg(target_os = "macos")]
-const AFTER_PAGE: &[(Key, u32, &CStr)] = &[
-    (Key::Char('R'), CMD, c"IDC_RELOAD"),
-    (Key::Char('R'), CMD | SHIFT, c"IDC_RELOAD_BYPASSING_CACHE"),
+const AFTER_PAGE: &[(VirtualKey, u32, &CStr)] = &[
+    (letter('R'), CMD, c"IDC_RELOAD"),
+    (letter('R'), CMD | SHIFT, c"IDC_RELOAD_BYPASSING_CACHE"),
     (PERIOD, CMD, c"IDC_STOP"),
-    (Key::Char('F'), CMD, c"IDC_FIND"),
-    (Key::Char('G'), CMD, c"IDC_FIND_NEXT"),
-    (Key::Char('G'), CMD | SHIFT, c"IDC_FIND_PREVIOUS"),
-    (Key::Char('P'), CMD, c"IDC_PRINT"),
+    (letter('F'), CMD, c"IDC_FIND"),
+    (letter('G'), CMD, c"IDC_FIND_NEXT"),
+    (letter('G'), CMD | SHIFT, c"IDC_FIND_PREVIOUS"),
+    (letter('P'), CMD, c"IDC_PRINT"),
     (PLUS, CMD, c"IDC_ZOOM_PLUS"),
     (PLUS, CMD | SHIFT, c"IDC_ZOOM_PLUS"),
     (MINUS, CMD, c"IDC_ZOOM_MINUS"),
-    (Key::Digit(0), CMD, c"IDC_ZOOM_NORMAL"),
+    (DIGIT_0, CMD, c"IDC_ZOOM_NORMAL"),
     (LEFT_BRACKET, CMD, c"IDC_BACK"),
     (RIGHT_BRACKET, CMD, c"IDC_FORWARD"),
-    (Key::Char('F'), CMD | CTRL, c"IDC_FULLSCREEN"),
-    (Key::F(12), NONE, c"IDC_DEV_TOOLS_TOGGLE"),
-    (Key::Char('I'), CMD | ALT, c"IDC_DEV_TOOLS"),
-    (Key::Char('J'), CMD | ALT, c"IDC_DEV_TOOLS_CONSOLE"),
-    (Key::Char('C'), CMD | ALT, c"IDC_DEV_TOOLS_INSPECT"),
+    (letter('F'), CMD | CTRL, c"IDC_FULLSCREEN"),
+    (function_key(12), NONE, c"IDC_DEV_TOOLS_TOGGLE"),
+    (letter('I'), CMD | ALT, c"IDC_DEV_TOOLS"),
+    (letter('J'), CMD | ALT, c"IDC_DEV_TOOLS_CONSOLE"),
+    (letter('C'), CMD | ALT, c"IDC_DEV_TOOLS_INSPECT"),
 ];
 
 /// Keys Chromium reserves on Windows and Linux for commands Kurogane refuses
 /// (`BrowserCommandController::IsReservedCommandOrKey`). macOS has them only
 /// in Chrome's main menu.
 #[cfg(not(target_os = "macos"))]
-const REFUSED: &[(Key, u32)] = &[
-    (Key::Char('T'), CTRL),
-    (Key::Char('N'), CTRL),
-    (Key::Char('N'), CTRL | SHIFT),
-    (Key::Char('T'), CTRL | SHIFT),
-    (Key::PageDown, CTRL),
-    (Key::PageUp, CTRL),
+const REFUSED: &[(VirtualKey, u32)] = &[
+    (letter('T'), CTRL),
+    (letter('N'), CTRL),
+    (letter('N'), CTRL | SHIFT),
+    (letter('T'), CTRL | SHIFT),
+    (PAGE_DOWN, CTRL),
+    (PAGE_UP, CTRL),
 ];
 #[cfg(target_os = "macos")]
-const REFUSED: &[(Key, u32)] = &[];
+const REFUSED: &[(VirtualKey, u32)] = &[];
 
 #[cfg(test)]
 mod tests {
@@ -177,9 +199,14 @@ mod tests {
 
     /// Returns the shortcut of the key of virtual-key code `key` pressed with
     /// `modifiers`.
-    fn shortcut(key: u32, modifiers: u32) -> Option<Shortcut> {
-        let press = crate::keys::KeyPress::new(key, modifiers, 0, false, None);
-        shortcut_for(press.key(), press.modifiers())
+    fn shortcut(key: i32, modifiers: u32) -> Option<Shortcut> {
+        let event = tanso::KeyEvent {
+            windows_key_code: key,
+            modifiers,
+            ..Default::default()
+        };
+        let press = crate::keys::KeyPress::from_cef(&event, None);
+        shortcut_for(press.virtual_key(), press.modifiers())
     }
 
     #[test]
@@ -195,7 +222,7 @@ mod tests {
 
     #[test]
     fn a_key_is_one_shortcut_at_most() {
-        let all: Vec<(Key, u32)> = BEFORE_PAGE
+        let all: Vec<(VirtualKey, u32)> = BEFORE_PAGE
             .iter()
             .chain(AFTER_PAGE)
             .map(|&(k, m, _)| (k, m))

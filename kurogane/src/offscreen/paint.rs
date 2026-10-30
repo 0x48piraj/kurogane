@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tanso::*;
 use tracing::{debug, error, warn};
 
-use super::{Layer, PixelFrame, PixelRect, Shared, SharedTextureFrame};
+use super::{Layer, OffscreenEvent, PixelFrame, PixelRect, Shared, SharedTextureFrame};
 
 /// Frame callback the application gives with
 /// [`OffscreenOptions::on_pixels`](crate::OffscreenOptions::on_pixels).
@@ -406,6 +406,13 @@ wrap_render_handler! {
             *rect = Rect { x: 0, y: 0, width, height };
         }
 
+        // The page's window on the screen, which its screenX and screenY read
+        fn root_screen_rect(&self, _browser: &mut Browser, rect: &mut Rect) -> c_int {
+            let (x, y, width, height) = self.shared.view().screen_rect();
+            *rect = Rect { x, y, width, height };
+            1
+        }
+
         fn screen_point(
             &self,
             _browser: &mut Browser,
@@ -441,18 +448,41 @@ wrap_render_handler! {
 
         // The rectangle is in view DIPs and may reach past the view
         fn on_popup_size(&self, browser: &mut Browser, rect: &Rect) {
-            let scale = self.shared.view().scale();
-            let scaled = |dips: c_int, round: fn(f64) -> f64| round(f64::from(dips) * scale) as c_int;
-            let place = PixelRect::from_cef(&Rect {
-                x: scaled(rect.x, f64::floor),
-                y: scaled(rect.y, f64::floor),
-                width: scaled(rect.width, f64::ceil),
-                height: scaled(rect.height, f64::ceil),
-            });
+            let place = pixels_of(rect, self.shared.view().scale());
             let needs_popup = with_painter(self.key, |painter| painter.popup_placed(place));
             if needs_popup == Some(true) {
                 repaint_later(browser, PaintElementType::POPUP);
             }
+        }
+
+        fn start_dragging(
+            &self,
+            browser: &mut Browser,
+            drag_data: &mut DragData,
+            allowed_ops: DragOperationsMask,
+            _x: c_int,
+            _y: c_int,
+        ) -> c_int {
+            let event = self.shared.pointer(|pointer, scale| pointer.event(scale));
+            super::drag::start(self.key, browser, drag_data, allowed_ops, super::mouse_event(event)).into()
+        }
+
+        fn update_drag_cursor(&self, _browser: &mut Browser, operation: DragOperationsMask) {
+            super::drag::accept(self.key, operation);
+        }
+
+        // The characters' bounds are in view DIPs
+        fn on_ime_composition_range_changed(
+            &self,
+            _browser: &mut Browser,
+            _selected_range: &Range,
+            character_bounds: &[Rect],
+        ) {
+            let Some(area) = character_bounds.iter().copied().reduce(union) else {
+                return;
+            };
+            let area = pixels_of(&area, self.shared.view().scale());
+            self.shared.events.push(OffscreenEvent::ImeArea(area));
         }
 
         fn on_paint(
@@ -480,6 +510,30 @@ wrap_render_handler! {
         ) {
             with_painter(self.key, |painter| painter.paint_texture(type_, dirty_rects, info));
         }
+    }
+}
+
+/// Returns the pixels covering `rect` of view DIPs at `scale`.
+fn pixels_of(rect: &Rect, scale: f64) -> PixelRect {
+    let scaled = |dips: c_int, round: fn(f64) -> f64| round(f64::from(dips) * scale) as c_int;
+    PixelRect::from_cef(&Rect {
+        x: scaled(rect.x, f64::floor),
+        y: scaled(rect.y, f64::floor),
+        width: scaled(rect.width, f64::ceil),
+        height: scaled(rect.height, f64::ceil),
+    })
+}
+
+/// Returns the smallest rectangle holding `a` and `b`.
+fn union(a: Rect, b: Rect) -> Rect {
+    let (left, top) = (a.x.min(b.x), a.y.min(b.y));
+    let right = (a.x + a.width).max(b.x + b.width);
+    let bottom = (a.y + a.height).max(b.y + b.height);
+    Rect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
     }
 }
 

@@ -1,7 +1,8 @@
 //! Events an offscreen browser queues for its host.
 //!
-//! A cursor or tooltip replaces the one of its kind not yet read and joins the
-//! back of the queue. Other events are never dropped or merged.
+//! A cursor, tooltip, input purpose or IME area replaces the one of its kind
+//! not yet read and joins the back of the queue. Other events are never
+//! dropped or merged.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -13,6 +14,8 @@ use tanso::sys::cef_cursor_type_t as Cef;
 use tanso::{CursorInfo, CursorType};
 use tracing::error;
 
+use super::frame::PixelRect;
+
 /// What an offscreen browser tells its host, from
 /// [`OffscreenBrowser::events`](crate::OffscreenBrowser::events).
 #[derive(Clone, Debug, PartialEq)]
@@ -22,6 +25,12 @@ pub enum OffscreenEvent {
     Cursor(MouseCursor),
     /// The tooltip the page shows; None hides it.
     Tooltip(Option<String>),
+    /// What the focused field takes, for the host's IME and on-screen
+    /// keyboard. [`InputPurpose::None`] when no field has the focus.
+    InputPurpose(InputPurpose),
+    /// Where the IME's candidates belong in surface pixels: the text being
+    /// composed, else the focused field of the main frame.
+    ImeArea(PixelRect),
     /// The browser has closed. No event follows.
     Closed,
 }
@@ -29,8 +38,26 @@ pub enum OffscreenEvent {
 impl OffscreenEvent {
     /// Returns whether a newer event of this kind replaces an unread one.
     fn coalesces(&self) -> bool {
-        matches!(self, Self::Cursor(_) | Self::Tooltip(_))
+        matches!(
+            self,
+            Self::Cursor(_) | Self::Tooltip(_) | Self::InputPurpose(_) | Self::ImeArea(_)
+        )
     }
+}
+
+/// What a focused field takes, named after its `type`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum InputPurpose {
+    /// No field has the focus.
+    None,
+    Text,
+    Password,
+    Email,
+    Number,
+    Url,
+    Tel,
+    Search,
 }
 
 /// Cursor a page shows, named as CSS names it.
