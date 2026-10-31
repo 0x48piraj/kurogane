@@ -235,6 +235,14 @@ impl Pointer {
         (self.event(scale), count)
     }
 
+    /// Lets go of every held button without a click and returns the event at
+    /// the last position.
+    pub(crate) fn cancelled(&mut self, scale: f64) -> PointerEvent {
+        self.buttons = 0;
+        self.last_press = None;
+        self.event(scale)
+    }
+
     /// Turns the wheel by `delta` at the last position. Returns the event and
     /// CEF's whole units, None while they come to nothing.
     pub(crate) fn wheel(
@@ -247,9 +255,10 @@ impl Pointer {
             WheelDelta::Pixels { x, y } => (x, y),
         };
         let total = (self.wheel_rest.0 + pixels.0, self.wheel_rest.1 + pixels.1);
+        // Rounded as a window's page rounds a notch of a fraction of pixels
         let ((across, scrolled_x), (down, scrolled_y)) = (
-            pixel_units(total.0.trunc(), true),
-            pixel_units(total.1.trunc(), false),
+            pixel_units(total.0.round(), true),
+            pixel_units(total.1.round(), false),
         );
         // What CEF scrolls short or past stays for the next turn
         self.wheel_rest = (
@@ -414,6 +423,18 @@ mod tests {
         );
         assert_eq!(pointer.released(0.0, 0.0, PointerButton::Left, 1.0).1, 2);
         assert_eq!(pointer.released(0.0, 0.0, PointerButton::Middle, 1.0).1, 1);
+    }
+
+    #[test]
+    fn a_cancel_lets_go_and_starts_the_click_count_over() {
+        let mut pointer = Pointer::new(BOUNDS);
+        let start = Instant::now();
+        pointer.set_modifiers(Modifiers::SHIFT);
+        pointer.pressed(0.0, 0.0, PointerButton::Left, 1.0, start);
+        assert_eq!(pointer.cancelled(1.0).modifiers, flag::SHIFT_DOWN);
+        let again = start + Duration::from_millis(50);
+        let (_, count) = pointer.pressed(0.0, 0.0, PointerButton::Left, 1.0, again);
+        assert_eq!(count, 1);
     }
 
     #[test]

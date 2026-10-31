@@ -544,20 +544,24 @@ enum KeyTarget {
     /// Application's browser embedded in its own window (Alloy style). No
     /// shortcut runs there.
     Embedded(Option<BrowserId>),
+    /// Application's offscreen browser. No shortcut runs there.
+    Offscreen(Option<BrowserId>),
 }
 
 /// Returns whose `browser` is. No registry guard outlives the call.
 fn key_target(app: &AppHandle, browser: &Browser) -> KeyTarget {
-    let (id, kind) = {
+    let (id, metadata) = {
         let reg = app.registry();
         let id = reg.browsers.find_id_by_browser(browser);
-        let kind = id
+        let metadata = id
             .and_then(|id| reg.browsers.get(id))
-            .map(|state| state.metadata.browser_type);
-        (id, kind)
+            .map(|state| (state.metadata.browser_type, state.metadata.rendering));
+        (id, metadata)
     };
-    if matches!(kind, Some(BrowserType::DevTools | BrowserType::ChromeUi)) {
-        return KeyTarget::Chromium;
+    match metadata {
+        Some((BrowserType::DevTools | BrowserType::ChromeUi, _)) => return KeyTarget::Chromium,
+        Some((_, Rendering::Offscreen)) => return KeyTarget::Offscreen(id),
+        _ => {}
     }
     if browser
         .host()
@@ -592,7 +596,7 @@ fn pre_key_event(
                 shortcut,
             )
         }
-        KeyTarget::Embedded(id) => (KeyPress::from_cef(event, id), None),
+        KeyTarget::Embedded(id) | KeyTarget::Offscreen(id) => (KeyPress::from_cef(event, id), None),
     };
     let route = keys::before_page(keys::decide(app, &press), shortcut);
     if let Route::Run(name) = route
@@ -603,19 +607,28 @@ fn pre_key_event(
     answer_key(route, is_keyboard_shortcut)
 }
 
-/// Runs Kurogane's shortcut in Chromium's place for a key the page let
-/// through in a window of Chromium's (crate::shortcuts).
+/// Runs the action of a key the page let through, Kurogane's shortcut in a
+/// window of Chromium's (crate::shortcuts) or an offscreen browser's editing
+/// key on macOS.
 fn key_event(app: &AppHandle, browser: &Browser, event: &KeyEvent) -> i32 {
     if event.type_ != KeyEventType::RAWKEYDOWN {
         return 0;
     }
-    let KeyTarget::Window(id) = key_target(app, browser) else {
-        return 0;
-    };
-    let press = KeyPress::from_cef(event, id);
-    match shortcuts::shortcut_for(press.virtual_key(), press.modifiers()).and_then(Shortcut::name) {
-        Some(name) => i32::from(run_shortcut(browser, name)),
-        None => 0,
+    match key_target(app, browser) {
+        KeyTarget::Window(id) => {
+            let press = KeyPress::from_cef(event, id);
+            let shortcut = shortcuts::shortcut_for(press.virtual_key(), press.modifiers());
+            match shortcut.and_then(Shortcut::name) {
+                Some(name) => i32::from(run_shortcut(browser, name)),
+                None => 0,
+            }
+        }
+        #[cfg(target_os = "macos")]
+        KeyTarget::Offscreen(id) => i32::from(crate::offscreen::editing::run(
+            browser,
+            &KeyPress::from_cef(event, id),
+        )),
+        _ => 0,
     }
 }
 

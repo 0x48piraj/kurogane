@@ -5,6 +5,8 @@
 //! tooltip and what its IME needs come as events.
 
 mod drag;
+#[cfg(target_os = "macos")]
+pub(crate) mod editing;
 mod events;
 pub(crate) mod field;
 mod frame;
@@ -36,8 +38,8 @@ use crate::keys::Modifiers;
 use crate::runtime::{AppHandle, BrowserHandle};
 use events::{EventQueue, Wake};
 use input::{DoubleClick, Pointer, PointerEvent};
-use typing::NO_RANGE;
 use paint::{OnPixelLayers, OnPixels, OnSharedTexture, Painter, PainterKey};
+use typing::NO_RANGE;
 use view::View;
 
 /// Frames a second Chromium's capturer takes at most.
@@ -287,9 +289,10 @@ impl OffscreenClient {
 /// Browser without a window, from
 /// [`AppInstance::create_offscreen_browser`](crate::AppInstance::create_offscreen_browser).
 ///
-/// Its frames go to [`OffscreenOptions::on_pixels`]. Its cursor and tooltip
-/// come from [`events`](Self::events). Dropping it closes the browser at
-/// once without asking the page; [`close`](Self::close) asks first.
+/// Its frames go to the callbacks of its [`OffscreenOptions`]. Its cursor,
+/// tooltip and what its IME needs come from [`events`](Self::events). Dropping
+/// it closes the browser at once without asking the page;
+/// [`close`](Self::close) asks first.
 ///
 /// # Threads
 ///
@@ -443,6 +446,15 @@ impl OffscreenBrowser {
         self.call(HostCall::PointerMove { event, leave: true });
     }
 
+    /// Lets go of the held buttons without a click, for a host that lost the
+    /// pointer during a press. A drag the page started ends without a drop.
+    pub fn pointer_cancel(&self) {
+        let event = self
+            .shared
+            .pointer(|pointer, scale| pointer.cancelled(scale));
+        self.call(HostCall::PointerCancel(event));
+    }
+
     /// Turns the wheel by `delta` at the pointer's last position.
     pub fn wheel(&self, delta: WheelDelta) {
         let turn = self
@@ -572,6 +584,7 @@ enum HostCall {
         up: bool,
         count: c_int,
     },
+    PointerCancel(PointerEvent),
     Wheel {
         event: PointerEvent,
         x: c_int,
@@ -608,7 +621,14 @@ wrap_task! {
             match &self.call {
                 HostCall::Resized => host.was_resized(),
                 HostCall::ScreenChanged => host.notify_screen_info_changed(),
-                HostCall::Hidden(hidden) => host.was_hidden((*hidden).into()),
+                HostCall::Hidden(hidden) => {
+                    host.was_hidden((*hidden).into());
+                    // A show past the compositor's saved frames evicts its new
+                    // surface; a screen change gives it another
+                    if !hidden {
+                        host.notify_screen_info_changed();
+                    }
+                }
                 HostCall::FrameRate(rate) => host.set_windowless_frame_rate(*rate),
                 HostCall::BeginFrame => host.send_external_begin_frame(),
                 HostCall::Repaint => host.invalidate(PaintElementType::VIEW),
@@ -624,6 +644,10 @@ wrap_task! {
                     if drag::released(self.key, &host, &mouse_event(*event)) => {}
                 HostCall::PointerButton { event, button, up, count } => {
                     host.send_mouse_click_event(&mouse_event(*event), button.cef(), (*up).into(), *count);
+                }
+                HostCall::PointerCancel(event) => {
+                    drag::cancel(self.key, &host, &mouse_event(*event));
+                    host.send_capture_lost_event();
                 }
                 HostCall::Wheel { event, x, y } => host.send_mouse_wheel_event(&mouse_event(*event), *x, *y),
                 HostCall::Focus(focused) => host.set_focus((*focused).into()),

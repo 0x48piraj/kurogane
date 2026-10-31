@@ -216,7 +216,11 @@ fn main() {
                 Event::Window {
                     win_event: WindowEvent::FocusLost,
                     ..
-                } => browser.set_focused(false),
+                } => {
+                    // A press under way ends here; its release goes elsewhere
+                    browser.pointer_cancel();
+                    browser.set_focused(false);
+                }
                 Event::Window {
                     win_event: WindowEvent::MouseLeave,
                     ..
@@ -412,8 +416,8 @@ fn key_input(scancode: Option<Scancode>, keycode: Option<Keycode>) -> KeyInput {
     }
 }
 
-/// Returns what an SDL key means: the character of a printable keycode, a
-/// named key by its place for any other.
+/// Returns what an SDL key means, the character of a printable keycode or
+/// else a named key by its place.
 fn logical_key(keycode: Keycode, code: PhysicalCode) -> LogicalKey {
     if let Some(c) = char::from_u32(keycode.to_ll().0).filter(|c| !c.is_control()) {
         return LogicalKey::Character(c.to_string());

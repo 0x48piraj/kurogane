@@ -10,9 +10,9 @@ use super::OffscreenClient;
 use super::events::{InputPurpose, OffscreenEvent};
 use super::frame::PixelRect;
 
-/// Process message of a focused field from the renderer: the purpose's
-/// number, then the field's bounds in device pixels for a field of the main
-/// frame.
+/// Process message of a focused field from the renderer. It holds the
+/// purpose's number, then the field's bounds in device pixels for a field of
+/// the main frame.
 pub(crate) const FOCUSED_FIELD: &str = "kurogane-focused-field";
 
 /// Purposes by their number in the message.
@@ -27,8 +27,8 @@ const PURPOSES: [InputPurpose; 8] = [
     InputPurpose::Search,
 ];
 
-/// Returns what `node` takes: a text field's purpose by its `type`, Text
-/// for a text area or editable element, None for any other node.
+/// Returns what `node` takes. A text field goes by its `type`, a text area or
+/// editable element is Text and any other node None.
 fn purpose_of(node: Option<&Domnode>) -> InputPurpose {
     let Some(node) = node.filter(|node| node.is_editable() != 0) else {
         return InputPurpose::None;

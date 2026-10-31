@@ -89,8 +89,8 @@ impl KeyInput {
             LogicalKey::Character(text) => single_unit(text),
             _ => None,
         };
-        // macOS builds an NSEvent of the characters; a named key types its
-        // function key's character, and one of no characters is a modifier
+        // macOS builds an NSEvent of the characters. A named key types its
+        // function key's character; one of no characters is a modifier
         #[cfg(target_os = "macos")]
         let key_unit = key_unit.or_else(|| crate::keyboard::mac_character(virtual_key));
         let character = text_unit.or(key_unit).unwrap_or(0);
@@ -123,10 +123,12 @@ impl KeyInput {
         event
     }
 
-    /// Returns the key's Windows virtual key: a letter's or digit's own, a
-    /// named key's, else its place's in the US layout.
+    /// Returns the key's Windows virtual key. A keypad character has its
+    /// place's, any other letter or digit its own, a named key its name's and
+    /// the rest its place's in the US layout.
     fn virtual_key(&self) -> u32 {
         let from_key = match &self.key {
+            LogicalKey::Character(_) if self.on_keypad() => None,
             LogicalKey::Character(text) => match text.as_bytes() {
                 &[c] if c.is_ascii_alphanumeric() => Some(u32::from(c.to_ascii_uppercase())),
                 _ => None,
@@ -136,8 +138,13 @@ impl KeyInput {
         from_key.or_else(|| self.code.us_virtual_key()).unwrap_or(0)
     }
 
-    /// Returns CEF's flags of where the key sits: a side for a modifier, the
-    /// keypad for a keypad key.
+    /// Returns whether the key sits on the keypad.
+    fn on_keypad(&self) -> bool {
+        self.code.as_str().starts_with("Numpad")
+    }
+
+    /// Returns CEF's flags of where the key sits, a side for a modifier and
+    /// the keypad for a keypad key.
     fn location(&self) -> u32 {
         match self.code {
             PhysicalCode::ShiftLeft
@@ -148,7 +155,7 @@ impl KeyInput {
             | PhysicalCode::ControlRight
             | PhysicalCode::AltRight
             | PhysicalCode::MetaRight => flag::IS_RIGHT,
-            code if code.as_str().starts_with("Numpad") => flag::IS_KEY_PAD,
+            _ if self.on_keypad() => flag::IS_KEY_PAD,
             _ => 0,
         }
     }
@@ -175,7 +182,7 @@ pub(crate) struct Press {
     pub(crate) commit: Option<String>,
 }
 
-/// Returns whether a key with `flags` is a system key: Cmd on macOS, Alt
+/// Returns whether a key with `flags` is a system key, Cmd on macOS and Alt
 /// without Ctrl elsewhere.
 fn system_key(flags: u32) -> bool {
     if cfg!(target_os = "macos") {
@@ -217,8 +224,8 @@ pub(crate) fn preedit_selection(text: &str, cursor: Option<(usize, usize)>) -> R
     }
 }
 
-/// Returns the underline of a composition of `text`: thin, black and solid
-/// across it, as an IME without styles of its own shows one.
+/// Returns the thin, black and solid underline across a composition of
+/// `text`, as an IME without styles of its own shows one.
 pub(crate) fn preedit_underline(text: &str) -> CompositionUnderline {
     CompositionUnderline {
         range: Range {
@@ -254,6 +261,13 @@ mod tests {
         // Any other character takes its place's US virtual key
         assert_eq!(input(PhysicalCode::Digit2, "é").virtual_key(), 0x32);
         assert_eq!(input(PhysicalCode::Equal, "=").virtual_key(), 0xbb);
+        // The keypad's digits and named keys
+        assert_eq!(input(PhysicalCode::Numpad1, "1").virtual_key(), 0x61);
+        assert_eq!(input(PhysicalCode::Numpad1, "End").virtual_key(), 0x23);
+        assert_eq!(
+            input(PhysicalCode::NumpadEnter, "Enter").virtual_key(),
+            0x0d
+        );
     }
 
     #[test]

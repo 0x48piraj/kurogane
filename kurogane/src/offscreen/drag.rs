@@ -2,7 +2,7 @@
 //!
 //! A page starts a drag (CEF's StartDragging) while a button is held. Kurogane
 //! runs it from the host's pointer calls as its target and its source, as the
-//! OS's drag loop does for a windowed browser: the pointer's moves and its
+//! OS's drag loop does for a windowed browser. The pointer's moves and its
 //! release drive the drag in place of mouse events. The drag stays inside the
 //! page.
 
@@ -73,7 +73,7 @@ pub(crate) fn accept(key: PainterKey, operation: DragOperationsMask) {
 /// Moves the drag of `key` to `event`, out of the view when `leave`. Returns
 /// whether a drag took the move.
 pub(crate) fn moved(key: PainterKey, host: &BrowserHost, event: &MouseEvent, leave: bool) -> bool {
-    // Out of the storage first: CEF's calls may reach it again
+    // Out of the storage first; CEF's calls may reach it again
     let state = DRAGS.with_borrow(|drags| {
         drags
             .get(&key)
@@ -96,8 +96,8 @@ pub(crate) fn moved(key: PainterKey, host: &BrowserHost, event: &MouseEvent, lea
     true
 }
 
-/// Drops the drag of `key` at `event`, nowhere when the pointer is out of the
-/// view, and ends it. Returns whether a drag took the release.
+/// Drops the drag of `key` at `event` and ends it, nowhere when the pointer is
+/// out of the view. Returns whether a drag took the release.
 pub(crate) fn released(key: PainterKey, host: &BrowserHost, event: &MouseEvent) -> bool {
     let Some(drag) = DRAGS.with_borrow_mut(|drags| drags.remove(&key)) else {
         return false;
@@ -108,9 +108,25 @@ pub(crate) fn released(key: PainterKey, host: &BrowserHost, event: &MouseEvent) 
     } else {
         DragOperationsMask::NONE
     };
+    end(host, event, operation);
+    true
+}
+
+/// Ends the drag of `key` at `event` without a drop, if one is under way.
+pub(crate) fn cancel(key: PainterKey, host: &BrowserHost, event: &MouseEvent) {
+    let Some(drag) = DRAGS.with_borrow_mut(|drags| drags.remove(&key)) else {
+        return;
+    };
+    if drag.inside {
+        host.drag_target_drag_leave();
+    }
+    end(host, event, DragOperationsMask::NONE);
+}
+
+/// Tells the page's drag source that its drag ended with `operation` at `event`.
+fn end(host: &BrowserHost, event: &MouseEvent, operation: DragOperationsMask) {
     host.drag_source_ended_at(event.x, event.y, operation);
     host.drag_source_system_drag_ended();
-    true
 }
 
 /// Forgets the drag of `key`, a browser that closed.

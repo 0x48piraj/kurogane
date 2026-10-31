@@ -28,8 +28,8 @@ pub enum OffscreenEvent {
     /// What the focused field takes, for the host's IME and on-screen
     /// keyboard. [`InputPurpose::None`] when no field has the focus.
     InputPurpose(InputPurpose),
-    /// Where the IME's candidates belong in surface pixels: the text being
-    /// composed, else the focused field of the main frame.
+    /// Where the IME's candidates belong in surface pixels, the text being
+    /// composed or else the focused field of the main frame.
     ImeArea(PixelRect),
     /// The browser has closed. No event follows.
     Closed,

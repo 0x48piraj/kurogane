@@ -242,9 +242,8 @@ impl Painter {
         if self.pixels.is_some() {
             self.popup.place = (place.x as i32, place.y as i32);
             self.deliver_composed();
-            return false;
         }
-        self.popup.shown
+        self.popup.shown && (self.pixel_layers.is_some() || self.texture.is_some())
     }
 }
 
@@ -568,5 +567,20 @@ mod tests {
             .collect();
         // Only the pixel at (3, 2) lies inside the view
         assert_eq!(painted, [3 + 2 * 4]);
+    }
+
+    #[test]
+    fn a_moved_popup_asks_for_a_frame_only_where_layers_take_it() {
+        let mut layered = Painter::new(
+            Some(Box::new(|_| {})),
+            None,
+            Some(Box::new(|_: Layer<SharedTextureFrame<'_>>| {})),
+        );
+        layered.popup_shown(true);
+        assert!(layered.popup_placed(PixelRect::default()));
+
+        let mut composed = Painter::new(Some(Box::new(|_| {})), None, None);
+        composed.popup_shown(true);
+        assert!(!composed.popup_placed(PixelRect::default()));
     }
 }
