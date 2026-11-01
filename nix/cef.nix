@@ -11,8 +11,8 @@
 
 let
   version = cefVersion;
-  gitRevision = "a03e714";
-  chromiumVersion = "154.0.8037.94";
+  gitRevision = "cf671c0";
+  chromiumVersion = "156.0.8078.80";
 
   platform =
     {
@@ -32,9 +32,9 @@ let
   # Archive SHA-1 published in the CEF build index
   sha1 =
     {
-      "x86_64-linux" = "9794ecf85ccd4dfcca42bfaac7a7666004f051e8";
-      "aarch64-linux" = "87d20c0c25f08841db595c327125d270f5045865";
-      "aarch64-darwin" = "bfa2358a5fba8d0a016118941d9cda0bf2d06f20";
+      "x86_64-linux" = "09235427222e026a4f34399742df27c5d98a4f8a";
+      "aarch64-linux" = "85602db8e813ad824b45ae54218476aa3d91d561";
+      "aarch64-darwin" = "bcdd1877edb300b0fb91d8f71c0b14aae256cd0f";
     }
     .${stdenv.hostPlatform.system};
 
@@ -49,7 +49,7 @@ let
 
           hash =
             {
-              "aarch64-darwin" = "sha256-beeJyUKulIWWsbDGDXJQPA4SbzaKvdT+5TDo6qN3aBQ=";
+              "aarch64-darwin" = "sha256-on8dhW6EBHZX7SoUyvNV+wRIDE/hlj8EJJqKMYSvHDA=";
             }
             .${stdenv.hostPlatform.system};
         };
@@ -66,12 +66,12 @@ let
         inherit version gitRevision chromiumVersion;
 
         srcHashes = {
-          aarch64-linux = "sha256-zQ8IkqjCF7Z2DfafhZs70jFY/Kob7jXFWYpBxuCHiJk=";
-          x86_64-linux = "sha256-zYnjZgVdRBKUL6JTNKn8mKW2n/Wwq/YgnJTi2eOABaI=";
+          aarch64-linux = "sha256-gGZjqeyiqPe+GFSAzn53nFhktc3VK9d0iQU72xkz/rg=";
+          x86_64-linux = "sha256-aHP5dbsEcxZoDqGDmYDtW9TDPIzUzkV2HJQhGFZgU4g=";
         };
       }).overrideAttrs
         (old: {
-          # CEF 154 bundles ANGLE in libcef.so; patch only libraries present in the archive
+          # CEF bundles ANGLE in libcef.so; patch only libraries present in the archive
           # Goes away when https://github.com/NixOS/nixpkgs/pull/571896 lands
           installPhase = lib.concatMapStringsSep "\n" (
             line:

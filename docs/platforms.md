@@ -121,7 +121,7 @@ xcode-select --install
 
 `kurogane dev`, `run` and `bundle` work as on the other platforms. `hdiutil` ships with macOS. `--sign` also needs `codesign` from the Command Line Tools.
 
-`kurogane bundle --format app` produces a `.app` with the CEF framework inside. It also produces a `.dmg` holding the app beside an `Applications` link for drag-to-install. The app runs on macOS 12 and later. That is the oldest version CEF supports. `[macos] minimum-system-version` can raise it. See [What the app declares](bundling.md#what-the-app-declares).
+`kurogane bundle --format app` produces a `.app` with the CEF framework inside. It also produces a `.dmg` holding the app beside an `Applications` link for drag-to-install. The app runs on macOS 13 and later. That is the oldest version CEF supports. `[macos] minimum-system-version` can raise it. See [What the app declares](bundling.md#what-the-app-declares).
 
 `--sign` with an `identity` in `[signing.macos]` signs the app and its disk image. Notarization is not performed. See [Code signing](bundling.md#code-signing).
 

@@ -604,7 +604,7 @@ mod tests {
                 path: "cef".into(),
                 location,
                 found: "a03e714".into(),
-                expected: "154.0.33".into(),
+                expected: "156.0.15".into(),
             }
             .to_string()
         };

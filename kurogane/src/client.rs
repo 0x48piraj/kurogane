@@ -1074,7 +1074,6 @@ wrap_frame_handler! {
 wrap_load_handler! {
     pub struct KuroganeLoadHandler {
         app: AppHandle,
-        offscreen: Option<OffscreenClient>,
     }
 
     impl LoadHandler {
@@ -1090,14 +1089,6 @@ wrap_load_handler! {
             let browser_id = self.app.registry().browsers.find_id_by_browser(browser);
             if let Some(browser_id) = browser_id {
                 self.app.router().document_committed(frame, browser_id);
-            }
-            // A cross-site page starts unfocused in an offscreen browser; it
-            // gets the focus the host gave
-            if frame.is_main() != 0
-                && self.offscreen.as_ref().is_some_and(OffscreenClient::focused)
-                && let Some(host) = browser.host()
-            {
-                host.set_focus(1);
             }
         }
 
@@ -1429,7 +1420,7 @@ wrap_client! {
         }
 
         fn load_handler(&self) -> Option<LoadHandler> {
-            Some(KuroganeLoadHandler::new(self.app.clone(), self.surface.offscreen().cloned()))
+            Some(KuroganeLoadHandler::new(self.app.clone()))
         }
 
         fn permission_handler(&self) -> Option<PermissionHandler> {

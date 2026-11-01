@@ -16,7 +16,7 @@
         "aarch64-darwin"
       ];
 
-      cefVersion = "154.0.33";
+      cefVersion = "156.0.15";
     in
     inputs.flake-utils.lib.eachSystem supportedSystems (
       system:

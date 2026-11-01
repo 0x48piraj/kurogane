@@ -15,12 +15,12 @@ use crate::plist::Dict;
 /// Oldest macOS CEF runs on, as `CEF_TARGET_SDK` in CEF's
 /// `cmake/cef_variables.cmake` names it. Raise it with a CEF update that
 /// raises CEF's.
-pub const CEF_MINIMUM_MACOS: MacosVersion = MacosVersion([12, 0, 0]);
+pub const CEF_MINIMUM_MACOS: MacosVersion = MacosVersion([13, 0, 0]);
 
 /// The CEF whose `CEF_TARGET_SDK` [`CEF_MINIMUM_MACOS`] was read from; a
 /// test fails once the CEF Kurogane builds with is another.
 #[cfg(test)]
-const CEF_MINIMUM_MACOS_CHECKED_FOR: &str = "154.0.33";
+const CEF_MINIMUM_MACOS_CHECKED_FOR: &str = "156.0.15";
 
 /// The category of an application whose `[macos]` names none.
 const DEFAULT_CATEGORY: &str = "public.app-category.utilities";
@@ -293,13 +293,13 @@ mod tests {
     fn an_empty_table_declares_cef_s_floor_utilities_and_every_device() {
         let settings = MacosSettings::resolve(&MacosPackagingConfig::default()).unwrap();
 
-        assert_eq!(settings.minimum_system_version.to_string(), "12.0");
+        assert_eq!(settings.minimum_system_version.to_string(), "13.0");
         assert_eq!(settings.category, "public.app-category.utilities");
         let mut plist = Dict::new();
         settings.declare(&mut plist);
         assert_eq!(
             plist.get("LSMinimumSystemVersion"),
-            Some(&Value::from("12.0"))
+            Some(&Value::from("13.0"))
         );
         assert_eq!(
             plist.get("NSCameraUsageDescription"),
@@ -348,14 +348,14 @@ mod tests {
 
     #[test]
     fn versions_compare_by_number_and_never_go_below_cef_s() {
-        for (text, expected) in [("12", "12.0"), ("12.0.0", "12.0"), ("15.10", "15.10")] {
+        for (text, expected) in [("13", "13.0"), ("13.0.0", "13.0"), ("15.10", "15.10")] {
             let settings = MacosSettings::resolve(&config(Some(text), None)).unwrap();
             assert_eq!(settings.minimum_system_version.to_string(), expected);
         }
         // 12.10 is newer than 12.9, not older as text would have it
         assert!("12.10".parse::<MacosVersion>() > "12.9".parse::<MacosVersion>());
 
-        for text in ["11.7", "10.15", "11"] {
+        for text in ["12.7", "11.7", "10.15", "11"] {
             assert_eq!(
                 MacosSettings::resolve(&config(Some(text), None)),
                 Err(MacosConfigError::BelowCefMinimum(text.into())),

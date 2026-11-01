@@ -146,7 +146,7 @@ pub(crate) fn project_cef_version() -> String {
 }
 
 /// Returns the CEF version a resolved project loads, the one its tanso-sys
-/// was generated for (`154.0.33` in `154.4.0+154.0.33`), else the CLI's own.
+/// was generated for (`156.0.15` in `156.0.0+156.0.15`), else the CLI's own.
 pub(crate) fn cef_version_of(metadata: &Metadata) -> String {
     metadata
         .packages
@@ -357,7 +357,7 @@ mod tests {
 
     use kurogane_layout::test_fixtures::{cef_runtime, tmp_dir};
 
-    const VERSION: &str = "154.0.33";
+    const VERSION: &str = "156.0.15";
 
     /// A runtime with CEF's notices whose `archive.json` names CEF `version`
     /// for `platform`.
@@ -367,7 +367,7 @@ mod tests {
             std::fs::write(root.join(notice), "notice").unwrap();
         }
         let name = format!(
-            "cef_binary_{version}+ga03e714+chromium-154.0.8037.94_{platform}_minimal.tar.bz2"
+            "cef_binary_{version}+gcf671c0+chromium-156.0.8078.80_{platform}_minimal.tar.bz2"
         );
         std::fs::write(
             root.join("archive.json"),
@@ -421,7 +421,7 @@ mod tests {
             "linux64"
         };
         for (case, version, platform) in [
-            ("another version", "154.0.34", host_platform()),
+            ("another version", "156.0.16", host_platform()),
             ("another platform", VERSION, other_platform),
         ] {
             let dir = tmp_dir();

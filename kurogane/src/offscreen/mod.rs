@@ -24,7 +24,6 @@ pub use typing::KeyInput;
 
 use std::fmt;
 use std::os::raw::c_int;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
@@ -64,7 +63,7 @@ pub enum Pacing {
     /// A frame for each [`OffscreenBrowser::begin_frame`], which the host calls
     /// once a vsync. Frames stay in step with the host's vsync.
     ///
-    /// A known CEF issue at CEF 154: a crash of Chromium's GPU process can
+    /// A known CEF issue at CEF 156: a crash of Chromium's GPU process can
     /// stop such a browser's frames for good. Its start can rarely freeze the
     /// same way. A browser created again paints.
     Host,
@@ -226,8 +225,6 @@ impl fmt::Debug for OffscreenOptions {
 pub(crate) struct Shared {
     view: Mutex<View>,
     pointer: Mutex<Pointer>,
-    /// Keyboard focus as the host last gave it; CEF starts a browser focused.
-    focused: AtomicBool,
     pacing: Pacing,
     events: EventQueue,
 }
@@ -266,11 +263,6 @@ impl OffscreenClient {
     /// The browser's render handler, the same one each time CEF asks.
     pub(crate) fn render_handler(&self) -> RenderHandler {
         self.render.clone()
-    }
-
-    /// Returns whether the host gave the browser the keyboard focus.
-    pub(crate) fn focused(&self) -> bool {
-        self.shared.focused.load(Ordering::Relaxed)
     }
 
     /// Queues `event` for the host.
@@ -468,7 +460,6 @@ impl OffscreenBrowser {
     /// Gives the browser the keyboard focus or takes it away. The page sees
     /// its focus and blur events and shows a caret only while focused.
     pub fn set_focused(&self, focused: bool) {
-        self.shared.focused.store(focused, Ordering::Relaxed);
         self.call(HostCall::Focus(focused));
     }
 
@@ -710,7 +701,6 @@ pub(crate) fn create(
     let shared = Arc::new(Shared {
         view: Mutex::new(view),
         pointer: Mutex::new(Pointer::new(DoubleClick::of_os())),
-        focused: AtomicBool::new(true),
         pacing,
         events: EventQueue::new(wake),
     });

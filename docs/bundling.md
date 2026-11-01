@@ -148,7 +148,7 @@ flowchart TD
 ```json
 {
   "type": "minimal",
-  "name": "cef_binary_154.0.33+ga03e714+chromium-154.0.8037.94_linux64_minimal.tar.bz2",
+  "name": "cef_binary_156.0.15+gcf671c0+chromium-156.0.8078.80_linux64_minimal.tar.bz2",
   "sha1": "..."
 }
 ```
@@ -156,7 +156,7 @@ flowchart TD
 `export-cef-dir` writes it too. A distribution from `CEF_PATH` or the installation passes verification when:
 
 * **The runtime** is complete and carries CEF's notices.
-* **The CEF version** in the archive's name equals the project's exactly. The `+g<hash>` commit after it does not count. `154.0.33+ga03e714` matches the expected `154.0.33` and `154.0.34` does not.
+* **The CEF version** in the archive's name equals the project's exactly. The `+g<hash>` commit after it does not count. `156.0.15+gcf671c0` matches the expected `156.0.15` and `156.0.16` does not.
 * **The platform name** matches the current target.
 
 ### Resolution errors
@@ -499,7 +499,7 @@ Both are named after `[app].name` or the crate name without one. The image is st
 
 Every `Info.plist` of the bundle (the application's and each helper's) declares:
 
-* `LSMinimumSystemVersion`: `[macos] minimum-system-version` or else `12.0`. That is the oldest macOS CEF runs on. An older version is refused.
+* `LSMinimumSystemVersion`: `[macos] minimum-system-version` or else `13.0`. That is the oldest macOS CEF runs on. An older version is refused.
 * `NSCameraUsageDescription` and `NSMicrophoneUsageDescription`: why the application uses the camera and the microphone. macOS shows it when a page asks. `[macos.privacy]` replaces Kurogane's generic wording. Every app declares both. A page's `getUserMedia` can reach the devices and macOS is reported to end an application that asks for one without saying why.
 
 The application's plist also carries `LSApplicationCategoryType`. It is `[macos] category`. That is one of Apple's `public.app-category.*` values (`public.app-category.utilities` by default).
@@ -635,7 +635,7 @@ categories = ["Development", "IDE"] # .desktop Categories=; default ["Utility"]
 terminal = true                     # .desktop Terminal=; default false
 
 [macos]
-minimum-system-version = "13.0"     # LSMinimumSystemVersion; default and floor 12.0, CEF's
+minimum-system-version = "14.0"     # LSMinimumSystemVersion; default and floor 13.0, CEF's
 category = "public.app-category.video" # LSApplicationCategoryType; default public.app-category.utilities
 
 [macos.privacy]                     # what macOS shows when a page asks for a device

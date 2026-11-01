@@ -24,7 +24,7 @@ Rust and the platform build tools are yours to install. `kurogane run`, `dev` an
 | Platform | Architectures | Minimum OS | Release artifact |
 |---|---|---|---|
 | Linux (glibc) | x86_64, aarch64 | glibc 2.31 (Ubuntu 20.04, Debian 11) for apps; the CLI itself is static | `kurogane-cli-<arch>-unknown-linux-musl.tar.gz` |
-| macOS | Apple Silicon, Intel | macOS 12 | `kurogane-cli-<arch>-apple-darwin.tar.gz` |
+| macOS | Apple Silicon, Intel | macOS 13 | `kurogane-cli-<arch>-apple-darwin.tar.gz` |
 | Windows | x86_64, ARM64 | Windows 10 | `kurogane-cli-<arch>-pc-windows-msvc.zip` |
 | NixOS, Nix | x86_64-linux, aarch64-linux, aarch64-darwin | - | flake, built from source |
 
