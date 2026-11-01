@@ -31,3 +31,8 @@ wildcards = "warn"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+
+# Between releases Kurogane pins tanso to a Git revision
+allow-git = [
+    "https://github.com/kurogane-rs/tanso",
+]
