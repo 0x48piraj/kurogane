@@ -73,11 +73,25 @@ pub(crate) fn apply_flag_defaults(flags: &mut ChromiumFlags) {
     }
 }
 
-/// Registers global preference [`SET_LAST_START`].
-pub(crate) fn register_preferences(kind: PreferencesType, registrar: &mut PreferenceRegistrar) {
-    if kind != PreferencesType::GLOBAL {
-        return;
+/// Registers global preference [`SET_LAST_START`] and makes Kurogane's
+/// preferences and the application's (`chosen`) Chromium's defaults. A new
+/// profile holds them as it starts, before Chromium reads the ones that gate
+/// its startup work.
+pub(crate) fn register_preferences(
+    kind: PreferencesType,
+    registrar: &mut PreferenceRegistrar,
+    chosen: &[(String, Json)],
+) {
+    if kind == PreferencesType::GLOBAL {
+        register_set_last_start(registrar);
     }
+    for (name, value) in resolved(default_preferences(), chosen) {
+        set_default(registrar, &name, &value);
+    }
+}
+
+/// Registers global preference [`SET_LAST_START`] with `registrar`.
+fn register_set_last_start(registrar: &mut PreferenceRegistrar) {
     let (Some(mut empty), Some(mut list)) = (value_create(), list_value_create()) else {
         return;
     };
@@ -87,10 +101,26 @@ pub(crate) fn register_preferences(kind: PreferencesType, registrar: &mut Prefer
     }
 }
 
+/// Makes `value` the default of preference `name` when `registrar` holds that
+/// name, the profile's registrar a profile preference and the global one a
+/// global preference. A null keeps Chromium's default.
+fn set_default(registrar: &mut PreferenceRegistrar, name: &str, value: &Json) {
+    let key = CefString::from(name);
+    if registrar.default_preference(&key).is_none() {
+        return;
+    }
+    let Some(mut cef) = cef_value(value) else {
+        return;
+    };
+    let mut error = CefString::default();
+    if registrar.set_default_preference(&key, &mut cef, &mut error) == 0 {
+        warn!("failed to set Chromium's default of {name}: {error}");
+    }
+}
+
 /// Sets Kurogane's preferences and the application's (`chosen`), each once
 /// and the application's in place of Kurogane's. One set at the last start
-/// and set no more returns to Chromium's default. One Chromium reads only as
-/// the profile starts takes effect at the next start.
+/// and set no more returns to Chromium's default.
 pub(crate) fn apply_preferences(chosen: &[(String, Json)]) {
     let wanted = resolved(default_preferences(), chosen);
 

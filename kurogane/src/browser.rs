@@ -26,7 +26,11 @@ wrap_browser_process_handler! {
             type_: PreferencesType,
             registrar: &mut PreferenceRegistrar,
         ) {
-            crate::chromium_defaults::register_preferences(type_, registrar);
+            crate::chromium_defaults::register_preferences(
+                type_,
+                registrar,
+                &self.spec.chromium_prefs,
+            );
         }
 
         fn on_context_initialized(&self) {

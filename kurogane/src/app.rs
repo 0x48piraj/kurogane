@@ -1505,11 +1505,11 @@ impl App {
     /// The name is Chromium's, such as `extensions.block_external_extensions`.
     /// It is the profile's preference when the profile has one of that name
     /// and else Chromium's global one. The value takes the place of
-    /// Kurogane's own and applies once the runtime has started. Chromium
-    /// reads some preferences only as the profile starts; those take effect
-    /// at the next start. A null value returns the preference to Chromium's
-    /// default. A name Chromium does not have, or a value it refuses, is
-    /// logged and skipped.
+    /// Kurogane's own. A new profile starts with it. Chromium reads some
+    /// preferences only as the profile starts, so in a profile holding another
+    /// value those change at the next start. A null value returns the
+    /// preference to Chromium's default. A name Chromium does not have, or a
+    /// value it refuses, is logged and skipped.
     ///
     /// Preferences are declarative. One set at an earlier start and given
     /// no more returns to Chromium's default.
