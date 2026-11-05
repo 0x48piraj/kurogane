@@ -109,12 +109,18 @@ jobs:
       - name: Test runtime
         run: cargo test -p kurogane --locked
 
+      - name: Test frame ring
+        run: cargo test -p kurogane -p kurogane-wgpu --features kurogane/gpu-frames --locked
+
       # Compile-only coverage for platform-specific examples
       - name: Build examples
         run: cargo build -p kurogane-suite --examples --locked
 
       - name: Clippy
         run: cargo clippy -p kurogane -p kurogane-suite --all-targets --locked -- -D warnings
+
+      - name: Clippy frame ring
+        run: cargo clippy -p kurogane -p kurogane-wgpu --all-targets --features kurogane/gpu-frames --locked -- -D warnings
 
   # Generate each official starter from its default branch with this CLI and
   # bundle against checkout's Kurogane

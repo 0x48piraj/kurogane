@@ -1,0 +1,31 @@
+[package]
+name = "kurogane-wgpu"
+description = "Offscreen Kurogane browsers as wgpu textures"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+kurogane = { workspace = true, features = ["gpu-frames"] }
+wgpu = "30"
+
+[target.'cfg(windows)'.dependencies]
+ash = "0.38"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ash = "0.38"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-metal = { version = "0.3", default-features = false, features = ["std", "objc2-io-surface", "MTLAllocation", "MTLDevice", "MTLPixelFormat", "MTLResource", "MTLTexture", "MTLTypes"] }
+
+[lints]
+workspace = true

@@ -5,7 +5,8 @@ members = [
     "kurogane-build",
     "kurogane-cli",
     "kurogane-layout",
-    "kurogane-suite"
+    "kurogane-suite",
+    "kurogane-wgpu"
 ]
 
 [workspace.package]
