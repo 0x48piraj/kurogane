@@ -119,6 +119,16 @@ pub enum RuntimeError {
     /// was given options no offscreen browser can have, named here.
     InvalidOffscreenOptions(&'static str),
 
+    /// [`OffscreenOptions::gpu_frames`](crate::OffscreenOptions::gpu_frames) was
+    /// asked of an application started without
+    /// [`App::gpu_frames`](crate::App::gpu_frames).
+    #[cfg(feature = "gpu-frames")]
+    GpuFramesNotEnabled,
+
+    /// The frame ring cannot run on this machine, for the reason named.
+    #[cfg(feature = "gpu-frames")]
+    GpuFramesUnavailable(String),
+
     /// The requested sandbox cannot be enforced on this platform or layout.
     SandboxUnsupported { reason: String },
 
@@ -374,6 +384,17 @@ impl Display for RuntimeError {
                 write!(f, "Invalid offscreen options: {problem}.")
             }
 
+            #[cfg(feature = "gpu-frames")]
+            RuntimeError::GpuFramesNotEnabled => write!(
+                f,
+                "GPU frames need App::gpu_frames, called before the application starts."
+            ),
+
+            #[cfg(feature = "gpu-frames")]
+            RuntimeError::GpuFramesUnavailable(problem) => {
+                write!(f, "GPU frames are unavailable: {problem}.")
+            }
+
             RuntimeError::WindowNameTaken { name, window } => write!(
                 f,
                 "The window named {name:?} is still open (window {}); the name is free once it closes.",
@@ -450,6 +471,9 @@ impl std::error::Error for RuntimeError {
             | RuntimeError::BundleHelperUnavailable { source } => Some(&**source),
 
             RuntimeError::InvalidFilesystem(error) => Some(error),
+
+            #[cfg(feature = "gpu-frames")]
+            RuntimeError::GpuFramesNotEnabled | RuntimeError::GpuFramesUnavailable(_) => None,
 
             RuntimeError::InvalidAssetRoot(_)
             | RuntimeError::AssetRootMissing(_)

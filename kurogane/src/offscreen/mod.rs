@@ -12,6 +12,8 @@ pub(crate) mod field;
 mod frame;
 mod input;
 mod paint;
+#[cfg(feature = "gpu-frames")]
+mod ring;
 mod typing;
 mod view;
 
@@ -20,6 +22,10 @@ pub use events::{CursorImage, InputPurpose, MouseCursor, OffscreenEvent, Offscre
 pub use frame::DmabufPlane;
 pub use frame::{Layer, PixelFrame, PixelRect, SharedTextureFrame, TextureFormat};
 pub use input::{PointerButton, WheelDelta};
+#[cfg(feature = "gpu-frames")]
+pub(crate) use ring::{adapter as gpu_adapter, apply_gpu_frames_flags};
+#[cfg(feature = "gpu-frames")]
+pub use ring::{GpuAdapter, GpuChoice, GpuFrame, GpuFrames, SlotId};
 pub use typing::KeyInput;
 
 use std::fmt;
@@ -86,6 +92,8 @@ pub struct OffscreenOptions {
     pixels: Option<OnPixels>,
     pixel_layers: Option<OnPixelLayers>,
     texture: Option<OnSharedTexture>,
+    #[cfg(feature = "gpu-frames")]
+    gpu_frames: bool,
     wake: Option<Wake>,
 }
 
@@ -108,6 +116,8 @@ impl OffscreenOptions {
             pixels: None,
             pixel_layers: None,
             texture: None,
+            #[cfg(feature = "gpu-frames")]
+            gpu_frames: false,
             wake: None,
         }
     }
@@ -170,6 +180,21 @@ impl OffscreenOptions {
         self
     }
 
+    /// Puts each frame in a ring of GPU textures the host leases from through
+    /// [`OffscreenBrowser::gpu_frames`], in place of the frame callbacks.
+    ///
+    /// The application starts with [`App::gpu_frames`](crate::App::gpu_frames).
+    /// The ring copies each frame on a device of its own and waits only for that
+    /// copy. A lease stays valid as long as the host holds it.
+    ///
+    /// On NVIDIA's Linux driver, which attaches no fence to CEF's textures, the
+    /// ring fills from Chromium's pixel frames. The host's code stays the same.
+    #[cfg(feature = "gpu-frames")]
+    pub fn gpu_frames(mut self) -> Self {
+        self.gpu_frames = true;
+        self
+    }
+
     /// Runs `f` whenever an event waits in [`OffscreenBrowser::events`].
     ///
     /// `f` may run on any thread. It returns at once, after waking the host's
@@ -189,7 +214,17 @@ impl OffscreenOptions {
                 "an offscreen browser takes pixels through on_pixels or on_pixel_layers, not both",
             );
         }
-        if self.pixels.is_none() && self.pixel_layers.is_none() && self.texture.is_none() {
+        let callback =
+            self.pixels.is_some() || self.pixel_layers.is_some() || self.texture.is_some();
+        #[cfg(feature = "gpu-frames")]
+        if self.gpu_frames && callback {
+            return Some(
+                "an offscreen browser takes its frames through gpu_frames or a frame callback, not both",
+            );
+        }
+        #[cfg(feature = "gpu-frames")]
+        let callback = callback || self.gpu_frames;
+        if !callback {
             return Some(
                 "an offscreen browser takes its frames through on_pixels, on_pixel_layers or on_shared_texture",
             );
@@ -219,7 +254,7 @@ impl fmt::Debug for OffscreenOptions {
             .field("on_pixel_layers", &self.pixel_layers.is_some())
             .field("on_shared_texture", &self.texture.is_some())
             .field("wake", &self.wake.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -229,6 +264,9 @@ pub(crate) struct Shared {
     pointer: Mutex<Pointer>,
     pacing: Pacing,
     events: EventQueue,
+    /// Slots the host leases from and their GPU, for a browser with a ring
+    #[cfg(feature = "gpu-frames")]
+    ring: Option<(Arc<ring::NativeRing>, GpuAdapter)>,
 }
 
 impl Shared {
@@ -309,8 +347,24 @@ impl OffscreenBrowser {
         &self.browser
     }
 
+    /// Returns the ring this browser's frames go to.
+    ///
+    /// # Panics
+    ///
+    /// For a browser opened without [`OffscreenOptions::gpu_frames`].
+    #[cfg(feature = "gpu-frames")]
+    #[track_caller]
+    pub fn gpu_frames(&self) -> GpuFrames {
+        let ring = self.shared.ring.as_ref();
+        let (ring, adapter) = ring.expect("this offscreen browser was opened without gpu_frames");
+        let (app, browser, key) = (self.browser.app.clone(), self.browser.id, self.key);
+        let refresh = Arc::new(move || post(&app, browser, key, HostCall::Repaint));
+        GpuFrames::new(Arc::clone(ring), *adapter, refresh)
+    }
+
     /// Sets the surface's size in pixels. One without area hides the browser
-    /// and keeps its layout.
+    /// and keeps its layout. A side longer than 16,000 pixels is cut to that,
+    /// which the frames' own size shows.
     pub fn set_size(&self, width: u32, height: u32) {
         let (before, after) = self.shared.change(|view| view.set_surface(width, height));
         if after.dip_size() != before.dip_size() {
@@ -326,7 +380,7 @@ impl OffscreenBrowser {
     ///
     /// # Panics
     ///
-    /// For a scale that is not a positive finite number.
+    /// For a scale outside 0.01 to 16.
     #[track_caller]
     pub fn set_scale(&self, scale: f64) {
         assert!(
@@ -523,20 +577,24 @@ impl OffscreenBrowser {
         self.shared.events.drain()
     }
 
-    /// Makes `call` on CEF's UI thread. Posted there from the UI thread too,
-    /// since a call inside a frame callback must not re-enter CEF's paint.
+    /// Makes `call` on CEF's UI thread.
     fn call(&self, call: HostCall) {
-        let app = &self.browser.app;
-        if app.cef_is_down() {
-            return;
-        }
-        let mut task = HostTask::new(app.clone(), self.browser.id, self.key, call);
-        if post_task(ThreadId::UI, &mut task) == 0 {
-            debug!(
-                "CEF refused a call for offscreen browser {}",
-                self.browser.id.as_u32()
-            );
-        }
+        post(&self.browser.app, self.browser.id, self.key, call);
+    }
+}
+
+/// Makes `call` on CEF's UI thread. Posted there from the UI thread too, since
+/// a call inside a frame callback must not re-enter CEF's paint.
+fn post(app: &AppHandle, browser: BrowserId, key: PainterKey, call: HostCall) {
+    if app.cef_is_down() {
+        return;
+    }
+    let mut task = HostTask::new(app.clone(), browser, key, call);
+    if post_task(ThreadId::UI, &mut task) == 0 {
+        debug!(
+            "CEF refused a call for offscreen browser {}",
+            browser.as_u32()
+        );
     }
 }
 
@@ -695,9 +753,28 @@ pub(crate) fn create(
         pixels,
         pixel_layers,
         texture,
+        #[cfg(feature = "gpu-frames")]
+        gpu_frames,
         wake,
     } = options;
     let shared_texture = texture.is_some();
+
+    #[cfg(feature = "gpu-frames")]
+    let (ring, writer) = if gpu_frames {
+        let choice = app
+            .gpu_frames_choice()
+            .ok_or(RuntimeError::GpuFramesNotEnabled)?;
+        let adapter = gpu_adapter(choice).map_err(RuntimeError::GpuFramesUnavailable)?;
+        let ring = Arc::new(ring::Ring::new());
+        let writer =
+            ring::writer(Arc::clone(&ring), adapter).map_err(RuntimeError::GpuFramesUnavailable)?;
+        (Some((ring, adapter)), Some(writer))
+    } else {
+        (None, None)
+    };
+    #[cfg(feature = "gpu-frames")]
+    let shared_texture =
+        shared_texture || writer.as_ref().is_some_and(ring::Writer::takes_textures);
 
     let view = View::new(width, height, scale);
     let shared = Arc::new(Shared {
@@ -705,8 +782,16 @@ pub(crate) fn create(
         pointer: Mutex::new(Pointer::new(DoubleClick::of_os())),
         pacing,
         events: EventQueue::new(wake),
+        #[cfg(feature = "gpu-frames")]
+        ring,
     });
-    let key = paint::keep(Painter::new(pixels, pixel_layers, texture));
+    let painter = Painter::new(pixels, pixel_layers, texture);
+    #[cfg(feature = "gpu-frames")]
+    let painter = match writer {
+        Some(writer) => painter.with_ring(writer),
+        None => painter,
+    };
+    let key = paint::keep(painter);
     let offscreen = OffscreenClient {
         key,
         shared: Arc::clone(&shared),

@@ -133,6 +133,13 @@ impl<'a> SharedTextureFrame<'a> {
         PixelRect::from_cef(&self.info.extra.visible_rect)
     }
 
+    /// Part of the texture that holds the page. Less than
+    /// [`visible_rect`](Self::visible_rect) for a frame CEF letterboxes during
+    /// a resize.
+    pub fn content_rect(&self) -> PixelRect {
+        PixelRect::from_cef(&self.info.extra.content_rect)
+    }
+
     /// Layout of the texture's pixels.
     pub fn format(&self) -> TextureFormat {
         if self.info.format == ColorType::RGBA_8888 {
@@ -174,6 +181,10 @@ impl<'a> SharedTextureFrame<'a> {
     }
 
     /// Linux dmabuf planes of the frame, in order.
+    ///
+    /// A frame can reach the callback before the GPU has drawn it. A reader
+    /// waits on the dmabuf's implicit fences, which a Vulkan import gets with
+    /// `DMA_BUF_IOCTL_EXPORT_SYNC_FILE`.
     #[cfg(target_os = "linux")]
     pub fn planes(&self) -> impl Iterator<Item = DmabufPlane<'a>> + 'a {
         self.info.planes().iter().filter_map(|plane| {

@@ -93,6 +93,10 @@ pub(crate) struct Painter {
     place: PixelRect,
     /// A software frame has come to a browser that takes textures alone
     software_dropped: bool,
+    /// Frame ring, in place of the callbacks. Software frames reach it through
+    /// `pixels`.
+    #[cfg(feature = "gpu-frames")]
+    ring: Option<std::rc::Rc<RefCell<super::ring::Writer>>>,
 }
 
 impl Painter {
@@ -110,7 +114,81 @@ impl Painter {
             popup: Popup::default(),
             place: PixelRect::default(),
             software_dropped: false,
+            #[cfg(feature = "gpu-frames")]
+            ring: None,
         }
+    }
+
+    /// Returns the painter writing its frames to the ring of `writer`.
+    #[cfg(feature = "gpu-frames")]
+    pub(crate) fn with_ring(self, writer: super::ring::Writer) -> Self {
+        let writer = std::rc::Rc::new(RefCell::new(writer));
+        let software = std::rc::Rc::clone(&writer);
+        Self {
+            pixels: Some(Box::new(move |frame| software.borrow_mut().pixels(&frame))),
+            ring: Some(writer),
+            ..self
+        }
+    }
+
+    /// Writes a frame of CEF's texture to the ring. Returns None for a browser
+    /// without a ring, else whether it needs a frame of the view next.
+    #[cfg(feature = "gpu-frames")]
+    fn paint_ring(
+        &mut self,
+        element: PaintElementType,
+        dirty: &[Rect],
+        info: &AcceleratedPaintInfo,
+    ) -> Option<Result<bool, String>> {
+        let writer = self.ring.as_ref()?;
+        // SAFETY: info is the one CEF passed to the running on_accelerated_paint
+        let Some(frame) = (unsafe { SharedTextureFrame::new(info, &[]) }) else {
+            debug!("an offscreen frame came without its texture");
+            return Some(Ok(false));
+        };
+        let mut writer = writer.borrow_mut();
+        let written = if element == PaintElementType::POPUP {
+            writer.popup_frame(&frame).map(|()| true)
+        } else {
+            let damage = dirty.first().map(PixelRect::from_cef).unwrap_or_default();
+            writer.view_frame(&frame, damage).map(|()| false)
+        };
+        let wants_view = writer.take_wants_view();
+        drop(writer);
+        let written = written.map(|needs_view| needs_view || wants_view);
+        if written.is_err() {
+            self.end_ring();
+        }
+        Some(written)
+    }
+
+    /// Ends the ring, which takes no more frames.
+    #[cfg(feature = "gpu-frames")]
+    fn end_ring(&mut self) {
+        self.ring = None;
+        self.pixels = None;
+    }
+
+    /// Returns how the software frame just delivered went, None for a browser
+    /// without a ring.
+    #[cfg(feature = "gpu-frames")]
+    fn ring_outcome(&mut self) -> Option<Result<(), String>> {
+        let failure = self.ring.as_ref()?.borrow_mut().take_failure();
+        Some(match failure {
+            Some(problem) => {
+                self.end_ring();
+                Err(problem)
+            }
+            None => Ok(()),
+        })
+    }
+
+    /// Tells the ring of the popup's place, None for no popup. Returns whether
+    /// it needs a frame of the view.
+    #[cfg(feature = "gpu-frames")]
+    fn ring_popup(&mut self, place: Option<PixelRect>) -> bool {
+        let writer = self.ring.as_ref();
+        writer.is_some_and(|writer| writer.borrow_mut().place_popup(place))
     }
 
     /// Takes a frame in pixels of the view or of its popup.
@@ -439,7 +517,12 @@ wrap_render_handler! {
         }
 
         fn on_popup_show(&self, browser: &mut Browser, show: c_int) {
-            let needs_view = with_painter(self.key, |painter| painter.popup_shown(show != 0));
+            let needs_view = with_painter(self.key, |painter| {
+                let needs_view = painter.popup_shown(show != 0);
+                #[cfg(feature = "gpu-frames")]
+                let needs_view = (show == 0 && painter.ring_popup(None)) || needs_view;
+                needs_view
+            });
             if needs_view == Some(true) {
                 repaint_later(browser, PaintElementType::VIEW);
             }
@@ -451,6 +534,10 @@ wrap_render_handler! {
             let needs_popup = with_painter(self.key, |painter| painter.popup_placed(place));
             if needs_popup == Some(true) {
                 repaint_later(browser, PaintElementType::POPUP);
+            }
+            #[cfg(feature = "gpu-frames")]
+            if with_painter(self.key, |painter| painter.ring_popup(Some(place))) == Some(true) {
+                repaint_later(browser, PaintElementType::VIEW);
             }
         }
 
@@ -498,16 +585,41 @@ wrap_render_handler! {
                 return;
             };
             with_painter(self.key, |painter| painter.paint(type_, dirty_rects, frame));
+            #[cfg(feature = "gpu-frames")]
+            if let Some(Some(written)) = with_painter(self.key, Painter::ring_outcome) {
+                report_ring(&self.shared, written);
+            }
         }
 
         fn on_accelerated_paint(
             &self,
-            _browser: &mut Browser,
+            browser: &mut Browser,
             type_: PaintElementType,
             dirty_rects: &[Rect],
             info: &AcceleratedPaintInfo,
         ) {
+            #[cfg(feature = "gpu-frames")]
+            if let Some(Some(written)) = with_painter(self.key, |painter| painter.paint_ring(type_, dirty_rects, info)) {
+                let needs_view = *written.as_ref().unwrap_or(&false);
+                report_ring(&self.shared, written.map(|_| ()));
+                if needs_view {
+                    repaint_later(browser, PaintElementType::VIEW);
+                }
+                return;
+            }
             with_painter(self.key, |painter| painter.paint_texture(type_, dirty_rects, info));
+        }
+    }
+}
+
+/// Tells the host how a write to the ring went.
+#[cfg(feature = "gpu-frames")]
+fn report_ring(shared: &Shared, written: Result<(), String>) {
+    match written {
+        Ok(()) => shared.events.wake(),
+        Err(problem) => {
+            error!("an offscreen browser's frame ring stopped: {problem}");
+            shared.events.push(OffscreenEvent::GpuFramesFailed(problem));
         }
     }
 }

@@ -31,6 +31,11 @@ pub enum OffscreenEvent {
     /// Where the IME's candidates belong in surface pixels, the text being
     /// composed or else the focused field of the main frame.
     ImeArea(PixelRect),
+    /// The frame ring stopped for the reason named. No frame follows; the host
+    /// can open the browser again with
+    /// [`OffscreenOptions::on_pixels`](crate::OffscreenOptions::on_pixels).
+    #[cfg(feature = "gpu-frames")]
+    GpuFramesFailed(String),
     /// The browser has closed. No event follows.
     Closed,
 }
@@ -261,6 +266,11 @@ impl EventQueue {
             }
             queue.push_back(event);
         }
+        self.wake();
+    }
+
+    /// Runs the host's wake.
+    pub(crate) fn wake(&self) {
         if let Some(wake) = &self.wake
             && catch_unwind(AssertUnwindSafe(|| wake())).is_err()
         {

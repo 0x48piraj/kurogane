@@ -6,7 +6,7 @@ mod backend;
 mod detection;
 
 #[cfg(target_os = "linux")]
-pub(super) mod linux;
+pub(crate) mod linux;
 
 #[cfg(target_os = "windows")]
 pub(super) mod windows;

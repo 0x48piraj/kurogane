@@ -461,6 +461,9 @@ pub(crate) struct RuntimeServices {
     identity: WindowIdentity,
     /// CEF renders windowless browsers (App::offscreen)
     offscreen: bool,
+    /// GPU of the frame rings (App::gpu_frames)
+    #[cfg(feature = "gpu-frames")]
+    gpu_frames: Option<crate::GpuChoice>,
 }
 
 impl RuntimeServices {
@@ -472,6 +475,7 @@ impl RuntimeServices {
         hooks: Weak<Hooks>,
         identity: WindowIdentity,
         offscreen: bool,
+        #[cfg(feature = "gpu-frames")] gpu_frames: Option<crate::GpuChoice>,
     ) -> Self {
         Self {
             router,
@@ -485,6 +489,8 @@ impl RuntimeServices {
             hooks,
             identity,
             offscreen,
+            #[cfg(feature = "gpu-frames")]
+            gpu_frames,
         }
     }
 }
@@ -573,6 +579,13 @@ impl AppHandle {
     /// Returns whether CEF renders windowless browsers (App::offscreen).
     pub(crate) fn offscreen_enabled(&self) -> bool {
         self.services.offscreen
+    }
+
+    /// Returns the GPU the application asked for its frame rings
+    /// (App::gpu_frames).
+    #[cfg(feature = "gpu-frames")]
+    pub(crate) fn gpu_frames_choice(&self) -> Option<crate::GpuChoice> {
+        self.services.gpu_frames
     }
 
     /// Returns whether a mandatory end has begun, after which no browser may
@@ -878,6 +891,8 @@ impl AppHandle {
                 Weak::new(),
                 WindowIdentity::default(),
                 false,
+                #[cfg(feature = "gpu-frames")]
+                None,
             )),
         }
     }
@@ -1361,6 +1376,15 @@ impl AppInstance {
         crate::offscreen::create(&self.handle, url, options)
     }
 
+    /// Returns the GPU Chromium and the frame rings run on, where a host makes
+    /// its device. None without [`App::gpu_frames`](crate::App::gpu_frames) or
+    /// when the machine offers none.
+    #[cfg(feature = "gpu-frames")]
+    pub fn gpu_adapter(&self) -> Option<crate::GpuAdapter> {
+        let choice = self.handle.gpu_frames_choice()?;
+        crate::offscreen::gpu_adapter(choice).ok()
+    }
+
     fn create_child_browser_impl(
         &self,
         parent: &impl HasWindowHandle,
@@ -1466,6 +1490,8 @@ fn initialize_cef(spec: RuntimeSpec, router: IpcRouter) -> Result<AppHandle, Run
             Arc::downgrade(&spec.hooks),
             spec.window_identity.clone(),
             spec.offscreen,
+            #[cfg(feature = "gpu-frames")]
+            spec.gpu_frames,
         )),
     };
 

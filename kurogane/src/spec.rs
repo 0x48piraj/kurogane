@@ -59,6 +59,9 @@ pub(crate) struct RuntimeSpec {
     pub gpu_mode: GpuMode,
     /// Offscreen browsers are on (App::offscreen)
     pub offscreen: bool,
+    /// GPU of the frame rings (App::gpu_frames)
+    #[cfg(feature = "gpu-frames")]
+    pub gpu_frames: Option<crate::GpuChoice>,
     pub credential_storage: CredentialStorage,
     pub chromium_flags: Vec<ChromiumFlag>,
     /// Chromium preferences the application sets, in place of Kurogane's own

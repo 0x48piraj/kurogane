@@ -261,6 +261,8 @@ pub struct App {
     sandbox_mode: SandboxMode,
     gpu_mode: GpuMode,
     offscreen: bool,
+    #[cfg(feature = "gpu-frames")]
+    gpu_frames: Option<crate::GpuChoice>,
     credential_storage: CredentialStorage,
     chromium_flags: Vec<ChromiumFlag>,
     chromium_prefs: Vec<(String, Value)>,
@@ -305,6 +307,8 @@ impl App {
             sandbox_mode: SandboxMode::default(),
             gpu_mode: GpuMode::Auto,
             offscreen: false,
+            #[cfg(feature = "gpu-frames")]
+            gpu_frames: None,
             credential_storage: CredentialStorage::System,
             chromium_flags: Vec::new(),
             chromium_prefs: Vec::new(),
@@ -1418,8 +1422,25 @@ impl App {
     ///
     /// CEF takes windowless rendering at startup only. An application that
     /// creates no offscreen browser leaves it off.
+    ///
+    /// On Linux it also puts ANGLE on EGL, which Chromium's textures need, unless
+    /// the application chose a backend with [`App::gpu_mode`] or a `use-angle`
+    /// flag.
     pub fn offscreen(mut self) -> Self {
         self.offscreen = true;
+        self
+    }
+
+    /// Turns on offscreen frames in a ring of GPU textures on the GPU of
+    /// `choice`, which
+    /// [`OffscreenOptions::gpu_frames`](crate::OffscreenOptions::gpu_frames) asks
+    /// for.
+    ///
+    /// Chromium takes its GPU at startup only. It runs on this one for the
+    /// application's life, windows included.
+    #[cfg(feature = "gpu-frames")]
+    pub fn gpu_frames(mut self, choice: crate::GpuChoice) -> Self {
+        self.gpu_frames = Some(choice);
         self
     }
 
@@ -1622,6 +1643,8 @@ impl App {
             sandbox_mode,
             gpu_mode,
             offscreen,
+            #[cfg(feature = "gpu-frames")]
+            gpu_frames,
             credential_storage,
             chromium_flags,
             chromium_prefs,
@@ -1655,6 +1678,8 @@ impl App {
             profile_dir,
             gpu_mode,
             offscreen,
+            #[cfg(feature = "gpu-frames")]
+            gpu_frames,
             credential_storage,
             chromium_flags,
             chromium_prefs,

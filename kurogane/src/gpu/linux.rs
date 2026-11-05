@@ -32,6 +32,17 @@ pub(super) fn apply_hardware(flags: &mut ChromiumFlags) {
     }
 }
 
+/// Puts ANGLE on EGL for offscreen browsers on a GPU, as cefclient does.
+///
+/// A frame's texture carries a fence and reaches the kernel from that backend
+/// alone. Through GLX a frame stays in the driver's batch, up to several frames
+/// behind the page. A backend already chosen stays.
+pub(crate) fn apply_offscreen(flags: &mut ChromiumFlags) {
+    if !flags.contains("use-angle") && !flags.contains("disable-gpu") {
+        flags.set_with_value("use-angle", "gl-egl");
+    }
+}
+
 fn detect_display_server() -> DisplayServer {
     if std::env::var_os("WAYLAND_DISPLAY").is_some() {
         DisplayServer::Wayland
@@ -77,6 +88,26 @@ fn detect_gpu_vendor() -> GpuVendor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offscreen_browsers_put_angle_on_egl() {
+        let mut flags = ChromiumFlags::default();
+        apply_offscreen(&mut flags);
+        assert_eq!(flags.to_string(), "--use-angle=gl-egl\n");
+    }
+
+    #[test]
+    fn a_chosen_backend_stays() {
+        let mut flags = ChromiumFlags::default();
+        flags.set_with_value("use-angle", "swiftshader");
+        apply_offscreen(&mut flags);
+        assert_eq!(flags.to_string(), "--use-angle=swiftshader\n");
+
+        let mut flags = ChromiumFlags::default();
+        flags.set("disable-gpu");
+        apply_offscreen(&mut flags);
+        assert_eq!(flags.to_string(), "--disable-gpu\n");
+    }
 
     #[test]
     fn vendors_are_read_from_the_id_column_only() {

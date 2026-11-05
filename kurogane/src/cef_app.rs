@@ -41,6 +41,12 @@ wrap_app! {
 
             apply_sandbox_flags(&mut flags, self.spec.sandbox_mode);
             apply_gpu_flags(&mut flags, self.spec.gpu_mode);
+            #[cfg(target_os = "linux")]
+            if self.spec.offscreen {
+                crate::gpu::linux::apply_offscreen(&mut flags);
+            }
+            #[cfg(feature = "gpu-frames")]
+            crate::offscreen::apply_gpu_frames_flags(&mut flags, self.spec.gpu_frames);
             apply_credential_flags(&mut flags, self.spec.credential_storage);
             apply_embedding_flags(&mut flags, self.spec.mode);
             apply_flag_defaults(&mut flags);

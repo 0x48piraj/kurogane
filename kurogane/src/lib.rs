@@ -87,6 +87,8 @@ pub use app::{PumpRequest, ClientAppBrowserDelegate, ClientAppRendererDelegate, 
 pub use new_window::{NewWindowDecision, NewWindowKind, NewWindowRequest};
 #[cfg(target_os = "linux")]
 pub use offscreen::DmabufPlane;
+#[cfg(feature = "gpu-frames")]
+pub use offscreen::{GpuAdapter, GpuChoice, GpuFrame, GpuFrames, SlotId};
 pub use offscreen::{
     CursorImage, InputPurpose, KeyInput, Layer, MouseCursor, OffscreenBrowser, OffscreenEvent,
     OffscreenEvents, OffscreenOptions, Pacing, PixelFrame, PixelRect, PointerButton,
