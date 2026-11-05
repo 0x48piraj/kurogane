@@ -4,6 +4,21 @@
 //! makes each frame `ceil(dip * scale)` pixels. The view is the smallest
 //! whole-DIP size whose frame covers the surface.
 
+use std::ops::RangeInclusive;
+use std::sync::Once;
+
+use tracing::warn;
+
+/// Longest side of a surface in pixels. Past what the GPU can allocate no
+/// frame of the size comes and CEF holds every later resize for one. On macOS
+/// the GPU process dies until the application does. CEF gives no way to learn
+/// a GPU's limit; this sits a margin under the 16,384 D3D11 and Metal take.
+pub(super) const MAX_SIDE: u32 = 16_000;
+
+/// Device scale factors a view takes. The range bounds a view's DIPs and the
+/// pixels of its frames.
+pub(super) const SCALES: RangeInclusive<f64> = 0.01..=16.0;
+
 /// View an offscreen browser lays out and paints.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct View {
@@ -37,13 +52,21 @@ impl View {
         view
     }
 
-    /// Sets the surface's size in pixels; one without area keeps the layout
-    /// and hides the browser.
+    /// Sets the surface's size in pixels, each side cut to [`MAX_SIDE`]; one
+    /// without area keeps the layout and hides the browser.
     pub(crate) fn set_surface(&mut self, width: u32, height: u32) {
+        if width > MAX_SIDE || height > MAX_SIDE {
+            static WARNED: Once = Once::new();
+            WARNED.call_once(|| {
+                warn!(
+                    "an offscreen surface of {width}x{height} is cut to {MAX_SIDE} pixels a side"
+                );
+            });
+        }
         self.empty = width == 0 || height == 0;
         if !self.empty {
-            self.width = width;
-            self.height = height;
+            self.width = width.min(MAX_SIDE);
+            self.height = height.min(MAX_SIDE);
         }
     }
 
@@ -146,6 +169,16 @@ mod tests {
     fn a_view_is_never_empty() {
         assert_eq!(dip_extent(0, 2.0), 1);
         assert_eq!(dip_extent(1, 3.0), 1);
+    }
+
+    #[test]
+    fn a_side_past_the_limit_is_cut() {
+        let side = MAX_SIDE as i32;
+        assert_eq!(View::new(u32::MAX, 100, 1.0).dip_size(), (side, 100));
+        assert_eq!(View::new(100, u32::MAX, 1.0).dip_size(), (100, side));
+        // The largest surface at the smallest scale, a pixel being 100 DIPs
+        // and a frame rounding up
+        assert_eq!(dip_extent(MAX_SIDE, *SCALES.start()), 1_599_901);
     }
 
     #[test]

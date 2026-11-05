@@ -47,7 +47,7 @@ pub enum WheelDelta {
     /// Notches of a mouse wheel, each scrolling as far as the OS scrolls a
     /// windowed browser.
     Lines { x: f64, y: f64 },
-    /// Pixels of a touchpad or a smooth wheel, scrolled exactly.
+    /// Surface pixels of a touchpad or a smooth wheel, scrolled exactly.
     Pixels { x: f64, y: f64 },
 }
 
@@ -142,7 +142,7 @@ pub(crate) struct Pointer {
     modifiers: u32,
     double_click: DoubleClick,
     last_press: Option<Press>,
-    /// Wheel pixels not scrolled yet, each under one.
+    /// Wheel DIPs not scrolled yet, each under one.
     wheel_rest: (f64, f64),
 }
 
@@ -250,11 +250,11 @@ impl Pointer {
         delta: WheelDelta,
         scale: f64,
     ) -> Option<(PointerEvent, (i32, i32))> {
-        let pixels = match delta {
+        let dips = match delta {
             WheelDelta::Lines { x, y } => (x * notch_pixels(true), y * notch_pixels(false)),
-            WheelDelta::Pixels { x, y } => (x, y),
+            WheelDelta::Pixels { x, y } => (x / scale, y / scale),
         };
-        let total = (self.wheel_rest.0 + pixels.0, self.wheel_rest.1 + pixels.1);
+        let total = (self.wheel_rest.0 + dips.0, self.wheel_rest.1 + dips.1);
         // Rounded as a window's page rounds a notch of a fraction of pixels
         let ((across, scrolled_x), (down, scrolled_y)) = (
             pixel_units(total.0.round(), true),
@@ -447,6 +447,15 @@ mod tests {
         };
         assert!(units(1.0).1 > 0);
         assert!(units(-2.0).1 < 0);
+    }
+
+    #[test]
+    fn pixels_are_the_surface_s() {
+        let mut pointer = Pointer::new(BOUNDS);
+        let (_, units) = pointer
+            .wheel(WheelDelta::Pixels { x: 0.0, y: -120.0 }, 2.0)
+            .expect("a turn");
+        assert_eq!(units, (0, pixel_units(-60.0, false).0));
     }
 
     #[test]

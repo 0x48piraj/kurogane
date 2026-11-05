@@ -96,6 +96,8 @@ impl OffscreenOptions {
     /// The page lays out in whole DIPs, the smallest size whose frames cover
     /// the surface. At a fractional scale a frame can be a pixel or two wider
     /// or taller than the surface. A surface without area hides the browser.
+    /// A side longer than 16,000 pixels is cut to that, which the frames'
+    /// own size shows. The scale runs from 0.01 to 16.
     pub fn new(width: u32, height: u32, scale: f64) -> Self {
         Self {
             width,
@@ -192,8 +194,8 @@ impl OffscreenOptions {
                 "an offscreen browser takes its frames through on_pixels, on_pixel_layers or on_shared_texture",
             );
         }
-        if !(self.scale.is_finite() && self.scale > 0.0) {
-            return Some("the scale is a positive finite number");
+        if !view::SCALES.contains(&self.scale) {
+            return Some("the scale is a number from 0.01 to 16");
         }
         if let Pacing::Display { hz } = self.pacing
             && !(hz.is_finite() && hz > 0.0)
@@ -328,8 +330,8 @@ impl OffscreenBrowser {
     #[track_caller]
     pub fn set_scale(&self, scale: f64) {
         assert!(
-            scale.is_finite() && scale > 0.0,
-            "the scale is a positive finite number, not {scale}"
+            view::SCALES.contains(&scale),
+            "the scale is a number from 0.01 to 16, not {scale}"
         );
         let (before, after) = self.shared.change(|view| view.set_scale(scale));
         if after != before {
